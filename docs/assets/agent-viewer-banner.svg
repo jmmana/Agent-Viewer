@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+<title id="title">Agent Viewer</title><desc id="desc">Watch your AI agents work. An animated office for agent collaboration, tokens and costs.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1020"/><stop offset="1" stop-color="#22143e"/></linearGradient><linearGradient id="accent"><stop stop-color="#a855f7"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+<rect width="1200" height="340" rx="24" fill="url(#bg)"/>
+<path d="M30 310H1170" stroke="#ffffff" stroke-opacity=".08"/>
+<rect x="56" y="48" width="138" height="27" rx="13" fill="#a855f7" fill-opacity=".16" stroke="#a855f7" stroke-opacity=".45"/>
+<text x="125" y="66" text-anchor="middle" fill="#d8b4fe" font-family="Arial, sans-serif" font-size="12" letter-spacing="2">AGENT VIEWER</text>
+<text x="54" y="150" fill="#ffffff" font-family="Arial, sans-serif" font-size="64" font-weight="700">Agent Viewer</text>
+<text x="58" y="194" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="26">Watch your AI agents work.</text>
+<text x="58" y="237" fill="#94a3b8" font-family="Arial, sans-serif" font-size="17">A living office for collaboration, tokens and costs.</text>
+<path d="M58 270H400" stroke="url(#accent)" stroke-width="3"/>
+<g stroke="#94a3b8" stroke-opacity=".35" stroke-width="2" fill="none"><path d="M943 91V133M827 151L917 104M1059 151L969 104M827 178V230M1059 178V230M943 181V230M854 163H917M969 163H1032"/></g>
+<g fill="#101827" stroke="#a855f7" stroke-opacity=".7" stroke-width="2"><rect x="906" y="44" width="74" height="64" rx="18"/><rect x="790" y="133" width="74" height="64" rx="18"/><rect x="906" y="133" width="74" height="64" rx="18"/><rect x="1022" y="133" width="74" height="64" rx="18"/><rect x="790" y="224" width="74" height="64" rx="18"/><rect x="906" y="224" width="74" height="64" rx="18"/><rect x="1022" y="224" width="74" height="64" rx="18"/></g>
+<g fill="#c4b5fd"><circle cx="943" cy="67" r="9"/><path d="M927 91Q927 77 943 77Q959 77 959 91Z"/><circle cx="827" cy="156" r="8"/><path d="M813 180Q813 166 827 166Q841 166 841 180Z"/><circle cx="943" cy="156" r="8"/><path d="M929 180Q929 166 943 166Q957 166 957 180Z"/><circle cx="1059" cy="156" r="8"/><path d="M1045 180Q1045 166 1059 166Q1073 166 1073 180Z"/></g>
+<g fill="#22d3ee"><circle cx="827" cy="247" r="8"/><path d="M813 271Q813 257 827 257Q841 257 841 271Z"/><circle cx="943" cy="247" r="8"/><path d="M929 271Q929 257 943 257Q957 257 957 271Z"/><circle cx="1059" cy="247" r="8"/><path d="M1045 271Q1045 257 1059 257Q1073 257 1073 271Z"/></g>
+<g fill="#22c55e"><circle cx="856" cy="190" r="4"/><circle cx="972" cy="190" r="4"/><circle cx="1088" cy="190" r="4"/></g>
+</svg>

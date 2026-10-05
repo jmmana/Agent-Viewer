@@ -84,7 +84,7 @@ export interface Agent {
   roleTitle: string;
   team: 'leadership' | 'engineering' | 'research' | 'quality' | 'operations' | 'other';
   managerId: string | null;
-  provider: 'OpenAI' | 'Anthropic' | 'Google Gemini' | 'Local (Ollama)' | 'OpenRouter';
+  provider: string;
   model: string;
   status: AgentStatus;
   statusText: string;

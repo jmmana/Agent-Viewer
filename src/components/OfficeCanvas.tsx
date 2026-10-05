@@ -4,6 +4,7 @@ import { CameraState, renderOfficeScene } from '../engine/canvasRenderer';
 import { getOfficeRenderedBounds, gridToScreen } from '../engine/officeModel';
 import { OfficeMotion } from '../engine/visualMotion';
 import { cameraCenter } from '../engine/visualLayout';
+import { Locale, t } from '../i18n';
 import {
   ZoomIn,
   ZoomOut,
@@ -19,6 +20,7 @@ interface OfficeCanvasProps {
   onSelectAgent: (agentId: string | null) => void;
   activeMeetingId: string | null;
   theme: 'dark' | 'light';
+  locale: Locale;
   isInspectorOpen?: boolean;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
@@ -30,6 +32,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   onSelectAgent,
   activeMeetingId,
   theme,
+  locale,
   isInspectorOpen = false,
   onToggleSidebar,
   isSidebarOpen = false,
@@ -192,6 +195,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         nowMs: Date.now(),
         reducedMotion,
         theme,
+        locale,
       });
 
       ctx.restore();
@@ -204,7 +208,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, reducedMotion]);
+  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, locale, reducedMotion]);
 
   // Mouse drag & pan
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -319,18 +323,18 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         onWheel={handleWheel}
         className="w-full h-full block touch-none cursor-grab active:cursor-grabbing"
         role="img"
-        aria-label="Oficina animada de agentes. Usa el panel lateral para consultar sus tareas y conversaciones."
+        aria-label={t(locale, 'canvas.aria')}
       />
 
       {/* Floating Zoom Control HUD (Bottom Center) */}
       <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-slate-900/95 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-slate-800 shadow-2xl z-20 text-xs text-slate-200">
-        <button onClick={() => fitOfficeToViewport((camera.rotation + 3) % 4)} aria-label="Girar oficina a la izquierda" title="Girar izquierda" className="p-2 rounded-xl hover:bg-slate-800"><RotateCcw className="w-4 h-4" /></button>
-        <button onClick={() => fitOfficeToViewport((camera.rotation + 1) % 4)} aria-label="Girar oficina a la derecha" title="Girar derecha" className="p-2 rounded-xl hover:bg-slate-800"><RotateCw className="w-4 h-4" /></button>
-        <button onClick={() => fitOfficeToViewport()} aria-label="Centrar oficina completa" title="Centrar oficina" className="p-2 rounded-xl text-sky-300 hover:bg-slate-800"><Focus className="w-4 h-4" /></button>
+        <button onClick={() => fitOfficeToViewport((camera.rotation + 3) % 4)} aria-label={t(locale, 'canvas.rotateLeft')} title={t(locale, 'canvas.rotateLeft')} className="p-2 rounded-xl hover:bg-slate-800"><RotateCcw className="w-4 h-4" /></button>
+        <button onClick={() => fitOfficeToViewport((camera.rotation + 1) % 4)} aria-label={t(locale, 'canvas.rotateRight')} title={t(locale, 'canvas.rotateRight')} className="p-2 rounded-xl hover:bg-slate-800"><RotateCw className="w-4 h-4" /></button>
+        <button onClick={() => fitOfficeToViewport()} aria-label={t(locale, 'canvas.fit')} title={t(locale, 'canvas.fit')} className="p-2 rounded-xl text-sky-300 hover:bg-slate-800"><Focus className="w-4 h-4" /></button>
         <button
           onClick={() => setCamera((c) => ({ ...c, zoom: Math.max(c.zoom * 0.88, 0.15) }))}
-          aria-label="Alejar oficina"
-          title="Alejar vista (Zoom Out)"
+          aria-label={t(locale, 'canvas.zoomOut')}
+          title={t(locale, 'canvas.zoomOut')}
           className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
         >
           <ZoomOut className="w-4 h-4" />
@@ -342,8 +346,8 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
 
         <button
           onClick={() => setCamera((c) => ({ ...c, zoom: Math.min(c.zoom * 1.12, 2.5) }))}
-          aria-label="Acercar oficina"
-          title="Acercar vista (Zoom In)"
+          aria-label={t(locale, 'canvas.zoomIn')}
+          title={t(locale, 'canvas.zoomIn')}
           className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
         >
           <ZoomIn className="w-4 h-4" />
@@ -355,10 +359,10 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         <button
           onClick={onToggleSidebar}
           className="absolute top-3 right-3 z-20 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800 shadow-xl text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800 transition-colors"
-          title="Mostrar timeline lateral de actividad"
+          title={t(locale, 'canvas.showTimeline')}
         >
           <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-          <span>Ver Timeline</span>
+          <span>{t(locale, 'canvas.showTimeline')}</span>
         </button>
       )}
     </div>

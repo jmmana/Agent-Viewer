@@ -16,6 +16,9 @@ import { MeetingRoomModal } from './components/MeetingRoomModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewTaskModal } from './components/NewTaskModal';
 import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
+import { OverflowFloorView } from './components/OverflowFloorView';
+import { DoorOpen } from 'lucide-react';
+import { t } from './i18n';
 import { detectLocale, Locale, persistLocale } from './i18n';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
@@ -49,6 +52,7 @@ export default function App() {
   const [locale, setLocale] = useState<Locale>(() => detectLocale());
   const [ambientSocialEnabled, setAmbientSocialEnabled] = useState(true);
   const [politicsChatterEnabled, setPoliticsChatterEnabled] = useState(false);
+  const [currentFloor, setCurrentFloor] = useState<1 | 2>(1);
 
   useEffect(() => {
     persistLocale(locale);
@@ -353,6 +357,8 @@ export default function App() {
 
   const selectedAgent = simState.agents.find((a) => a.id === selectedAgentId) || null;
   const activeMeetingCount = simState.meetings.filter((m) => m.status === 'ACTIVE').length;
+  const overflowReservations = simState.roomReservations.filter((reservation) => reservation.floor === 2);
+  const mainFloorAgents = simState.agents.filter((agent) => (agent.floor ?? 1) === 1);
 
   return (
     <div className={`w-screen h-screen flex flex-col bg-slate-950 font-sans overflow-hidden select-none ${theme}`}>
@@ -388,20 +394,47 @@ export default function App() {
         {currentTab === 'office' && (
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
             <div className="flex-1 h-full relative overflow-hidden">
-              <OfficeCanvas
-                agents={simState.agents}
-                selectedAgentId={selectedAgentId}
-                onSelectAgent={(id) => {
-                  setSelectedAgentId(id);
-                  if (!isSidebarOpen) setIsSidebarOpen(true);
-                }}
-                activeMeetingId={simState.activeMeetingId}
-                theme={theme}
-                locale={locale}
-                isInspectorOpen={isSidebarOpen}
-                isSidebarOpen={isSidebarOpen}
-                onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
-              />
+              {currentFloor === 1 ? (
+                <>
+                  <OfficeCanvas
+                    agents={mainFloorAgents}
+                    selectedAgentId={selectedAgentId}
+                    onSelectAgent={(id) => {
+                      setSelectedAgentId(id);
+                      if (!isSidebarOpen) setIsSidebarOpen(true);
+                    }}
+                    activeMeetingId={simState.activeMeetingId}
+                    theme={theme}
+                    locale={locale}
+                    isInspectorOpen={isSidebarOpen}
+                    isSidebarOpen={isSidebarOpen}
+                    onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+                  />
+                  {overflowReservations.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setCurrentFloor(2)}
+                      className="absolute bottom-5 right-5 z-30 flex items-center gap-2 rounded-xl border border-violet-700/60 bg-slate-950/95 px-3 py-2 text-xs font-semibold text-violet-200 shadow-xl hover:bg-violet-950/70"
+                      title={t(locale, 'floor.secret')}
+                    >
+                      <DoorOpen className="w-4 h-4" />
+                      <span>{t(locale, 'floor.enterSecret')}</span>
+                      <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[10px] text-white">
+                        {overflowReservations.length}
+                      </span>
+                    </button>
+                  )}
+                </>
+              ) : (
+                <OverflowFloorView
+                  locale={locale}
+                  reservations={simState.roomReservations}
+                  meetings={simState.meetings}
+                  agents={simState.agents}
+                  onBack={() => setCurrentFloor(1)}
+                  onSelectAgent={(id) => setSelectedAgentId(id)}
+                />
+              )}
             </div>
 
             {/* Collapsible Vertical Activity Timeline & Inspector Sidebar */}

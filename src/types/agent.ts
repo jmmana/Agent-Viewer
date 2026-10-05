@@ -44,6 +44,7 @@ export type WorkspaceZone =
   | 'research_area'
   | 'server_room'
   | 'meeting_room'
+  | 'meeting_room_b'
   | 'break_room';
 
 export type AgentMood =

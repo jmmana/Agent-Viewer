@@ -17,6 +17,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { NewTaskModal } from './components/NewTaskModal';
 import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
 import { detectLocale, Locale, persistLocale } from './i18n';
+import { applyAmbientLife } from './engine/livingOfficeEngine';
 
 export default function App() {
   // Master Simulation State
@@ -44,6 +45,8 @@ export default function App() {
   const [pricing, setPricing] = useState<PricingConfig[]>(DEFAULT_PRICING);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [locale, setLocale] = useState<Locale>(() => detectLocale());
+  const [ambientSocialEnabled, setAmbientSocialEnabled] = useState(true);
+  const [politicsChatterEnabled, setPoliticsChatterEnabled] = useState(false);
 
   useEffect(() => {
     persistLocale(locale);
@@ -66,6 +69,8 @@ export default function App() {
         meetings: prevState.meetings.map((m) => ({ ...m, agenda: [...m.agenda], decisions: [...m.decisions], messages: [...m.messages] })),
         events: [...prevState.events],
         totalTokens: { ...prevState.totalTokens },
+        roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+        socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
       };
 
       DEMO_STEPS[stepIdx].execute(nextState);
@@ -74,6 +79,34 @@ export default function App() {
 
     setDemoStepIndex(stepIdx);
   };
+
+  useEffect(() => {
+    if (!ambientSocialEnabled) return;
+
+    const timer = window.setInterval(() => {
+      setSimState((prevState) => {
+        const nextState: SimulationState = {
+          ...prevState,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
+          tasks: prevState.tasks,
+          meetings: prevState.meetings,
+          events: [...prevState.events],
+          totalTokens: { ...prevState.totalTokens },
+          roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+          socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+        };
+        applyAmbientLife(nextState, Date.now(), locale, {
+          enabled: ambientSocialEnabled,
+          politicsEnabled: politicsChatterEnabled,
+          idleGraceMs: 12000,
+          minIntervalMs: 18000,
+        });
+        return nextState;
+      });
+    }, 4000);
+
+    return () => window.clearInterval(timer);
+  }, [ambientSocialEnabled, politicsChatterEnabled, locale]);
 
   // Demo playback timer
   useEffect(() => {
@@ -403,6 +436,11 @@ export default function App() {
         onUpdatePricing={(newPricing) => setPricing(newPricing)}
         onResetSession={handleResetDemo}
         onExportSession={handleExportSession}
+        ambientSocialEnabled={ambientSocialEnabled}
+        onAmbientSocialEnabledChange={setAmbientSocialEnabled}
+        politicsChatterEnabled={politicsChatterEnabled}
+        onPoliticsChatterEnabledChange={setPoliticsChatterEnabled}
+        locale={locale}
       />
 
       {/* New Task Dispatch Modal */}

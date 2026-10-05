@@ -6,6 +6,17 @@ const events: unknown[] = [];
 const clients = new Set<express.Response>();
 
 app.use(express.json({ limit: '1mb' }));
+
+app.use('/api/v1', (req, res, next) => {
+  const expected = process.env.AGENT_VIEWER_API_TOKEN;
+  if (!expected) return next();
+  const auth = req.header('authorization');
+  if (auth !== `Bearer ${expected}`) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  next();
+});
 app.use((_, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.AGENT_VIEWER_CORS_ORIGIN ?? '*');
   res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, idempotency-key');

@@ -132,6 +132,10 @@ export function routeAgent(agent: Agent, workspace: WorkspaceZone): void {
   agent.targetX = anchor.x;
   agent.targetY = anchor.y;
   agent.isWalking = Math.hypot(agent.x - anchor.x, agent.y - anchor.y) > 0.15;
+  if (agent.isWalking) {
+    agent.travelStartedAt = Date.now();
+    agent.travelDurationMs = Math.max(900, Math.min(4500, Math.hypot(agent.x - anchor.x, agent.y - anchor.y) * 350));
+  }
 }
 
 export function reserveMeetingRoom(
@@ -245,6 +249,8 @@ export function requestMeeting(
     agent.targetX = seat.x;
     agent.targetY = seat.y;
     agent.isWalking = true;
+    agent.travelStartedAt = Date.now();
+    agent.travelDurationMs = 2200 + index * 250;
   }
 
   return meeting;
@@ -302,6 +308,49 @@ export function endMeeting(state: LivingOfficeState, meetingId: string): void {
   state.events.unshift(
     event('meeting.ended', meeting.initiatorId, `Meeting ended: ${meeting.title}.`, { meetingId }),
   );
+}
+
+export function advanceLivingOffice(state: LivingOfficeState, now: number): void {
+  for (const agent of state.agents) {
+    if (
+      agent.isWalking &&
+      typeof agent.travelStartedAt === 'number' &&
+      typeof agent.travelDurationMs === 'number' &&
+      now - agent.travelStartedAt >= agent.travelDurationMs
+    ) {
+      agent.x = agent.targetX;
+      agent.y = agent.targetY;
+      agent.isWalking = false;
+      agent.travelStartedAt = undefined;
+      agent.travelDurationMs = undefined;
+      if (agent.status === 'PHONE_CALL') {
+        agent.status = 'WALKING';
+        agent.statusText = 'Arrived for scheduled collaboration';
+      }
+    }
+  }
+
+  for (const meeting of state.meetings) {
+    if (meeting.status === 'SCHEDULED') {
+      activateMeetingWhenArrived(state, meeting.id);
+    }
+  }
+
+  for (const activity of state.socialActivities) {
+    if (activity.endsAt && activity.endsAt <= now) {
+      for (const agentId of activity.participantIds) {
+        const agent = state.agents.find((item) => item.id === agentId);
+        if (!agent || agent.socialActivityId !== activity.id) continue;
+        agent.socialActivityId = null;
+        agent.mood = 'neutral';
+        if (agent.status === 'CHATTING') {
+          agent.status = 'COFFEE_BREAK';
+          agent.statusText = 'Coffee break';
+        }
+      }
+    }
+  }
+  state.socialActivities = state.socialActivities.filter((activity) => !activity.endsAt || activity.endsAt > now);
 }
 
 export interface AmbientOptions {

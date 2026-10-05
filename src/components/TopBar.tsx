@@ -87,7 +87,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
         <div className="h-4 w-px bg-slate-700" />
         <span className="text-xs text-slate-400 hidden 2xl:inline">
-          ${t(locale, 'app.subtitle')}
+          {t(locale, 'app.subtitle')}
         </span>
         <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-200" title={t(locale, 'demo.title')}>{t(locale, 'demo.label')}</span>
       </div>

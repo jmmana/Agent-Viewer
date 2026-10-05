@@ -46,6 +46,7 @@ export type WorkspaceZone =
   | 'server_room'
   | 'meeting_room'
   | 'meeting_room_b'
+  | 'overflow_floor'
   | 'break_room';
 
 export type AgentMood =
@@ -91,6 +92,7 @@ export interface Agent {
   currentTaskId: string | null;
   currentTool: string | null;
   workspace: WorkspaceZone;
+  floor?: number;
   x: number;
   y: number;
   targetX: number;

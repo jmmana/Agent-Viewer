@@ -52,7 +52,7 @@ export function applyExternalEvent(state: SimulationState, incoming: ExternalEve
           statusText: 'Registered from external runtime',
           currentTaskId: null,
           currentTool: null,
-          workspace: 'lounge' as WorkspaceZone,
+          workspace: 'break_room',
           x: 19,
           y: 14,
           targetX: 19,

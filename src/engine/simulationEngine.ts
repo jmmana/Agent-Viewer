@@ -24,6 +24,7 @@ export interface SimulationState {
   activeMeetingId: string | null;
   roomReservations: RoomReservation[];
   socialActivities: SocialActivity[];
+  coffeeSeatAssignments: Array<{ seatId: string; agentId: string }>;
   totalTokens: {
     input: number;
     output: number;
@@ -52,6 +53,7 @@ export function createInitialSimulationState(initialAgents: Agent[]): Simulation
     activeMeetingId: null,
     roomReservations: [],
     socialActivities: [],
+    coffeeSeatAssignments: [],
     totalTokens: {
       input: 179300,
       output: 43300,
@@ -442,6 +444,13 @@ export const DEMO_STEPS: DemoStep[] = [
     execute: (s) => {
       const qa = s.agents.find((a) => a.id === 'qa-agent');
       if (qa) {
+        qa.x = 20;
+        qa.y = 10;
+        qa.targetX = 20;
+        qa.targetY = 10;
+        qa.workspace = 'qa_lab';
+        qa.isWalking = false;
+        qa.floor = 1;
         qa.status = 'TESTING';
         qa.currentTool = 'test.run(integration_auth_spec)';
         qa.statusText = 'Executing 24 security test cases & fuzzing nonce';
@@ -477,6 +486,13 @@ export const DEMO_STEPS: DemoStep[] = [
     execute: (s) => {
       const qa = s.agents.find((a) => a.id === 'qa-agent');
       if (qa) {
+        qa.x = 20;
+        qa.y = 10;
+        qa.targetX = 20;
+        qa.targetY = 10;
+        qa.workspace = 'qa_lab';
+        qa.isWalking = false;
+        qa.floor = 1;
         qa.status = 'BLOCKED';
         qa.statusText = 'Vulnerability detected: Token replay flaw';
         qa.speechBubble = {

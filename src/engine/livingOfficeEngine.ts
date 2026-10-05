@@ -40,6 +40,122 @@ export interface LivingOfficeState {
   activeMeetingId: string | null;
   roomReservations: RoomReservation[];
   socialActivities: SocialActivity[];
+  coffeeSeatAssignments: Array<{ seatId: string; agentId: string }>;
+}
+
+export interface CoffeeSeat {
+  id: string;
+  x: number;
+  y: number;
+  tableId: string;
+}
+
+export interface CoffeeSeatAssignment {
+  seatId: string;
+  agentId: string;
+}
+
+export const COFFEE_SEATS: CoffeeSeat[] = [
+  // Table A (round cafe table)
+  { id: 'coffee_a_1', tableId: 'coffee_a', x: 10.6, y: 13.2 },
+  { id: 'coffee_a_2', tableId: 'coffee_a', x: 11.6, y: 12.7 },
+  { id: 'coffee_a_3', tableId: 'coffee_a', x: 12.6, y: 13.2 },
+  { id: 'coffee_a_4', tableId: 'coffee_a', x: 12.6, y: 14.3 },
+  { id: 'coffee_a_5', tableId: 'coffee_a', x: 11.6, y: 14.8 },
+  { id: 'coffee_a_6', tableId: 'coffee_a', x: 10.6, y: 14.3 },
+
+  // Table B (round cafe table)
+  { id: 'coffee_b_1', tableId: 'coffee_b', x: 14.2, y: 13.2 },
+  { id: 'coffee_b_2', tableId: 'coffee_b', x: 15.2, y: 12.7 },
+  { id: 'coffee_b_3', tableId: 'coffee_b', x: 16.2, y: 13.2 },
+  { id: 'coffee_b_4', tableId: 'coffee_b', x: 16.2, y: 14.3 },
+  { id: 'coffee_b_5', tableId: 'coffee_b', x: 15.2, y: 14.8 },
+  { id: 'coffee_b_6', tableId: 'coffee_b', x: 14.2, y: 14.3 },
+
+  // Standing / overflow bar
+  { id: 'coffee_s_1', tableId: 'standing', x: 9.2, y: 14.2 },
+  { id: 'coffee_s_2', tableId: 'standing', x: 17.4, y: 14.2 },
+  { id: 'coffee_s_3', tableId: 'standing', x: 11.0, y: 15.5 },
+  { id: 'coffee_s_4', tableId: 'standing', x: 15.8, y: 15.5 },
+];
+
+export const AGENT_DESK_ANCHORS: Record<string, { x: number; y: number; workspace: WorkspaceZone }> = {
+  'boss': { x: 3, y: 3, workspace: 'boss_office' },
+  'tech-lead': { x: 2, y: 9, workspace: 'leads_area' },
+  'research-lead': { x: 4, y: 9, workspace: 'research_area' },
+  'backend-agent': { x: 8, y: 10, workspace: 'development' },
+  'frontend-agent': { x: 12, y: 10, workspace: 'development' },
+  'security-agent': { x: 16, y: 10, workspace: 'development' },
+  'qa-agent': { x: 20, y: 10, workspace: 'qa_lab' },
+};
+
+export function getAssignedCoffeeSeat(
+  state: Pick<LivingOfficeState, 'coffeeSeatAssignments'>,
+  agentId: string,
+): CoffeeSeat | null {
+  if (!state.coffeeSeatAssignments) state.coffeeSeatAssignments = [];
+  const assignment = state.coffeeSeatAssignments.find((item) => item.agentId === agentId);
+  if (!assignment) return null;
+  return COFFEE_SEATS.find((seat) => seat.id === assignment.seatId) ?? null;
+}
+
+export function releaseCoffeeSeat(
+  state: Pick<LivingOfficeState, 'coffeeSeatAssignments'>,
+  agentId: string,
+): void {
+  if (!state.coffeeSeatAssignments) {
+    state.coffeeSeatAssignments = [];
+    return;
+  }
+  state.coffeeSeatAssignments = state.coffeeSeatAssignments.filter(
+    (item) => item.agentId !== agentId,
+  );
+}
+
+export function assignCoffeeSeat(
+  state: Pick<LivingOfficeState, 'coffeeSeatAssignments'>,
+  agentId: string,
+): CoffeeSeat | null {
+  if (!state.coffeeSeatAssignments) state.coffeeSeatAssignments = [];
+  const existing = getAssignedCoffeeSeat(state, agentId);
+  if (existing) return existing;
+
+  const used = new Set(state.coffeeSeatAssignments.map((item) => item.seatId));
+  const freeSeat = COFFEE_SEATS.find((seat) => !used.has(seat.id));
+  if (!freeSeat) return null;
+
+  state.coffeeSeatAssignments.push({
+    seatId: freeSeat.id,
+    agentId,
+  });
+
+  return freeSeat;
+}
+
+export function moveAgentToCoffeeSeat(
+  state: Pick<LivingOfficeState, 'coffeeSeatAssignments'>,
+  agent: Agent,
+): void {
+  const seat = assignCoffeeSeat(state, agent.id);
+  if (!seat) {
+    // fallback to generic break room anchor
+    routeAgent(agent, 'break_room');
+    return;
+  }
+
+  agent.workspace = 'break_room';
+  agent.floor = 1;
+  agent.targetX = seat.x;
+  agent.targetY = seat.y;
+  agent.isWalking = Math.hypot(agent.x - seat.x, agent.y - seat.y) > 0.15;
+
+  if (agent.isWalking) {
+    agent.travelStartedAt = Date.now();
+    agent.travelDurationMs = Math.max(
+      900,
+      Math.min(3500, Math.hypot(agent.x - seat.x, agent.y - seat.y) * 350),
+    );
+  }
 }
 
 export const MEETING_ROOM_POLICIES: RoomPolicy[] = [
@@ -92,6 +208,7 @@ const STATUS_DESTINATIONS: Partial<Record<AgentStatus, WorkspaceZone>> = {
   WRITING: 'development',
   USING_TOOL: 'development',
   TESTING: 'qa_lab',
+  BLOCKED: 'qa_lab',
   RESEARCHING: 'research_area',
   READING: 'research_area',
   DELEGATING: 'leads_area',
@@ -174,7 +291,11 @@ export function routeForStatus(agent: Agent, status: AgentStatus): WorkspaceZone
 }
 
 export function routeAgent(agent: Agent, workspace: WorkspaceZone): void {
-  const anchor = WORKSPACE_ANCHORS[workspace];
+  const desk = AGENT_DESK_ANCHORS[agent.id];
+  const anchor = (desk && desk.workspace === workspace)
+    ? { x: desk.x, y: desk.y }
+    : WORKSPACE_ANCHORS[workspace];
+
   agent.workspace = workspace;
   if (workspace !== 'overflow_floor') agent.floor = 1;
   agent.targetX = anchor.x;
@@ -477,6 +598,7 @@ export function advanceLivingOffice(state: LivingOfficeState, now: number): void
         if (agent.status === 'CHATTING') {
           agent.status = 'COFFEE_BREAK';
           agent.statusText = 'Coffee break';
+          moveAgentToCoffeeSeat(state, agent);
         }
       }
     }
@@ -515,17 +637,18 @@ export function applyAmbientLife(
       idleSince.delete(agent.id);
       if (agent.status !== 'CHATTING' && agent.status !== 'COFFEE_BREAK') {
         agent.socialActivityId = null;
+        releaseCoffeeSeat(state, agent.id);
       }
     }
   }
 
   for (const agent of idleAgents) {
     const since = idleSince.get(agent.id) ?? now;
-    if (now - since >= options.idleGraceMs && agent.workspace !== 'break_room') {
+    if (now - since >= options.idleGraceMs) {
       agent.status = 'COFFEE_BREAK';
       agent.statusText = 'Idle · grabbing coffee';
       agent.mood = 'neutral';
-      routeAgent(agent, 'break_room');
+      moveAgentToCoffeeSeat(state, agent);
     }
   }
 
@@ -564,7 +687,7 @@ export function applyAmbientLife(
     agent.statusText = `Ambient chat · ${exchange.topic}`;
     agent.socialActivityId = activityId;
     agent.mood = exchange.lines[index].mood;
-    routeAgent(agent, 'break_room');
+    moveAgentToCoffeeSeat(state, agent);
     agent.speechBubble = {
       text: exchange.lines[index].text,
       targetAgentName: participants[(index + 1) % participants.length].name,

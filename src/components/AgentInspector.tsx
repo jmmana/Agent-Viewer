@@ -12,6 +12,7 @@ import {
   CheckCircle,
   Eye,
   CornerDownRight,
+  Maximize2,
 } from 'lucide-react';
 
 interface AgentInspectorProps {
@@ -20,6 +21,7 @@ interface AgentInspectorProps {
   onFocusAgent: (agent: Agent) => void;
   onSendMessage: (agentId: string, message: string) => void;
   onUpdateStatus: (agentId: string, status: AgentStatus) => void;
+  onOpenDetailModal?: (agentId: string) => void;
   events: ViewerEvent[];
 }
 
@@ -29,6 +31,7 @@ export const AgentInspector: React.FC<AgentInspectorProps> = ({
   onFocusAgent,
   onSendMessage,
   onUpdateStatus,
+  onOpenDetailModal,
   events,
 }) => {
   const [instructionText, setInstructionText] = useState('');
@@ -50,27 +53,45 @@ export const AgentInspector: React.FC<AgentInspectorProps> = ({
   return (
     <aside className="w-96 h-full bg-slate-900 border-l border-slate-800 flex flex-col z-20 shrink-0 text-slate-100 shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200">
       {/* Inspector Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/60">
-        <div className="flex items-center gap-3">
+      <div
+        onDoubleClick={() => onOpenDetailModal && onOpenDetailModal(agent.id)}
+        title="Doble clic para ver expediente completo en modal"
+        className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900/60 cursor-pointer select-none"
+      >
+        <div className="flex items-center gap-3 min-w-0">
           <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-md relative"
+            className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-md relative shrink-0"
             style={{ backgroundColor: agent.clothingColor }}
           >
             <span className="text-sm font-sans">{agent.name.charAt(0)}</span>
             <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-slate-900 bg-emerald-500" />
           </div>
-          <div>
-            <h2 className="text-sm font-bold text-white leading-tight">{agent.name}</h2>
-            <p className="text-xs text-slate-400 font-medium">{agent.roleTitle}</p>
+          <div className="min-w-0">
+            <h2 className="text-sm font-bold text-white leading-tight truncate hover:text-sky-300 transition-colors">
+              {agent.name}
+            </h2>
+            <p className="text-xs text-slate-400 font-medium truncate">{agent.roleTitle}</p>
           </div>
         </div>
 
-        <button
-          onClick={onClose}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onOpenDetailModal && (
+            <button
+              onClick={() => onOpenDetailModal(agent.id)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition-colors"
+              title="Abrir expediente completo en modal"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            title="Cerrar panel lateral"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Main Inspector Scroll Area */}

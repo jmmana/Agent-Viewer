@@ -17,7 +17,9 @@ import {
   ChevronRight,
   Filter,
   Sparkles,
+  Maximize2,
 } from 'lucide-react';
+import { EventDetailModal } from './EventDetailModal';
 
 interface LiveTimelineSidebarProps {
   isOpen: boolean;
@@ -31,6 +33,7 @@ interface LiveTimelineSidebarProps {
   onFocusAgent: (agent: Agent) => void;
   onSendMessage: (agentId: string, message: string) => void;
   onUpdateStatus: (agentId: string, status: AgentStatus) => void;
+  onOpenAgentDetailModal?: (agentId: string) => void;
   theme: 'dark' | 'light';
 }
 
@@ -46,6 +49,7 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
   onFocusAgent,
   onSendMessage,
   onUpdateStatus,
+  onOpenAgentDetailModal,
   theme,
 }) => {
   const [activeTab, setActiveTab] = useState<'timeline' | 'inspector'>('timeline');
@@ -315,7 +319,11 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
                       </div>
 
                       {/* Event Card */}
-                      <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 hover:border-slate-700 transition-colors shadow-sm">
+                      <div
+                        onDoubleClick={() => sourceAgent && onOpenAgentDetailModal && onOpenAgentDetailModal(sourceAgent.id)}
+                        title="Doble clic para abrir expediente completo del agente"
+                        className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 hover:border-slate-700 transition-colors shadow-sm cursor-pointer select-none"
+                      >
                         {/* Header: Agent Name + Action Badge + Timestamp */}
                         <div className="flex items-center justify-between gap-2 mb-1.5">
                           <div className="flex items-center gap-1.5 min-w-0">
@@ -405,14 +413,31 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
 
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-1">
-                <h3 className="font-bold text-white text-sm truncate">{selectedAgent.name}</h3>
-                <button
-                  onClick={() => onFocusAgent(selectedAgent)}
-                  className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition-colors"
-                  title="Enfocar en oficina"
+                <h3
+                  onDoubleClick={() => onOpenAgentDetailModal && onOpenAgentDetailModal(selectedAgent.id)}
+                  title="Doble clic para ver todo el detalle"
+                  className="font-bold text-white text-sm truncate cursor-pointer hover:text-sky-300 transition-colors"
                 >
-                  <Eye className="w-4 h-4" />
-                </button>
+                  {selectedAgent.name}
+                </h3>
+                <div className="flex items-center gap-1">
+                  {onOpenAgentDetailModal && (
+                    <button
+                      onClick={() => onOpenAgentDetailModal(selectedAgent.id)}
+                      className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition-colors"
+                      title="Abrir expediente modal completo (Doble clic)"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onFocusAgent(selectedAgent)}
+                    className="p-1 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition-colors"
+                    title="Enfocar en oficina"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
               <p className="text-xs text-sky-400 font-medium">{selectedAgent.roleTitle}</p>
               <p className="text-[11px] text-slate-500 font-mono mt-0.5">

@@ -221,64 +221,94 @@ function drawModelOpsTelemetry(
   if (!room) return;
 
   const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
-  const providers = aggregateModelUsage(agents).slice(0, 4);
+  const providers = aggregateModelUsage(agents);
   const totalTokens = providers.reduce((sum, provider) => sum + provider.totalTokens, 0);
   const totalCost = providers.reduce((sum, provider) => sum + provider.cost, 0);
-  const panelX = rect.x + 10;
-  const panelY = rect.y + 36;
-  const panelW = Math.max(120, rect.width - 20);
-  const rowH = 28;
 
   ctx.save();
-  ctx.fillStyle = theme === 'dark' ? 'rgba(2, 8, 23, 0.88)' : 'rgba(248,250,252,0.94)';
-  ctx.strokeStyle = theme === 'dark' ? 'rgba(34,211,238,0.45)' : 'rgba(8,145,178,0.45)';
-  ctx.lineWidth = 1;
+
+  // 1. Fiber Optic Data Conduits on Floor (linking server racks to NOC display)
+  // Racks at gx: 18, 20, 22. NOC at gx: 20, gy: 0.
+  const rackCoords = [
+    { gx: 18, gy: 1, color: '#10a37f' },
+    { gx: 20, gy: 1, color: '#d97706' },
+    { gx: 22, gy: 1, color: '#2563eb' },
+    { gx: 22, gy: 3, color: '#a855f7' },
+  ];
+
+  const nocScreenPos = gridToScreen(20, 0.5, rot);
+
+  for (const rack of rackCoords) {
+    const rackPos = gridToScreen(rack.gx, rack.gy, rot);
+    ctx.strokeStyle = theme === 'dark' ? 'rgba(15, 23, 42, 0.8)' : 'rgba(203, 213, 225, 0.8)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(rackPos.x + 24, rackPos.y + 24);
+    ctx.lineTo(nocScreenPos.x + 24, nocScreenPos.y + 24);
+    ctx.stroke();
+
+    // Glowing core pulse
+    ctx.strokeStyle = rack.color;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // Data packet light traveling along the fiber
+    const packetProgress = (timeMs / 1200 + (rack.gx * 0.3)) % 1;
+    const packetX = rackPos.x + 24 + (nocScreenPos.x + 24 - (rackPos.x + 24)) * (1 - packetProgress);
+    const packetY = rackPos.y + 24 + (nocScreenPos.y + 24 - (rackPos.y + 24)) * (1 - packetProgress);
+
+    ctx.fillStyle = rack.color;
+    ctx.beginPath();
+    ctx.arc(packetX, packetY, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 2. High-Tech Floor Telemetry Runner Plaque at entrance threshold (gy: 5)
+  const threshPos = gridToScreen(18, 5, rot);
+  const hudW = 200;
+  const hudH = 26;
+  const hudX = threshPos.x + 8;
+  const hudY = threshPos.y + 12;
+
+  // Background banner with neon glow
+  ctx.fillStyle = theme === 'dark' ? 'rgba(2, 6, 23, 0.94)' : 'rgba(248, 250, 252, 0.96)';
+  ctx.strokeStyle = theme === 'dark' ? 'rgba(34, 211, 238, 0.6)' : 'rgba(8, 145, 178, 0.6)';
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.roundRect(panelX, panelY, panelW, 34 + providers.length * rowH, 8);
+  ctx.roundRect(hudX, hudY, hudW, hudH, 6);
   ctx.fill();
   ctx.stroke();
 
+  // Cyan pulsing indicator light
+  const pulse = 0.5 + Math.sin(timeMs / 250) * 0.5;
+  ctx.fillStyle = `rgba(34, 211, 238, ${pulse})`;
+  ctx.beginPath();
+  ctx.arc(hudX + 12, hudY + 13, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Title & live token stats
+  ctx.font = '700 8px "JetBrains Mono", monospace';
+  ctx.fillStyle = theme === 'dark' ? '#38bdf8' : '#0284c7';
   ctx.textAlign = 'left';
-  ctx.font = '700 8px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText('MODEL OPS · LIVE TELEMETRY', hudX + 22, hudY + 11);
+
+  ctx.font = '700 7.5px "JetBrains Mono", monospace';
+  ctx.fillStyle = '#22c55e';
+  ctx.fillText(`${compactTokens(totalTokens)} t · $${totalCost.toFixed(3)}`, hudX + 22, hudY + 21);
+
+  // Click CTA badge
+  ctx.fillStyle = theme === 'dark' ? '#083344' : '#cffafe';
+  ctx.beginPath();
+  ctx.roundRect(hudX + hudW - 58, hudY + 5, 52, 16, 4);
+  ctx.fill();
+  ctx.strokeStyle = '#22d3ee';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  ctx.font = '700 6.5px "Plus Jakarta Sans", sans-serif';
   ctx.fillStyle = theme === 'dark' ? '#67e8f9' : '#0e7490';
-  ctx.fillText('LIVE MODEL FLOW', panelX + 8, panelY + 12);
-
-  ctx.font = '600 8px "Plus Jakarta Sans", sans-serif';
-  ctx.fillStyle = theme === 'dark' ? '#cbd5e1' : '#334155';
-  ctx.fillText(`${compactTokens(totalTokens)} TOKENS  ·  $${totalCost.toFixed(3)}`, panelX + 8, panelY + 24);
-
-  providers.forEach((provider, index) => {
-    const y = panelY + 34 + index * rowH;
-    const pulse = 0.55 + Math.sin(timeMs / 450 + index) * 0.25;
-    const max = Math.max(totalTokens, 1);
-    const fraction = Math.max(0.04, provider.totalTokens / max);
-
-    ctx.fillStyle = theme === 'dark' ? 'rgba(15,23,42,0.9)' : 'rgba(226,232,240,0.95)';
-    ctx.beginPath();
-    ctx.roundRect(panelX + 6, y, panelW - 12, 22, 5);
-    ctx.fill();
-
-    ctx.globalAlpha = pulse;
-    ctx.fillStyle = '#22d3ee';
-    ctx.beginPath();
-    ctx.arc(panelX + 14, y + 7, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    ctx.font = '700 7.5px "Plus Jakarta Sans", sans-serif';
-    ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#0f172a';
-    const model = provider.models[0]?.model ?? '—';
-    ctx.fillText(`${provider.provider} · ${model}`, panelX + 21, y + 9);
-
-    ctx.font = '600 7px "Plus Jakarta Sans", sans-serif';
-    ctx.fillStyle = theme === 'dark' ? '#94a3b8' : '#64748b';
-    ctx.fillText(`${compactTokens(provider.totalTokens)} · $${provider.cost.toFixed(3)} · ${provider.activeAgents} agents`, panelX + 21, y + 18);
-
-    ctx.fillStyle = theme === 'dark' ? '#164e63' : '#a5f3fc';
-    ctx.fillRect(panelX + panelW - 62, y + 4, 50, 3);
-    ctx.fillStyle = '#22d3ee';
-    ctx.fillRect(panelX + panelW - 62, y + 4, 50 * fraction, 3);
-  });
+  ctx.textAlign = 'center';
+  ctx.fillText('⚡ ABRIR', hudX + hudW - 32, hudY + 15.5);
 
   ctx.restore();
 }
@@ -396,6 +426,31 @@ function drawArchitecturalWalls(ctx: CanvasRenderingContext2D, rot: number, them
   ctx.restore();
 }
 
+export function getAgentVisualOffsets(agents: Agent[]): Map<string, { ox: number; oy: number }> {
+  const offsets = new Map<string, { ox: number; oy: number }>();
+  for (let i = 0; i < agents.length; i++) {
+    const a1 = agents[i];
+    let clusterIndex = 0;
+    let clusterSize = 1;
+    for (let j = 0; j < agents.length; j++) {
+      if (i === j) continue;
+      const a2 = agents[j];
+      if (Math.hypot(a1.x - a2.x, a1.y - a2.y) < 0.35) {
+        clusterSize++;
+        if (j < i) clusterIndex++;
+      }
+    }
+    if (clusterSize > 1) {
+      const totalSpread = (clusterSize - 1) * 20;
+      const ox = -totalSpread / 2 + clusterIndex * 20;
+      offsets.set(a1.id, { ox, oy: 0 });
+    } else {
+      offsets.set(a1.id, { ox: 0, oy: 0 });
+    }
+  }
+  return offsets;
+}
+
 function drawDepthSortedEntities(
   ctx: CanvasRenderingContext2D,
   rot: number,
@@ -426,11 +481,14 @@ function drawDepthSortedEntities(
   // Sort by Y coordinate so entities in front overlap those behind
   entities.sort((a, b) => a.depth - b.depth);
 
+  const visualOffsets = getAgentVisualOffsets(agents);
+
   for (const ent of entities) {
     if (ent.kind === 'furniture') {
-      renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId);
+      renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId, agents);
     } else {
-      renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme, nowMs);
+      const offset = visualOffsets.get(ent.agent.id) ?? { ox: 0, oy: 0 };
+      renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme, nowMs, offset);
     }
   }
 }
@@ -441,11 +499,12 @@ function renderFurnitureItem(
   rot: number,
   timeMs: number,
   theme: 'dark' | 'light',
-  activeMeetingId: string | null
+  activeMeetingId: string | null,
+  agents: Agent[] = []
 ) {
   const { x, y } = gridToScreen(item.gridX, item.gridY, rot);
   ctx.save();
-  const scale = item.scale ?? (item.type === 'desk' ? 1.35 : item.type === 'meeting_table' ? 1.65 : item.type === 'plant' ? 1.2 : 1);
+  const scale = item.scale ?? (item.type === 'desk' ? 1.35 : item.type === 'meeting_table' ? (item.subType === 'cafe_round' ? 1.0 : 1.65) : item.type === 'plant' ? 1.2 : 1);
   const cx = x + TILE_SIZE / 2;
   const cy = y + TILE_SIZE / 2;
   ctx.translate(cx, cy);
@@ -454,7 +513,7 @@ function renderFurnitureItem(
   // Ground contact gives every object a place in the room.
   ctx.fillStyle = 'rgba(0,0,0,0.16)';
   ctx.beginPath();
-  ctx.ellipse(cx + 2, cy + 13, item.type === 'meeting_table' ? 65 : 21, 9, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx + 2, cy + 13, item.type === 'meeting_table' ? (item.subType === 'cafe_round' ? 24 : 65) : 21, 9, 0, 0, Math.PI * 2);
   ctx.fill();
 
   if (item.type === 'desk') {
@@ -462,13 +521,17 @@ function renderFurnitureItem(
   } else if (item.type === 'chair') {
     renderChair(ctx, x, y, item, theme);
   } else if (item.type === 'meeting_table') {
-    renderMeetingTable(ctx, x, y, theme);
+    if (item.subType === 'cafe_round') {
+      renderCafeRoundTable(ctx, x, y, theme, item.label);
+    } else {
+      renderMeetingTable(ctx, x, y, theme);
+    }
   } else if (item.type === 'screen') {
-    renderWallScreen(ctx, x, y, item, activeMeetingId, timeMs);
+    renderWallScreen(ctx, x, y, item, activeMeetingId, timeMs, agents);
   } else if (item.type === 'whiteboard') {
     renderWhiteboard(ctx, x, y, item);
   } else if (item.type === 'server_rack') {
-    renderServerRack(ctx, x, y, item, timeMs);
+    renderServerRack(ctx, x, y, item, timeMs, agents);
   } else if (item.type === 'bookshelf') {
     renderBookshelf(ctx, x, y);
   } else if (item.type === 'credenza') {
@@ -904,13 +967,84 @@ function renderMeetingTable(ctx: CanvasRenderingContext2D, x: number, y: number,
   ctx.fillRect(px + tableW - 53, py + 14, 8, 6);
 }
 
+function renderCafeRoundTable(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  theme: 'dark' | 'light',
+  label?: string
+) {
+  const cx = x + 24;
+  const cy = y + 24;
+
+  // Drop shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+  ctx.beginPath();
+  ctx.ellipse(cx + 1, cy + 5, 23, 16, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Polished Warm Wood Round Cafe Tabletop
+  ctx.fillStyle = theme === 'dark' ? '#3b251a' : '#8d6e63';
+  ctx.strokeStyle = theme === 'dark' ? '#d97706' : '#b45309';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 21, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Inlaid Ring
+  ctx.strokeStyle = theme === 'dark' ? 'rgba(217, 119, 6, 0.4)' : 'rgba(255, 255, 255, 0.4)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 16, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Ceramic Espresso Cups
+  ctx.fillStyle = '#f8fafc';
+  ctx.beginPath();
+  ctx.arc(cx - 7, cy - 6, 3.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#6f4e37'; // crema
+  ctx.beginPath();
+  ctx.arc(cx - 7, cy - 6, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#f8fafc';
+  ctx.beginPath();
+  ctx.arc(cx + 7, cy - 5, 3.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#78350f';
+  ctx.beginPath();
+  ctx.arc(cx + 7, cy - 5, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Pastry dish in center
+  ctx.fillStyle = '#f1f5f9';
+  ctx.beginPath();
+  ctx.arc(cx, cy + 6, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#f59e0b';
+  ctx.beginPath();
+  ctx.arc(cx - 1, cy + 6, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Table label
+  if (label) {
+    ctx.font = '700 8px "Plus Jakarta Sans", sans-serif';
+    ctx.fillStyle = theme === 'dark' ? '#fbbf24' : '#92400e';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, cx, cy + 34);
+  }
+}
+
 function renderWallScreen(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   item: FurnitureItem,
   activeMeetingId: string | null,
-  timeMs: number
+  timeMs: number,
+  agents: Agent[] = []
 ) {
   const sw = 76;
   const sh = 32;
@@ -960,25 +1094,50 @@ function renderWallScreen(
     ctx.fillStyle = '#22c55e';
     ctx.fillRect(px + 6, py + 18, 48, 4);
   } else if (item.id === 'f_server_noc') {
-    // NOC Server Vault Monitor
-    ctx.fillStyle = '#090d16';
-    ctx.fillRect(px + 4, py + 4, sw - 8, sh - 8);
+    // Model Ops Wall NOC Multi-Monitor Display
+    ctx.fillStyle = '#020617';
+    ctx.fillRect(px + 3, py + 3, sw - 6, sh - 6);
 
+    // Top status strip
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(px + 4, py + 4, sw - 8, 9);
     ctx.fillStyle = '#38bdf8';
-    ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-    ctx.fillText('INFRASTRUCTURE', px + 6, py + 13);
+    ctx.font = 'bold 6px "JetBrains Mono", monospace';
+    ctx.fillText('MODEL OPS · LIVE TOKEN FLOW', px + 6, py + 11);
 
-    // Heartbeat ping graph
-    ctx.strokeStyle = '#22c55e';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(px + 6, py + 22);
-    ctx.lineTo(px + 24, py + 22);
-    ctx.lineTo(px + 28, py + 17);
-    ctx.lineTo(px + 32, py + 25);
-    ctx.lineTo(px + 36, py + 22);
-    ctx.lineTo(px + 68, py + 22);
-    ctx.stroke();
+    // Live Animated Oscilloscope / Spectrogram of Token Traffic
+    const waveColors = ['#10b981', '#38bdf8', '#f59e0b', '#a855f7'];
+    for (let ch = 0; ch < 2; ch++) {
+      ctx.strokeStyle = waveColors[ch];
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let wx = 6; wx < sw - 6; wx += 4) {
+        const freq = timeMs / 180 + wx * 0.2 + ch * 1.5;
+        const amp = Math.sin(freq) * 3.5 * Math.cos(timeMs / 400 + wx * 0.1);
+        const wy = py + 17 + amp;
+        if (wx === 6) ctx.moveTo(px + wx, wy);
+        else ctx.lineTo(px + wx, wy);
+      }
+      ctx.stroke();
+    }
+
+    // Mini provider indicators & real-time token throughput
+    const totalTok = agents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
+    ctx.font = 'bold 5.5px "JetBrains Mono", monospace';
+    ctx.fillStyle = '#10a37f';
+    ctx.fillText('OAI', px + 5, py + sh - 4);
+    ctx.fillStyle = '#d97706';
+    ctx.fillText('ANT', px + 18, py + sh - 4);
+    ctx.fillStyle = '#2563eb';
+    ctx.fillText('GEM', px + 31, py + sh - 4);
+    ctx.fillStyle = '#a855f7';
+    ctx.fillText('LOC', px + 44, py + sh - 4);
+
+    ctx.fillStyle = '#22c55e';
+    ctx.font = 'bold 5.5px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${compactTokens(totalTok)} t`, px + sw - 6, py + sh - 4);
+    ctx.textAlign = 'left';
   } else {
     // Boss KPI or Lounge Screen
     ctx.fillStyle = '#0f172a';
@@ -1144,53 +1303,111 @@ function renderServerRack(
   x: number,
   y: number,
   item: FurnitureItem,
-  timeMs: number
+  timeMs: number,
+  agents: Agent[] = []
 ) {
   const rx = x + 4;
   const ry = y + 2;
   const rw = 40;
   const rh = 44;
 
-  // Dark metallic server rack chassis
-  ctx.fillStyle = '#090d16';
-  ctx.strokeStyle = '#0284c7';
+  // Determine provider metadata for this rack
+  let providerColor = '#0284c7';
+  let providerTag = 'SERVER';
+  let modelTag = 'gpt-4o';
+  let tokenCount = 0;
+  let rackCost = 0;
+
+  if (item.id === 'f_server_rack_1') {
+    providerColor = '#10a37f'; // OpenAI
+    providerTag = 'OpenAI';
+    modelTag = 'gpt-4o / o1';
+    const pAgents = agents.filter(a => a.provider === 'OpenAI');
+    tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
+    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
+  } else if (item.id === 'f_server_rack_2') {
+    providerColor = '#d97706'; // Anthropic
+    providerTag = 'Anthropic';
+    modelTag = 'claude-3.5';
+    const pAgents = agents.filter(a => a.provider === 'Anthropic');
+    tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
+    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
+  } else if (item.id === 'f_server_rack_3') {
+    providerColor = '#2563eb'; // Google Gemini
+    providerTag = 'Gemini';
+    modelTag = 'gemini-2.5';
+    const pAgents = agents.filter(a => a.provider === 'Google Gemini');
+    tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
+    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
+  } else if (item.id === 'f_server_rack_4') {
+    providerColor = '#a855f7'; // Local / Ollama
+    providerTag = 'Local';
+    modelTag = 'llama-3.3';
+    const pAgents = agents.filter(a => a.provider.toLowerCase().includes('local'));
+    tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
+    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
+  }
+
+  // Dark metallic server rack chassis with provider accent glow
+  ctx.fillStyle = '#030712';
+  ctx.strokeStyle = providerColor;
   ctx.lineWidth = 1.8;
-  ctx.fillRect(rx, ry, rw, rh);
-  ctx.strokeRect(rx, ry, rw, rh);
+  ctx.beginPath();
+  ctx.roundRect(rx, ry, rw, rh, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  // Top header with provider badge & active model label
+  ctx.fillStyle = providerColor;
+  ctx.fillRect(rx + 1, ry + 1, rw - 2, 5);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 5px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(modelTag, rx + rw / 2, ry + 4.8);
+  ctx.textAlign = 'left';
 
   // 6 Server Blades per rack
   for (let s = 0; s < 6; s++) {
-    const sy = ry + 4 + s * 6.5;
-    ctx.fillStyle = '#1e293b';
-    ctx.fillRect(rx + 3, sy, rw - 6, 5);
+    const sy = ry + 7 + s * 5.6;
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(rx + 3, sy, rw - 6, 4.6);
 
     // Multi-color blinking LEDs
-    const led1 = Math.sin(timeMs / 180 + s * 1.5) > 0;
-    const led2 = Math.cos(timeMs / 220 + s * 2.3) > 0;
-    const led3 = Math.sin(timeMs / 140 + s * 0.8) > 0;
+    const pulseSpeed = 160 + s * 30;
+    const led1 = Math.sin(timeMs / pulseSpeed + s * 1.5) > 0;
+    const led2 = Math.cos(timeMs / (pulseSpeed + 40) + s * 2.3) > 0;
 
-    ctx.fillStyle = led1 ? '#22c55e' : '#14532d';
+    ctx.fillStyle = led1 ? providerColor : '#1e293b';
     ctx.beginPath();
-    ctx.arc(rx + 6, sy + 2.5, 1.2, 0, Math.PI * 2);
+    ctx.arc(rx + 6, sy + 2.3, 1.2, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = led2 ? '#38bdf8' : '#075985';
+    ctx.fillStyle = led2 ? '#38bdf8' : '#1e293b';
     ctx.beginPath();
-    ctx.arc(rx + 11, sy + 2.5, 1.2, 0, Math.PI * 2);
+    ctx.arc(rx + 10, sy + 2.3, 1.2, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = led3 ? '#f59e0b' : '#78350f';
-    ctx.beginPath();
-    ctx.arc(rx + 16, sy + 2.5, 1.2, 0, Math.PI * 2);
-    ctx.fill();
+    // VU meter bar on right of blade showing dynamic traffic
+    const vuIntensity = Math.abs(Math.sin(timeMs / 250 + s * 0.9));
+    const vuWidth = Math.floor(vuIntensity * 16);
+    ctx.fillStyle = led1 ? providerColor : '#334155';
+    ctx.fillRect(rx + rw - 20, sy + 1.6, vuWidth, 1.5);
   }
 
-  // Server Rack Name tag
-  if (item.label) {
-    ctx.fillStyle = '#38bdf8';
-    ctx.font = 'bold 7px "JetBrains Mono", monospace';
-    ctx.fillText(item.label, rx + 2, ry + rh + 8);
-  }
+  // Mini token badge under rack
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(rx - 3, ry + rh + 1, rw + 6, 11);
+  ctx.strokeStyle = providerColor;
+  ctx.lineWidth = 0.8;
+  ctx.strokeRect(rx - 3, ry + rh + 1, rw + 6, 11);
+
+  ctx.fillStyle = providerColor;
+  ctx.font = 'bold 5.5px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  const displayLabel = tokenCount > 0 ? `${providerTag}: ${compactTokens(tokenCount)} t` : providerTag;
+  ctx.fillText(displayLabel, rx + rw / 2, ry + rh + 8.5);
+  ctx.textAlign = 'left';
 }
 
 function renderBookshelf(ctx: CanvasRenderingContext2D, x: number, y: number) {
@@ -1408,11 +1625,12 @@ function renderHVAC(ctx: CanvasRenderingContext2D, x: number, y: number, timeMs:
 function renderAgentItem(
   ctx: CanvasRenderingContext2D, agent: Agent, rot: number,
   selectedAgentId: string | null, hoveredAgentId: string | null,
-  timeMs: number, theme: 'dark' | 'light', nowMs: number
+  timeMs: number, theme: 'dark' | 'light', nowMs: number,
+  visualOffset: { ox: number; oy: number } = { ox: 0, oy: 0 }
 ) {
   const { x, y } = gridToScreen(agent.x, agent.y, rot);
-  const cx = x + TILE_SIZE / 2;
-  const ground = y + TILE_SIZE / 2 + 12;
+  const cx = x + TILE_SIZE / 2 + visualOffset.ox;
+  const ground = y + TILE_SIZE / 2 + 12 + visualOffset.oy;
   const phase = [...agent.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
   const walking = agent.isWalking;
   const speaking = isSpeechActive(agent.speechBubble, nowMs);
@@ -1533,10 +1751,12 @@ function shortRole(agent: Agent) {
 function drawAgentOverlays(rc: RenderContext) {
   const { ctx, agents, camera, width, height, nowMs, timeMs, theme } = rc;
   const center = cameraCenter(width, height);
+  const visualOffsets = getAgentVisualOffsets(agents);
   const anchors = agents.filter(agent => camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble, nowMs)).map(agent => {
     const world = gridToScreen(agent.x, agent.y, camera.rotation);
-    return { agent, x: center.x + (world.x + TILE_SIZE / 2 + camera.x) * camera.zoom,
-      y: center.y + (world.y - 13 + camera.y) * camera.zoom };
+    const offset = visualOffsets.get(agent.id) ?? { ox: 0, oy: 0 };
+    return { agent, x: center.x + (world.x + TILE_SIZE / 2 + offset.ox + camera.x) * camera.zoom,
+      y: center.y + (world.y - 13 + offset.oy + camera.y) * camera.zoom };
   }).filter(anchor => anchor.x > -20 && anchor.x < width + 20 && anchor.y > -20 && anchor.y < height + 20);
   // Reserve heads before laying out cards, so labels cannot hide another character.
   const occupied: OverlayRect[] = anchors.map(a => ({ x: a.x - 15, y: a.y - 5, width: 30, height: 46 }));

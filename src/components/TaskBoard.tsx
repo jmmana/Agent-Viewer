@@ -17,6 +17,7 @@ interface TaskBoardProps {
   tasks: Task[];
   agents: Agent[];
   onSelectAgent: (agentId: string) => void;
+  onOpenAgentDetail?: (agentId: string) => void;
   onOpenNewTask: () => void;
 }
 
@@ -24,6 +25,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
   tasks,
   agents,
   onSelectAgent,
+  onOpenAgentDetail,
   onOpenNewTask,
 }) => {
   const getAgentName = (id: string) => {
@@ -119,7 +121,9 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
           tasks.map((task) => (
             <div
               key={task.id}
-              className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-4 hover:border-slate-700 transition-colors"
+              onDoubleClick={() => onOpenAgentDetail && onOpenAgentDetail(task.assignedAgentId)}
+              title="Doble clic para ver expediente completo del agente asignado"
+              className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-4 hover:border-slate-700 transition-colors cursor-pointer select-none"
             >
               {/* Task Header */}
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -181,8 +185,12 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
                 <div>
                   <span className="text-[10px] text-slate-500 block uppercase">Assigned Lead</span>
                   <button
-                    onClick={() => onSelectAgent(task.assignedAgentId)}
-                    className="font-medium text-sky-400 hover:underline"
+                    onClick={() => {
+                      onSelectAgent(task.assignedAgentId);
+                      if (onOpenAgentDetail) onOpenAgentDetail(task.assignedAgentId);
+                    }}
+                    title="Clic para ver expediente completo"
+                    className="font-medium text-sky-400 hover:text-sky-300 hover:underline"
                   >
                     {getAgentName(task.assignedAgentId)}
                   </button>

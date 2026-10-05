@@ -17,6 +17,9 @@ import { SettingsModal } from './components/SettingsModal';
 import { NewTaskModal } from './components/NewTaskModal';
 import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
 import { OverflowFloorView } from './components/OverflowFloorView';
+import { ModelOpsModal } from './components/ModelOpsModal';
+import { AgentDetailModal } from './components/AgentDetailModal';
+import { SimulatedTokenBurst } from './engine/modelOps';
 import { DoorOpen } from 'lucide-react';
 import { t } from './i18n';
 import { detectLocale, Locale, persistLocale } from './i18n';
@@ -38,6 +41,13 @@ export default function App() {
 
   // Selected agent for Inspector
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+
+  // Model Ops Telemetry Modal state
+  const [isModelOpsOpen, setIsModelOpsOpen] = useState(false);
+  const [modelOpsInitialProvider, setModelOpsInitialProvider] = useState<string | null>(null);
+
+  // Agent Detail Modal state (triggered on double click)
+  const [detailModalAgentId, setDetailModalAgentId] = useState<string | null>(null);
 
   // Demo Playback Engine state
   const [isPlayingDemo, setIsPlayingDemo] = useState(false);
@@ -105,6 +115,7 @@ export default function App() {
           totalTokens: { ...prevState.totalTokens },
           roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
           socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+          coffeeSeatAssignments: prevState.coffeeSeatAssignments ? [...prevState.coffeeSeatAssignments] : [],
         };
         advanceLivingOffice(nextState, Date.now());
         return nextState;
@@ -127,6 +138,7 @@ export default function App() {
           totalTokens: { ...prevState.totalTokens },
           roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
           socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+          coffeeSeatAssignments: prevState.coffeeSeatAssignments ? [...prevState.coffeeSeatAssignments] : [],
         };
         applyAmbientLife(nextState, Date.now(), locale, {
           enabled: ambientSocialEnabled,
@@ -296,6 +308,104 @@ export default function App() {
     setSelectedAgentId(agent.id);
   };
 
+  // Open Model Ops & Token telemetry console
+  const handleOpenModelOps = (providerFilter?: string) => {
+    setModelOpsInitialProvider(providerFilter || null);
+    setIsModelOpsOpen(true);
+  };
+
+  // Ingest simulated or real token inference burst into live telemetry
+  const handleSimulateTokenBurst = (burst: SimulatedTokenBurst) => {
+    setSimState((prev) => {
+      // Find an agent with that provider and model, or pick the first matching agent
+      const targetAgent =
+        prev.agents.find((a) => a.provider === burst.provider && a.model === burst.model) ||
+        prev.agents.find((a) => a.provider === burst.provider) ||
+        prev.agents[0];
+
+      const nextAgents = prev.agents.map((a) => {
+        if (a.id === targetAgent.id) {
+          return {
+            ...a,
+            tokensInput: a.tokensInput + burst.inputTokens,
+            tokensOutput: a.tokensOutput + burst.outputTokens,
+            cachedTokens: a.cachedTokens + (burst.cachedTokens || 0),
+            cost: a.cost + burst.cost,
+            speechBubble: {
+              text: `⚡ Inferencia: +${(burst.inputTokens + burst.outputTokens).toLocaleString()} tokens en ${burst.model}`,
+              expiresAt: Date.now() + 4000,
+            },
+          };
+        }
+        return a;
+      });
+
+      const nextTotalTokens = {
+        input: prev.totalTokens.input + burst.inputTokens,
+        output: prev.totalTokens.output + burst.outputTokens,
+        cached: prev.totalTokens.cached + (burst.cachedTokens || 0),
+        reasoning: prev.totalTokens.reasoning,
+      };
+
+      const burstEvent: ViewerEvent = {
+        id: `evt-burst-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        type: 'llm.usage',
+        timestamp: Date.now(),
+        source: targetAgent.id,
+        target: 'server_room',
+        severity: 'normal',
+        summary: `Inferencia ejecutada en ${burst.provider} (${burst.model}): +${(burst.inputTokens + burst.outputTokens).toLocaleString()} tokens (${burst.latencyMs}ms, $${burst.cost.toFixed(4)})`,
+        payload: burst,
+      };
+
+      return {
+        ...prev,
+        agents: nextAgents,
+        totalTokens: nextTotalTokens,
+        totalCost: prev.totalCost + burst.cost,
+        events: [burstEvent, ...prev.events],
+      };
+    });
+  };
+
+  // Reassign agent model interactively from Model Ops
+  const handleChangeAgentModel = (agentId: string, newProvider: string, newModel: string) => {
+    setSimState((prev) => {
+      const nextAgents = prev.agents.map((a) => {
+        if (a.id === agentId) {
+          return {
+            ...a,
+            provider: newProvider,
+            model: newModel,
+            statusText: `Modelo cambiado a ${newModel} (${newProvider})`,
+            speechBubble: {
+              text: `Cambié mi motor a ${newModel} (${newProvider})`,
+              expiresAt: Date.now() + 4500,
+            },
+          };
+        }
+        return a;
+      });
+
+      const reassignEvent: ViewerEvent = {
+        id: `evt-reassign-${Date.now()}`,
+        type: 'agent.status.changed',
+        timestamp: Date.now(),
+        source: 'operator',
+        target: agentId,
+        severity: 'normal',
+        summary: `Agente reasignado: ${newModel} (${newProvider})`,
+        payload: { agentId, newProvider, newModel },
+      };
+
+      return {
+        ...prev,
+        agents: nextAgents,
+        events: [reassignEvent, ...prev.events],
+      };
+    });
+  };
+
   // Submit custom task
   const handleCreateCustomTask = (
     title: string,
@@ -339,6 +449,8 @@ export default function App() {
         setSelectedAgentId(null);
         setIsSettingsOpen(false);
         setIsNewTaskOpen(false);
+        setIsModelOpsOpen(false);
+        setDetailModalAgentId(null);
       } else if (e.key === ' ') {
         e.preventDefault();
         handleTogglePlayDemo();
@@ -386,6 +498,7 @@ export default function App() {
         activeMeetingCount={activeMeetingCount}
         locale={locale}
         onChangeLocale={setLocale}
+        onOpenModelOps={() => handleOpenModelOps()}
       />
 
       {/* Main View Area */}
@@ -403,6 +516,8 @@ export default function App() {
                       setSelectedAgentId(id);
                       if (!isSidebarOpen) setIsSidebarOpen(true);
                     }}
+                    onDoubleClickAgent={(id) => setDetailModalAgentId(id)}
+                    onOpenModelOps={handleOpenModelOps}
                     activeMeetingId={simState.activeMeetingId}
                     theme={theme}
                     locale={locale}
@@ -450,6 +565,7 @@ export default function App() {
               onFocusAgent={handleFocusAgent}
               onSendMessage={handleSendMessageToAgent}
               onUpdateStatus={handleUpdateAgentStatus}
+              onOpenAgentDetailModal={(id) => setDetailModalAgentId(id)}
               theme={theme}
             />
           </div>
@@ -464,6 +580,7 @@ export default function App() {
               setSelectedAgentId(id);
               setCurrentTab('office');
             }}
+            onOpenAgentDetail={(id) => setDetailModalAgentId(id)}
             onOpenNewTask={() => setIsNewTaskOpen(true)}
           />
         )}
@@ -501,6 +618,7 @@ export default function App() {
             onFocusAgent={handleFocusAgent}
             onSendMessage={handleSendMessageToAgent}
             onUpdateStatus={handleUpdateAgentStatus}
+            onOpenDetailModal={(id) => setDetailModalAgentId(id)}
             events={simState.events}
           />
         )}
@@ -542,6 +660,33 @@ export default function App() {
         onClose={() => setIsNewTaskOpen(false)}
         agents={simState.agents}
         onSubmitTask={handleCreateCustomTask}
+      />
+
+      {/* Interactive Model Ops & Token Operations Center Modal */}
+      <ModelOpsModal
+        isOpen={isModelOpsOpen}
+        onClose={() => setIsModelOpsOpen(false)}
+        agents={simState.agents}
+        onFocusAgent={handleFocusAgent}
+        onSimulateTokenBurst={handleSimulateTokenBurst}
+        onChangeAgentModel={handleChangeAgentModel}
+        initialProviderFilter={modelOpsInitialProvider}
+        events={simState.events}
+      />
+
+      {/* Comprehensive Agent Detail Modal (Double click on agent) */}
+      <AgentDetailModal
+        isOpen={Boolean(detailModalAgentId)}
+        agent={simState.agents.find((a) => a.id === detailModalAgentId) || null}
+        allAgents={simState.agents}
+        tasks={simState.tasks}
+        events={simState.events}
+        pricing={pricing}
+        onClose={() => setDetailModalAgentId(null)}
+        onSelectAgent={(id) => setSelectedAgentId(id)}
+        onFocusAgent={handleFocusAgent}
+        onSendMessage={handleSendMessageToAgent}
+        onUpdateStatus={handleUpdateAgentStatus}
       />
     </div>
   );

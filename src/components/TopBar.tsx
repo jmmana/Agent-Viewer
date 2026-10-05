@@ -39,6 +39,7 @@ interface TopBarProps {
   activeMeetingCount: number;
   locale: Locale;
   onChangeLocale: (locale: Locale) => void;
+  onOpenModelOps?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -61,6 +62,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   activeMeetingCount,
   locale,
   onChangeLocale,
+  onOpenModelOps,
 }) => {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled());
 
@@ -201,8 +203,13 @@ export const TopBar: React.FC<TopBarProps> = ({
           </span>
         </div>
 
-        {/* Global Live Tokens & Cost Pill (Unboxed text with tabular numerals) */}
-        <div className="flex items-center gap-2 text-xs font-mono tabular-nums bg-slate-950/60 px-2.5 py-1.5 rounded-lg border border-slate-800/80">
+        {/* Global Live Tokens & Cost Pill (Interactive Model Ops Launcher) */}
+        <button
+          onClick={onOpenModelOps}
+          title="⚡ Abrir Model Ops & Consumo de Tokens por Proveedor y Modelo"
+          className="flex items-center gap-2 text-xs font-mono tabular-nums bg-slate-950/80 hover:bg-slate-850 px-3 py-1.5 rounded-lg border border-slate-800 hover:border-cyan-500/50 shadow-sm transition-all group cursor-pointer"
+        >
+          <div className="w-2 h-2 rounded-full bg-emerald-400 group-hover:bg-cyan-400 animate-pulse shrink-0" />
           <div className="flex items-center gap-1 text-slate-300">
             <span className="text-slate-500">{t(locale, 'controls.tokens')}</span>
             <span className="text-sky-400 font-semibold">{formattedTokens}</span>
@@ -212,7 +219,10 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span className="text-slate-500">{t(locale, 'controls.cost')}</span>
             <span className="text-emerald-400 font-semibold">{formattedCost}</span>
           </div>
-        </div>
+          <span className="text-[10px] font-sans font-semibold text-cyan-400/80 group-hover:text-cyan-300 ml-1">
+            Model Ops ⚡
+          </span>
+        </button>
 
         {/* Action: New Task */}
         <button

@@ -18,6 +18,8 @@ import { NewTaskModal } from './components/NewTaskModal';
 import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
 import { detectLocale, Locale, persistLocale } from './i18n';
 import { applyAmbientLife } from './engine/livingOfficeEngine';
+import { applyExternalEvent } from './integrations/eventIngestion';
+import { connectEventStream } from './integrations/realtimeClient';
 
 export default function App() {
   // Master Simulation State
@@ -107,6 +109,37 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [ambientSocialEnabled, politicsChatterEnabled, locale]);
+
+  useEffect(() => {
+    const apiBase = import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined;
+    if (!apiBase) return;
+
+    const connection = connectEventStream(apiBase, (incoming) => {
+      setSimState((prevState) => {
+        const nextState: SimulationState = {
+          ...prevState,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
+          tasks: prevState.tasks.map((task) => ({ ...task, artifacts: [...task.artifacts], toolsUsed: [...task.toolsUsed], collaboratorIds: [...task.collaboratorIds] })),
+          meetings: prevState.meetings.map((meeting) => ({
+            ...meeting,
+            participants: [...meeting.participants],
+            agenda: [...meeting.agenda],
+            decisions: [...meeting.decisions],
+            tasksCreated: [...meeting.tasksCreated],
+            messages: [...meeting.messages],
+          })),
+          events: [...prevState.events],
+          totalTokens: { ...prevState.totalTokens },
+          roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+          socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+        };
+        applyExternalEvent(nextState, incoming);
+        return nextState;
+      });
+    });
+
+    return () => connection.close();
+  }, []);
 
   // Demo playback timer
   useEffect(() => {

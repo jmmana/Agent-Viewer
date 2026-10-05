@@ -1,4 +1,4 @@
-import type { AgentStatus, ViewerEvent, WorkspaceZone } from '../types/agent';
+import type { Agent, AgentStatus, ViewerEvent, WorkspaceZone } from '../types/agent';
 import type { SimulationState } from '../engine/simulationEngine';
 import { endMeeting, requestMeeting, routeAgent } from '../engine/livingOfficeEngine';
 

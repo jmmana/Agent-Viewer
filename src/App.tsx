@@ -17,7 +17,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { NewTaskModal } from './components/NewTaskModal';
 import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
 import { detectLocale, Locale, persistLocale } from './i18n';
-import { applyAmbientLife } from './engine/livingOfficeEngine';
+import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
 
@@ -81,6 +81,33 @@ export default function App() {
 
     setDemoStepIndex(stepIdx);
   };
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setSimState((prevState) => {
+        const nextState: SimulationState = {
+          ...prevState,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
+          tasks: prevState.tasks,
+          meetings: prevState.meetings.map((meeting) => ({
+            ...meeting,
+            participants: [...meeting.participants],
+            agenda: [...meeting.agenda],
+            decisions: [...meeting.decisions],
+            tasksCreated: [...meeting.tasksCreated],
+            messages: [...meeting.messages],
+          })),
+          events: [...prevState.events],
+          totalTokens: { ...prevState.totalTokens },
+          roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+          socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+        };
+        advanceLivingOffice(nextState, Date.now());
+        return nextState;
+      });
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!ambientSocialEnabled) return;

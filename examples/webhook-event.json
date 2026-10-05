@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "id": "evt_example_001",
+  "type": "agent.status.changed",
+  "timestamp": 1791190800000,
+  "source": "agent:research-1",
+  "agentId": "research-1",
+  "severity": "normal",
+  "summary": "Research agent started reviewing documents",
+  "payload": {
+    "status": "RESEARCHING",
+    "workspace": "research_area",
+    "statusText": "Reviewing source documents"
+  }
+}

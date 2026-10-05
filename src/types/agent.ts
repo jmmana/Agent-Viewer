@@ -14,6 +14,7 @@ export type AgentRole =
 export type AgentStatus =
   | 'OFFLINE'
   | 'IDLE'
+  | 'AVAILABLE'
   | 'THINKING'
   | 'READING'
   | 'RESEARCHING'
@@ -25,7 +26,11 @@ export type AgentStatus =
   | 'WAITING_APPROVAL'
   | 'BLOCKED'
   | 'DELEGATING'
+  | 'PHONE_CALL'
+  | 'WALKING'
   | 'IN_MEETING'
+  | 'COFFEE_BREAK'
+  | 'CHATTING'
   | 'REVIEWING'
   | 'DELIVERING'
   | 'DONE'
@@ -40,6 +45,35 @@ export type WorkspaceZone =
   | 'server_room'
   | 'meeting_room'
   | 'break_room';
+
+export type AgentMood =
+  | 'neutral'
+  | 'happy'
+  | 'amused'
+  | 'excited'
+  | 'surprised'
+  | 'focused'
+  | 'annoyed'
+  | 'frustrated'
+  | 'tired';
+
+export type SocialTopic =
+  | 'jokes'
+  | 'sports'
+  | 'technology'
+  | 'entertainment'
+  | 'current_events'
+  | 'office_banter';
+
+export interface SocialActivity {
+  id: string;
+  participantIds: string[];
+  topic: SocialTopic;
+  simulated: true;
+  locale: string;
+  startedAt: number;
+  endsAt?: number;
+}
 
 export interface Agent {
   id: string;
@@ -71,6 +105,8 @@ export interface Agent {
   reasoningTokens: number;
   cost: number;
   startedAt: number;
+  mood?: AgentMood;
+  socialActivityId?: string | null;
   speechBubble: {
     text: string;
     targetAgentName?: string;
@@ -122,6 +158,7 @@ export interface Meeting {
   agenda: string[];
   decisions: string[];
   tasksCreated: string[];
+  roomId?: string;
   messages: MeetingMessage[];
 }
 
@@ -157,10 +194,18 @@ export type EventType =
   | 'task.completed'
   | 'task.failed'
   | 'message.sent'
+  | 'agent.phone_call.started'
+  | 'agent.phone_call.ended'
+  | 'meeting.requested'
+  | 'meeting.room.reserved'
   | 'meeting.started'
   | 'meeting.message'
   | 'meeting.decision'
   | 'meeting.ended'
+  | 'meeting.cancelled'
+  | 'social.started'
+  | 'social.message'
+  | 'social.ended'
   | 'tool.started'
   | 'tool.completed'
   | 'tool.failed'

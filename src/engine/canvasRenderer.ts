@@ -74,6 +74,8 @@ export function renderOfficeScene(rc: RenderContext) {
 
   // 4. Depth-sorted Entities (Furniture and Agents rendered in 2.5D perspective)
   drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs);
+  // Room plaques are intentionally rendered after furniture/agents so static decoration can never cover them.
+  drawRoomPlaques(ctx, rot, theme, locale);
 
   ctx.restore();
   // Typography lives in screen space: readable at every camera zoom.
@@ -1628,29 +1630,85 @@ function renderFloorLamp(ctx: CanvasRenderingContext2D, x: number, y: number, th
   ctx.fillStyle = '#f0d5a3'; ctx.beginPath(); ctx.moveTo(cx - 7, cy - 26); ctx.lineTo(cx + 7, cy - 26); ctx.lineTo(cx + 11, cy - 16); ctx.lineTo(cx - 11, cy - 16); ctx.closePath(); ctx.fill();
 }
 
-function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light', locale: Locale) {
-  const names: Record<string, string> = Object.fromEntries(OFFICE_ROOMS.map((room) => [room.id, t(locale, `rooms.${room.id}` as Parameters<typeof t>[1])]));
-  const accents: Record<string, string> = { boss_office: '#b8a3e6', meeting_room: '#818cf8', server_room: '#38bdf8', leads_area: '#a5b4fc', development: '#34d399', qa_lab: '#38bdf8', research_area: '#d8b48a', break_room: '#e6b77a', lounge: '#5eead4' };
+function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light', _locale: Locale) {
   ctx.save();
   for (const room of OFFICE_ROOMS) {
     const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
-    ctx.save(); ctx.beginPath(); ctx.rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6); ctx.clip();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6);
+    ctx.clip();
     const warm = ['wood', 'executive'].includes(room.floorPattern) || room.id === 'break_room';
-    const glow = ctx.createRadialGradient(rect.x + rect.width * 0.65, rect.y + rect.height * 0.35, 1, rect.x + rect.width * 0.65, rect.y + rect.height * 0.35, Math.max(rect.width, rect.height) * 0.7);
-    glow.addColorStop(0, warm ? 'rgba(251,191,113,0.08)' : 'rgba(56,189,248,0.07)'); glow.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = glow; ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    const glow = ctx.createRadialGradient(
+      rect.x + rect.width * 0.65,
+      rect.y + rect.height * 0.35,
+      1,
+      rect.x + rect.width * 0.65,
+      rect.y + rect.height * 0.35,
+      Math.max(rect.width, rect.height) * 0.7,
+    );
+    glow.addColorStop(0, warm ? 'rgba(251,191,113,0.08)' : 'rgba(56,189,248,0.07)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
     if (room.floorPattern === 'wood' || room.floorPattern === 'executive') {
-      ctx.strokeStyle = theme === 'dark' ? 'rgba(225,195,155,0.05)' : 'rgba(115,82,52,0.08)'; ctx.lineWidth = 1;
-      for (let yy = rect.y + 8; yy < rect.y + rect.height; yy += 12) { ctx.beginPath(); ctx.moveTo(rect.x + 4, yy); ctx.lineTo(rect.x + rect.width - 4, yy); ctx.stroke(); }
+      ctx.strokeStyle = theme === 'dark' ? 'rgba(225,195,155,0.05)' : 'rgba(115,82,52,0.08)';
+      ctx.lineWidth = 1;
+      for (let yy = rect.y + 8; yy < rect.y + rect.height; yy += 12) {
+        ctx.beginPath();
+        ctx.moveTo(rect.x + 4, yy);
+        ctx.lineTo(rect.x + rect.width - 4, yy);
+        ctx.stroke();
+      }
     }
     ctx.restore();
-    const accent = accents[room.id];
-    ctx.fillStyle = theme === 'dark' ? 'rgba(12,19,32,0.9)' : 'rgba(255,255,255,0.94)';
+  }
+  ctx.restore();
+}
+
+function drawRoomPlaques(
+  ctx: CanvasRenderingContext2D,
+  rot: number,
+  theme: 'dark' | 'light',
+  locale: Locale,
+) {
+  const accents: Record<string, string> = {
+    boss_office: '#b8a3e6',
+    meeting_room: '#818cf8',
+    meeting_room_b: '#a78bfa',
+    server_room: '#38bdf8',
+    leads_area: '#a5b4fc',
+    development: '#34d399',
+    qa_lab: '#38bdf8',
+    research_area: '#d8b48a',
+    break_room: '#e6b77a',
+    lounge: '#5eead4',
+  };
+
+  ctx.save();
+  for (const room of OFFICE_ROOMS) {
+    const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
+    const label = t(locale, `rooms.${room.id}` as Parameters<typeof t>[1]);
+    const accent = accents[room.id] ?? '#94a3b8';
+
     ctx.font = '700 10px "Plus Jakarta Sans", sans-serif';
-    const label = names[room.id]; const plaqueWidth = Math.min(rect.width - 18, ctx.measureText(label).width + 29);
-    ctx.beginPath(); ctx.roundRect(rect.x + 9, rect.y + 7, plaqueWidth, 22, 6); ctx.fill();
-    ctx.fillStyle = accent; ctx.fillRect(rect.x + 15, rect.y + 13, 3, 10);
-    ctx.textAlign = 'left'; ctx.fillStyle = theme === 'dark' ? '#b7c6d9' : '#475569'; ctx.fillText(label, rect.x + 24, rect.y + 22);
+    const plaqueWidth = Math.min(rect.width - 18, ctx.measureText(label).width + 29);
+    const plaqueX = rect.x + 9;
+    const plaqueY = rect.y + 7;
+
+    ctx.fillStyle = theme === 'dark' ? 'rgba(7,12,22,0.96)' : 'rgba(255,255,255,0.98)';
+    ctx.strokeStyle = theme === 'dark' ? 'rgba(148,163,184,0.35)' : 'rgba(71,85,105,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(plaqueX, plaqueY, plaqueWidth, 22, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = accent;
+    ctx.fillRect(plaqueX + 6, plaqueY + 6, 3, 10);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#334155';
+    ctx.fillText(label, plaqueX + 15, plaqueY + 15);
   }
   ctx.restore();
 }

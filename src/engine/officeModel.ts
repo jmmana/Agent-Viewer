@@ -124,7 +124,7 @@ export const OFFICE_ROOMS: RoomZone[] = [
   },
   {
     id: 'server_room',
-    name: 'Cloud & Infrastructure Vault',
+    name: 'Model Ops & Token Operations Center',
     gridX: 17,
     gridY: 0,
     width: 7,
@@ -257,7 +257,7 @@ export const OFFICE_FURNITURE: FurnitureItem[] = [
   { id: 'f_boss_lamp', name: 'Director Reading Lamp', type: 'lamp', gridX: 0, gridY: 4 },
   { id: 'f_boardroom_lamp', name: 'Boardroom Corner Lamp', type: 'lamp', gridX: 16, gridY: 1 },
   { id: 'f_leads_lamp', name: 'Architecture Reading Lamp', type: 'lamp', gridX: 5, gridY: 7 },
-  { id: 'f_dev_lamp', name: 'Engineering Floor Lamp', type: 'lamp', gridX: 7, gridY: 7 },
+  { id: 'f_dev_lamp', name: 'Engineering Floor Lamp', type: 'lamp', gridX: 17, gridY: 10 },
   { id: 'f_qa_lamp', name: 'Lab Task Lamp', type: 'lamp', gridX: 23, gridY: 10 },
   { id: 'f_library_lamp', name: 'Library Reading Lamp', type: 'lamp', gridX: 3, gridY: 15 },
   { id: 'f_cafe_lamp', name: 'Cafe Ambient Lamp', type: 'lamp', gridX: 15, gridY: 13 },
@@ -291,13 +291,13 @@ export const OFFICE_FURNITURE: FurnitureItem[] = [
   { id: 'f_conf_plant_2', name: 'Tall Architectural Snake Plant', type: 'plant', gridX: 16, gridY: 4, plantType: 'snake' },
 
   // --- 3. CLOUD & INFRASTRUCTURE VAULT (gx: 17..23, gy: 0..5) ---
-  { id: 'f_server_rack_1', name: 'K8s Cluster Node Rack 1', type: 'server_rack', gridX: 18, gridY: 1, label: 'K8s Cluster' },
-  { id: 'f_server_rack_2', name: 'GPU Neural Training Node A100', type: 'server_rack', gridX: 20, gridY: 1, label: 'GPU Node' },
-  { id: 'f_server_rack_3', name: 'High-Throughput NVMe SAN Array', type: 'server_rack', gridX: 22, gridY: 1, label: 'SAN Storage' },
-  { id: 'f_server_rack_4', name: 'Cloud Edge Gateway Rack', type: 'server_rack', gridX: 22, gridY: 3, label: 'Edge Gateway' },
-  { id: 'f_server_noc', name: 'Wall Infrastructure NOC Display', type: 'screen', gridX: 18, gridY: 0, label: 'NOC 99.99%' },
+  { id: 'f_server_rack_1', name: 'OpenAI Provider Node', type: 'server_rack', gridX: 18, gridY: 1, label: 'OpenAI · Tokens' },
+  { id: 'f_server_rack_2', name: 'Anthropic Provider Node', type: 'server_rack', gridX: 20, gridY: 1, label: 'Anthropic · Tokens' },
+  { id: 'f_server_rack_3', name: 'Google Gemini Provider Node', type: 'server_rack', gridX: 22, gridY: 1, label: 'Gemini · Tokens' },
+  { id: 'f_server_rack_4', name: 'Local Model Runtime Rack', type: 'server_rack', gridX: 22, gridY: 3, label: 'Local · Requests' },
+  { id: 'f_server_noc', name: 'Live Model Usage Display', type: 'screen', gridX: 18, gridY: 0, label: 'LIVE TOKEN FLOW' },
   { id: 'f_server_hvac', name: 'Precision Air Cooling HVAC', type: 'hvac', gridX: 20, gridY: 0 },
-  { id: 'f_server_desk', name: 'Sysadmin Diagnostics Workstation', type: 'desk', gridX: 18, gridY: 4, label: 'Sysadmin Terminal', deskStyle: 'sysadmin' },
+  { id: 'f_server_desk', name: 'Token Telemetry Workstation', type: 'desk', gridX: 18, gridY: 4, label: 'Token Telemetry', deskStyle: 'sysadmin' },
   { id: 'f_server_chair', name: 'Technical Operator Chair', type: 'chair', gridX: 18, gridY: 3 },
 
   // --- 4. ARCHITECTURE & LEADS (gx: 0..5, gy: 7..11) ---

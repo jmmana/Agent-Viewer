@@ -20,8 +20,9 @@
   <a href="#what-you-can-explore-today">Features</a> ·
   <a href="#run-locally">Run locally</a> ·
   <a href="#project-status-and-roadmap">Roadmap</a> ·
+  <a href="#integration-direction">Integrate</a> ·
   <a href="#contribute">Contribute</a> ·
-  <a href="#en-español">Español</a>
+  <a href="README.es.md">Español</a>
 </p>
 
 ## The idea
@@ -31,6 +32,19 @@
 The goal is a modern, expressive office with animated characters, readable conversations and purposeful movement. Every operational action should be tied to an agent event, so you can follow the actual work as well as its visual representation.
 
 **Built to be free, downloadable and community driven.** The aim is to make agent collaboration easier to understand and share.
+
+### The living-office direction
+
+Agent Viewer is evolving from a static office demo into a **humanized agent observability framework**:
+
+- Agents move to the room that matches their operational state.
+- Idle agents can walk to the espresso/social area, tell jokes and hold clearly marked ambient conversations.
+- Collaboration can begin with a visible phone call, continue in a reserved meeting room and fall back to the Director Suite when meeting rooms are occupied.
+- The former passive infrastructure area becomes **Model Ops**, combining server-room aesthetics with live provider/model/token/cost telemetry.
+- English is the canonical interface language, with locale packs starting with English and Spanish.
+- External runtimes remain authoritative; Agent Viewer visualizes observable events rather than requiring private reasoning.
+
+The detailed behavior contract lives in [`docs/specs/living-office.md`](docs/specs/living-office.md).
 
 ## Preview
 
@@ -81,13 +95,14 @@ The React application and local simulation are now included in this repository.
 | Area | Role in the experience |
 |---|---|
 | **Executive Director Suite** | Coordination, priorities and escalations. |
-| **Conference Boardroom** | Team meetings, decisions and collaborative reviews. |
-| **Cloud & Infrastructure Vault** | Infrastructure activity and operational monitoring. |
+| **Meeting Room A** | Primary team meetings, decisions and collaborative reviews. |
+| **Meeting Room B** | Overflow collaboration when Room A is occupied; planned in the living-office scheduler. |
+| **Model Ops / Token Operations Center** | Provider/model activity, tokens, cost, latency and request telemetry inside a server/NOC-style room. |
 | **Architecture & Leads** | Planning, technical reviews and delegation. |
 | **Engineering & Dev Pods** | Implementation and tool execution. |
 | **QA & Test Automation Lab** | Validation, test results and feedback. |
 | **Research Archives & Library** | Research, document analysis and knowledge gathering. |
-| **Cafeteria / Espresso Bar** | Informal conversations and pauses. |
+| **Cafeteria / Espresso Bar** | Idle social behavior, coffee, jokes and clearly marked ambient conversations. |
 | **Team Lounge** | Team interaction and a quieter shared space. |
 
 Room design should make these roles recognizable through desks, computers, chairs, plants, shelves and presentation screens. Labels and dialogue bubbles should remain readable while the office is panned, rotated or zoomed.
@@ -165,11 +180,11 @@ The regression tests cover movement at different refresh rates, reset and arriva
 | `src/types/agent.ts` | Agent, task, meeting, tool, event and pricing types. |
 | `tests/office-visuals.test.mjs` | Focused regressions for motion and dialogue layout. |
 
-## Connecting real agents: next steps
+## Integration direction
 
-The longer-term goal is a viewer that receives events from existing agent runtimes. That integration layer is **not implemented yet**.
+The target architecture is a viewer that receives versioned observable events from existing agent runtimes. The public ingestion layer is still being implemented, but the contract is now specified so adapters can be built without depending on renderer internals.
 
-A future adapter should map task assignments, messages, meetings, tool calls and provider-reported usage into the event model. The renderer can then show those events without depending on a particular LLM vendor.
+Adapters should map task assignments, messages, meetings, tool calls and provider-reported usage into the versioned event model. See [`docs/integration.md`](docs/integration.md) for the target REST/realtime/SDK contract and payload examples.
 
 Current event types include `agent.status.changed`, `task.assigned`, `message.sent`, `meeting.started`, `meeting.message`, `tool.started`, `tool.completed` and `llm.usage`. These TypeScript types describe the local model; they are not an externally supported ingestion API.
 
@@ -182,8 +197,11 @@ Real integrations will need to distinguish provider usage from estimates, unknow
 - [x] Add the local task, meeting and timeline simulation.
 - [x] Improve room atmosphere, character gestures and readable dialogue cards.
 - [x] Add motion and dialogue regression tests.
-- [ ] Connect and verify the first real agent adapter.
-- [ ] Add provider-reported usage and reliable cost accounting.
+- [ ] Implement the public v1 ingestion API and verify the first real agent adapter.
+- [ ] Add autonomous room routing, phone-call choreography and Meeting Room B.
+- [ ] Add humanized idle social behavior and locale-aware conversation packs.
+- [ ] Complete live Model Ops provider/model aggregation and reliable cost accounting.
+- [ ] Complete English/Spanish UI migration and translation contribution flow.
 - [ ] Persist sessions and replay recorded agent runs.
 - [ ] Add downloadable packaged releases.
 - [ ] Add an open-source license and contribution guidelines.
@@ -211,14 +229,6 @@ Created by **[Juan Manuel Castillo Pinto](https://github.com/jmmana)** · **Warl
 
 [LinkedIn](https://linkedin.com/in/jmmana) · [Portfolio](https://juancastillo.bio)
 
-## En español
+## Languages
 
-**Agent Viewer — Mira cómo trabajan tus agentes de IA.**
-
-Una oficina virtual animada donde un director, líderes y analistas representan el trabajo de los agentes: tareas, conversaciones, reuniones, herramientas, consumo de tokens y costos.
-
-La idea es que puedas entender quién está trabajando, con quién se coordina, qué está bloqueado y cuánto consume cada tarea. Los movimientos y mensajes deben reflejar eventos del sistema conectado.
-
-El objetivo es crear una herramienta **gratuita, descargable y abierta a la comunidad**. El código ya está publicado: instala Node.js 24, ejecuta `npm ci` y después `npm run dev`. La oficina actual usa React, TypeScript y Canvas 2D. Los personajes, reuniones, mensajes, tokens y costos pertenecen a una simulación local; todavía falta conectar agentes reales, publicar instaladores y añadir la licencia.
-
-Si te interesa la idea, deja una estrella o comparte una propuesta en los issues.
+English is the canonical source language. Spanish documentation is available in [`README.es.md`](README.es.md). The application now includes the localization foundation and persists the selected locale; remaining component migration is tracked in issue AV-006.

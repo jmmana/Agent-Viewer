@@ -16,6 +16,7 @@ import { MeetingRoomModal } from './components/MeetingRoomModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewTaskModal } from './components/NewTaskModal';
 import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
+import { detectLocale, Locale, persistLocale } from './i18n';
 
 export default function App() {
   // Master Simulation State
@@ -42,6 +43,11 @@ export default function App() {
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [pricing, setPricing] = useState<PricingConfig[]>(DEFAULT_PRICING);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [locale, setLocale] = useState<Locale>(() => detectLocale());
+
+  useEffect(() => {
+    persistLocale(locale);
+  }, [locale]);
 
   // Keep a ref to current simulation state to avoid stale closure during step execution
   const simStateRef = useRef(simState);
@@ -279,6 +285,8 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenNewTask={() => setIsNewTaskOpen(true)}
         activeMeetingCount={activeMeetingCount}
+        locale={locale}
+        onChangeLocale={setLocale}
       />
 
       {/* Main View Area */}
@@ -296,6 +304,7 @@ export default function App() {
                 }}
                 activeMeetingId={simState.activeMeetingId}
                 theme={theme}
+                locale={locale}
                 isInspectorOpen={isSidebarOpen}
                 isSidebarOpen={isSidebarOpen}
                 onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}

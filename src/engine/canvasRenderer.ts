@@ -1,4 +1,5 @@
-import { Agent, WorkspaceZone } from '../types/agent';
+import { cameraCenter, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
+import type { Agent } from '../types/agent';
 import {
   FurnitureItem,
   GRID_COLS,
@@ -7,8 +8,6 @@ import {
   OFFICE_FURNITURE,
   OFFICE_HALLWAYS,
   OFFICE_ROOMS,
-  rotateGrid,
-  RoomZone,
   TILE_SIZE,
 } from './officeModel';
 
@@ -30,6 +29,8 @@ export interface RenderContext {
   activeMeetingId: string | null;
   timeMs: number;
   theme: 'dark' | 'light';
+  nowMs: number;
+  reducedMotion?: boolean;
 }
 
 /**
@@ -37,7 +38,7 @@ export interface RenderContext {
  * Screen-aligned, rectangular layout (NO diamond / rhombus!) that fills the viewport cleanly.
  */
 export function renderOfficeScene(rc: RenderContext) {
-  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme } = rc;
+  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs } = rc;
   const rot = ((camera.rotation % 4) + 4) % 4;
 
   ctx.clearRect(0, 0, width, height);
@@ -48,8 +49,9 @@ export function renderOfficeScene(rc: RenderContext) {
 
   // Apply camera pan, zoom and center transform to exact visual center of available area
   ctx.save();
-  const effectiveCenterX = width / 2;
-  const effectiveCenterY = height / 2 - 12;
+  const center = cameraCenter(width, height);
+  const effectiveCenterX = center.x;
+  const effectiveCenterY = center.y;
   ctx.translate(effectiveCenterX, effectiveCenterY);
   ctx.scale(camera.zoom, camera.zoom);
   ctx.translate(camera.x, camera.y);
@@ -60,16 +62,18 @@ export function renderOfficeScene(rc: RenderContext) {
   // 2. Floor tiles for rooms and designated interconnecting hallways
   drawFloorRooms(ctx, rot, theme, activeMeetingId, timeMs);
 
+  drawRoomAtmosphere(ctx, rot, theme);
+  drawMessageConnections(ctx, rot, agents, timeMs, nowMs);
+
   // 3. Architectural interior walls, glass partitions & doorways
   drawArchitecturalWalls(ctx, rot, theme);
 
   // 4. Depth-sorted Entities (Furniture and Agents rendered in 2.5D perspective)
-  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme);
-
-  // 5. Speech bubbles above agents
-  drawSpeechBubbles(ctx, rot, agents, timeMs);
+  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs);
 
   ctx.restore();
+  // Typography lives in screen space: readable at every camera zoom.
+  drawAgentOverlays(rc);
 }
 
 function drawBuildingBackdrop(
@@ -154,27 +158,27 @@ function drawFloorRooms(
           // Executive dark herringbone parquet
           ctx.fillStyle = (gx + gy) % 2 === 0
             ? (theme === 'dark' ? '#1e1b4b' : '#ede9fe')
-            : (theme === 'dark' ? '#27225d' : '#e0e7ff');
+            : (theme === 'dark' ? '#201d49' : '#e9e5fb');
         } else if (room.floorPattern === 'concrete') {
           // Raised server floor grid
           ctx.fillStyle = (gx + gy) % 2 === 0
             ? (theme === 'dark' ? '#0f172a' : '#cbd5e1')
-            : (theme === 'dark' ? '#141d33' : '#d8e1ea');
+            : (theme === 'dark' ? '#111b2c' : '#d3dce6');
         } else if (room.floorPattern === 'carpet') {
           // Acoustic woven carpet
           ctx.fillStyle = (gx + gy) % 2 === 0
             ? (theme === 'dark' ? '#151d30' : '#e2e8f0')
-            : (theme === 'dark' ? '#1a243b' : '#dbeafe');
+            : (theme === 'dark' ? '#172033' : '#dfe7ef');
         } else if (room.floorPattern === 'wood') {
           // Natural warm oak planks
           ctx.fillStyle = (gx + gy) % 2 === 0
-            ? (theme === 'dark' ? '#1b2230' : '#fef3c7')
-            : (theme === 'dark' ? '#1e2637' : '#fde68a');
+            ? (theme === 'dark' ? '#29282c' : '#efe4d3')
+            : (theme === 'dark' ? '#2c2a2d' : '#f2e8da');
         } else {
           // Modern kitchen / lab ceramic tile
           ctx.fillStyle = (gx + gy) % 2 === 0
             ? (theme === 'dark' ? '#111827' : '#ffffff')
-            : (theme === 'dark' ? '#161f30' : '#f8fafc');
+            : (theme === 'dark' ? '#141c2b' : '#f8fafc');
         }
 
         ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
@@ -185,23 +189,16 @@ function drawFloorRooms(
       }
     }
 
-    // Room Label positioned at the top-left of the room rect
-    const roomRect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
-    ctx.save();
-    ctx.font = '700 11px "Plus Jakarta Sans", sans-serif';
-    ctx.fillStyle = theme === 'dark' ? 'rgba(148, 163, 184, 0.65)' : 'rgba(71, 85, 105, 0.75)';
-    ctx.textAlign = 'left';
-    ctx.fillText(room.name.toUpperCase(), roomRect.x + 10, roomRect.y + 16);
-    ctx.restore();
+
   }
 
   // Draw Area Rugs with rich ambient colors
   // 1. Executive Geometric Area Rug in Boss Office
-  drawRectAreaRug(ctx, 1, 1, 5, 4, rot, '#2e1065', '#a855f7');
+  drawRectAreaRug(ctx, 1, 1, 5, 4, rot, theme === 'dark' ? '#282244' : '#e4dcf5', '#63557e');
   // 2. Emerald Plush Rug in Team Lounge
-  drawRectAreaRug(ctx, 18, 13, 5, 2.8, rot, '#134e4a', '#14b8a6');
+  drawRectAreaRug(ctx, 18, 13, 5, 2.8, rot, theme === 'dark' ? '#1a3a3e' : '#d1e9df', '#4b7975');
   // 3. Antique Warm Rug in RAG Research Library
-  drawRectAreaRug(ctx, 3, 13, 3, 2.8, rot, '#3b1d11', '#b45309');
+  drawRectAreaRug(ctx, 3, 13, 3, 2.8, rot, theme === 'dark' ? '#382d29' : '#ead9c5', '#8b6d55');
   // 4. Yellow/Black Security Hazard Stripes along Server Vault threshold
   drawServerHazardStripes(ctx, 17, 5, 7, 1, rot);
 }
@@ -327,7 +324,8 @@ function drawDepthSortedEntities(
   hoveredAgentId: string | null,
   activeMeetingId: string | null,
   timeMs: number,
-  theme: 'dark' | 'light'
+  theme: 'dark' | 'light',
+  nowMs: number
 ) {
   type DepthEntity =
     | { kind: 'furniture'; item: FurnitureItem; depth: number }
@@ -352,7 +350,7 @@ function drawDepthSortedEntities(
     if (ent.kind === 'furniture') {
       renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId);
     } else {
-      renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme);
+      renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme, nowMs);
     }
   }
 }
@@ -367,6 +365,17 @@ function renderFurnitureItem(
 ) {
   const { x, y } = gridToScreen(item.gridX, item.gridY, rot);
   ctx.save();
+  const scale = item.scale ?? (item.type === 'desk' ? 1.35 : item.type === 'meeting_table' ? 1.65 : item.type === 'plant' ? 1.2 : 1);
+  const cx = x + TILE_SIZE / 2;
+  const cy = y + TILE_SIZE / 2;
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-cx, -cy);
+  // Ground contact gives every object a place in the room.
+  ctx.fillStyle = 'rgba(0,0,0,0.16)';
+  ctx.beginPath();
+  ctx.ellipse(cx + 2, cy + 13, item.type === 'meeting_table' ? 65 : 21, 9, 0, 0, Math.PI * 2);
+  ctx.fill();
 
   if (item.type === 'desk') {
     renderDesk(ctx, x, y, item, timeMs, theme);
@@ -391,7 +400,7 @@ function renderFurnitureItem(
   } else if (item.type === 'terminal_podium') {
     renderTerminalPodium(ctx, x, y, timeMs);
   } else if (item.type === 'plant') {
-    renderPlant(ctx, x, y, item.plantType || 'monstera');
+    renderPlant(ctx, x, y, item.plantType || 'monstera', timeMs);
   } else if (item.type === 'coffee_machine') {
     renderEspressoMachine(ctx, x, y, timeMs);
   } else if (item.type === 'water_cooler') {
@@ -404,6 +413,8 @@ function renderFurnitureItem(
     renderSofa(ctx, x, y);
   } else if (item.type === 'snack_table') {
     renderSnackTable(ctx, x, y);
+  } else if (item.type === 'lamp') {
+    renderFloorLamp(ctx, x, y, theme);
   } else if (item.type === 'hvac') {
     renderHVAC(ctx, x, y, timeMs);
   }
@@ -513,7 +524,7 @@ function renderDesk(
     ctx.fillRect(posX + 21, posY - 5, 14, 1.5);
 
     // Mechanical Keyboard with animated RGB backlighting
-    const rgbHue = (timeMs / 8) % 360;
+    const rgbHue = 200 + Math.sin(timeMs / 2400) * 30;
     ctx.fillStyle = `hsl(${rgbHue}, 85%, 60%)`;
     ctx.fillRect(posX + 17, posY + 10, 14, 5);
   } else if (item.deskStyle === 'dev_figma') {
@@ -696,7 +707,7 @@ function renderDesk(
   }
 
   // Label under desk
-  if (item.label) {
+  if (item.label && !item.assignedAgentId) {
     ctx.font = '600 8.5px "JetBrains Mono", monospace';
     ctx.fillStyle = theme === 'dark' ? '#94a3b8' : '#64748b';
     ctx.textAlign = 'left';
@@ -844,7 +855,7 @@ function renderWallScreen(
 
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 8.5px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText('RFC 7636 PKCE REVIEW', px + 7, py + 14);
+      ctx.fillText('TEAM COORDINATION', px + 7, py + 14);
 
       ctx.fillStyle = '#38bdf8';
       ctx.fillRect(px + 7, py + 18, 24, 5);
@@ -865,7 +876,7 @@ function renderWallScreen(
 
     ctx.fillStyle = '#4ade80';
     ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-    ctx.fillText('CI/CD: 48/48 PASS', px + 6, py + 13);
+    ctx.fillText('TEST AUTOMATION', px + 6, py + 13);
     ctx.fillStyle = '#22c55e';
     ctx.fillRect(px + 6, py + 18, 48, 4);
   } else if (item.id === 'f_server_noc') {
@@ -875,7 +886,7 @@ function renderWallScreen(
 
     ctx.fillStyle = '#38bdf8';
     ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-    ctx.fillText('NOC UPTIME 99.99%', px + 6, py + 13);
+    ctx.fillText('INFRASTRUCTURE', px + 6, py + 13);
 
     // Heartbeat ping graph
     ctx.strokeStyle = '#22c55e';
@@ -1124,11 +1135,15 @@ function renderPlant(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
-  type: 'monstera' | 'snake' | 'palm' | 'fig' | 'succulent' | 'bamboo'
+  type: 'monstera' | 'snake' | 'palm' | 'fig' | 'succulent' | 'bamboo',
+  timeMs: number
 ) {
   const px = x + 24;
   const py = y + 24;
 
+  // Slow, slight leaf movement; the pot remains grounded.
+  ctx.save();
+  ctx.translate(Math.sin(timeMs / 2800 + x * 0.02) * 0.7, 0);
   // Plant Pot
   ctx.fillStyle = type === 'fig' ? '#9a3412' : '#f8fafc';
   ctx.beginPath();
@@ -1187,6 +1202,7 @@ function renderPlant(
     ctx.arc(px, py - 15, 8.5, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.restore();
 }
 
 function renderEspressoMachine(ctx: CanvasRenderingContext2D, x: number, y: number, timeMs: number) {
@@ -1310,334 +1326,237 @@ function renderHVAC(ctx: CanvasRenderingContext2D, x: number, y: number, timeMs:
 }
 
 function renderAgentItem(
-  ctx: CanvasRenderingContext2D,
-  agent: Agent,
-  rot: number,
-  selectedAgentId: string | null,
-  hoveredAgentId: string | null,
-  timeMs: number,
-  theme: 'dark' | 'light'
+  ctx: CanvasRenderingContext2D, agent: Agent, rot: number,
+  selectedAgentId: string | null, hoveredAgentId: string | null,
+  timeMs: number, theme: 'dark' | 'light', nowMs: number
 ) {
-  if (agent.isWalking) {
-    const dx = agent.targetX - agent.x;
-    const dy = agent.targetY - agent.y;
-    const dist = Math.hypot(dx, dy);
-
-    if (dist < 0.08) {
-      agent.x = agent.targetX;
-      agent.y = agent.targetY;
-      agent.isWalking = false;
-    } else {
-      const step = 0.05;
-      agent.x += (dx / dist) * step;
-      agent.y += (dy / dist) * step;
-
-      if (Math.abs(dx) > Math.abs(dy)) {
-        agent.facing = dx > 0 ? 'SE' : 'NW';
-      } else {
-        agent.facing = dy > 0 ? 'SW' : 'NE';
-      }
-    }
-  }
-
   const { x, y } = gridToScreen(agent.x, agent.y, rot);
-  const charCenterX = x + TILE_SIZE / 2;
-  const charCenterY = y + TILE_SIZE / 2;
-
-  const isSelected = agent.id === selectedAgentId;
-  const isHovered = agent.id === hoveredAgentId;
-
+  const cx = x + TILE_SIZE / 2;
+  const ground = y + TILE_SIZE / 2 + 12;
+  const phase = [...agent.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const walking = agent.isWalking;
+  const speaking = isSpeechActive(agent.speechBubble, nowMs);
+  const typing = !walking && ['CODING', 'TESTING', 'USING_TOOL', 'WRITING'].includes(agent.status);
+  const seated = !walking && (typing || agent.status === 'IN_MEETING');
+  const selected = agent.id === selectedAgentId;
+  const hovered = agent.id === hoveredAgentId;
+  const cycle = timeMs / 130 + phase;
+  const bob = walking ? Math.sin(cycle * 2) * 1.5 : Math.sin(timeMs / 950 + phase) * 0.45;
+  const torsoY = ground - (seated ? 23 : 28) + bob;
+  const skin = ['#e8b89a', '#c58e6f', '#f2cfb1', '#ad7656'][phase % 4];
+  const palette = statusAppearance(agent.status);
   ctx.save();
-
-  // Shadow
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-  ctx.beginPath();
-  ctx.ellipse(charCenterX, charCenterY + 12, 13, 6, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Selection target ring
-  if (isSelected || isHovered) {
-    ctx.strokeStyle = isSelected ? '#38bdf8' : '#818cf8';
-    ctx.lineWidth = isSelected ? 2.5 : 1.5;
-    ctx.beginPath();
-    ctx.ellipse(charCenterX, charCenterY + 12, 16, 8, 0, 0, Math.PI * 2);
-    ctx.stroke();
-
-    if (isSelected) {
-      const pulse = Math.sin(timeMs / 200) * 3 + 18;
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.3)';
-      ctx.beginPath();
-      ctx.ellipse(charCenterX, charCenterY + 12, pulse, pulse / 2, 0, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+  ctx.fillStyle = 'rgba(0,0,0,0.32)';
+  ctx.beginPath(); ctx.ellipse(cx, ground + 1, 13, 5, 0, 0, Math.PI * 2); ctx.fill();
+  if (selected || hovered || speaking) {
+    ctx.strokeStyle = selected ? '#38bdf8' : speaking ? palette.color : '#a5b4fc';
+    ctx.lineWidth = selected ? 2 : 1.2;
+    ctx.globalAlpha = speaking ? 0.65 + Math.sin(timeMs / 350) * 0.15 : 0.8;
+    ctx.beginPath(); ctx.ellipse(cx, ground + 1, 17, 7, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
   }
-
-  const bob = agent.isWalking ? Math.sin(timeMs / 110) * 3.5 : Math.sin(timeMs / 600) * 1;
-  const charY = charCenterY - 14 + bob;
-
-  // Legs with walk cycle
-  const legPhase = agent.isWalking ? Math.sin(timeMs / 90) * 5 : 0;
-  ctx.strokeStyle = '#1e293b';
-  ctx.lineWidth = 3.2;
-  ctx.beginPath();
-  ctx.moveTo(charCenterX - 3.5, charY + 12);
-  ctx.lineTo(charCenterX - 4 + legPhase, charY + 20);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.moveTo(charCenterX + 3.5, charY + 12);
-  ctx.lineTo(charCenterX + 4 - legPhase, charY + 20);
-  ctx.stroke();
-
-  // Torso / Clothing
-  ctx.fillStyle = agent.clothingColor;
-  ctx.beginPath();
-  ctx.roundRect(charCenterX - 7.5, charY, 15, 14, 4);
-  ctx.fill();
-
-  // Accessories
-  if (agent.accessory === 'tie') {
-    ctx.fillStyle = '#dc2626';
-    ctx.beginPath();
-    ctx.moveTo(charCenterX, charY + 2);
-    ctx.lineTo(charCenterX - 2, charY + 10);
-    ctx.lineTo(charCenterX, charY + 13);
-    ctx.lineTo(charCenterX + 2, charY + 10);
-    ctx.closePath();
-    ctx.fill();
-  } else if (agent.accessory === 'badge') {
-    ctx.fillStyle = '#f59e0b';
-    ctx.fillRect(charCenterX + 2, charY + 4, 3, 4);
+  // Chair and bent legs make working and meeting poses distinct from standing.
+  if (seated) {
+    ctx.fillStyle = theme === 'dark' ? '#475569' : '#94a3b8';
+    ctx.beginPath(); ctx.roundRect(cx - 10, torsoY + 4, 20, 18, 6); ctx.fill();
+    ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx, torsoY + 20); ctx.lineTo(cx, ground + 3); ctx.stroke();
   }
-
-  // Head & Skin
-  ctx.fillStyle = '#fcd34d';
-  ctx.beginPath();
-  ctx.arc(charCenterX, charY - 6, 7.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Hair
+  ctx.strokeStyle = '#27344c'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+  for (const side of [-1, 1]) {
+    const stride = walking ? Math.sin(cycle) * 5 * side : 0;
+    ctx.beginPath(); ctx.moveTo(cx + side * 3.5, torsoY + 13);
+    ctx.lineTo(cx + side * (seated ? 7 : 4) + stride, ground - 2); ctx.stroke();
+    ctx.fillStyle = '#111827';
+    ctx.beginPath(); ctx.roundRect(cx + side * (seated ? 7 : 4) + stride - 3, ground - 3, 7, 3.5, 1.5); ctx.fill();
+  }
+  const cloth = ctx.createLinearGradient(cx - 8, torsoY, cx + 8, torsoY + 15);
+  cloth.addColorStop(0, agent.clothingColor); cloth.addColorStop(1, agent.avatarColor);
+  ctx.fillStyle = cloth;
+  ctx.beginPath(); ctx.roundRect(cx - 8, torsoY, 16, 15, 5); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.moveTo(cx, torsoY + 4); ctx.lineTo(cx, torsoY + 13); ctx.stroke();
+  // Arms: relaxed, walking, typing, or gesturing during an emitted message.
+  for (const side of [-1, 1]) {
+    const lift = walking ? Math.sin(cycle) * 3 * -side : typing ? Math.sin(timeMs / 100 + side) * 1.5 : speaking ? 4 + Math.sin(timeMs / 260 + side) * 2 : 0;
+    const handX = cx + side * (typing ? 5 : speaking ? 13 : 10);
+    const handY = torsoY + (typing ? 7 : speaking ? 4 : 12) - lift;
+    ctx.strokeStyle = agent.clothingColor; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(cx + side * 6, torsoY + 3); ctx.lineTo(handX, handY); ctx.stroke();
+    ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(handX, handY, 2.2, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = skin; ctx.fillRect(cx - 2, torsoY - 3, 4, 5);
+  const headY = torsoY - 8;
+  ctx.fillStyle = skin; ctx.beginPath(); ctx.ellipse(cx, headY, 7.4, 8.5, 0, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = agent.hairColor;
-  ctx.beginPath();
-  ctx.arc(charCenterX, charY - 9, 7.8, Math.PI * 0.9, Math.PI * 2.1);
-  ctx.fill();
-
-  // Eyes
-  ctx.fillStyle = '#1e293b';
-  const faceOffset = agent.facing === 'SE' ? 1.5 : -1.5;
-  ctx.beginPath();
-  ctx.arc(charCenterX - 2 + faceOffset, charY - 6, 1.2, 0, Math.PI * 2);
-  ctx.arc(charCenterX + 2 + faceOffset, charY - 6, 1.2, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Typing hands when coding/testing
-  if (agent.status === 'CODING' || agent.status === 'TESTING' || agent.status === 'USING_TOOL') {
-    const typeHand = Math.sin(timeMs / 80) * 2;
-    ctx.fillStyle = '#fcd34d';
-    ctx.beginPath();
-    ctx.arc(charCenterX - 5, charY + 6 + typeHand, 2, 0, Math.PI * 2);
-    ctx.arc(charCenterX + 5, charY + 6 - typeHand, 2, 0, Math.PI * 2);
-    ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, headY - 1, 7.6, Math.PI, Math.PI * 2); ctx.lineTo(cx + 6, headY - 2); ctx.quadraticCurveTo(cx, headY - 6, cx - 6, headY - 2); ctx.fill();
+  const blink = (timeMs + phase * 31) % 4700 < 130;
+  const faceOffset = agent.facing === 'SE' || agent.facing === 'NE' ? 1 : -1;
+  ctx.fillStyle = '#242b3a';
+  for (const eye of [-1, 1]) {
+    ctx.beginPath(); ctx.ellipse(cx + eye * 2.3 + faceOffset, headY + 1, 0.8, blink ? 0.2 : 1.1, 0, 0, Math.PI * 2); ctx.fill();
   }
-
-  // Floating Status Badge Above Head
-  drawAgentStatusBadge(ctx, agent, charCenterX, charY - 22, timeMs);
-
+  ctx.strokeStyle = '#97664e'; ctx.lineWidth = 0.8;
+  ctx.beginPath(); ctx.arc(cx + faceOffset, headY + 4, speaking ? 1.5 : 1.1, 0, Math.PI); ctx.stroke();
+  if (agent.accessory === 'glasses') {
+    ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
+    ctx.strokeRect(cx - 5 + faceOffset, headY - 1, 4, 3.5); ctx.strokeRect(cx + 1 + faceOffset, headY - 1, 4, 3.5);
+    ctx.beginPath(); ctx.moveTo(cx - 1 + faceOffset, headY); ctx.lineTo(cx + 1 + faceOffset, headY); ctx.stroke();
+  } else if (agent.accessory === 'headphones') {
+    ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, headY - 1, 8.5, Math.PI, 0); ctx.stroke();
+    ctx.fillStyle = agent.avatarColor; ctx.fillRect(cx - 9, headY - 2, 3, 6); ctx.fillRect(cx + 6, headY - 2, 3, 6);
+  } else if (agent.accessory === 'tie') {
+    ctx.fillStyle = '#e2e8f0'; ctx.beginPath(); ctx.moveTo(cx - 4, torsoY); ctx.lineTo(cx, torsoY + 4); ctx.lineTo(cx + 4, torsoY); ctx.fill();
+    ctx.fillStyle = '#fb7185'; ctx.beginPath(); ctx.moveTo(cx, torsoY + 3); ctx.lineTo(cx - 2, torsoY + 10); ctx.lineTo(cx, torsoY + 12); ctx.lineTo(cx + 2, torsoY + 10); ctx.fill();
+  } else if (agent.accessory === 'hoodie') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx - 3, torsoY + 2); ctx.lineTo(cx - 3, torsoY + 7); ctx.moveTo(cx + 3, torsoY + 2); ctx.lineTo(cx + 3, torsoY + 7); ctx.stroke();
+  } else if (agent.accessory === 'badge') {
+    ctx.fillStyle = '#e2e8f0'; ctx.fillRect(cx + 2, torsoY + 5, 4, 5);
+    ctx.fillStyle = agent.avatarColor; ctx.fillRect(cx + 3, torsoY + 6, 2, 2);
+  }
+  if (!walking && agent.status === 'THINKING') {
+    ctx.fillStyle = '#fbbf24';
+    for (let i = 0; i < 3; i++) { ctx.globalAlpha = 0.3 + (Math.sin(timeMs / 300 - i) + 1) * 0.3; ctx.beginPath(); ctx.arc(cx + 12 + i * 4, headY - 3, 1.7, 0, Math.PI * 2); ctx.fill(); }
+  }
   ctx.restore();
 }
 
-function drawAgentStatusBadge(
-  ctx: CanvasRenderingContext2D,
-  agent: Agent,
-  x: number,
-  y: number,
-  timeMs: number
-) {
-  const status = agent.status;
-  const firstName = agent.name.split(' ')[0];
-
-  // Format short role
-  let shortRole = 'Agent';
-  if (agent.role === 'boss') shortRole = 'Executive';
-  else if (agent.role === 'tech_lead') shortRole = 'Tech Lead';
-  else if (agent.role === 'research_lead') shortRole = 'Research';
-  else if (agent.role === 'backend_engineer') shortRole = 'Backend';
-  else if (agent.role === 'frontend_engineer') shortRole = 'Frontend';
-  else if (agent.role === 'security_analyst') shortRole = 'Security';
-  else if (agent.role === 'qa_engineer') shortRole = 'QA Lead';
-
-  // Status configuration with clean color palette
-  let statusColor = '#94a3b8'; // IDLE = slate/azulado
-  let icon = '●';
-  let statusText = 'IDLE';
-
-  if (status === 'CODING') {
-    statusColor = '#34d399'; // WORKING = verde/teal
-    icon = '⚡';
-    statusText = 'CODING';
-  } else if (status === 'IN_MEETING') {
-    statusColor = '#c084fc'; // MEETING = morado/cian
-    icon = '👥';
-    statusText = 'MEETING';
-  } else if (status === 'TESTING') {
-    statusColor = '#38bdf8'; // TESTING = cyan/teal
-    icon = '🧪';
-    statusText = 'TESTING';
-  } else if (status === 'RESEARCHING' || status === 'USING_TOOL') {
-    statusColor = '#38bdf8'; // TOOL = sky
-    icon = '🔍';
-    statusText = status === 'USING_TOOL' ? 'TOOL' : 'RESEARCH';
-  } else if (status === 'BLOCKED') {
-    const pulse = Math.sin(timeMs / 150) > 0;
-    statusColor = pulse ? '#f43f5e' : '#fb7185'; // BLOCKED = rojo/naranja
-    icon = '⚠️';
-    statusText = 'BLOCKED';
-  } else if (status === 'DONE') {
-    statusColor = '#4ade80';
-    icon = '✓';
-    statusText = 'DONE';
-  } else if (status === 'DELIVERING' || status === 'DELEGATING') {
-    statusColor = '#fbbf24';
-    icon = '📦';
-    statusText = status;
-  } else if (status === 'THINKING') {
-    statusColor = '#facc15'; // THINKING = amarillo sutil
-    icon = '💭';
-    statusText = 'THINKING';
-  }
-
-  // Two-tier typography calculation
-  ctx.font = 'bold 9.5px "Plus Jakarta Sans", sans-serif';
-  const nameWidth = ctx.measureText(firstName).width;
-  ctx.font = '600 7.5px "JetBrains Mono", monospace';
-  const roleStatusText = `${shortRole} · ${icon} ${statusText}`;
-  const subWidth = ctx.measureText(roleStatusText).width;
-
-  const cardW = Math.max(nameWidth, subWidth) + 16;
-  const cardH = 25;
-  const cardX = x - cardW / 2;
-  const cardY = y - cardH;
-
-  // Drop Shadow
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-  ctx.beginPath();
-  ctx.roundRect(cardX + 1.5, cardY + 1.5, cardW, cardH, 5);
-  ctx.fill();
-
-  // Dark glass background
-  ctx.fillStyle = 'rgba(10, 15, 29, 0.94)';
-  ctx.beginPath();
-  ctx.roundRect(cardX, cardY, cardW, cardH, 5);
-  ctx.fill();
-
-  // Subtle accent border
-  ctx.strokeStyle = statusColor;
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
-
-  // Downward pointer notch towards the agent
-  ctx.fillStyle = 'rgba(10, 15, 29, 0.94)';
-  ctx.beginPath();
-  ctx.moveTo(x - 3.5, cardY + cardH);
-  ctx.lineTo(x, cardY + cardH + 4);
-  ctx.lineTo(x + 3.5, cardY + cardH);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = statusColor;
-  ctx.lineWidth = 1.2;
-  ctx.stroke();
-
-  // Row 1: Agent Name (Bold, white, prominent)
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 9.5px "Plus Jakarta Sans", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(firstName, x, cardY + 10.5);
-
-  // Row 2: Short role + status indicator
-  ctx.fillStyle = statusColor;
-  ctx.font = '600 7.5px "JetBrains Mono", monospace';
-  ctx.fillText(roleStatusText, x, cardY + 20.5);
+function statusAppearance(status: Agent['status']) {
+  const colors: Partial<Record<Agent['status'], string>> = {
+    CODING: '#34d399', WRITING: '#34d399', DONE: '#4ade80',
+    TESTING: '#38bdf8', USING_TOOL: '#38bdf8', RESEARCHING: '#38bdf8', READING: '#38bdf8',
+    IN_MEETING: '#c4b5fd', REVIEWING: '#c4b5fd',
+    BLOCKED: '#fb923c', WAITING_APPROVAL: '#fbbf24', ERROR: '#fb7185',
+    DELEGATING: '#fbbf24', DELIVERING: '#fbbf24', THINKING: '#facc15',
+  };
+  return { color: colors[status] ?? '#94a3b8', label: status.replaceAll('_', ' ') };
 }
 
-function drawSpeechBubbles(
-  ctx: CanvasRenderingContext2D,
-  rot: number,
-  agents: Agent[],
-  timeMs: number
-) {
-  for (const agent of agents) {
-    if (!agent.speechBubble || agent.speechBubble.expiresAt < timeMs) continue;
+function shortRole(agent: Agent) {
+  const roles: Record<Agent['role'], string> = { boss: 'Director', tech_lead: 'Tech lead', research_lead: 'Research', backend_engineer: 'Backend', frontend_engineer: 'Frontend', qa_engineer: 'QA', security_analyst: 'Security' };
+  return roles[agent.role];
+}
 
-    const { x, y } = gridToScreen(agent.x, agent.y, rot);
-    const bubbleCenterX = x + TILE_SIZE / 2;
-    // Position cleanly above the persistent status badge (badge top is ~ y - 48)
-    const bubbleY = y - 56;
-    const text = agent.speechBubble.text;
-
-    ctx.save();
-    ctx.font = '500 10.5px "Plus Jakarta Sans", sans-serif';
-
-    const maxBubbleWidth = 210;
-    const words = text.split(' ');
-    let lines: string[] = [];
-    let currentLine = '';
-
-    for (const w of words) {
-      const testLine = currentLine ? `${currentLine} ${w}` : w;
-      if (ctx.measureText(testLine).width > maxBubbleWidth) {
-        lines.push(currentLine);
-        currentLine = w;
-      } else {
-        currentLine = testLine;
-      }
-    }
-    if (currentLine) lines.push(currentLine);
-
-    // Limit to max 2 lines for clean, non-intrusive bubbles
-    if (lines.length > 2) {
-      lines = lines.slice(0, 2);
-      lines[1] += '...';
-    }
-
-    const lineHeight = 13;
-    const bubbleHeight = lines.length * lineHeight + 12;
-    const longestLineWidth = Math.max(...lines.map((l) => ctx.measureText(l).width));
-    const bubbleWidth = longestLineWidth + 18;
-    const bubbleX = bubbleCenterX - bubbleWidth / 2;
-
-    // Soft drop shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-    ctx.beginPath();
-    ctx.roundRect(bubbleX + 2, bubbleY - bubbleHeight + 2, bubbleWidth, bubbleHeight, 7);
-    ctx.fill();
-
-    // Dark sleek glass card
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.96)';
-    ctx.strokeStyle = '#38bdf8';
-    ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    ctx.roundRect(bubbleX, bubbleY - bubbleHeight, bubbleWidth, bubbleHeight, 7);
-    ctx.fill();
-    ctx.stroke();
-
-    // Speech arrow pointer down
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.96)';
-    ctx.beginPath();
-    ctx.moveTo(bubbleCenterX - 4, bubbleY);
-    ctx.lineTo(bubbleCenterX, bubbleY + 6);
-    ctx.lineTo(bubbleCenterX + 4, bubbleY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = '#38bdf8';
-    ctx.stroke();
-
-    // Bubble text
-    ctx.fillStyle = '#f8fafc';
-    ctx.textAlign = 'left';
-    lines.forEach((line, idx) => {
-      ctx.fillText(line, bubbleX + 9, bubbleY - bubbleHeight + 14 + idx * lineHeight);
-    });
-
-    ctx.restore();
+function drawAgentOverlays(rc: RenderContext) {
+  const { ctx, agents, camera, width, height, nowMs, timeMs, theme } = rc;
+  const center = cameraCenter(width, height);
+  const anchors = agents.filter(agent => camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble, nowMs)).map(agent => {
+    const world = gridToScreen(agent.x, agent.y, camera.rotation);
+    return { agent, x: center.x + (world.x + TILE_SIZE / 2 + camera.x) * camera.zoom,
+      y: center.y + (world.y - 13 + camera.y) * camera.zoom };
+  }).filter(anchor => anchor.x > -20 && anchor.x < width + 20 && anchor.y > -20 && anchor.y < height + 20);
+  // Reserve heads before laying out cards, so labels cannot hide another character.
+  const occupied: OverlayRect[] = anchors.map(a => ({ x: a.x - 15, y: a.y - 5, width: 30, height: 46 }));
+  const labels = new Map<string, OverlayRect>();
+  const foreground = theme === 'dark' ? '#f1f5f9' : '#0f172a';
+  const background = theme === 'dark' ? 'rgba(13,21,36,0.96)' : 'rgba(255,255,255,0.97)';
+  ctx.save();
+  for (const a of [...anchors].sort((a, b) => a.y - b.y)) {
+    const { color, label } = statusAppearance(a.agent.status);
+    const name = a.agent.role === 'boss' ? 'Director' : a.agent.name;
+    ctx.font = '600 10px "Plus Jakarta Sans", sans-serif';
+    const subtitle = shortRole(a.agent) + ' · ' + label;
+    const subtitleWidth = ctx.measureText(subtitle).width + 26;
+    ctx.font = '700 11px "Plus Jakarta Sans", sans-serif';
+    const cardWidth = Math.max(112, Math.min(190, Math.max(subtitleWidth, ctx.measureText(name).width + 34)));
+    const card = placeOverlay({ x: a.x - cardWidth / 2, y: a.y - 46, width: cardWidth, height: 38 }, occupied, { width, height });
+    occupied.push(card); labels.set(a.agent.id, card);
+    ctx.strokeStyle = color; ctx.globalAlpha = 0.4; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(card.x + card.width / 2, card.y + card.height); ctx.lineTo(a.x, a.y); ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 9; ctx.shadowOffsetY = 3;
+    ctx.fillStyle = background; ctx.beginPath(); ctx.roundRect(card.x, card.y, card.width, card.height, 9); ctx.fill();
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.strokeStyle = a.agent.id === rc.selectedAgentId ? '#38bdf8' : theme === 'dark' ? '#334155' : '#cbd5e1'; ctx.stroke();
+    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(card.x + 12, card.y + 12, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.font = '700 11px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground; ctx.textAlign = 'left';
+    ctx.fillText(wrapText(name, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 21, card.y + 16);
+    ctx.font = '500 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = theme === 'dark' ? '#a9b7ca' : '#526176';
+    ctx.fillText(wrapText(subtitle, card.width - 20, t => ctx.measureText(t).width, 1)[0], card.x + 10, card.y + 30);
   }
+  for (const a of anchors) {
+    if (!isSpeechActive(a.agent.speechBubble, nowMs)) continue;
+    const speech = a.agent.speechBubble!;
+    ctx.font = '500 12px "Plus Jakarta Sans", sans-serif';
+    const maxWidth = Math.min(250, width - 32);
+    const lines = wrapText(speech.text, maxWidth - 24, t => ctx.measureText(t).width, 2);
+    const badge = labels.get(a.agent.id)!;
+    const card = placeOverlay({ x: a.x - maxWidth / 2, y: badge.y - (lines.length * 17 + 40), width: maxWidth, height: lines.length * 17 + 32 }, occupied, { width, height });
+    occupied.push(card);
+    const remaining = speech.expiresAt - nowMs;
+    ctx.globalAlpha = Math.min(1, remaining / 250);
+    const { color } = statusAppearance(a.agent.status);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(card.x + card.width / 2, card.y + card.height); ctx.lineTo(a.x, a.y - 4); ctx.stroke();
+    ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
+    ctx.fillStyle = background; ctx.beginPath(); ctx.roundRect(card.x, card.y, card.width, card.height, 11); ctx.fill();
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.stroke();
+    ctx.font = '700 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = color;
+    const speaker = a.agent.role === 'boss' ? 'Director' : a.agent.name.split(' ')[0];
+    const header = speech.targetAgentName ? speaker + ' → ' + speech.targetAgentName : speaker + (a.agent.status === 'IN_MEETING' ? ' · MEETING' : ' · ACTIVITY');
+    ctx.fillText(wrapText(header, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 12, card.y + 16);
+    ctx.font = '500 12px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground;
+    lines.forEach((line, i) => ctx.fillText(line, card.x + 12, card.y + 34 + i * 17));
+    // Speaker dots follow a real, unexpired message, not invented dialogue.
+    for (let i = 0; i < 3; i++) {
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(card.x + card.width - 23 + i * 5, card.y + 13, 1.3 + Math.max(0, Math.sin(timeMs / 220 - i)) * 0.7, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+function drawMessageConnections(ctx: CanvasRenderingContext2D, rot: number, agents: Agent[], timeMs: number, nowMs: number) {
+  ctx.save();
+  for (const agent of agents) {
+    if (!isSpeechActive(agent.speechBubble, nowMs) || !agent.speechBubble?.targetAgentName) continue;
+    const target = agents.find(a => a.id !== agent.id && (a.name === agent.speechBubble!.targetAgentName || a.name.startsWith(agent.speechBubble!.targetAgentName!)));
+    if (!target) continue;
+    const from = gridToScreen(agent.x, agent.y, rot); const to = gridToScreen(target.x, target.y, rot);
+    const ax = from.x + 24, ay = from.y + 24, bx = to.x + 24, by = to.y + 24;
+    ctx.strokeStyle = '#a5b4fc'; ctx.globalAlpha = 0.35; ctx.lineWidth = 1.5; ctx.setLineDash([4, 6]); ctx.lineDashOffset = -timeMs / 80;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); ctx.setLineDash([]);
+    const t = (timeMs / 1800) % 1;
+    ctx.globalAlpha = 0.8; ctx.fillStyle = '#c4b5fd'; ctx.beginPath(); ctx.arc(ax + (bx - ax) * t, ay + (by - ay) * t, 2.8, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function renderFloorLamp(ctx: CanvasRenderingContext2D, x: number, y: number, theme: 'dark' | 'light') {
+  const cx = x + 24, cy = y + 28;
+  ctx.fillStyle = '#475569'; ctx.beginPath(); ctx.ellipse(cx, cy, 9, 4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - 26); ctx.stroke();
+  const halo = ctx.createRadialGradient(cx, cy - 23, 1, cx, cy - 23, 25);
+  halo.addColorStop(0, theme === 'dark' ? 'rgba(251,191,113,0.22)' : 'rgba(251,191,113,0.12)'); halo.addColorStop(1, 'rgba(251,191,113,0)');
+  ctx.fillStyle = halo; ctx.fillRect(cx - 25, cy - 48, 50, 50);
+  ctx.fillStyle = '#f0d5a3'; ctx.beginPath(); ctx.moveTo(cx - 7, cy - 26); ctx.lineTo(cx + 7, cy - 26); ctx.lineTo(cx + 11, cy - 16); ctx.lineTo(cx - 11, cy - 16); ctx.closePath(); ctx.fill();
+}
+
+function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light') {
+  const names: Record<string, string> = { boss_office: 'DIRECTOR SUITE', meeting_room: 'BOARDROOM', server_room: 'INFRASTRUCTURE', leads_area: 'ARCHITECTURE', development: 'ENGINEERING', qa_lab: 'QA LAB', research_area: 'RESEARCH LIBRARY', break_room: 'ESPRESSO BAR', lounge: 'TEAM LOUNGE' };
+  const accents: Record<string, string> = { boss_office: '#b8a3e6', meeting_room: '#818cf8', server_room: '#38bdf8', leads_area: '#a5b4fc', development: '#34d399', qa_lab: '#38bdf8', research_area: '#d8b48a', break_room: '#e6b77a', lounge: '#5eead4' };
+  ctx.save();
+  for (const room of OFFICE_ROOMS) {
+    const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
+    ctx.save(); ctx.beginPath(); ctx.rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6); ctx.clip();
+    const warm = ['wood', 'executive'].includes(room.floorPattern) || room.id === 'break_room';
+    const glow = ctx.createRadialGradient(rect.x + rect.width * 0.65, rect.y + rect.height * 0.35, 1, rect.x + rect.width * 0.65, rect.y + rect.height * 0.35, Math.max(rect.width, rect.height) * 0.7);
+    glow.addColorStop(0, warm ? 'rgba(251,191,113,0.08)' : 'rgba(56,189,248,0.07)'); glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow; ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    if (room.floorPattern === 'wood' || room.floorPattern === 'executive') {
+      ctx.strokeStyle = theme === 'dark' ? 'rgba(225,195,155,0.05)' : 'rgba(115,82,52,0.08)'; ctx.lineWidth = 1;
+      for (let yy = rect.y + 8; yy < rect.y + rect.height; yy += 12) { ctx.beginPath(); ctx.moveTo(rect.x + 4, yy); ctx.lineTo(rect.x + rect.width - 4, yy); ctx.stroke(); }
+    }
+    ctx.restore();
+    const accent = accents[room.id];
+    ctx.fillStyle = theme === 'dark' ? 'rgba(12,19,32,0.9)' : 'rgba(255,255,255,0.94)';
+    ctx.font = '700 10px "Plus Jakarta Sans", sans-serif';
+    const label = names[room.id]; const plaqueWidth = Math.min(rect.width - 18, ctx.measureText(label).width + 29);
+    ctx.beginPath(); ctx.roundRect(rect.x + 9, rect.y + 7, plaqueWidth, 22, 6); ctx.fill();
+    ctx.fillStyle = accent; ctx.fillRect(rect.x + 15, rect.y + 13, 3, 10);
+    ctx.textAlign = 'left'; ctx.fillStyle = theme === 'dark' ? '#b7c6d9' : '#475569'; ctx.fillText(label, rect.x + 24, rect.y + 22);
+  }
+  ctx.restore();
 }

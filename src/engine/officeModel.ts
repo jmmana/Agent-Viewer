@@ -49,6 +49,7 @@ export interface FurnitureItem {
   deskStyle?: 'boss' | 'standing' | 'research' | 'dev_rgb' | 'dev_figma' | 'qa_lab' | 'sec_console' | 'hotdesk' | 'sysadmin';
   subType?: string;
   statusColor?: string;
+  scale?: number;
 }
 
 // 2.5D Rectangular Architectural Grid Dimensions (Screen-aligned, NO diamond/rombo!)
@@ -252,8 +253,19 @@ export function getOfficeRenderedBounds(rotation = 0): OfficeRenderedBounds {
 }
 
 export const OFFICE_FURNITURE: FurnitureItem[] = [
+  // Warm pools of light and a few perimeter accents keep circulation paths clear.
+  { id: 'f_boss_lamp', name: 'Director Reading Lamp', type: 'lamp', gridX: 0, gridY: 4 },
+  { id: 'f_boardroom_lamp', name: 'Boardroom Corner Lamp', type: 'lamp', gridX: 16, gridY: 1 },
+  { id: 'f_leads_lamp', name: 'Architecture Reading Lamp', type: 'lamp', gridX: 5, gridY: 7 },
+  { id: 'f_dev_lamp', name: 'Engineering Floor Lamp', type: 'lamp', gridX: 7, gridY: 7 },
+  { id: 'f_qa_lamp', name: 'Lab Task Lamp', type: 'lamp', gridX: 23, gridY: 10 },
+  { id: 'f_library_lamp', name: 'Library Reading Lamp', type: 'lamp', gridX: 3, gridY: 15 },
+  { id: 'f_cafe_lamp', name: 'Cafe Ambient Lamp', type: 'lamp', gridX: 15, gridY: 13 },
+  { id: 'f_lounge_lamp', name: 'Lounge Reading Lamp', type: 'lamp', gridX: 18, gridY: 15 },
+  { id: 'f_dev_planter', name: 'Engineering Desk Planter', type: 'plant', gridX: 10, gridY: 8, plantType: 'succulent' },
+  { id: 'f_qa_snake', name: 'Lab Corner Snake Plant', type: 'plant', gridX: 23, gridY: 7, plantType: 'snake' },
   // --- 1. EXECUTIVE DIRECTOR SUITE (gx: 0..6, gy: 0..5) ---
-  { id: 'f_boss_desk', name: 'Executive Walnut L-Desk', type: 'desk', gridX: 3, gridY: 2, label: 'Director Desk', assignedAgentId: 'boss', deskStyle: 'boss' },
+  { id: 'f_boss_desk', name: 'Executive Walnut L-Desk', type: 'desk', gridX: 3, gridY: 2, label: 'Director Desk', assignedAgentId: 'boss', deskStyle: 'boss', scale: 1.65 },
   { id: 'f_boss_chair', name: 'Leather Executive High-Back Chair', type: 'chair', gridX: 3, gridY: 1, subType: 'executive' },
   { id: 'f_boss_credenza', name: 'Mahogany Bookshelf & Awards Credenza', type: 'credenza', gridX: 5, gridY: 1 },
   { id: 'f_boss_screen', name: 'Wall KPI Dashboard Display', type: 'screen', gridX: 1, gridY: 1, label: 'Objectives Wall' },

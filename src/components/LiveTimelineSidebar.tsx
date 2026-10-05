@@ -148,7 +148,7 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
   }
 
   return (
-    <aside className="w-80 sm:w-96 h-full bg-slate-900 border-l border-slate-800/90 flex flex-col z-20 shrink-0 text-slate-100 shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200">
+    <aside className="absolute right-0 top-0 lg:relative w-[min(100%,24rem)] h-full bg-slate-900 border-l border-slate-800/90 flex flex-col z-20 shrink-0 text-slate-100 shadow-2xl overflow-hidden animate-in slide-in-from-right duration-200">
       {/* Sidebar Header with Mode Tabs & Hide Button */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md">
         <div className="flex items-center gap-1 bg-slate-950/80 p-0.5 rounded-lg border border-slate-800">

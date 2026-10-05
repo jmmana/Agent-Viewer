@@ -2,10 +2,15 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Agent } from '../types/agent';
 import { CameraState, renderOfficeScene } from '../engine/canvasRenderer';
 import { getOfficeRenderedBounds, gridToScreen } from '../engine/officeModel';
+import { OfficeMotion } from '../engine/visualMotion';
+import { cameraCenter } from '../engine/visualLayout';
 import {
   ZoomIn,
   ZoomOut,
   Radio,
+  Focus,
+  RotateCw,
+  RotateCcw,
 } from 'lucide-react';
 
 interface OfficeCanvasProps {
@@ -31,6 +36,17 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const motionRef = useRef(new OfficeMotion());
+  const visibleAgentsRef = useRef<Agent[]>(agents);
+  const dragDistanceRef = useRef(0);
+  const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  useEffect(() => {
+    const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(preference.matches);
+    preference.addEventListener('change', update);
+    return () => preference.removeEventListener('change', update);
+  }, []);
 
   // Camera State with 4-way rotation
   const [camera, setCamera] = useState<CameraState>({
@@ -79,7 +95,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
 
       // Uniform scale preserving proportions
       const targetZoom = Math.min(scaleX, scaleY);
-      const clampedZoom = Math.min(Math.max(targetZoom, 0.6), 2.5);
+      const clampedZoom = Math.min(Math.max(targetZoom, 0.15), 2.5);
 
       // Center exactly on the bounding box center point
       setCamera((prev) => ({
@@ -119,7 +135,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     setCamera((prev) => ({
       ...prev,
       x: -(x + 24),
-      y: -(y + 24),
+      y: -(y + 8),
       zoom: zoomLevel,
     }));
   };
@@ -127,7 +143,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   // If selectedAgentId changes externally, focus on that agent
   useEffect(() => {
     if (selectedAgentId) {
-      const agent = agents.find((a) => a.id === selectedAgentId);
+      const agent = visibleAgentsRef.current.find((a) => a.id === selectedAgentId);
       if (agent) {
         focusOnCoordinates(agent.x, agent.y, 1.4);
       }
@@ -143,8 +159,13 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     if (!ctx) return;
 
     let animationFrameId: number;
+    let previousTime: number | null = null;
 
     const render = (time: number) => {
+      const deltaMs = previousTime === null ? 0 : time - previousTime;
+      previousTime = time;
+      const visibleAgents = motionRef.current.update(agents, deltaMs, reducedMotion);
+      visibleAgentsRef.current = visibleAgents;
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
       const displayWidth = Math.floor(rect.width * dpr);
@@ -163,11 +184,13 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         width: rect.width,
         height: rect.height,
         camera,
-        agents,
+        agents: visibleAgents,
         selectedAgentId,
         hoveredAgentId,
         activeMeetingId,
-        timeMs: time,
+        timeMs: reducedMotion ? 1000 : time,
+        nowMs: Date.now(),
+        reducedMotion,
         theme,
       });
 
@@ -181,11 +204,12 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme]);
+  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, reducedMotion]);
 
   // Mouse drag & pan
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     isDraggingRef.current = true;
+    dragDistanceRef.current = 0;
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
   };
 
@@ -196,6 +220,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     if (isDraggingRef.current) {
       const deltaScreenX = e.clientX - lastMousePosRef.current.x;
       const deltaScreenY = e.clientY - lastMousePosRef.current.y;
+      dragDistanceRef.current += Math.hypot(deltaScreenX, deltaScreenY);
       lastMousePosRef.current = { x: e.clientX, y: e.clientY };
 
       setCamera((prev) => ({
@@ -211,17 +236,18 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    const screenDx = mouseX - rect.width / 2;
-    const screenDy = mouseY - (rect.height / 2 - 12);
+    const center = cameraCenter(rect.width, rect.height);
+    const screenDx = mouseX - center.x;
+    const screenDy = mouseY - center.y;
     const worldX = screenDx / camera.zoom - camera.x;
     const worldY = screenDy / camera.zoom - camera.y;
 
     let foundAgent: Agent | null = null;
     let minDist = 32;
 
-    for (const agent of agents) {
+    for (const agent of visibleAgentsRef.current) {
       const { x, y } = gridToScreen(agent.x, agent.y, camera.rotation);
-      const dist = Math.hypot(worldX - x, worldY - (y - 12));
+      const dist = Math.hypot(worldX - (x + 24), worldY - (y + 8));
       if (dist < minDist) {
         minDist = dist;
         foundAgent = agent;
@@ -240,6 +266,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
+    if (dragDistanceRef.current > 5) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -248,17 +275,18 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    const screenDx = mouseX - rect.width / 2;
-    const screenDy = mouseY - (rect.height / 2 - 12);
+    const center = cameraCenter(rect.width, rect.height);
+    const screenDx = mouseX - center.x;
+    const screenDy = mouseY - center.y;
     const worldX = screenDx / camera.zoom - camera.x;
     const worldY = screenDy / camera.zoom - camera.y;
 
     let clickedAgent: Agent | null = null;
     let minDist = 30;
 
-    for (const agent of agents) {
+    for (const agent of visibleAgentsRef.current) {
       const { x, y } = gridToScreen(agent.x, agent.y, camera.rotation);
-      const dist = Math.hypot(worldX - x, worldY - (y - 12));
+      const dist = Math.hypot(worldX - (x + 24), worldY - (y + 8));
       if (dist < minDist) {
         minDist = dist;
         clickedAgent = agent;
@@ -275,7 +303,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
     setCamera((prev) => {
-      const newZoom = Math.min(Math.max(prev.zoom * zoomFactor, 0.45), 2.5);
+      const newZoom = Math.min(Math.max(prev.zoom * zoomFactor, 0.15), 2.5);
       return { ...prev, zoom: newZoom };
     });
   };
@@ -287,14 +315,21 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onMouseLeave={() => { isDraggingRef.current = false; setHoveredAgentId(null); }}
         onWheel={handleWheel}
         className="w-full h-full block touch-none cursor-grab active:cursor-grabbing"
+        role="img"
+        aria-label="Oficina animada de agentes. Usa el panel lateral para consultar sus tareas y conversaciones."
       />
 
       {/* Floating Zoom Control HUD (Bottom Center) */}
       <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-slate-900/95 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-slate-800 shadow-2xl z-20 text-xs text-slate-200">
+        <button onClick={() => fitOfficeToViewport((camera.rotation + 3) % 4)} aria-label="Girar oficina a la izquierda" title="Girar izquierda" className="p-2 rounded-xl hover:bg-slate-800"><RotateCcw className="w-4 h-4" /></button>
+        <button onClick={() => fitOfficeToViewport((camera.rotation + 1) % 4)} aria-label="Girar oficina a la derecha" title="Girar derecha" className="p-2 rounded-xl hover:bg-slate-800"><RotateCw className="w-4 h-4" /></button>
+        <button onClick={() => fitOfficeToViewport()} aria-label="Centrar oficina completa" title="Centrar oficina" className="p-2 rounded-xl text-sky-300 hover:bg-slate-800"><Focus className="w-4 h-4" /></button>
         <button
-          onClick={() => setCamera((c) => ({ ...c, zoom: Math.max(c.zoom * 0.88, 0.45) }))}
+          onClick={() => setCamera((c) => ({ ...c, zoom: Math.max(c.zoom * 0.88, 0.15) }))}
+          aria-label="Alejar oficina"
           title="Alejar vista (Zoom Out)"
           className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
         >
@@ -307,6 +342,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
 
         <button
           onClick={() => setCamera((c) => ({ ...c, zoom: Math.min(c.zoom * 1.12, 2.5) }))}
+          aria-label="Acercar oficina"
           title="Acercar vista (Zoom In)"
           className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
         >

@@ -27,7 +27,7 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState<'office' | 'tasks' | 'meetings' | 'timeline'>('office');
 
   // Collapsible vertical live timeline sidebar state
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
 
   // Selected agent for Inspector
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);

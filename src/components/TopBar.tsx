@@ -69,7 +69,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   const formattedCost = `$${totalCost.toFixed(3)}`;
 
   return (
-    <header className="flex items-center justify-between px-5 py-2.5 bg-slate-900 border-b border-slate-800 text-slate-100 select-none z-30 shrink-0">
+    <header className="flex flex-wrap gap-2 items-center justify-between px-3 sm:px-5 py-2.5 bg-slate-900 border-b border-slate-800 text-slate-100 select-none z-30 shrink-0">
       {/* Zone 1: Single text element Brand mark */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
@@ -81,13 +81,14 @@ export const TopBar: React.FC<TopBarProps> = ({
           </span>
         </div>
         <div className="h-4 w-px bg-slate-700" />
-        <span className="text-xs text-slate-400 hidden lg:inline">
-          Live Agent Observability & Virtual Office
+        <span className="text-xs text-slate-400 hidden 2xl:inline">
+          Virtual Office · Simulation
         </span>
+        <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-200" title="Actividad, tokens y costos generados por la simulación local">DEMO</span>
       </div>
 
       {/* Zone 2: Navigation Links (Single-line, clean tabs) */}
-      <nav className="flex items-center gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800/80">
+      <nav className="flex max-w-full overflow-x-auto items-center gap-1 bg-slate-950/80 p-1 rounded-lg border border-slate-800/80">
         <button
           onClick={() => onTabChange('office')}
           className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap ${
@@ -141,7 +142,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       </nav>
 
       {/* Zone 3: Demo Controls & Telemetry Stats */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         {/* Live Replay / Demo Controls */}
         <div className="flex items-center gap-1.5 bg-slate-950/80 px-2 py-1 rounded-lg border border-slate-800">
           <button

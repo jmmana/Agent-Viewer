@@ -96,6 +96,8 @@ export interface Agent {
   targetX: number;
   targetY: number;
   isWalking: boolean;
+  travelStartedAt?: number;
+  travelDurationMs?: number;
   facing: 'SE' | 'SW' | 'NE' | 'NW';
   avatarColor: string;
   clothingColor: string;

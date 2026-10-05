@@ -1474,8 +1474,18 @@ function renderAgentItem(
   for (const eye of [-1, 1]) {
     ctx.beginPath(); ctx.ellipse(cx + eye * 2.3 + faceOffset, headY + 1, 0.8, blink ? 0.2 : 1.1, 0, 0, Math.PI * 2); ctx.fill();
   }
-  ctx.strokeStyle = '#97664e'; ctx.lineWidth = 0.8;
-  ctx.beginPath(); ctx.arc(cx + faceOffset, headY + 4, speaking ? 1.5 : 1.1, 0, Math.PI); ctx.stroke();
+  ctx.strokeStyle = '#97664e'; ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  if (agent.mood === 'annoyed' || agent.mood === 'frustrated') {
+    ctx.arc(cx + faceOffset, headY + 6, 1.8, Math.PI, Math.PI * 2);
+  } else if (agent.mood === 'happy' || agent.mood === 'amused' || agent.mood === 'excited') {
+    ctx.arc(cx + faceOffset, headY + 3.5, speaking ? 2.0 : 1.7, 0, Math.PI);
+  } else if (agent.mood === 'surprised') {
+    ctx.arc(cx + faceOffset, headY + 4.5, 1.5, 0, Math.PI * 2);
+  } else {
+    ctx.arc(cx + faceOffset, headY + 4, speaking ? 1.5 : 1.1, 0, Math.PI);
+  }
+  ctx.stroke();
   if (agent.accessory === 'glasses') {
     ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
     ctx.strokeRect(cx - 5 + faceOffset, headY - 1, 4, 3.5); ctx.strokeRect(cx + 1 + faceOffset, headY - 1, 4, 3.5);
@@ -1508,6 +1518,7 @@ function statusAppearance(status: Agent['status']) {
     IN_MEETING: '#c4b5fd', REVIEWING: '#c4b5fd',
     BLOCKED: '#fb923c', WAITING_APPROVAL: '#fbbf24', ERROR: '#fb7185',
     DELEGATING: '#fbbf24', DELIVERING: '#fbbf24', THINKING: '#facc15',
+    PHONE_CALL: '#a78bfa', WALKING: '#94a3b8', COFFEE_BREAK: '#f59e0b', CHATTING: '#fb7185', AVAILABLE: '#86efac',
   };
   return { color: colors[status] ?? '#94a3b8', label: status.replaceAll('_', ' ') };
 }
@@ -1572,7 +1583,12 @@ function drawAgentOverlays(rc: RenderContext) {
     ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.stroke();
     ctx.font = '700 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = color;
     const speaker = a.agent.role === 'boss' ? 'Director' : a.agent.name.split(' ')[0];
-    const header = speech.targetAgentName ? speaker + ' → ' + speech.targetAgentName : speaker + (a.agent.status === 'IN_MEETING' ? ' · MEETING' : ' · ACTIVITY');
+    const activityLabel =
+      a.agent.status === 'IN_MEETING' ? 'MEETING'
+      : a.agent.status === 'PHONE_CALL' ? 'PHONE'
+      : a.agent.status === 'CHATTING' || a.agent.status === 'COFFEE_BREAK' ? 'SOCIAL · SIMULATED'
+      : 'ACTIVITY';
+    const header = speech.targetAgentName ? speaker + ' → ' + speech.targetAgentName + ' · ' + activityLabel : speaker + ' · ' + activityLabel;
     ctx.fillText(wrapText(header, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 12, card.y + 16);
     ctx.font = '500 12px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground;
     lines.forEach((line, i) => ctx.fillText(line, card.x + 12, card.y + 34 + i * 17));

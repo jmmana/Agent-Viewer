@@ -1,5 +1,6 @@
 import { cameraCenter, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
 import type { Agent } from '../types/agent';
+import { Locale, t } from '../i18n';
 import {
   FurnitureItem,
   GRID_COLS,
@@ -29,6 +30,7 @@ export interface RenderContext {
   activeMeetingId: string | null;
   timeMs: number;
   theme: 'dark' | 'light';
+  locale: Locale;
   nowMs: number;
   reducedMotion?: boolean;
 }
@@ -38,7 +40,7 @@ export interface RenderContext {
  * Screen-aligned, rectangular layout (NO diamond / rhombus!) that fills the viewport cleanly.
  */
 export function renderOfficeScene(rc: RenderContext) {
-  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs } = rc;
+  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, locale, nowMs } = rc;
   const rot = ((camera.rotation % 4) + 4) % 4;
 
   ctx.clearRect(0, 0, width, height);
@@ -62,7 +64,7 @@ export function renderOfficeScene(rc: RenderContext) {
   // 2. Floor tiles for rooms and designated interconnecting hallways
   drawFloorRooms(ctx, rot, theme, activeMeetingId, timeMs);
 
-  drawRoomAtmosphere(ctx, rot, theme);
+  drawRoomAtmosphere(ctx, rot, theme, locale);
   drawMessageConnections(ctx, rot, agents, timeMs, nowMs);
 
   // 3. Architectural interior walls, glass partitions & doorways
@@ -1534,8 +1536,8 @@ function renderFloorLamp(ctx: CanvasRenderingContext2D, x: number, y: number, th
   ctx.fillStyle = '#f0d5a3'; ctx.beginPath(); ctx.moveTo(cx - 7, cy - 26); ctx.lineTo(cx + 7, cy - 26); ctx.lineTo(cx + 11, cy - 16); ctx.lineTo(cx - 11, cy - 16); ctx.closePath(); ctx.fill();
 }
 
-function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light') {
-  const names: Record<string, string> = { boss_office: 'DIRECTOR SUITE', meeting_room: 'BOARDROOM', server_room: 'INFRASTRUCTURE', leads_area: 'ARCHITECTURE', development: 'ENGINEERING', qa_lab: 'QA LAB', research_area: 'RESEARCH LIBRARY', break_room: 'ESPRESSO BAR', lounge: 'TEAM LOUNGE' };
+function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light', locale: Locale) {
+  const names: Record<string, string> = Object.fromEntries(OFFICE_ROOMS.map((room) => [room.id, t(locale, `rooms.${room.id}` as Parameters<typeof t>[1])]));
   const accents: Record<string, string> = { boss_office: '#b8a3e6', meeting_room: '#818cf8', server_room: '#38bdf8', leads_area: '#a5b4fc', development: '#34d399', qa_lab: '#38bdf8', research_area: '#d8b48a', break_room: '#e6b77a', lounge: '#5eead4' };
   ctx.save();
   for (const room of OFFICE_ROOMS) {

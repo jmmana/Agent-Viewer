@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { PricingConfig } from '../types/agent';
 import { isSoundEnabled, setSoundEnabled } from '../engine/soundEffects';
-import { X, DollarSign, Shield, Volume2, RotateCcw, Download } from 'lucide-react';
+import { X, DollarSign, Shield, Volume2, RotateCcw, Download, Coffee } from 'lucide-react';
+import type { Locale } from '../i18n';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,6 +11,11 @@ interface SettingsModalProps {
   onUpdatePricing: (pricing: PricingConfig[]) => void;
   onResetSession: () => void;
   onExportSession: () => void;
+  ambientSocialEnabled: boolean;
+  onAmbientSocialEnabledChange: (enabled: boolean) => void;
+  politicsChatterEnabled: boolean;
+  onPoliticsChatterEnabledChange: (enabled: boolean) => void;
+  locale: Locale;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -19,6 +25,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onUpdatePricing,
   onResetSession,
   onExportSession,
+  ambientSocialEnabled,
+  onAmbientSocialEnabledChange,
+  politicsChatterEnabled,
+  onPoliticsChatterEnabledChange,
 }) => {
   const [localPricing, setLocalPricing] = useState<PricingConfig[]>(pricing);
   const [maskSecrets, setMaskSecrets] = useState(true);
@@ -146,6 +156,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span className="font-semibold text-slate-200 block">Play Subtle Sonic Cues</span>
                 <span className="text-[11px] text-slate-400">
                   Unobtrusive Web Audio oscillator chimes for task completions, meetings, and blocker warnings.
+                </span>
+              </div>
+            </label>
+          </div>
+
+          {/* Section: Living Office */}
+          <div className="space-y-3 pt-3 border-t border-slate-800">
+            <div className="flex items-center gap-2">
+              <Coffee className="w-4 h-4 text-amber-400" />
+              <h4 className="font-semibold text-slate-200">Living Office</h4>
+            </div>
+            <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={ambientSocialEnabled}
+                onChange={(e) => onAmbientSocialEnabledChange(e.target.checked)}
+                className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4"
+              />
+              <div>
+                <span className="font-semibold text-slate-200 block">Ambient social life</span>
+                <span className="text-[11px] text-slate-400">
+                  Idle agents may walk to the espresso bar, tell jokes, chat and show lightweight moods.
+                </span>
+              </div>
+            </label>
+            <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={politicsChatterEnabled}
+                onChange={(e) => onPoliticsChatterEnabledChange(e.target.checked)}
+                disabled={!ambientSocialEnabled}
+                className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4 disabled:opacity-50"
+              />
+              <div>
+                <span className="font-semibold text-slate-200 block">Allow politics as an ambient topic</span>
+                <span className="text-[11px] text-slate-400">
+                  Off by default. Built-in dialogue stays generic; future live news must carry source and timestamp metadata.
                 </span>
               </div>
             </label>

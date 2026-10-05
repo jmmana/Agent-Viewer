@@ -1524,7 +1524,7 @@ function statusAppearance(status: Agent['status']) {
 }
 
 function shortRole(agent: Agent) {
-  const roles: Record<Agent['role'], string> = { boss: 'Director', tech_lead: 'Tech lead', research_lead: 'Research', backend_engineer: 'Backend', frontend_engineer: 'Frontend', qa_engineer: 'QA', security_analyst: 'Security' };
+  const roles: Record<Agent['role'], string> = { boss: 'Director', tech_lead: 'Tech lead', research_lead: 'Research', backend_engineer: 'Backend', frontend_engineer: 'Frontend', qa_engineer: 'QA', security_analyst: 'Security', custom: 'External' };
   return roles[agent.role];
 }
 

@@ -16,6 +16,13 @@ import { MeetingRoomModal } from './components/MeetingRoomModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewTaskModal } from './components/NewTaskModal';
 import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
+import { OverflowFloorView } from './components/OverflowFloorView';
+import { DoorOpen } from 'lucide-react';
+import { t } from './i18n';
+import { detectLocale, Locale, persistLocale } from './i18n';
+import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
+import { applyExternalEvent } from './integrations/eventIngestion';
+import { connectEventStream } from './integrations/realtimeClient';
 
 export default function App() {
   // Master Simulation State
@@ -42,6 +49,14 @@ export default function App() {
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [pricing, setPricing] = useState<PricingConfig[]>(DEFAULT_PRICING);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [locale, setLocale] = useState<Locale>(() => detectLocale());
+  const [ambientSocialEnabled, setAmbientSocialEnabled] = useState(true);
+  const [politicsChatterEnabled, setPoliticsChatterEnabled] = useState(false);
+  const [currentFloor, setCurrentFloor] = useState<1 | 2>(1);
+
+  useEffect(() => {
+    persistLocale(locale);
+  }, [locale]);
 
   // Keep a ref to current simulation state to avoid stale closure during step execution
   const simStateRef = useRef(simState);
@@ -60,6 +75,8 @@ export default function App() {
         meetings: prevState.meetings.map((m) => ({ ...m, agenda: [...m.agenda], decisions: [...m.decisions], messages: [...m.messages] })),
         events: [...prevState.events],
         totalTokens: { ...prevState.totalTokens },
+        roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+        socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
       };
 
       DEMO_STEPS[stepIdx].execute(nextState);
@@ -68,6 +85,92 @@ export default function App() {
 
     setDemoStepIndex(stepIdx);
   };
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setSimState((prevState) => {
+        const nextState: SimulationState = {
+          ...prevState,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
+          tasks: prevState.tasks,
+          meetings: prevState.meetings.map((meeting) => ({
+            ...meeting,
+            participants: [...meeting.participants],
+            agenda: [...meeting.agenda],
+            decisions: [...meeting.decisions],
+            tasksCreated: [...meeting.tasksCreated],
+            messages: [...meeting.messages],
+          })),
+          events: [...prevState.events],
+          totalTokens: { ...prevState.totalTokens },
+          roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+          socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+        };
+        advanceLivingOffice(nextState, Date.now());
+        return nextState;
+      });
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!ambientSocialEnabled) return;
+
+    const timer = window.setInterval(() => {
+      setSimState((prevState) => {
+        const nextState: SimulationState = {
+          ...prevState,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
+          tasks: prevState.tasks,
+          meetings: prevState.meetings,
+          events: [...prevState.events],
+          totalTokens: { ...prevState.totalTokens },
+          roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+          socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+        };
+        applyAmbientLife(nextState, Date.now(), locale, {
+          enabled: ambientSocialEnabled,
+          politicsEnabled: politicsChatterEnabled,
+          idleGraceMs: 12000,
+          minIntervalMs: 18000,
+        });
+        return nextState;
+      });
+    }, 4000);
+
+    return () => window.clearInterval(timer);
+  }, [ambientSocialEnabled, politicsChatterEnabled, locale]);
+
+  useEffect(() => {
+    const apiBase = import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined;
+    if (!apiBase) return;
+
+    const connection = connectEventStream(apiBase, (incoming) => {
+      setSimState((prevState) => {
+        const nextState: SimulationState = {
+          ...prevState,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
+          tasks: prevState.tasks.map((task) => ({ ...task, artifacts: [...task.artifacts], toolsUsed: [...task.toolsUsed], collaboratorIds: [...task.collaboratorIds] })),
+          meetings: prevState.meetings.map((meeting) => ({
+            ...meeting,
+            participants: [...meeting.participants],
+            agenda: [...meeting.agenda],
+            decisions: [...meeting.decisions],
+            tasksCreated: [...meeting.tasksCreated],
+            messages: [...meeting.messages],
+          })),
+          events: [...prevState.events],
+          totalTokens: { ...prevState.totalTokens },
+          roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+          socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+        };
+        applyExternalEvent(nextState, incoming);
+        return nextState;
+      });
+    });
+
+    return () => connection.close();
+  }, []);
 
   // Demo playback timer
   useEffect(() => {
@@ -254,6 +357,8 @@ export default function App() {
 
   const selectedAgent = simState.agents.find((a) => a.id === selectedAgentId) || null;
   const activeMeetingCount = simState.meetings.filter((m) => m.status === 'ACTIVE').length;
+  const overflowReservations = simState.roomReservations.filter((reservation) => reservation.floor === 2);
+  const mainFloorAgents = simState.agents.filter((agent) => (agent.floor ?? 1) === 1);
 
   return (
     <div className={`w-screen h-screen flex flex-col bg-slate-950 font-sans overflow-hidden select-none ${theme}`}>
@@ -279,6 +384,8 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenNewTask={() => setIsNewTaskOpen(true)}
         activeMeetingCount={activeMeetingCount}
+        locale={locale}
+        onChangeLocale={setLocale}
       />
 
       {/* Main View Area */}
@@ -287,19 +394,47 @@ export default function App() {
         {currentTab === 'office' && (
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
             <div className="flex-1 h-full relative overflow-hidden">
-              <OfficeCanvas
-                agents={simState.agents}
-                selectedAgentId={selectedAgentId}
-                onSelectAgent={(id) => {
-                  setSelectedAgentId(id);
-                  if (!isSidebarOpen) setIsSidebarOpen(true);
-                }}
-                activeMeetingId={simState.activeMeetingId}
-                theme={theme}
-                isInspectorOpen={isSidebarOpen}
-                isSidebarOpen={isSidebarOpen}
-                onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
-              />
+              {currentFloor === 1 ? (
+                <>
+                  <OfficeCanvas
+                    agents={mainFloorAgents}
+                    selectedAgentId={selectedAgentId}
+                    onSelectAgent={(id) => {
+                      setSelectedAgentId(id);
+                      if (!isSidebarOpen) setIsSidebarOpen(true);
+                    }}
+                    activeMeetingId={simState.activeMeetingId}
+                    theme={theme}
+                    locale={locale}
+                    isInspectorOpen={isSidebarOpen}
+                    isSidebarOpen={isSidebarOpen}
+                    onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+                  />
+                  {overflowReservations.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setCurrentFloor(2)}
+                      className="absolute bottom-5 right-5 z-30 flex items-center gap-2 rounded-xl border border-violet-700/60 bg-slate-950/95 px-3 py-2 text-xs font-semibold text-violet-200 shadow-xl hover:bg-violet-950/70"
+                      title={t(locale, 'floor.secret')}
+                    >
+                      <DoorOpen className="w-4 h-4" />
+                      <span>{t(locale, 'floor.enterSecret')}</span>
+                      <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[10px] text-white">
+                        {overflowReservations.length}
+                      </span>
+                    </button>
+                  )}
+                </>
+              ) : (
+                <OverflowFloorView
+                  locale={locale}
+                  reservations={simState.roomReservations}
+                  meetings={simState.meetings}
+                  agents={simState.agents}
+                  onBack={() => setCurrentFloor(1)}
+                  onSelectAgent={(id) => setSelectedAgentId(id)}
+                />
+              )}
             </div>
 
             {/* Collapsible Vertical Activity Timeline & Inspector Sidebar */}
@@ -394,6 +529,11 @@ export default function App() {
         onUpdatePricing={(newPricing) => setPricing(newPricing)}
         onResetSession={handleResetDemo}
         onExportSession={handleExportSession}
+        ambientSocialEnabled={ambientSocialEnabled}
+        onAmbientSocialEnabledChange={setAmbientSocialEnabled}
+        politicsChatterEnabled={politicsChatterEnabled}
+        onPoliticsChatterEnabledChange={setPoliticsChatterEnabled}
+        locale={locale}
       />
 
       {/* New Task Dispatch Modal */}

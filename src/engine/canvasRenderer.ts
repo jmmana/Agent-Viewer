@@ -1,5 +1,7 @@
 import { cameraCenter, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
 import type { Agent } from '../types/agent';
+import { Locale, t } from '../i18n';
+import { aggregateModelUsage, compactTokens } from './modelOps';
 import {
   FurnitureItem,
   GRID_COLS,
@@ -29,6 +31,7 @@ export interface RenderContext {
   activeMeetingId: string | null;
   timeMs: number;
   theme: 'dark' | 'light';
+  locale: Locale;
   nowMs: number;
   reducedMotion?: boolean;
 }
@@ -38,7 +41,7 @@ export interface RenderContext {
  * Screen-aligned, rectangular layout (NO diamond / rhombus!) that fills the viewport cleanly.
  */
 export function renderOfficeScene(rc: RenderContext) {
-  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs } = rc;
+  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, locale, nowMs } = rc;
   const rot = ((camera.rotation % 4) + 4) % 4;
 
   ctx.clearRect(0, 0, width, height);
@@ -62,7 +65,8 @@ export function renderOfficeScene(rc: RenderContext) {
   // 2. Floor tiles for rooms and designated interconnecting hallways
   drawFloorRooms(ctx, rot, theme, activeMeetingId, timeMs);
 
-  drawRoomAtmosphere(ctx, rot, theme);
+  drawRoomAtmosphere(ctx, rot, theme, locale);
+  drawModelOpsTelemetry(ctx, rot, theme, agents, timeMs);
   drawMessageConnections(ctx, rot, agents, timeMs, nowMs);
 
   // 3. Architectural interior walls, glass partitions & doorways
@@ -70,6 +74,8 @@ export function renderOfficeScene(rc: RenderContext) {
 
   // 4. Depth-sorted Entities (Furniture and Agents rendered in 2.5D perspective)
   drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs);
+  // Room plaques are intentionally rendered after furniture/agents so static decoration can never cover them.
+  drawRoomPlaques(ctx, rot, theme, locale);
 
   ctx.restore();
   // Typography lives in screen space: readable at every camera zoom.
@@ -201,6 +207,80 @@ function drawFloorRooms(
   drawRectAreaRug(ctx, 3, 13, 3, 2.8, rot, theme === 'dark' ? '#382d29' : '#ead9c5', '#8b6d55');
   // 4. Yellow/Black Security Hazard Stripes along Server Vault threshold
   drawServerHazardStripes(ctx, 17, 5, 7, 1, rot);
+}
+
+
+function drawModelOpsTelemetry(
+  ctx: CanvasRenderingContext2D,
+  rot: number,
+  theme: 'dark' | 'light',
+  agents: Agent[],
+  timeMs: number
+) {
+  const room = OFFICE_ROOMS.find((item) => item.id === 'server_room');
+  if (!room) return;
+
+  const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
+  const providers = aggregateModelUsage(agents).slice(0, 4);
+  const totalTokens = providers.reduce((sum, provider) => sum + provider.totalTokens, 0);
+  const totalCost = providers.reduce((sum, provider) => sum + provider.cost, 0);
+  const panelX = rect.x + 10;
+  const panelY = rect.y + 36;
+  const panelW = Math.max(120, rect.width - 20);
+  const rowH = 28;
+
+  ctx.save();
+  ctx.fillStyle = theme === 'dark' ? 'rgba(2, 8, 23, 0.88)' : 'rgba(248,250,252,0.94)';
+  ctx.strokeStyle = theme === 'dark' ? 'rgba(34,211,238,0.45)' : 'rgba(8,145,178,0.45)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(panelX, panelY, panelW, 34 + providers.length * rowH, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.font = '700 8px "Plus Jakarta Sans", sans-serif';
+  ctx.fillStyle = theme === 'dark' ? '#67e8f9' : '#0e7490';
+  ctx.fillText('LIVE MODEL FLOW', panelX + 8, panelY + 12);
+
+  ctx.font = '600 8px "Plus Jakarta Sans", sans-serif';
+  ctx.fillStyle = theme === 'dark' ? '#cbd5e1' : '#334155';
+  ctx.fillText(`${compactTokens(totalTokens)} TOKENS  ·  $${totalCost.toFixed(3)}`, panelX + 8, panelY + 24);
+
+  providers.forEach((provider, index) => {
+    const y = panelY + 34 + index * rowH;
+    const pulse = 0.55 + Math.sin(timeMs / 450 + index) * 0.25;
+    const max = Math.max(totalTokens, 1);
+    const fraction = Math.max(0.04, provider.totalTokens / max);
+
+    ctx.fillStyle = theme === 'dark' ? 'rgba(15,23,42,0.9)' : 'rgba(226,232,240,0.95)';
+    ctx.beginPath();
+    ctx.roundRect(panelX + 6, y, panelW - 12, 22, 5);
+    ctx.fill();
+
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#22d3ee';
+    ctx.beginPath();
+    ctx.arc(panelX + 14, y + 7, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.font = '700 7.5px "Plus Jakarta Sans", sans-serif';
+    ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#0f172a';
+    const model = provider.models[0]?.model ?? '—';
+    ctx.fillText(`${provider.provider} · ${model}`, panelX + 21, y + 9);
+
+    ctx.font = '600 7px "Plus Jakarta Sans", sans-serif';
+    ctx.fillStyle = theme === 'dark' ? '#94a3b8' : '#64748b';
+    ctx.fillText(`${compactTokens(provider.totalTokens)} · $${provider.cost.toFixed(3)} · ${provider.activeAgents} agents`, panelX + 21, y + 18);
+
+    ctx.fillStyle = theme === 'dark' ? '#164e63' : '#a5f3fc';
+    ctx.fillRect(panelX + panelW - 62, y + 4, 50, 3);
+    ctx.fillStyle = '#22d3ee';
+    ctx.fillRect(panelX + panelW - 62, y + 4, 50 * fraction, 3);
+  });
+
+  ctx.restore();
 }
 
 function drawServerHazardStripes(
@@ -1396,8 +1476,18 @@ function renderAgentItem(
   for (const eye of [-1, 1]) {
     ctx.beginPath(); ctx.ellipse(cx + eye * 2.3 + faceOffset, headY + 1, 0.8, blink ? 0.2 : 1.1, 0, 0, Math.PI * 2); ctx.fill();
   }
-  ctx.strokeStyle = '#97664e'; ctx.lineWidth = 0.8;
-  ctx.beginPath(); ctx.arc(cx + faceOffset, headY + 4, speaking ? 1.5 : 1.1, 0, Math.PI); ctx.stroke();
+  ctx.strokeStyle = '#97664e'; ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  if (agent.mood === 'annoyed' || agent.mood === 'frustrated') {
+    ctx.arc(cx + faceOffset, headY + 6, 1.8, Math.PI, Math.PI * 2);
+  } else if (agent.mood === 'happy' || agent.mood === 'amused' || agent.mood === 'excited') {
+    ctx.arc(cx + faceOffset, headY + 3.5, speaking ? 2.0 : 1.7, 0, Math.PI);
+  } else if (agent.mood === 'surprised') {
+    ctx.arc(cx + faceOffset, headY + 4.5, 1.5, 0, Math.PI * 2);
+  } else {
+    ctx.arc(cx + faceOffset, headY + 4, speaking ? 1.5 : 1.1, 0, Math.PI);
+  }
+  ctx.stroke();
   if (agent.accessory === 'glasses') {
     ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
     ctx.strokeRect(cx - 5 + faceOffset, headY - 1, 4, 3.5); ctx.strokeRect(cx + 1 + faceOffset, headY - 1, 4, 3.5);
@@ -1430,12 +1520,13 @@ function statusAppearance(status: Agent['status']) {
     IN_MEETING: '#c4b5fd', REVIEWING: '#c4b5fd',
     BLOCKED: '#fb923c', WAITING_APPROVAL: '#fbbf24', ERROR: '#fb7185',
     DELEGATING: '#fbbf24', DELIVERING: '#fbbf24', THINKING: '#facc15',
+    PHONE_CALL: '#a78bfa', WALKING: '#94a3b8', COFFEE_BREAK: '#f59e0b', CHATTING: '#fb7185', AVAILABLE: '#86efac',
   };
   return { color: colors[status] ?? '#94a3b8', label: status.replaceAll('_', ' ') };
 }
 
 function shortRole(agent: Agent) {
-  const roles: Record<Agent['role'], string> = { boss: 'Director', tech_lead: 'Tech lead', research_lead: 'Research', backend_engineer: 'Backend', frontend_engineer: 'Frontend', qa_engineer: 'QA', security_analyst: 'Security' };
+  const roles: Record<Agent['role'], string> = { boss: 'Director', tech_lead: 'Tech lead', research_lead: 'Research', backend_engineer: 'Backend', frontend_engineer: 'Frontend', qa_engineer: 'QA', security_analyst: 'Security', custom: 'External' };
   return roles[agent.role];
 }
 
@@ -1494,7 +1585,12 @@ function drawAgentOverlays(rc: RenderContext) {
     ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.stroke();
     ctx.font = '700 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = color;
     const speaker = a.agent.role === 'boss' ? 'Director' : a.agent.name.split(' ')[0];
-    const header = speech.targetAgentName ? speaker + ' → ' + speech.targetAgentName : speaker + (a.agent.status === 'IN_MEETING' ? ' · MEETING' : ' · ACTIVITY');
+    const activityLabel =
+      a.agent.status === 'IN_MEETING' ? 'MEETING'
+      : a.agent.status === 'PHONE_CALL' ? 'PHONE'
+      : a.agent.status === 'CHATTING' || a.agent.status === 'COFFEE_BREAK' ? 'SOCIAL · SIMULATED'
+      : 'ACTIVITY';
+    const header = speech.targetAgentName ? speaker + ' → ' + speech.targetAgentName + ' · ' + activityLabel : speaker + ' · ' + activityLabel;
     ctx.fillText(wrapText(header, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 12, card.y + 16);
     ctx.font = '500 12px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground;
     lines.forEach((line, i) => ctx.fillText(line, card.x + 12, card.y + 34 + i * 17));
@@ -1534,29 +1630,85 @@ function renderFloorLamp(ctx: CanvasRenderingContext2D, x: number, y: number, th
   ctx.fillStyle = '#f0d5a3'; ctx.beginPath(); ctx.moveTo(cx - 7, cy - 26); ctx.lineTo(cx + 7, cy - 26); ctx.lineTo(cx + 11, cy - 16); ctx.lineTo(cx - 11, cy - 16); ctx.closePath(); ctx.fill();
 }
 
-function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light') {
-  const names: Record<string, string> = { boss_office: 'DIRECTOR SUITE', meeting_room: 'BOARDROOM', server_room: 'INFRASTRUCTURE', leads_area: 'ARCHITECTURE', development: 'ENGINEERING', qa_lab: 'QA LAB', research_area: 'RESEARCH LIBRARY', break_room: 'ESPRESSO BAR', lounge: 'TEAM LOUNGE' };
-  const accents: Record<string, string> = { boss_office: '#b8a3e6', meeting_room: '#818cf8', server_room: '#38bdf8', leads_area: '#a5b4fc', development: '#34d399', qa_lab: '#38bdf8', research_area: '#d8b48a', break_room: '#e6b77a', lounge: '#5eead4' };
+function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light', _locale: Locale) {
   ctx.save();
   for (const room of OFFICE_ROOMS) {
     const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
-    ctx.save(); ctx.beginPath(); ctx.rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6); ctx.clip();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6);
+    ctx.clip();
     const warm = ['wood', 'executive'].includes(room.floorPattern) || room.id === 'break_room';
-    const glow = ctx.createRadialGradient(rect.x + rect.width * 0.65, rect.y + rect.height * 0.35, 1, rect.x + rect.width * 0.65, rect.y + rect.height * 0.35, Math.max(rect.width, rect.height) * 0.7);
-    glow.addColorStop(0, warm ? 'rgba(251,191,113,0.08)' : 'rgba(56,189,248,0.07)'); glow.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = glow; ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    const glow = ctx.createRadialGradient(
+      rect.x + rect.width * 0.65,
+      rect.y + rect.height * 0.35,
+      1,
+      rect.x + rect.width * 0.65,
+      rect.y + rect.height * 0.35,
+      Math.max(rect.width, rect.height) * 0.7,
+    );
+    glow.addColorStop(0, warm ? 'rgba(251,191,113,0.08)' : 'rgba(56,189,248,0.07)');
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
     if (room.floorPattern === 'wood' || room.floorPattern === 'executive') {
-      ctx.strokeStyle = theme === 'dark' ? 'rgba(225,195,155,0.05)' : 'rgba(115,82,52,0.08)'; ctx.lineWidth = 1;
-      for (let yy = rect.y + 8; yy < rect.y + rect.height; yy += 12) { ctx.beginPath(); ctx.moveTo(rect.x + 4, yy); ctx.lineTo(rect.x + rect.width - 4, yy); ctx.stroke(); }
+      ctx.strokeStyle = theme === 'dark' ? 'rgba(225,195,155,0.05)' : 'rgba(115,82,52,0.08)';
+      ctx.lineWidth = 1;
+      for (let yy = rect.y + 8; yy < rect.y + rect.height; yy += 12) {
+        ctx.beginPath();
+        ctx.moveTo(rect.x + 4, yy);
+        ctx.lineTo(rect.x + rect.width - 4, yy);
+        ctx.stroke();
+      }
     }
     ctx.restore();
-    const accent = accents[room.id];
-    ctx.fillStyle = theme === 'dark' ? 'rgba(12,19,32,0.9)' : 'rgba(255,255,255,0.94)';
+  }
+  ctx.restore();
+}
+
+function drawRoomPlaques(
+  ctx: CanvasRenderingContext2D,
+  rot: number,
+  theme: 'dark' | 'light',
+  locale: Locale,
+) {
+  const accents: Record<string, string> = {
+    boss_office: '#b8a3e6',
+    meeting_room: '#818cf8',
+    meeting_room_b: '#a78bfa',
+    server_room: '#38bdf8',
+    leads_area: '#a5b4fc',
+    development: '#34d399',
+    qa_lab: '#38bdf8',
+    research_area: '#d8b48a',
+    break_room: '#e6b77a',
+    lounge: '#5eead4',
+  };
+
+  ctx.save();
+  for (const room of OFFICE_ROOMS) {
+    const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
+    const label = t(locale, `rooms.${room.id}` as Parameters<typeof t>[1]);
+    const accent = accents[room.id] ?? '#94a3b8';
+
     ctx.font = '700 10px "Plus Jakarta Sans", sans-serif';
-    const label = names[room.id]; const plaqueWidth = Math.min(rect.width - 18, ctx.measureText(label).width + 29);
-    ctx.beginPath(); ctx.roundRect(rect.x + 9, rect.y + 7, plaqueWidth, 22, 6); ctx.fill();
-    ctx.fillStyle = accent; ctx.fillRect(rect.x + 15, rect.y + 13, 3, 10);
-    ctx.textAlign = 'left'; ctx.fillStyle = theme === 'dark' ? '#b7c6d9' : '#475569'; ctx.fillText(label, rect.x + 24, rect.y + 22);
+    const plaqueWidth = Math.min(rect.width - 18, ctx.measureText(label).width + 29);
+    const plaqueX = rect.x + 9;
+    const plaqueY = rect.y + 7;
+
+    ctx.fillStyle = theme === 'dark' ? 'rgba(7,12,22,0.96)' : 'rgba(255,255,255,0.98)';
+    ctx.strokeStyle = theme === 'dark' ? 'rgba(148,163,184,0.35)' : 'rgba(71,85,105,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(plaqueX, plaqueY, plaqueWidth, 22, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = accent;
+    ctx.fillRect(plaqueX + 6, plaqueY + 6, 3, 10);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#334155';
+    ctx.fillText(label, plaqueX + 15, plaqueY + 15);
   }
   ctx.restore();
 }

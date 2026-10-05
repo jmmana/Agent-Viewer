@@ -9,11 +9,13 @@ export type AgentRole =
   | 'backend_engineer'
   | 'frontend_engineer'
   | 'qa_engineer'
-  | 'security_analyst';
+  | 'security_analyst'
+  | 'custom';
 
 export type AgentStatus =
   | 'OFFLINE'
   | 'IDLE'
+  | 'AVAILABLE'
   | 'THINKING'
   | 'READING'
   | 'RESEARCHING'
@@ -25,7 +27,11 @@ export type AgentStatus =
   | 'WAITING_APPROVAL'
   | 'BLOCKED'
   | 'DELEGATING'
+  | 'PHONE_CALL'
+  | 'WALKING'
   | 'IN_MEETING'
+  | 'COFFEE_BREAK'
+  | 'CHATTING'
   | 'REVIEWING'
   | 'DELIVERING'
   | 'DONE'
@@ -39,27 +45,61 @@ export type WorkspaceZone =
   | 'research_area'
   | 'server_room'
   | 'meeting_room'
+  | 'meeting_room_b'
+  | 'overflow_floor'
   | 'break_room';
+
+export type AgentMood =
+  | 'neutral'
+  | 'happy'
+  | 'amused'
+  | 'excited'
+  | 'surprised'
+  | 'focused'
+  | 'annoyed'
+  | 'frustrated'
+  | 'tired';
+
+export type SocialTopic =
+  | 'jokes'
+  | 'sports'
+  | 'technology'
+  | 'entertainment'
+  | 'current_events'
+  | 'office_banter';
+
+export interface SocialActivity {
+  id: string;
+  participantIds: string[];
+  topic: SocialTopic;
+  simulated: true;
+  locale: string;
+  startedAt: number;
+  endsAt?: number;
+}
 
 export interface Agent {
   id: string;
   name: string;
   role: AgentRole;
   roleTitle: string;
-  team: 'leadership' | 'engineering' | 'research' | 'quality';
+  team: 'leadership' | 'engineering' | 'research' | 'quality' | 'operations' | 'other';
   managerId: string | null;
-  provider: 'OpenAI' | 'Anthropic' | 'Google Gemini' | 'Local (Ollama)' | 'OpenRouter';
+  provider: string;
   model: string;
   status: AgentStatus;
   statusText: string;
   currentTaskId: string | null;
   currentTool: string | null;
   workspace: WorkspaceZone;
+  floor?: number;
   x: number;
   y: number;
   targetX: number;
   targetY: number;
   isWalking: boolean;
+  travelStartedAt?: number;
+  travelDurationMs?: number;
   facing: 'SE' | 'SW' | 'NE' | 'NW';
   avatarColor: string;
   clothingColor: string;
@@ -71,6 +111,8 @@ export interface Agent {
   reasoningTokens: number;
   cost: number;
   startedAt: number;
+  mood?: AgentMood;
+  socialActivityId?: string | null;
   speechBubble: {
     text: string;
     targetAgentName?: string;
@@ -122,6 +164,7 @@ export interface Meeting {
   agenda: string[];
   decisions: string[];
   tasksCreated: string[];
+  roomId?: string;
   messages: MeetingMessage[];
 }
 
@@ -148,6 +191,7 @@ export interface ToolCall {
 
 export type EventType =
   | 'agent.registered'
+  | 'agent.updated'
   | 'agent.status.changed'
   | 'task.created'
   | 'task.assigned'
@@ -157,10 +201,18 @@ export type EventType =
   | 'task.completed'
   | 'task.failed'
   | 'message.sent'
+  | 'agent.phone_call.started'
+  | 'agent.phone_call.ended'
+  | 'meeting.requested'
+  | 'meeting.room.reserved'
   | 'meeting.started'
   | 'meeting.message'
   | 'meeting.decision'
   | 'meeting.ended'
+  | 'meeting.cancelled'
+  | 'social.started'
+  | 'social.message'
+  | 'social.ended'
   | 'tool.started'
   | 'tool.completed'
   | 'tool.failed'

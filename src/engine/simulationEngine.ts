@@ -1,4 +1,5 @@
-import { Agent, Artifact, Meeting, Task, ViewerEvent } from '../types/agent';
+import { Agent, Artifact, Meeting, SocialActivity, Task, ViewerEvent } from '../types/agent';
+import type { RoomReservation } from './livingOfficeEngine';
 import {
   playAlert,
   playMeetingGong,
@@ -21,6 +22,8 @@ export interface SimulationState {
   meetings: Meeting[];
   events: ViewerEvent[];
   activeMeetingId: string | null;
+  roomReservations: RoomReservation[];
+  socialActivities: SocialActivity[];
   totalTokens: {
     input: number;
     output: number;
@@ -47,6 +50,8 @@ export function createInitialSimulationState(initialAgents: Agent[]): Simulation
       },
     ],
     activeMeetingId: null,
+    roomReservations: [],
+    socialActivities: [],
     totalTokens: {
       input: 179300,
       output: 43300,

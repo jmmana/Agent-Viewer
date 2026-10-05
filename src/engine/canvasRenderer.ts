@@ -1,6 +1,7 @@
 import { cameraCenter, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
 import type { Agent } from '../types/agent';
 import { Locale, t } from '../i18n';
+import { aggregateModelUsage, compactTokens } from './modelOps';
 import {
   FurnitureItem,
   GRID_COLS,
@@ -65,6 +66,7 @@ export function renderOfficeScene(rc: RenderContext) {
   drawFloorRooms(ctx, rot, theme, activeMeetingId, timeMs);
 
   drawRoomAtmosphere(ctx, rot, theme, locale);
+  drawModelOpsTelemetry(ctx, rot, theme, agents, timeMs);
   drawMessageConnections(ctx, rot, agents, timeMs, nowMs);
 
   // 3. Architectural interior walls, glass partitions & doorways
@@ -203,6 +205,80 @@ function drawFloorRooms(
   drawRectAreaRug(ctx, 3, 13, 3, 2.8, rot, theme === 'dark' ? '#382d29' : '#ead9c5', '#8b6d55');
   // 4. Yellow/Black Security Hazard Stripes along Server Vault threshold
   drawServerHazardStripes(ctx, 17, 5, 7, 1, rot);
+}
+
+
+function drawModelOpsTelemetry(
+  ctx: CanvasRenderingContext2D,
+  rot: number,
+  theme: 'dark' | 'light',
+  agents: Agent[],
+  timeMs: number
+) {
+  const room = OFFICE_ROOMS.find((item) => item.id === 'server_room');
+  if (!room) return;
+
+  const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
+  const providers = aggregateModelUsage(agents).slice(0, 4);
+  const totalTokens = providers.reduce((sum, provider) => sum + provider.totalTokens, 0);
+  const totalCost = providers.reduce((sum, provider) => sum + provider.cost, 0);
+  const panelX = rect.x + 10;
+  const panelY = rect.y + 36;
+  const panelW = Math.max(120, rect.width - 20);
+  const rowH = 28;
+
+  ctx.save();
+  ctx.fillStyle = theme === 'dark' ? 'rgba(2, 8, 23, 0.88)' : 'rgba(248,250,252,0.94)';
+  ctx.strokeStyle = theme === 'dark' ? 'rgba(34,211,238,0.45)' : 'rgba(8,145,178,0.45)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(panelX, panelY, panelW, 34 + providers.length * rowH, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.font = '700 8px "Plus Jakarta Sans", sans-serif';
+  ctx.fillStyle = theme === 'dark' ? '#67e8f9' : '#0e7490';
+  ctx.fillText('LIVE MODEL FLOW', panelX + 8, panelY + 12);
+
+  ctx.font = '600 8px "Plus Jakarta Sans", sans-serif';
+  ctx.fillStyle = theme === 'dark' ? '#cbd5e1' : '#334155';
+  ctx.fillText(`${compactTokens(totalTokens)} TOKENS  ·  $${totalCost.toFixed(3)}`, panelX + 8, panelY + 24);
+
+  providers.forEach((provider, index) => {
+    const y = panelY + 34 + index * rowH;
+    const pulse = 0.55 + Math.sin(timeMs / 450 + index) * 0.25;
+    const max = Math.max(totalTokens, 1);
+    const fraction = Math.max(0.04, provider.totalTokens / max);
+
+    ctx.fillStyle = theme === 'dark' ? 'rgba(15,23,42,0.9)' : 'rgba(226,232,240,0.95)';
+    ctx.beginPath();
+    ctx.roundRect(panelX + 6, y, panelW - 12, 22, 5);
+    ctx.fill();
+
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#22d3ee';
+    ctx.beginPath();
+    ctx.arc(panelX + 14, y + 7, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    ctx.font = '700 7.5px "Plus Jakarta Sans", sans-serif';
+    ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#0f172a';
+    const model = provider.models[0]?.model ?? '—';
+    ctx.fillText(`${provider.provider} · ${model}`, panelX + 21, y + 9);
+
+    ctx.font = '600 7px "Plus Jakarta Sans", sans-serif';
+    ctx.fillStyle = theme === 'dark' ? '#94a3b8' : '#64748b';
+    ctx.fillText(`${compactTokens(provider.totalTokens)} · $${provider.cost.toFixed(3)} · ${provider.activeAgents} agents`, panelX + 21, y + 18);
+
+    ctx.fillStyle = theme === 'dark' ? '#164e63' : '#a5f3fc';
+    ctx.fillRect(panelX + panelW - 62, y + 4, 50, 3);
+    ctx.fillStyle = '#22d3ee';
+    ctx.fillRect(panelX + panelW - 62, y + 4, 50 * fraction, 3);
+  });
+
+  ctx.restore();
 }
 
 function drawServerHazardStripes(

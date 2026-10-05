@@ -1,4 +1,4 @@
-import type { Agent, AgentStatus, ViewerEvent, WorkspaceZone } from '../types/agent';
+import type { AgentStatus, ViewerEvent, WorkspaceZone } from '../types/agent';
 import type { SimulationState } from '../engine/simulationEngine';
 import { endMeeting, requestMeeting, routeAgent } from '../engine/livingOfficeEngine';
 
@@ -36,6 +36,55 @@ export function applyExternalEvent(state: SimulationState, incoming: ExternalEve
   const payload = incoming.payload ?? {};
 
   switch (incoming.type) {
+    case 'agent.registered': {
+      const id = incoming.agentId ?? incoming.source.replace(/^agent:/, '');
+      if (!state.agents.some((item) => item.id === id)) {
+        state.agents.push({
+          id,
+          name: typeof payload.name === 'string' ? payload.name : id,
+          role: 'custom',
+          roleTitle: typeof payload.roleTitle === 'string' ? payload.roleTitle : 'External Agent',
+          team: 'other',
+          managerId: typeof payload.managerId === 'string' ? payload.managerId : null,
+          provider: typeof payload.provider === 'string' ? payload.provider : 'Unknown',
+          model: typeof payload.model === 'string' ? payload.model : 'Unknown',
+          status: 'IDLE',
+          statusText: 'Registered from external runtime',
+          currentTaskId: null,
+          currentTool: null,
+          workspace: 'lounge' as WorkspaceZone,
+          x: 19,
+          y: 14,
+          targetX: 19,
+          targetY: 14,
+          isWalking: false,
+          facing: 'SE',
+          avatarColor: '#38bdf8',
+          clothingColor: '#1d4ed8',
+          hairColor: '#334155',
+          accessory: 'none',
+          tokensInput: 0,
+          tokensOutput: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          cost: 0,
+          startedAt: Date.now(),
+          speechBubble: null,
+          mood: 'neutral',
+          socialActivityId: null,
+        });
+      }
+      break;
+    }
+    case 'agent.updated': {
+      if (agent) {
+        if (typeof payload.name === 'string') agent.name = payload.name;
+        if (typeof payload.roleTitle === 'string') agent.roleTitle = payload.roleTitle;
+        if (typeof payload.provider === 'string') agent.provider = payload.provider;
+        if (typeof payload.model === 'string') agent.model = payload.model;
+      }
+      break;
+    }
     case 'agent.status.changed': {
       const status = payload.status;
       if (agent && typeof status === 'string' && STATUS_VALUES.has(status as AgentStatus)) {
@@ -80,7 +129,7 @@ export function applyExternalEvent(state: SimulationState, incoming: ExternalEve
         const output = Number(payload.outputTokens ?? 0);
         const cached = Number(payload.cachedTokens ?? 0);
         const cost = typeof payload.cost === 'number' ? payload.cost : 0;
-        if (typeof payload.provider === 'string') agent.provider = payload.provider as Agent['provider'];
+        if (typeof payload.provider === 'string') agent.provider = payload.provider;
         if (typeof payload.model === 'string') agent.model = payload.model;
         agent.tokensInput += Number.isFinite(input) ? input : 0;
         agent.tokensOutput += Number.isFinite(output) ? output : 0;

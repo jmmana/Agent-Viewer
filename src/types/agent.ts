@@ -9,7 +9,8 @@ export type AgentRole =
   | 'backend_engineer'
   | 'frontend_engineer'
   | 'qa_engineer'
-  | 'security_analyst';
+  | 'security_analyst'
+  | 'custom';
 
 export type AgentStatus =
   | 'OFFLINE'
@@ -81,7 +82,7 @@ export interface Agent {
   name: string;
   role: AgentRole;
   roleTitle: string;
-  team: 'leadership' | 'engineering' | 'research' | 'quality';
+  team: 'leadership' | 'engineering' | 'research' | 'quality' | 'operations' | 'other';
   managerId: string | null;
   provider: 'OpenAI' | 'Anthropic' | 'Google Gemini' | 'Local (Ollama)' | 'OpenRouter';
   model: string;
@@ -186,6 +187,7 @@ export interface ToolCall {
 
 export type EventType =
   | 'agent.registered'
+  | 'agent.updated'
   | 'agent.status.changed'
   | 'task.created'
   | 'task.assigned'

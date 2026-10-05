@@ -9,10 +9,14 @@ import type {
 import type { Locale } from '../i18n';
 import { socialPack } from '../content/socialPacks';
 
-export type MeetingRoomId = 'meeting_room' | 'meeting_room_b' | 'boss_office';
+export type VisibleMeetingRoomId = 'meeting_room' | 'meeting_room_b' | 'boss_office';
+export type OverflowMeetingRoomId = `overflow_meeting_${number}`;
+export type MeetingRoomId = VisibleMeetingRoomId | OverflowMeetingRoomId;
 
 export interface RoomPolicy {
-  id: MeetingRoomId;
+  id: VisibleMeetingRoomId;
+  label: string;
+  floor: 1;
   capacity: number;
   priority: number;
   fallback: boolean;
@@ -21,6 +25,8 @@ export interface RoomPolicy {
 
 export interface RoomReservation {
   roomId: MeetingRoomId;
+  roomLabel: string;
+  floor: 1 | 2;
   meetingId: string;
   participantIds: string[];
   reservedAt: number;
@@ -39,6 +45,8 @@ export interface LivingOfficeState {
 export const MEETING_ROOM_POLICIES: RoomPolicy[] = [
   {
     id: 'meeting_room',
+    label: 'Meeting Room A',
+    floor: 1,
     capacity: 4,
     priority: 1,
     fallback: false,
@@ -51,6 +59,8 @@ export const MEETING_ROOM_POLICIES: RoomPolicy[] = [
   },
   {
     id: 'meeting_room_b',
+    label: 'Meeting Room B',
+    floor: 1,
     capacity: 4,
     priority: 2,
     fallback: false,
@@ -63,6 +73,8 @@ export const MEETING_ROOM_POLICIES: RoomPolicy[] = [
   },
   {
     id: 'boss_office',
+    label: 'Director Suite',
+    floor: 1,
     capacity: 4,
     priority: 3,
     fallback: true,
@@ -97,6 +109,7 @@ export const WORKSPACE_ANCHORS: Record<WorkspaceZone, { x: number; y: number }> 
   server_room: { x: 20, y: 4 },
   meeting_room: { x: 9, y: 3 },
   meeting_room_b: { x: 14, y: 3 },
+  overflow_floor: { x: 22.5, y: 14.4 },
   break_room: { x: 12, y: 14 },
 };
 
@@ -119,8 +132,42 @@ function event(
   };
 }
 
+function homeWorkspace(agent: Agent): WorkspaceZone {
+  switch (agent.role) {
+    case 'boss': return 'boss_office';
+    case 'tech_lead': return 'leads_area';
+    case 'research_lead': return 'research_area';
+    case 'backend_engineer':
+    case 'frontend_engineer':
+    case 'security_analyst':
+      return 'development';
+    case 'qa_engineer':
+      return 'qa_lab';
+    default:
+      return 'break_room';
+  }
+}
+
+function isOverflowRoom(roomId: string): roomId is OverflowMeetingRoomId {
+  return /^overflow_meeting_\d+$/.test(roomId);
+}
+
+function nextOverflowRoomId(state: LivingOfficeState): OverflowMeetingRoomId {
+  const used = new Set(
+    state.roomReservations
+      .filter((reservation) => reservation.floor === 2)
+      .map((reservation) => reservation.roomId),
+  );
+  let index = 1;
+  while (used.has(`overflow_meeting_${index}` as MeetingRoomId)) index += 1;
+  return `overflow_meeting_${index}`;
+}
+
 export function routeForStatus(agent: Agent, status: AgentStatus): WorkspaceZone {
-  if (status === 'IN_MEETING' && (agent.workspace === 'meeting_room' || agent.workspace === 'meeting_room_b' || agent.workspace === 'boss_office')) {
+  if (
+    status === 'IN_MEETING' &&
+    ['meeting_room', 'meeting_room_b', 'boss_office', 'overflow_floor'].includes(agent.workspace)
+  ) {
     return agent.workspace;
   }
   return STATUS_DESTINATIONS[status] ?? agent.workspace;
@@ -129,12 +176,16 @@ export function routeForStatus(agent: Agent, status: AgentStatus): WorkspaceZone
 export function routeAgent(agent: Agent, workspace: WorkspaceZone): void {
   const anchor = WORKSPACE_ANCHORS[workspace];
   agent.workspace = workspace;
+  if (workspace !== 'overflow_floor') agent.floor = 1;
   agent.targetX = anchor.x;
   agent.targetY = anchor.y;
   agent.isWalking = Math.hypot(agent.x - anchor.x, agent.y - anchor.y) > 0.15;
   if (agent.isWalking) {
     agent.travelStartedAt = Date.now();
-    agent.travelDurationMs = Math.max(900, Math.min(4500, Math.hypot(agent.x - anchor.x, agent.y - anchor.y) * 350));
+    agent.travelDurationMs = Math.max(
+      900,
+      Math.min(4500, Math.hypot(agent.x - anchor.x, agent.y - anchor.y) * 350),
+    );
   }
 }
 
@@ -142,29 +193,54 @@ export function reserveMeetingRoom(
   state: LivingOfficeState,
   meetingId: string,
   participantIds: string[],
-): RoomReservation | null {
-  const occupied = new Set(state.roomReservations.map((reservation) => reservation.roomId));
-  const room = MEETING_ROOM_POLICIES
+): RoomReservation {
+  const occupied = new Set(
+    state.roomReservations
+      .filter((reservation) => reservation.floor === 1)
+      .map((reservation) => reservation.roomId),
+  );
+
+  const visibleRoom = MEETING_ROOM_POLICIES
     .filter((candidate) => candidate.capacity >= participantIds.length && !occupied.has(candidate.id))
     .sort((a, b) => a.priority - b.priority)[0];
 
-  if (!room) return null;
-
-  const reservation: RoomReservation = {
-    roomId: room.id,
-    meetingId,
-    participantIds,
-    reservedAt: Date.now(),
-    status: 'RESERVED',
-  };
+  const reservation: RoomReservation = visibleRoom
+    ? {
+        roomId: visibleRoom.id,
+        roomLabel: visibleRoom.label,
+        floor: 1,
+        meetingId,
+        participantIds,
+        reservedAt: Date.now(),
+        status: 'RESERVED',
+      }
+    : (() => {
+        const roomId = nextOverflowRoomId(state);
+        const number = Number(roomId.split('_').pop());
+        return {
+          roomId,
+          roomLabel: `Secret Room ${String(number).padStart(2, '0')}`,
+          floor: 2 as const,
+          meetingId,
+          participantIds,
+          reservedAt: Date.now(),
+          status: 'RESERVED' as const,
+        };
+      })();
 
   state.roomReservations.push(reservation);
   state.events.unshift(
     event(
       'meeting.room.reserved',
       'system',
-      `${room.id} reserved for ${meetingId}.`,
-      { meetingId, roomId: room.id, participantIds },
+      `${reservation.roomLabel} reserved for ${meetingId}.`,
+      {
+        meetingId,
+        roomId: reservation.roomId,
+        roomLabel: reservation.roomLabel,
+        floor: reservation.floor,
+        participantIds,
+      },
     ),
   );
   return reservation;
@@ -180,19 +256,8 @@ export function requestMeeting(
     participantIds: string[];
     taskId?: string;
   },
-): Meeting | null {
+): Meeting {
   const reservation = reserveMeetingRoom(state, args.id, args.participantIds);
-  if (!reservation) {
-    state.events.unshift(
-      event(
-        'meeting.cancelled',
-        args.initiatorId,
-        `No room available for ${args.title}.`,
-        { meetingId: args.id, reason: 'no-room-available' },
-      ),
-    );
-    return null;
-  }
 
   const meeting: Meeting = {
     id: args.id,
@@ -218,36 +283,68 @@ export function requestMeeting(
       'meeting.requested',
       args.initiatorId,
       `${args.title} requested.`,
-      { meetingId: args.id, participantIds: args.participantIds, roomId: reservation.roomId },
+      {
+        meetingId: args.id,
+        participantIds: args.participantIds,
+        roomId: reservation.roomId,
+        roomLabel: reservation.roomLabel,
+        floor: reservation.floor,
+      },
     ),
   );
 
-  const room = MEETING_ROOM_POLICIES.find((item) => item.id === reservation.roomId)!;
+  const visibleRoom = MEETING_ROOM_POLICIES.find((item) => item.id === reservation.roomId);
   for (const [index, agentId] of args.participantIds.entries()) {
     const agent = state.agents.find((item) => item.id === agentId);
     if (!agent) continue;
+
     agent.status = 'PHONE_CALL';
-    agent.statusText = `Call received: meeting in ${reservation.roomId}`;
+    agent.statusText = reservation.floor === 2
+      ? `Call received: meet upstairs in ${reservation.roomLabel}`
+      : `Call received: meeting in ${reservation.roomLabel}`;
     agent.speechBubble = {
-      text: index === 0 ? 'We need to sync. Meet me in the room.' : 'Got it. I am heading there.',
+      text: index === 0
+        ? reservation.floor === 2
+          ? 'Visible rooms are full. Meet me upstairs through the secret door.'
+          : 'We need to sync. Meet me in the room.'
+        : reservation.floor === 2
+          ? 'Got it. Heading to the secret floor.'
+          : 'Got it. I am heading there.',
       targetAgentName: index === 0
         ? state.agents.find((item) => item.id === args.participantIds[1])?.name
         : state.agents.find((item) => item.id === args.initiatorId)?.name,
-      expiresAt: Date.now() + 2600,
+      expiresAt: Date.now() + 3200,
     };
+
     state.events.unshift(
       event(
         'agent.phone_call.started',
         args.initiatorId,
         `Phone call started with ${agent.name}.`,
-        { meetingId: args.id, roomId: reservation.roomId },
+        {
+          meetingId: args.id,
+          roomId: reservation.roomId,
+          roomLabel: reservation.roomLabel,
+          floor: reservation.floor,
+        },
         agent.id,
       ),
     );
-    const seat = room.seats[index] ?? room.seats[room.seats.length - 1];
-    agent.workspace = reservation.roomId;
-    agent.targetX = seat.x;
-    agent.targetY = seat.y;
+
+    if (reservation.floor === 2) {
+      agent.workspace = 'overflow_floor';
+      agent.floor = 1;
+      const portal = WORKSPACE_ANCHORS.overflow_floor;
+      agent.targetX = portal.x;
+      agent.targetY = portal.y;
+    } else {
+      const seat = visibleRoom?.seats[index] ?? visibleRoom?.seats[visibleRoom.seats.length - 1];
+      agent.workspace = reservation.roomId as WorkspaceZone;
+      agent.floor = 1;
+      agent.targetX = seat?.x ?? WORKSPACE_ANCHORS[agent.workspace].x;
+      agent.targetY = seat?.y ?? WORKSPACE_ANCHORS[agent.workspace].y;
+    }
+
     agent.isWalking = true;
     agent.travelStartedAt = Date.now();
     agent.travelDurationMs = 2200 + index * 250;
@@ -256,14 +353,17 @@ export function requestMeeting(
   return meeting;
 }
 
-export function activateMeetingWhenArrived(state: LivingOfficeState, meetingId: string): boolean {
+export function activateMeetingWhenArrived(
+  state: LivingOfficeState,
+  meetingId: string,
+): boolean {
   const meeting = state.meetings.find((item) => item.id === meetingId);
   const reservation = state.roomReservations.find((item) => item.meetingId === meetingId);
   if (!meeting || !reservation || meeting.status !== 'SCHEDULED') return false;
 
   const allArrived = meeting.participants.every((id) => {
     const agent = state.agents.find((item) => item.id === id);
-    return agent && !agent.isWalking;
+    return agent && !agent.isWalking && (agent.floor ?? 1) === reservation.floor;
   });
   if (!allArrived) return false;
 
@@ -284,7 +384,13 @@ export function activateMeetingWhenArrived(state: LivingOfficeState, meetingId: 
       'meeting.started',
       meeting.initiatorId,
       `Meeting started: ${meeting.title}.`,
-      { meetingId, roomId: reservation.roomId, participants: meeting.participants },
+      {
+        meetingId,
+        roomId: reservation.roomId,
+        roomLabel: reservation.roomLabel,
+        floor: reservation.floor,
+        participants: meeting.participants,
+      },
     ),
   );
   return true;
@@ -292,21 +398,36 @@ export function activateMeetingWhenArrived(state: LivingOfficeState, meetingId: 
 
 export function endMeeting(state: LivingOfficeState, meetingId: string): void {
   const meeting = state.meetings.find((item) => item.id === meetingId);
+  const reservation = state.roomReservations.find((item) => item.meetingId === meetingId);
   if (!meeting) return;
+
   meeting.status = 'CONCLUDED';
   meeting.endedAt = Date.now();
   state.activeMeetingId = state.activeMeetingId === meetingId ? null : state.activeMeetingId;
   state.roomReservations = state.roomReservations.filter((item) => item.meetingId !== meetingId);
+
   for (const id of meeting.participants) {
     const agent = state.agents.find((item) => item.id === id);
     if (!agent) continue;
+    agent.floor = 1;
     agent.status = 'IDLE';
-    agent.statusText = 'Available after meeting';
-    const destination = routeForStatus(agent, agent.status);
-    routeAgent(agent, destination);
+    agent.statusText = reservation?.floor === 2
+      ? 'Returned from secret collaboration floor'
+      : 'Available after meeting';
+    routeAgent(agent, homeWorkspace(agent));
   }
+
   state.events.unshift(
-    event('meeting.ended', meeting.initiatorId, `Meeting ended: ${meeting.title}.`, { meetingId }),
+    event(
+      'meeting.ended',
+      meeting.initiatorId,
+      `Meeting ended: ${meeting.title}.`,
+      {
+        meetingId,
+        roomId: reservation?.roomId,
+        floor: reservation?.floor,
+      },
+    ),
   );
 }
 
@@ -323,7 +444,17 @@ export function advanceLivingOffice(state: LivingOfficeState, now: number): void
       agent.isWalking = false;
       agent.travelStartedAt = undefined;
       agent.travelDurationMs = undefined;
-      if (agent.status === 'PHONE_CALL') {
+
+      if (agent.workspace === 'overflow_floor') {
+        const reservation = state.roomReservations.find(
+          (item) => item.participantIds.includes(agent.id) && item.floor === 2,
+        );
+        if (reservation) {
+          agent.floor = 2;
+          agent.status = 'WALKING';
+          agent.statusText = `Entered ${reservation.roomLabel} on secret floor`;
+        }
+      } else if (agent.status === 'PHONE_CALL') {
         agent.status = 'WALKING';
         agent.statusText = 'Arrived for scheduled collaboration';
       }
@@ -350,7 +481,9 @@ export function advanceLivingOffice(state: LivingOfficeState, now: number): void
       }
     }
   }
-  state.socialActivities = state.socialActivities.filter((activity) => !activity.endsAt || activity.endsAt > now);
+  state.socialActivities = state.socialActivities.filter(
+    (activity) => !activity.endsAt || activity.endsAt > now,
+  );
 }
 
 export interface AmbientOptions {
@@ -371,9 +504,12 @@ export function applyAmbientLife(
 ): void {
   if (!options.enabled) return;
 
-  const idleAgents = state.agents.filter((agent) => agent.status === 'IDLE' && !agent.currentTaskId);
+  const idleAgents = state.agents.filter(
+    (agent) => (agent.floor ?? 1) === 1 && agent.status === 'IDLE' && !agent.currentTaskId,
+  );
+
   for (const agent of state.agents) {
-    if (agent.status === 'IDLE' && !agent.currentTaskId) {
+    if ((agent.floor ?? 1) === 1 && agent.status === 'IDLE' && !agent.currentTaskId) {
       if (!idleSince.has(agent.id)) idleSince.set(agent.id, now);
     } else {
       idleSince.delete(agent.id);
@@ -394,14 +530,21 @@ export function applyAmbientLife(
   }
 
   if (now - lastSocialAt < options.minIntervalMs) return;
+
   const socialCandidates = state.agents.filter(
-    (agent) => (agent.status === 'COFFEE_BREAK' || agent.status === 'IDLE') && !agent.currentTaskId,
+    (agent) =>
+      (agent.floor ?? 1) === 1 &&
+      (agent.status === 'COFFEE_BREAK' || agent.status === 'IDLE') &&
+      !agent.currentTaskId,
   );
   if (socialCandidates.length < 2) return;
 
   const participants = socialCandidates.slice(0, 2);
-  const pack = socialPack(locale).filter((exchange) => options.politicsEnabled || exchange.topic !== 'politics');
+  const pack = socialPack(locale).filter(
+    (exchange) => options.politicsEnabled || exchange.topic !== 'politics',
+  );
   if (!pack.length) return;
+
   const seed = Math.abs(Math.floor(now / Math.max(options.minIntervalMs, 1))) % pack.length;
   const exchange = pack[seed];
   const activityId = `social-${now}`;
@@ -445,4 +588,14 @@ export function applyAmbientLife(
     ),
   );
   lastSocialAt = now;
+}
+
+export function activeOverflowReservations(
+  state: Pick<LivingOfficeState, 'roomReservations'>,
+): RoomReservation[] {
+  return state.roomReservations.filter((reservation) => reservation.floor === 2);
+}
+
+export function isOverflowMeetingRoom(roomId: string): boolean {
+  return isOverflowRoom(roomId);
 }

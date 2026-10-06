@@ -1,5 +1,7 @@
 import React from 'react';
 import { Meeting, Agent } from '../types/agent';
+import type { Locale } from '../i18n';
+import { t } from '../i18n';
 import {
   Users,
   Sparkles,
@@ -15,6 +17,7 @@ interface MeetingRoomModalProps {
   activeMeetingId: string | null;
   agents: Agent[];
   onSelectAgent: (agentId: string) => void;
+  locale: Locale;
 }
 
 export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
@@ -22,6 +25,7 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
   activeMeetingId,
   agents,
   onSelectAgent,
+  locale,
 }) => {
   const getAgentName = (id: string) => {
     const a = agents.find((ag) => ag.id === id);
@@ -36,7 +40,7 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-white font-sans">Conference Room & Collaboration</h2>
+            <h2 className="text-lg font-bold text-white font-sans">{t(locale, 'meetings.title')}</h2>
             {activeMeeting && activeMeeting.status === 'ACTIVE' && (
               <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 uppercase font-mono animate-pulse">
                 Live In Session
@@ -51,7 +55,7 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
 
       {!activeMeeting ? (
         <div className="text-center py-20 bg-slate-900/40 rounded-xl border border-slate-800 text-xs text-slate-500">
-          No meeting in progress. Start the demo sequence to see agents convene in the Conference Room.
+          {t(locale, 'meetings.empty')}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

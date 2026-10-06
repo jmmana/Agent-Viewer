@@ -582,6 +582,7 @@ export default function App() {
             }}
             onOpenAgentDetail={(id) => setDetailModalAgentId(id)}
             onOpenNewTask={() => setIsNewTaskOpen(true)}
+            locale={locale}
           />
         )}
 
@@ -595,6 +596,7 @@ export default function App() {
               setSelectedAgentId(id);
               setCurrentTab('office');
             }}
+            locale={locale}
           />
         )}
 
@@ -607,6 +609,7 @@ export default function App() {
               setSelectedAgentId(id);
               setCurrentTab('office');
             }}
+            locale={locale}
           />
         )}
 
@@ -659,6 +662,7 @@ export default function App() {
         isOpen={isNewTaskOpen}
         onClose={() => setIsNewTaskOpen(false)}
         agents={simState.agents}
+        locale={locale}
         onSubmitTask={handleCreateCustomTask}
       />
 

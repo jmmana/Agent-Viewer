@@ -3,6 +3,7 @@ import { PricingConfig } from '../types/agent';
 import { isSoundEnabled, setSoundEnabled } from '../engine/soundEffects';
 import { X, DollarSign, Shield, Volume2, RotateCcw, Download, Coffee } from 'lucide-react';
 import type { Locale } from '../i18n';
+import { t } from '../i18n';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -29,6 +30,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onAmbientSocialEnabledChange,
   politicsChatterEnabled,
   onPoliticsChatterEnabledChange,
+  locale,
 }) => {
   const [localPricing, setLocalPricing] = useState<PricingConfig[]>(pricing);
   const [maskSecrets, setMaskSecrets] = useState(true);
@@ -54,8 +56,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/60">
           <div>
-            <h3 className="text-sm font-bold text-white">Agent Viewer Settings & Pricing</h3>
-            <p className="text-xs text-slate-400">Configure LLM pricing catalog, privacy filters, and telemetry</p>
+            <h3 className="text-sm font-bold text-white">{t(locale, 'settings.title')}</h3>
+            <p className="text-xs text-slate-400">{t(locale, 'settings.subtitle')}</p>
           </div>
           <button
             onClick={onClose}
@@ -165,7 +167,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="space-y-3 pt-3 border-t border-slate-800">
             <div className="flex items-center gap-2">
               <Coffee className="w-4 h-4 text-amber-400" />
-              <h4 className="font-semibold text-slate-200">Living Office</h4>
+              <h4 className="font-semibold text-slate-200">{t(locale, 'settings.livingOffice')}</h4>
             </div>
             <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
               <input
@@ -175,7 +177,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4"
               />
               <div>
-                <span className="font-semibold text-slate-200 block">Ambient social life</span>
+                <span className="font-semibold text-slate-200 block">{t(locale, 'settings.ambient')}</span>
                 <span className="text-[11px] text-slate-400">
                   Idle agents may walk to the espresso bar, tell jokes, chat and show lightweight moods.
                 </span>
@@ -190,7 +192,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4 disabled:opacity-50"
               />
               <div>
-                <span className="font-semibold text-slate-200 block">Allow politics as an ambient topic</span>
+                <span className="font-semibold text-slate-200 block">{t(locale, 'settings.politics')}</span>
                 <span className="text-[11px] text-slate-400">
                   Off by default. Built-in dialogue stays generic; future live news must carry source and timestamp metadata.
                 </span>
@@ -200,7 +202,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Section: Session Management */}
           <div className="space-y-3 pt-3 border-t border-slate-800">
-            <h4 className="font-semibold text-slate-200">Session Controls</h4>
+            <h4 className="font-semibold text-slate-200">{t(locale, 'settings.session')}</h4>
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -208,7 +210,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Export Session JSON</span>
+                <span>{t(locale, 'settings.export')}</span>
               </button>
 
               <button
@@ -220,7 +222,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="flex items-center gap-1.5 px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded-lg border border-rose-900/40 transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reset Simulation State</span>
+                <span>{t(locale, 'settings.reset')}</span>
               </button>
             </div>
           </div>

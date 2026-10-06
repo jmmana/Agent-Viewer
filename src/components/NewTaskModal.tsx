@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { Agent, AgentRole } from '../types/agent';
+import type { Locale } from '../i18n';
+import { t } from '../i18n';
 import { X, Sparkles, Send, ShieldCheck, Database, BookOpen, CheckSquare } from 'lucide-react';
 
 interface NewTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
   agents: Agent[];
+  locale: Locale;
   onSubmitTask: (
     title: string,
     description: string,
@@ -44,6 +47,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
   isOpen,
   onClose,
   agents,
+  locale,
   onSubmitTask,
 }) => {
   const [title, setTitle] = useState('');
@@ -77,8 +81,8 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Dispatch Custom Task</h3>
-              <p className="text-xs text-slate-400">Instruct the multi-agent virtual organization</p>
+              <h3 className="text-sm font-bold text-white">{t(locale, 'newTask.title')}</h3>
+              <p className="text-xs text-slate-400">{t(locale, 'newTask.subtitle')}</p>
             </div>
           </div>
           <button
@@ -92,7 +96,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
         {/* Presets Quick Picker */}
         <div className="p-6 border-b border-slate-800 bg-slate-950/40 space-y-3">
           <span className="text-[11px] font-semibold uppercase text-slate-400 tracking-wide block">
-            Quick Goal Templates
+            {t(locale, 'newTask.templates')}
           </span>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {PRESET_TASKS.map((preset, idx) => {
@@ -122,7 +126,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
         {/* Task Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-300 block">Task Objective / Title</label>
+            <label className="text-xs font-medium text-slate-300 block">{t(locale, 'newTask.objective')}</label>
             <input
               type="text"
               required
@@ -134,7 +138,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-300 block">Description & Acceptance Criteria</label>
+            <label className="text-xs font-medium text-slate-300 block">{t(locale, 'newTask.description')}</label>
             <textarea
               rows={3}
               placeholder="Outline specific technical deliverables, security constraints, and endpoints..."
@@ -145,7 +149,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-300 block">Assign Primary Lead Agent</label>
+            <label className="text-xs font-medium text-slate-300 block">{t(locale, 'newTask.assign')}</label>
             <select
               value={assignedRole}
               onChange={(e) => setAssignedRole(e.target.value as any)}
@@ -173,7 +177,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
               className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:pointer-events-none rounded-lg transition-colors shadow-sm"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>Dispatch to Organization</span>
+              <span>{t(locale, 'newTask.dispatch')}</span>
             </button>
           </div>
         </form>

@@ -26,12 +26,14 @@ import { detectLocale, Locale, persistLocale } from './i18n';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
+import { clearSession, loadSession, saveSession } from './engine/sessionStorage';
 
 export default function App() {
   // Master Simulation State
-  const [simState, setSimState] = useState<SimulationState>(() =>
-    createInitialSimulationState(INITIAL_AGENTS)
-  );
+  const [simState, setSimState] = useState<SimulationState>(() => {
+    const restored = typeof window !== 'undefined' ? loadSession(window.localStorage) : null;
+    return restored ?? createInitialSimulationState(INITIAL_AGENTS);
+  });
 
   // Active navigation tab
   const [currentTab, setCurrentTab] = useState<'office' | 'tasks' | 'meetings' | 'timeline'>('office');
@@ -67,6 +69,13 @@ export default function App() {
   useEffect(() => {
     persistLocale(locale);
   }, [locale]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      saveSession(window.localStorage, simState);
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [simState]);
 
   // Keep a ref to current simulation state to avoid stale closure during step execution
   const simStateRef = useRef(simState);
@@ -226,6 +235,7 @@ export default function App() {
   const handleResetDemo = () => {
     setIsPlayingDemo(false);
     setDemoStepIndex(0);
+    clearSession(window.localStorage);
     setSimState(createInitialSimulationState(INITIAL_AGENTS));
     setSelectedAgentId(null);
   };

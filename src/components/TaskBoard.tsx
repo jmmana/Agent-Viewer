@@ -1,5 +1,7 @@
 import React from 'react';
 import { Task, Agent } from '../types/agent';
+import type { Locale } from '../i18n';
+import { t } from '../i18n';
 import {
   Layers,
   CheckCircle2,
@@ -19,6 +21,7 @@ interface TaskBoardProps {
   onSelectAgent: (agentId: string) => void;
   onOpenAgentDetail?: (agentId: string) => void;
   onOpenNewTask: () => void;
+  locale: Locale;
 }
 
 export const TaskBoard: React.FC<TaskBoardProps> = ({
@@ -27,6 +30,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
   onSelectAgent,
   onOpenAgentDetail,
   onOpenNewTask,
+  locale,
 }) => {
   const getAgentName = (id: string) => {
     const a = agents.find((ag) => ag.id === id);
@@ -53,23 +57,23 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
       {/* Header & Overview */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-bold text-white font-sans">Task Pipeline & Dependency Graph</h2>
+          <h2 className="text-lg font-bold text-white font-sans">{t(locale, 'tasks.title')}</h2>
           <p className="text-xs text-slate-400">
-            Real-time multi-agent execution pipeline, token attribution, and generated artifacts.
+            {t(locale, 'tasks.subtitle')}
           </p>
         </div>
         <button
           onClick={onOpenNewTask}
           className="px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors shadow-sm"
         >
-          + Create New Task
+          + {t(locale, 'tasks.create')}
         </button>
       </div>
 
       {/* Visual Workflow DAG */}
       <div className="bg-slate-900/80 p-4 rounded-xl border border-slate-800 space-y-3">
         <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wide">
-          Standard Organization Execution DAG
+          {t(locale, 'tasks.dag')}
         </h3>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <div className="bg-slate-950 px-3 py-2 rounded-lg border border-slate-800 flex items-center gap-2">
@@ -115,7 +119,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
       <div className="space-y-4">
         {tasks.length === 0 ? (
           <div className="text-center py-16 bg-slate-900/40 rounded-xl border border-slate-800 text-xs text-slate-500">
-            No tasks in pipeline. Start the demo sequence or click &quot;Create New Task&quot; above.
+            {t(locale, 'tasks.empty')}
           </div>
         ) : (
           tasks.map((task) => (
@@ -163,7 +167,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
               {/* Progress Bar */}
               <div className="space-y-1.5">
                 <div className="flex justify-between text-xs font-mono tabular-nums text-slate-400">
-                  <span>Execution Progress</span>
+                  <span>{t(locale, 'tasks.progress')}</span>
                   <span className="text-slate-200 font-semibold">{task.progress}%</span>
                 </div>
                 <div className="w-full h-2 rounded-full bg-slate-950 overflow-hidden border border-slate-800">
@@ -183,7 +187,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
               {/* Task Metadata & Telemetry Breakdown */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-slate-950 p-3 rounded-lg border border-slate-800/80 font-mono tabular-nums">
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">Assigned Lead</span>
+                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.assignedLead')}</span>
                   <button
                     onClick={() => {
                       onSelectAgent(task.assignedAgentId);
@@ -197,19 +201,19 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
                 </div>
 
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">Tokens Consumed</span>
+                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.tokens')}</span>
                   <span className="font-bold text-slate-200">
                     {task.tokensTotal.toLocaleString()}
                   </span>
                 </div>
 
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">Total Cost</span>
+                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.totalCost')}</span>
                   <span className="font-bold text-emerald-400">${task.costTotal.toFixed(3)}</span>
                 </div>
 
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">Collaborators</span>
+                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.collaborators')}</span>
                   <span className="text-slate-300">
                     {task.collaboratorIds.map((id) => getAgentName(id).split(' ')[0]).join(', ')}
                   </span>
@@ -220,7 +224,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
               {task.artifacts.length > 0 && (
                 <div className="space-y-2">
                   <span className="text-xs font-semibold text-slate-400 block uppercase tracking-wide">
-                    Produced Deliverables & Artifacts ({task.artifacts.length})
+                    {t(locale, 'tasks.deliverables')} ({task.artifacts.length})
                   </span>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     {task.artifacts.map((art) => (

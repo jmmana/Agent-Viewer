@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { ViewerEvent, Agent } from '../types/agent';
+import type { Locale } from '../i18n';
+import { t } from '../i18n';
 import {
   Search,
   Filter,
@@ -18,12 +20,14 @@ interface ActivityTimelineProps {
   events: ViewerEvent[];
   agents: Agent[];
   onSelectAgent: (agentId: string) => void;
+  locale: Locale;
 }
 
 export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
   events,
   agents,
   onSelectAgent,
+  locale,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<'all' | 'task' | 'message' | 'meeting' | 'tool' | 'llm'>('all');
@@ -89,7 +93,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
-              placeholder="Search event timeline, task IDs, tools..."
+              placeholder={t(locale, 'timeline.search')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
@@ -100,11 +104,11 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
         {/* Category Filters (Interactive buttons, not pills) */}
         <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
           {[
-            { id: 'all', label: 'All Events' },
-            { id: 'task', label: 'Tasks' },
-            { id: 'meeting', label: 'Meetings' },
-            { id: 'tool', label: 'Tools' },
-            { id: 'message', label: 'Messages' },
+            { id: 'all', label: t(locale, 'timeline.allEvents') },
+            { id: 'task', label: t(locale, 'timeline.tasks') },
+            { id: 'meeting', label: t(locale, 'timeline.meetings') },
+            { id: 'tool', label: t(locale, 'timeline.tools') },
+            { id: 'message', label: t(locale, 'timeline.messages') },
           ].map((cat) => (
             <button
               key={cat.id}
@@ -127,7 +131,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
             onChange={(e) => setSelectedAgentFilter(e.target.value)}
             className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none"
           >
-            <option value="all">All Agents</option>
+            <option value="all">{t(locale, 'timeline.allAgents')}</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
@@ -140,7 +144,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors border border-slate-700/60"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Export JSON</span>
+            <span>{t(locale, 'timeline.export')}</span>
           </button>
         </div>
       </div>
@@ -149,7 +153,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
         {filteredEvents.length === 0 ? (
           <div className="text-center py-16 text-slate-500 text-xs">
-            No events match current filter criteria.
+            {t(locale, 'timeline.empty')}
           </div>
         ) : (
           filteredEvents.map((ev) => {
@@ -185,11 +189,11 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
                         <span aria-hidden="true">·</span>
                         <span className="uppercase text-slate-400">{ev.type}</span>
                         <span aria-hidden="true">·</span>
-                        <span>Source: <button onClick={() => onSelectAgent(ev.source)} className="text-sky-400 hover:underline">{ev.source}</button></span>
+                        <span>{t(locale, 'timeline.source')}: <button onClick={() => onSelectAgent(ev.source)} className="text-sky-400 hover:underline">{ev.source}</button></span>
                         {ev.target && (
                           <>
                             <span aria-hidden="true">·</span>
-                            <span>Target: <button onClick={() => onSelectAgent(ev.target!)} className="text-indigo-400 hover:underline">{ev.target}</button></span>
+                            <span>{t(locale, 'timeline.target')}: <button onClick={() => onSelectAgent(ev.target!)} className="text-indigo-400 hover:underline">{ev.target}</button></span>
                           </>
                         )}
                       </div>
@@ -208,7 +212,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
                 {isExpanded && ev.payload && Object.keys(ev.payload).length > 0 && (
                   <div className="mt-3 pt-3 border-t border-slate-800">
                     <span className="text-[10px] text-slate-500 uppercase font-mono block mb-1">
-                      Event Payload
+                      {t(locale, 'timeline.payload')}
                     </span>
                     <pre className="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80 font-mono text-[11px] text-emerald-400 overflow-x-auto">
                       {JSON.stringify(ev.payload, null, 2)}

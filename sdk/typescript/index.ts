@@ -1,59 +1,326 @@
-export interface AgentViewerClientOptions {
-  baseUrl: string;
-  token?: string;
+import type {
+  CanonicalEvent,
+  CanonicalEventType,
+  EventSeverity,
+  LlmUsagePayload,
+} from '../../src/integrations/canonicalContract';
+
+export interface AgentViewerOptions {
+  url?: string;
+  baseUrl?: string; // alias for url
+  apiKey?: string;
+  token?: string; // alias for apiKey
+  runtimeId?: string;
+  sessionId?: string;
   source?: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  debug?: boolean;
+  autoRegisterAgents?: boolean;
 }
 
-export interface ViewerEventInput {
+export interface AgentInitOptions {
+  id: string;
+  name?: string;
+  roleTitle?: string;
+  provider?: string;
+  model?: string;
+  workspace?: string;
+}
+
+export interface EmitEventInput {
   id?: string;
   type: string;
   timestamp?: number;
   source?: string;
   target?: string;
   taskId?: string;
-  summary: string;
   agentId?: string;
-  payload: Record<string, unknown>;
+  severity?: EventSeverity;
+  summary?: string;
+  payload?: Record<string, unknown>;
 }
 
-export class AgentViewerClient {
-  private readonly baseUrl: string;
-  private readonly token?: string;
-  private readonly source: string;
+export interface UsageOptions {
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens?: number;
+  reasoningTokens?: number;
+  cost?: number | null;
+  costSource?: 'provider-reported' | 'estimated' | 'unknown';
+  latencyMs?: number;
+  requestId?: string;
+}
 
-  constructor(options: AgentViewerClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/$/, '');
-    this.token = options.token;
-    this.source = options.source ?? 'external-runtime';
+export class AgentViewerError extends Error {
+  public readonly status?: number;
+  public readonly issues?: Array<{ path: string; message: string }>;
+
+  constructor(message: string, status?: number, issues?: Array<{ path: string; message: string }>) {
+    super(message);
+    this.name = 'AgentViewerError';
+    this.status = status;
+    this.issues = issues;
+  }
+}
+
+export class AgentHandle {
+  public readonly id: string;
+  public readonly name: string;
+  public readonly roleTitle?: string;
+  public readonly provider?: string;
+  public readonly model?: string;
+  public readonly workspace?: string;
+
+  private readonly viewer: AgentViewer;
+  private registered = false;
+
+  constructor(viewer: AgentViewer, options: AgentInitOptions) {
+    this.viewer = viewer;
+    this.id = options.id;
+    this.name = options.name ?? options.id;
+    this.roleTitle = options.roleTitle;
+    this.provider = options.provider;
+    this.model = options.model;
+    this.workspace = options.workspace;
   }
 
-  async emit(input: ViewerEventInput): Promise<void> {
-    const event = {
+  private async ensureRegistered(): Promise<void> {
+    if (!this.registered && this.viewer.shouldAutoRegister()) {
+      try {
+        await this.viewer.emit({
+          type: 'agent.registered',
+          source: `agent:${this.id}`,
+          agentId: this.id,
+          summary: `Registered ${this.name}`,
+          payload: {
+            id: this.id,
+            name: this.name,
+            roleTitle: this.roleTitle ?? 'AI Agent',
+            provider: this.provider ?? 'Custom',
+            model: this.model ?? 'Custom',
+            workspace: this.workspace ?? 'development',
+          },
+        });
+        this.registered = true;
+      } catch (err) {
+        if (this.viewer.isDebug()) {
+          console.warn(`[AgentViewer] Auto-registration warning for ${this.id}:`, err);
+        }
+      }
+    }
+  }
+
+  async status(status: string, options: { workspace?: string; statusText?: string } = {}): Promise<void> {
+    await this.ensureRegistered();
+    await this.viewer.emit({
+      type: 'agent.status.changed',
+      source: `agent:${this.id}`,
+      agentId: this.id,
+      summary: options.statusText ?? `${this.id} → ${status}`,
+      payload: {
+        status,
+        statusText: options.statusText,
+        workspace: options.workspace ?? this.workspace,
+      },
+    });
+  }
+
+  async idle(summary = 'Idle and awaiting tasks'): Promise<void> {
+    await this.status('IDLE', { statusText: summary });
+  }
+
+  async thinking(summary = 'Thinking and processing'): Promise<void> {
+    await this.status('THINKING', { statusText: summary });
+  }
+
+  async researching(summary = 'Researching information'): Promise<void> {
+    await this.status('RESEARCHING', { statusText: summary, workspace: 'research_area' });
+  }
+
+  async coding(summary = 'Writing code'): Promise<void> {
+    await this.status('CODING', { statusText: summary, workspace: 'development' });
+  }
+
+  async testing(summary = 'Running tests'): Promise<void> {
+    await this.status('TESTING', { statusText: summary, workspace: 'qa_lab' });
+  }
+
+  async waiting(summary = 'Waiting for dependencies'): Promise<void> {
+    await this.status('WAITING', { statusText: summary });
+  }
+
+  async blocked(reason = 'Execution blocked'): Promise<void> {
+    await this.status('BLOCKED', { statusText: reason });
+  }
+
+  async done(summary = 'Task completed successfully'): Promise<void> {
+    await this.status('DONE', { statusText: summary });
+  }
+
+  async message(text: string, targetAgentName?: string): Promise<void> {
+    await this.ensureRegistered();
+    await this.viewer.emit({
+      type: 'agent.message.sent',
+      source: `agent:${this.id}`,
+      agentId: this.id,
+      summary: `${this.name}: ${text.slice(0, 60)}`,
+      payload: {
+        text,
+        targetAgentName,
+      },
+    });
+  }
+
+  async toolStarted(tool: string, inputSummary?: string): Promise<void> {
+    await this.ensureRegistered();
+    await this.viewer.emit({
+      type: 'tool.started',
+      source: `agent:${this.id}`,
+      agentId: this.id,
+      summary: inputSummary ? `Started ${tool}: ${inputSummary}` : `Started tool ${tool}`,
+      payload: {
+        tool,
+        inputSummary,
+      },
+    });
+  }
+
+  async toolCompleted(tool: string, outputSummary?: string): Promise<void> {
+    await this.ensureRegistered();
+    await this.viewer.emit({
+      type: 'tool.completed',
+      source: `agent:${this.id}`,
+      agentId: this.id,
+      summary: outputSummary ? `Completed ${tool}: ${outputSummary}` : `Completed tool ${tool}`,
+      payload: {
+        tool,
+        outputSummary,
+      },
+    });
+  }
+
+  async toolFailed(tool: string, errorSummary?: string): Promise<void> {
+    await this.ensureRegistered();
+    await this.viewer.emit({
+      type: 'tool.failed',
+      source: `agent:${this.id}`,
+      agentId: this.id,
+      severity: 'high',
+      summary: errorSummary ? `Failed ${tool}: ${errorSummary}` : `Failed tool ${tool}`,
+      payload: {
+        tool,
+        error: errorSummary,
+      },
+    });
+  }
+
+  async usage(options: UsageOptions): Promise<void> {
+    await this.ensureRegistered();
+    await this.viewer.emit({
+      type: 'llm.usage',
+      source: `agent:${this.id}`,
+      agentId: this.id,
+      summary: `${options.provider}/${options.model} tokens (${options.inputTokens}+${options.outputTokens})`,
+      payload: {
+        provider: options.provider,
+        model: options.model,
+        inputTokens: options.inputTokens,
+        outputTokens: options.outputTokens,
+        cachedTokens: options.cachedTokens ?? 0,
+        reasoningTokens: options.reasoningTokens ?? 0,
+        cost: options.cost !== undefined ? options.cost : null,
+        costSource: options.costSource ?? (options.cost !== undefined && options.cost !== null ? 'provider-reported' : 'unknown'),
+        latencyMs: options.latencyMs,
+        requestId: options.requestId,
+      },
+    });
+  }
+}
+
+export class AgentViewer {
+  public readonly url: string;
+  public readonly token?: string;
+  public readonly runtimeId?: string;
+  public readonly sessionId?: string;
+  public readonly source: string;
+  public readonly timeoutMs: number;
+  public readonly maxRetries: number;
+  public readonly debug: boolean;
+  public readonly autoRegisterAgents: boolean;
+
+  private registeredAgents = new Map<string, AgentHandle>();
+
+  constructor(options: AgentViewerOptions = {}) {
+    const rawUrl = options.url || options.baseUrl || 'http://localhost:8787';
+    this.url = rawUrl.replace(/\/$/, '');
+    this.token = options.apiKey || options.token;
+    this.runtimeId = options.runtimeId;
+    this.sessionId = options.sessionId;
+    this.source = options.source || (options.runtimeId ? `runtime:${options.runtimeId}` : 'external-runtime');
+    this.timeoutMs = options.timeoutMs ?? 10000;
+    this.maxRetries = options.maxRetries ?? 3;
+    this.debug = Boolean(options.debug);
+    this.autoRegisterAgents = options.autoRegisterAgents !== false;
+  }
+
+  isDebug(): boolean {
+    return this.debug;
+  }
+
+  shouldAutoRegister(): boolean {
+    return this.autoRegisterAgents;
+  }
+
+  agent(init: string | AgentInitOptions): AgentHandle {
+    const options: AgentInitOptions = typeof init === 'string' ? { id: init, name: init } : init;
+    const existing = this.registeredAgents.get(options.id);
+    if (existing) return existing;
+
+    const handle = new AgentHandle(this, options);
+    this.registeredAgents.set(options.id, handle);
+    return handle;
+  }
+
+  async emit(input: EmitEventInput): Promise<void> {
+    const event: CanonicalEvent = {
       schemaVersion: '1.0',
-      id: input.id ?? `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      type: input.type,
+      id: input.id ?? `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      type: input.type as CanonicalEventType,
       timestamp: input.timestamp ?? Date.now(),
+      runtimeId: this.runtimeId,
+      sessionId: this.sessionId,
       source: input.source ?? this.source,
-      target: input.target,
-      taskId: input.taskId,
       agentId: input.agentId,
-      severity: 'normal',
-      summary: input.summary,
-      payload: input.payload,
+      taskId: input.taskId,
+      severity: input.severity ?? 'normal',
+      summary: input.summary ?? `${input.type} reported`,
+      payload: input.payload ?? {},
     };
 
-    const response = await fetch(`${this.baseUrl}/api/v1/events`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
-      },
-      body: JSON.stringify(event),
-    });
+    await this.postWithRetry('/api/v1/events', event, event.id);
+  }
 
-    if (!response.ok) {
-      throw new Error(`Agent Viewer rejected event: ${response.status} ${await response.text()}`);
-    }
+  async emitBatch(inputs: EmitEventInput[]): Promise<{ accepted: number; duplicates: number }> {
+    const events: CanonicalEvent[] = inputs.map((input) => ({
+      schemaVersion: '1.0',
+      id: input.id ?? `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      type: input.type as CanonicalEventType,
+      timestamp: input.timestamp ?? Date.now(),
+      runtimeId: this.runtimeId,
+      sessionId: this.sessionId,
+      source: input.source ?? this.source,
+      agentId: input.agentId,
+      taskId: input.taskId,
+      severity: input.severity ?? 'normal',
+      summary: input.summary ?? `${input.type} reported`,
+      payload: input.payload ?? {},
+    }));
+
+    const result = await this.postWithRetry('/api/v1/events/batch', { events });
+    return result;
   }
 
   async registerAgent(agent: {
@@ -62,7 +329,7 @@ export class AgentViewerClient {
     roleTitle?: string;
     provider?: string;
     model?: string;
-    managerId?: string;
+    workspace?: string;
   }): Promise<void> {
     await this.emit({
       type: 'agent.registered',
@@ -73,60 +340,115 @@ export class AgentViewerClient {
     });
   }
 
-  async status(agentId: string, status: string, options: { workspace?: string; statusText?: string } = {}): Promise<void> {
+  async heartbeat(activeAgentsCount?: number): Promise<void> {
     await this.emit({
-      type: 'agent.status.changed',
-      source: `agent:${agentId}`,
-      agentId,
-      summary: `${agentId} → ${status}`,
-      payload: { status, ...options },
+      type: 'runtime.heartbeat',
+      source: this.source,
+      summary: `Heartbeat from ${this.runtimeId ?? 'runtime'}`,
+      payload: {
+        runtimeId: this.runtimeId,
+        status: 'healthy',
+        activeAgentsCount,
+      },
     });
   }
 
-  async message(agentId: string, text: string, targetAgentName?: string): Promise<void> {
-    await this.emit({
-      type: 'message.sent',
-      source: `agent:${agentId}`,
-      agentId,
-      summary: `${agentId} sent a visible message`,
-      payload: { text, targetAgentName },
+  async snapshot(): Promise<any> {
+    const response = await fetch(`${this.url}/api/v1/snapshot`, {
+      headers: this.buildHeaders(),
     });
+    if (!response.ok) {
+      throw new AgentViewerError(`Failed to fetch snapshot: ${response.status}`, response.status);
+    }
+    return response.json();
   }
 
-  async llmUsage(agentId: string, usage: {
-    provider: string;
-    model: string;
-    inputTokens: number;
-    outputTokens: number;
-    cachedTokens?: number;
-    cost?: number;
-    costSource?: 'provider-reported' | 'estimated' | 'unknown';
-    latencyMs?: number;
-    requestId?: string;
-  }): Promise<void> {
-    await this.emit({
-      type: 'llm.usage',
-      source: `agent:${agentId}`,
-      agentId,
-      summary: `${usage.provider}/${usage.model} usage reported`,
-      payload: usage,
-    });
+  private buildHeaders(idempotencyKey?: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      accept: 'application/json',
+    };
+    if (this.token) {
+      headers['authorization'] = `Bearer ${this.token}`;
+    }
+    if (idempotencyKey) {
+      headers['idempotency-key'] = idempotencyKey;
+    }
+    return headers;
   }
 
-  async requestMeeting(args: {
-    meetingId: string;
-    initiatorId: string;
-    participantIds: string[];
-    title: string;
-    topic: string;
-    taskId?: string;
-  }): Promise<void> {
-    await this.emit({
-      type: 'meeting.requested',
-      source: `agent:${args.initiatorId}`,
-      taskId: args.taskId,
-      summary: args.title,
-      payload: args,
-    });
+  private async postWithRetry(endpoint: string, body: unknown, idempotencyKey?: string): Promise<any> {
+    let attempt = 0;
+    let delay = 300;
+
+    while (attempt <= this.maxRetries) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+        const response = await fetch(`${this.url}${endpoint}`, {
+          method: 'POST',
+          headers: this.buildHeaders(idempotencyKey),
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (response.ok || response.status === 200 || response.status === 202) {
+          return await response.json();
+        }
+
+        const responseText = await response.text();
+        let parsedJson: any = null;
+        try {
+          parsedJson = JSON.parse(responseText);
+        } catch {
+          // not json
+        }
+
+        // 4xx errors (client errors) should not be retried except 429
+        if (response.status < 500 && response.status !== 429) {
+          throw new AgentViewerError(
+            parsedJson?.message || `Agent Viewer rejected request: ${response.status} ${responseText}`,
+            response.status,
+            parsedJson?.issues || parsedJson?.errors
+          );
+        }
+
+        // Retryable server error or 429
+        attempt++;
+        if (attempt > this.maxRetries) {
+          throw new AgentViewerError(`Agent Viewer request failed after ${this.maxRetries} retries: ${response.status} ${responseText}`, response.status);
+        }
+
+        if (this.debug) {
+          console.warn(`[AgentViewer] Request failed with ${response.status}, retrying in ${delay}ms... (attempt ${attempt}/${this.maxRetries})`);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, delay + Math.random() * 100));
+        delay = Math.min(delay * 2, 5000);
+      } catch (err: any) {
+        if (err instanceof AgentViewerError) {
+          throw err;
+        }
+
+        attempt++;
+        if (attempt > this.maxRetries) {
+          throw new AgentViewerError(`Agent Viewer network error after ${this.maxRetries} retries: ${err.message}`);
+        }
+
+        if (this.debug) {
+          console.warn(`[AgentViewer] Network error (${err.message}), retrying in ${delay}ms...`);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, delay + Math.random() * 100));
+        delay = Math.min(delay * 2, 5000);
+      }
+    }
   }
 }
+
+// Backward compatibility alias
+export { AgentViewer as AgentViewerClient };
+export default AgentViewer;

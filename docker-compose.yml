@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm run server
+    ports:
+      - "8787:8787"
+    environment:
+      - PORT=8787
+      - AGENT_VIEWER_STORAGE=sqlite
+      - AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db
+      - AGENT_VIEWER_CORS_ORIGIN=http://localhost:3000
+      - AGENT_VIEWER_MAX_BATCH_SIZE=100
+      - AGENT_VIEWER_RATE_LIMIT=1000
+    volumes:
+      - agent_viewer_data:/app/data
+    restart: unless-stopped
+
+  viewer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm run preview -- --port=3000 --host=0.0.0.0
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_AGENT_VIEWER_API_URL=http://localhost:8787
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  agent_viewer_data:
+    driver: local

@@ -1,85 +1,561 @@
+import crypto from 'node:crypto';
 import express from 'express';
+import dotenv from 'dotenv';
+import {
+  type CanonicalEvent,
+  validateCanonicalEvent,
+  normalizeCanonicalEvent,
+  ValidationIssue,
+} from '../src/integrations/canonicalContract';
+import { createEventStore, type EventStore } from './store';
+
+dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
-const events: unknown[] = [];
+const maxBatchSize = Number(process.env.AGENT_VIEWER_MAX_BATCH_SIZE ?? 100);
+const rateLimitMax = Number(process.env.AGENT_VIEWER_RATE_LIMIT ?? 1000);
+const rateLimitWindowMs = 60 * 1000;
+
+const store: EventStore = createEventStore();
 const clients = new Set<express.Response>();
 
-app.use(express.json({ limit: '1mb' }));
+// Rate limiter storage
+const rateLimits = new Map<string, { count: number; resetAt: number }>();
 
+function rateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  let entry = rateLimits.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    entry = { count: 0, resetAt: now + rateLimitWindowMs };
+    rateLimits.set(ip, entry);
+  }
+  entry.count++;
+  if (entry.count > rateLimitMax) {
+    res.status(429).json({ error: 'rate_limit_exceeded', message: `Too many requests. Limit: ${rateLimitMax}/min` });
+    return;
+  }
+  next();
+}
+
+// Body parsing with raw buffer capture for webhook HMAC
+app.use(
+  express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf;
+    },
+  })
+);
+
+// CORS configuration
+app.use((req, res, next) => {
+  const allowedOrigin = process.env.AGENT_VIEWER_CORS_ORIGIN ?? '*';
+  const requestOrigin = req.header('origin');
+
+  if (allowedOrigin === '*') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else if (requestOrigin && (allowedOrigin === requestOrigin || allowedOrigin.split(',').map((s) => s.trim()).includes(requestOrigin))) {
+    res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+  } else {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin.split(',')[0].trim());
+  }
+
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, idempotency-key, last-event-id, x-agent-viewer-signature, x-agent-viewer-timestamp');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+  next();
+});
+
+app.options('*', (_req, res) => {
+  res.sendStatus(204);
+});
+
+// Authentication middleware for /api/v1/*
 app.use('/api/v1', (req, res, next) => {
-  const expected = process.env.AGENT_VIEWER_API_TOKEN;
-  if (!expected) return next();
-  const auth = req.header('authorization');
-  if (auth !== `Bearer ${expected}`) {
-    res.status(401).json({ error: 'unauthorized' });
+  // Webhooks have their own HMAC security check
+  if (req.path.startsWith('/webhooks')) return next();
+
+  const expectedToken = process.env.AGENT_VIEWER_API_TOKEN;
+  if (!expectedToken) return next();
+
+  const authHeader = req.header('authorization');
+  if (authHeader !== `Bearer ${expectedToken}`) {
+    res.status(401).json({ error: 'unauthorized', message: 'Valid Bearer token required in Authorization header' });
     return;
   }
   next();
 });
-app.use((_, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', process.env.AGENT_VIEWER_CORS_ORIGIN ?? '*');
-  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, idempotency-key');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  next();
+
+// Apply rate limiting to all /api/v1 routes
+app.use('/api/v1', rateLimiter);
+
+// -------------------------------------------------------------
+// Health & Ready
+// -------------------------------------------------------------
+app.get('/health', (_req, res) => {
+  res.json({
+    ok: true,
+    status: 'healthy',
+    service: 'agent-viewer',
+    version: '1.0.0',
+    schemaVersion: '1.0',
+    clientsConnected: clients.size,
+  });
 });
 
-app.options('*', (_, res) => res.sendStatus(204));
-
-app.get('/health', (_, res) => {
-  res.json({ ok: true, service: 'agent-viewer-ingestion', schemaVersion: '1.0' });
+app.get('/ready', async (_req, res) => {
+  try {
+    const storageType = process.env.AGENT_VIEWER_STORAGE || 'memory';
+    res.json({
+      ok: true,
+      ready: true,
+      storage: storageType,
+    });
+  } catch (err: any) {
+    res.status(503).json({ ok: false, ready: false, error: err?.message || 'Storage error' });
+  }
 });
 
-app.get('/api/v1/snapshot', (_, res) => {
-  res.json({ schemaVersion: '1.0', events });
+// Helper to broadcast event to SSE subscribers
+function broadcastEvent(event: CanonicalEvent) {
+  const frame = `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  for (const client of clients) {
+    try {
+      client.write(frame);
+    } catch {
+      clients.delete(client);
+    }
+  }
+}
+
+// -------------------------------------------------------------
+// Event Ingestion (Single)
+// -------------------------------------------------------------
+app.post('/api/v1/events', async (req, res) => {
+  const idempotencyKey = req.header('idempotency-key');
+  let body = req.body;
+
+  if (idempotencyKey && !body.id) {
+    body = { ...body, id: idempotencyKey };
+  }
+
+  const validation = validateCanonicalEvent(body);
+  if (!validation.success || !validation.data) {
+    res.status(400).json({
+      error: 'validation_failed',
+      issues: validation.issues ?? [{ path: '', message: 'Invalid event payload' }],
+    });
+    return;
+  }
+
+  const event = validation.data;
+  const result = await store.append(event);
+
+  if (result.duplicate) {
+    res.status(200).json({
+      accepted: true,
+      duplicate: true,
+      id: event.id,
+    });
+    return;
+  }
+
+  broadcastEvent(event);
+
+  res.status(202).json({
+    accepted: true,
+    duplicate: false,
+    id: event.id,
+  });
 });
 
-app.get('/api/v1/events/stream', (req, res) => {
+// -------------------------------------------------------------
+// Event Ingestion (Batch)
+// -------------------------------------------------------------
+app.post('/api/v1/events/batch', async (req, res) => {
+  const rawEvents: unknown = Array.isArray(req.body) ? req.body : req.body?.events;
+
+  if (!Array.isArray(rawEvents)) {
+    res.status(400).json({
+      error: 'invalid_batch',
+      message: 'Expected JSON array of events or an object with "events" array',
+    });
+    return;
+  }
+
+  if (rawEvents.length === 0) {
+    res.status(400).json({
+      error: 'empty_batch',
+      message: 'Batch cannot be empty',
+    });
+    return;
+  }
+
+  if (rawEvents.length > maxBatchSize) {
+    res.status(413).json({
+      error: 'batch_too_large',
+      message: `Batch contains ${rawEvents.length} events; limit is ${maxBatchSize}`,
+    });
+    return;
+  }
+
+  const validatedEvents: CanonicalEvent[] = [];
+  const errors: Array<{ index: number; issues: ValidationIssue[] }> = [];
+
+  rawEvents.forEach((item, index) => {
+    const val = validateCanonicalEvent(item);
+    if (val.success && val.data) {
+      validatedEvents.push(val.data);
+    } else {
+      errors.push({ index, issues: val.issues ?? [{ path: '', message: 'Validation failed' }] });
+    }
+  });
+
+  if (errors.length > 0) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: `${errors.length} event(s) in batch failed validation`,
+      errors,
+    });
+    return;
+  }
+
+  const { accepted, duplicates, acceptedEvents } = await store.appendBatch(validatedEvents);
+
+  for (const event of acceptedEvents) {
+    broadcastEvent(event);
+  }
+
+  res.status(202).json({
+    accepted,
+    duplicates,
+    total: rawEvents.length,
+    results: validatedEvents.map((e) => ({
+      id: e.id,
+      duplicate: !acceptedEvents.some((acc) => acc.id === e.id),
+    })),
+  });
+});
+
+// -------------------------------------------------------------
+// Events Query
+// -------------------------------------------------------------
+app.get('/api/v1/events', async (req, res) => {
+  const limit = req.query.limit ? Number(req.query.limit) : 100;
+  const since = req.query.since ? Number(req.query.since) : undefined;
+  const afterId = typeof req.query.afterId === 'string' ? req.query.afterId : undefined;
+  const runtimeId = typeof req.query.runtimeId === 'string' ? req.query.runtimeId : undefined;
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined;
+  const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
+  const type = typeof req.query.type === 'string' ? req.query.type : undefined;
+
+  const events = await store.list({ limit, since, afterId, runtimeId, sessionId, agentId, type });
+  res.json({
+    schemaVersion: '1.0',
+    count: events.length,
+    events,
+  });
+});
+
+// -------------------------------------------------------------
+// Snapshot
+// -------------------------------------------------------------
+app.get('/api/v1/snapshot', async (_req, res) => {
+  const snapshot = await store.snapshot();
+  res.json(snapshot);
+});
+
+// -------------------------------------------------------------
+// Realtime Stream (SSE)
+// -------------------------------------------------------------
+app.get('/api/v1/events/stream', async (req, res) => {
   res.status(200);
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
+
+  // Handle missed events if Last-Event-ID or lastEventId query param is provided
+  const lastEventId = req.header('last-event-id') || (typeof req.query.lastEventId === 'string' ? req.query.lastEventId : undefined);
+  if (lastEventId) {
+    const missed = await store.list({ afterId: lastEventId, limit: 100 });
+    // missed events are descending; replay in chronological order
+    for (const evt of missed.reverse()) {
+      res.write(`id: ${evt.id}\nevent: ${evt.type}\ndata: ${JSON.stringify(evt)}\n\n`);
+    }
+  }
+
   res.write(': connected\n\n');
   clients.add(res);
 
-  const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 20000);
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': heartbeat\nevent: heartbeat\ndata: {}\n\n');
+    } catch {
+      // client disconnected
+    }
+  }, 15000);
+
   req.on('close', () => {
-    clearInterval(keepAlive);
+    clearInterval(heartbeat);
     clients.delete(res);
   });
 });
 
-app.post('/api/v1/events', (req, res) => {
-  const event = req.body;
-  if (
-    !event ||
-    typeof event !== 'object' ||
-    typeof event.id !== 'string' ||
-    typeof event.type !== 'string' ||
-    typeof event.timestamp !== 'number' ||
-    typeof event.source !== 'string' ||
-    typeof event.summary !== 'string' ||
-    typeof event.payload !== 'object'
-  ) {
-    res.status(400).json({ error: 'invalid-event-envelope' });
+// -------------------------------------------------------------
+// Agent Management
+// -------------------------------------------------------------
+app.post('/api/v1/agents', async (req, res) => {
+  const { id, name, roleTitle, role, provider, model, workspace, status, statusText } = req.body ?? {};
+  if (!id || typeof id !== 'string' || !name || typeof name !== 'string') {
+    res.status(400).json({ error: 'validation_failed', message: 'Fields "id" and "name" are required' });
     return;
   }
 
-  if (events.some((item: any) => item?.id === event.id)) {
-    res.status(200).json({ accepted: true, duplicate: true, id: event.id });
+  const agent = await store.upsertAgent({
+    id,
+    name,
+    roleTitle,
+    role,
+    provider,
+    model,
+    workspace,
+    status: status || 'IDLE',
+    statusText: statusText || 'Registered',
+  });
+
+  const regEvent: CanonicalEvent = {
+    schemaVersion: '1.0',
+    id: `evt_reg_${id}_${Date.now()}`,
+    type: 'agent.registered',
+    timestamp: Date.now(),
+    source: `agent:${id}`,
+    agentId: id,
+    severity: 'normal',
+    summary: `Registered ${name}`,
+    payload: { id, name, roleTitle, provider, model, workspace },
+  };
+
+  await store.append(regEvent);
+  broadcastEvent(regEvent);
+
+  res.status(201).json(agent);
+});
+
+app.patch('/api/v1/agents/:agentId', async (req, res) => {
+  const agentId = req.params.agentId;
+  const existing = await store.getAgent(agentId);
+  if (!existing) {
+    res.status(404).json({ error: 'agent_not_found', message: `Agent "${agentId}" not found` });
     return;
   }
 
-  events.unshift(event);
-  if (events.length > 10000) events.length = 10000;
+  const updated = await store.upsertAgent({
+    id: agentId,
+    ...req.body,
+  });
 
-  const frame = `data: ${JSON.stringify(event)}\n\n`;
-  for (const client of clients) client.write(frame);
+  // Emit status change or update event
+  if (req.body.status) {
+    const statusEvt: CanonicalEvent = {
+      schemaVersion: '1.0',
+      id: `evt_status_${agentId}_${Date.now()}`,
+      type: 'agent.status.changed',
+      timestamp: Date.now(),
+      source: `agent:${agentId}`,
+      agentId,
+      severity: 'normal',
+      summary: `${agentId} status updated to ${req.body.status}`,
+      payload: { status: req.body.status, statusText: req.body.statusText, workspace: req.body.workspace },
+    };
+    await store.append(statusEvt);
+    broadcastEvent(statusEvt);
+  }
 
-  res.status(202).json({ accepted: true, duplicate: false, id: event.id });
+  res.json(updated);
 });
 
-app.listen(port, () => {
-  console.log(`Agent Viewer ingestion listening on http://localhost:${port}`);
+// -------------------------------------------------------------
+// Runtimes & Sessions
+// -------------------------------------------------------------
+app.post('/api/v1/runtimes', async (req, res) => {
+  const { id, name, framework, version, metadata } = req.body ?? {};
+  if (!id || typeof id !== 'string') {
+    res.status(400).json({ error: 'validation_failed', message: 'Field "id" is required' });
+    return;
+  }
+
+  const runtime = await store.upsertRuntime({ id, name, framework, version, metadata });
+  const event: CanonicalEvent = {
+    schemaVersion: '1.0',
+    id: `evt_rt_${id}_${Date.now()}`,
+    type: 'runtime.connected',
+    timestamp: Date.now(),
+    runtimeId: id,
+    source: `runtime:${id}`,
+    severity: 'normal',
+    summary: `Runtime ${id} connected`,
+    payload: { id, name, framework, version, metadata },
+  };
+  await store.append(event);
+  broadcastEvent(event);
+
+  res.status(201).json(runtime);
 });
+
+app.get('/api/v1/runtimes', async (_req, res) => {
+  const runtimes = await store.listRuntimes();
+  res.json({ runtimes });
+});
+
+app.get('/api/v1/sessions', async (_req, res) => {
+  const sessions = await store.listSessions();
+  res.json({ sessions });
+});
+
+app.get('/api/v1/sessions/:sessionId', async (req, res) => {
+  const session = await store.getSession(req.params.sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'session_not_found', message: `Session ${req.params.sessionId} not found` });
+    return;
+  }
+  const events = await store.list({ sessionId: req.params.sessionId, limit: 1000 });
+  res.json({ session, events });
+});
+
+// -------------------------------------------------------------
+// Generic Webhook with optional HMAC & replay protection
+// -------------------------------------------------------------
+app.post('/api/v1/webhooks/generic', async (req, res) => {
+  const secret = process.env.AGENT_VIEWER_WEBHOOK_SECRET;
+
+  if (secret) {
+    const signature = req.header('x-agent-viewer-signature');
+    const timestampStr = req.header('x-agent-viewer-timestamp');
+
+    if (!signature || !timestampStr) {
+      res.status(401).json({
+        error: 'missing_webhook_signature',
+        message: 'Headers X-Agent-Viewer-Signature and X-Agent-Viewer-Timestamp required',
+      });
+      return;
+    }
+
+    const timestamp = Number(timestampStr);
+    const now = Date.now();
+    // Replay protection: within 5 minutes
+    if (isNaN(timestamp) || Math.abs(now - timestamp) > 300_000) {
+      res.status(401).json({
+        error: 'replay_detected_or_clock_skew',
+        message: 'Webhook timestamp is expired or too far in the future',
+      });
+      return;
+    }
+
+    const rawBody = (req as any).rawBody?.toString('utf-8') ?? JSON.stringify(req.body);
+    const expected = crypto.createHmac('sha256', secret).update(`${timestampStr}.${rawBody}`).digest('hex');
+
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      res.status(401).json({
+        error: 'invalid_webhook_signature',
+        message: 'HMAC signature verification failed',
+      });
+      return;
+    }
+  }
+
+  const payload = req.body ?? {};
+  const agentName = payload.agent || payload.agentId || 'generic-agent';
+  const status = payload.status || (payload.message ? 'THINKING' : 'IDLE');
+  const message = payload.message || payload.text;
+  const tool = payload.tool;
+  const usage = payload.usage;
+
+  const generatedEvents: CanonicalEvent[] = [];
+
+  // Generate status changed event
+  generatedEvents.push(
+    normalizeCanonicalEvent({
+      id: `evt_wh_status_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      type: 'agent.status.changed',
+      agentId: agentName,
+      source: `agent:${agentName}`,
+      summary: `${agentName} → ${status}`,
+      payload: { status, statusText: payload.statusText || status },
+    })
+  );
+
+  // Generate message sent event if present
+  if (message) {
+    generatedEvents.push(
+      normalizeCanonicalEvent({
+        id: `evt_wh_msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'agent.message.sent',
+        agentId: agentName,
+        source: `agent:${agentName}`,
+        summary: `${agentName}: ${message.slice(0, 60)}`,
+        payload: { text: message },
+      })
+    );
+  }
+
+  // Generate tool started event if present
+  if (tool) {
+    generatedEvents.push(
+      normalizeCanonicalEvent({
+        id: `evt_wh_tool_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'tool.started',
+        agentId: agentName,
+        source: `agent:${agentName}`,
+        summary: `${agentName} using ${tool}`,
+        payload: { tool },
+      })
+    );
+  }
+
+  // Generate usage event if present
+  if (usage && typeof usage === 'object') {
+    generatedEvents.push(
+      normalizeCanonicalEvent({
+        id: `evt_wh_usage_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'llm.usage',
+        agentId: agentName,
+        source: `agent:${agentName}`,
+        summary: `${agentName} LLM usage reported`,
+        payload: usage,
+      })
+    );
+  }
+
+  const { accepted, acceptedEvents } = await store.appendBatch(generatedEvents);
+  for (const evt of acceptedEvents) {
+    broadcastEvent(evt);
+  }
+
+  res.status(202).json({
+    accepted: true,
+    eventsGenerated: generatedEvents.length,
+    acceptedCount: accepted,
+    eventIds: generatedEvents.map((e) => e.id),
+  });
+});
+
+let serverInstance: any = null;
+const isDirectRun =
+  process.argv[1] &&
+  (process.argv[1].endsWith('server/index.ts') ||
+    process.argv[1].endsWith('server/index.js') ||
+    process.argv[1].endsWith('server') ||
+    (process.env.npm_lifecycle_event === 'server'));
+
+if (isDirectRun && process.env.NODE_ENV !== 'test') {
+  serverInstance = app.listen(port, () => {
+    console.log(`Agent Viewer ingestion server listening on http://localhost:${port}`);
+  });
+}
+
+export { app, serverInstance, store };

@@ -193,6 +193,7 @@ export type EventType =
   | 'agent.registered'
   | 'agent.updated'
   | 'agent.status.changed'
+  | 'agent.message.sent'
   | 'task.created'
   | 'task.assigned'
   | 'task.started'
@@ -217,15 +218,22 @@ export type EventType =
   | 'tool.completed'
   | 'tool.failed'
   | 'llm.usage'
+  | 'runtime.connected'
+  | 'runtime.disconnected'
+  | 'runtime.heartbeat'
   | 'approval.requested'
   | 'approval.approved'
   | 'artifact.created';
 
 export interface ViewerEvent {
+  schemaVersion?: string;
   id: string;
   type: EventType;
   timestamp: number;
   source: string;
+  runtimeId?: string;
+  sessionId?: string;
+  agentId?: string;
   target?: string;
   taskId?: string;
   severity: 'low' | 'normal' | 'high' | 'critical';

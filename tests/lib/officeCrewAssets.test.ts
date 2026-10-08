@@ -157,6 +157,31 @@ describe('Office Crew sprite loading and projection', () => {
     expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[0]);
   });
 
+  it('plays multi-frame raster clips, loops deterministically and respects reduced motion', () => {
+    const frames = [
+      'assets/animations/ceo/walk-front/00.png',
+      'assets/animations/ceo/walk-front/01.png',
+      'assets/animations/ceo/walk-front/02.png',
+    ];
+    const h = harness([asset('walk', {
+      file: frames[0], frameFiles: frames, frames: 3, fps: 5, loop: true,
+    }), asset()]);
+    expect(h.draw(0, { isWalking: true })).toBe(false); // async image loads
+    expect(h.images).toHaveLength(4); // three raster frames plus idle fallback (eager preload)
+    h.load();
+    expect(h.draw(0, { isWalking: true })).toBe(true);
+    expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[0]);
+    expect(h.draw(200, { isWalking: true })).toBe(true);
+    expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[1]);
+    expect(h.draw(400, { isWalking: true })).toBe(true);
+    expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[2]);
+    expect(h.draw(600, { isWalking: true })).toBe(true);
+    expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[0]);
+    expect(h.draw(800, { isWalking: true }, true)).toBe(true);
+    expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[0]);
+    expect(h.factory).toHaveBeenCalledTimes(4);
+  });
+
   it('holds the first animation frame with reduced motion and detaches pending callbacks on disposal', () => {
     const h = harness([asset('walk', { frames: 2, fps: 10, loop: true, frameFiles: ['frame-a.svg', 'frame-b.svg'] })]);
     h.draw(0, { isWalking: true });

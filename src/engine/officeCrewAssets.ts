@@ -23,7 +23,12 @@ export interface CrewAsset {
 // Vite rewrites these imports for both the demo app and the published library. No fetches, absolute
 // public-directory URLs or runtime dependencies on the repository's assets directory are necessary.
 const manifests = import.meta.glob<{ assets: CrewAsset[] }>('../../assets/asset-manifest.json', { eager: true, import: 'default' });
-const bundledUrls = import.meta.glob<string>(['../../assets/characters/*/*.svg', '../../assets/characters/*/*.png', '../../assets/characters/*/*.webp'], { eager: true, query: '?url', import: 'default' });
+// Only finished runtime artwork is imported. High-resolution sources and vector motion studies
+// stay unbundled; raster atlas frames may now live under assets/animations/<role>/<clip-facing>/.
+const bundledUrls = import.meta.glob<string>([
+  '../../assets/characters/*/*.{svg,png,webp}',
+  '../../assets/animations/**/*.{png,webp}',
+], { eager: true, query: '?url', import: 'default' });
 const manifest = Object.values(manifests)[0];
 const assetUrls = Object.fromEntries(Object.entries(bundledUrls).map(([path, url]) => [path.replace('../../', ''), url]));
 

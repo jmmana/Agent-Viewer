@@ -317,7 +317,7 @@ function drawModelOpsTelemetry(
   ctx.font = '700 8px "JetBrains Mono", monospace';
   ctx.fillStyle = theme === 'dark' ? '#38bdf8' : '#0284c7';
   ctx.textAlign = 'left';
-  ctx.fillText(scene.translate('screen.telemetry'), hudX + 22, hudY + 11);
+  ctx.fillText(scene.translate('screen.telemetry'), hudX + 22, hudY + 11, hudW - 84);
 
   ctx.font = '700 7.5px "JetBrains Mono", monospace';
   ctx.fillStyle = '#22c55e';
@@ -335,7 +335,7 @@ function drawModelOpsTelemetry(
   ctx.font = '700 6.5px "Plus Jakarta Sans", sans-serif';
   ctx.fillStyle = theme === 'dark' ? '#67e8f9' : '#0e7490';
   ctx.textAlign = 'center';
-  ctx.fillText(scene.translate('screen.open'), hudX + hudW - 32, hudY + 15.5);
+  ctx.fillText(scene.translate('screen.open'), hudX + hudW - 32, hudY + 15.5, 46);
 
   ctx.restore();
 }
@@ -885,7 +885,7 @@ function renderDesk(
     ctx.font = '600 8.5px "JetBrains Mono", monospace';
     ctx.fillStyle = theme === 'dark' ? '#94a3b8' : '#64748b';
     ctx.textAlign = 'left';
-    ctx.fillText(deskLabel, posX - 2, posY + deskH + 9);
+    ctx.fillText(deskLabel, posX - 2, posY + deskH + 9, deskW + 4);
   }
 }
 
@@ -1064,7 +1064,7 @@ function renderCafeRoundTable(
     ctx.font = '700 8px "Plus Jakarta Sans", sans-serif';
     ctx.fillStyle = theme === 'dark' ? '#fbbf24' : '#92400e';
     ctx.textAlign = 'center';
-    ctx.fillText(label, cx, cy + 34);
+    ctx.fillText(label, cx, cy + 34, 52);
   }
 }
 
@@ -1101,7 +1101,7 @@ function renderWallScreen(
 
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 8.5px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText(scene.translate('screen.meetingActive'), px + 7, py + 14);
+      ctx.fillText(scene.translate('screen.meetingActive'), px + 7, py + 14, sw - 14);
 
       ctx.fillStyle = '#38bdf8';
       ctx.fillRect(px + 7, py + 18, 24, 5);
@@ -1113,7 +1113,7 @@ function renderWallScreen(
 
       ctx.fillStyle = '#38bdf8';
       ctx.font = 'bold 8px "JetBrains Mono", monospace';
-      ctx.fillText(scene.translate('screen.meetingIdle'), px + 6, py + 16);
+      ctx.fillText(scene.translate('screen.meetingIdle'), px + 6, py + 16, sw - 12);
     }
   } else if (item.id === 'f_qa_screen') {
     // QA Automated CI/CD Screen
@@ -1122,7 +1122,7 @@ function renderWallScreen(
 
     ctx.fillStyle = '#4ade80';
     ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-    ctx.fillText(scene.translate('screen.qa'), px + 6, py + 13);
+    ctx.fillText(scene.translate('screen.qa'), px + 6, py + 13, sw - 12);
     ctx.fillStyle = '#22c55e';
     ctx.fillRect(px + 6, py + 18, 48, 4);
   } else if (item.id === 'f_server_noc') {
@@ -1135,7 +1135,7 @@ function renderWallScreen(
     ctx.fillRect(px + 4, py + 4, sw - 8, 9);
     ctx.fillStyle = '#38bdf8';
     ctx.font = 'bold 6px "JetBrains Mono", monospace';
-    ctx.fillText(scene.translate(scene.usageTelemetry ? 'screen.tokenFlow' : 'screen.status'), px + 6, py + 11);
+    ctx.fillText(scene.translate(scene.usageTelemetry ? 'screen.tokenFlow' : 'screen.status'), px + 6, py + 11, sw - 12);
 
     // Live Animated Oscilloscope / Spectrogram of Token Traffic
     const waveColors = ['#10b981', '#38bdf8', '#f59e0b', '#a855f7'];
@@ -1178,7 +1178,7 @@ function renderWallScreen(
     ctx.fillRect(px + 4, py + 4, sw - 8, sh - 8);
     ctx.fillStyle = '#f59e0b';
     ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-    ctx.fillText(furnitureLabel(item, scene) ?? scene.translate('screen.status'), px + 6, py + 16);
+    ctx.fillText(furnitureLabel(item, scene) ?? scene.translate('screen.status'), px + 6, py + 16, sw - 12);
   }
 }
 
@@ -1806,7 +1806,7 @@ function drawAgentOverlays(rc: RenderContext) {
   occupied.push(...roomPlaqueScreenRects(ctx, rc));
   const labels = new Map<string, OverlayRect>();
   const foreground = theme === 'dark' ? '#f1f5f9' : '#0f172a';
-  const background = theme === 'dark' ? 'rgba(13,21,36,0.96)' : 'rgba(255,255,255,0.97)';
+  const background = theme === 'dark' ? '#0d1524' : '#ffffff';
   ctx.save();
   for (const a of [...anchors].sort((a, b) => a.y - b.y)) {
     const { color, label } = statusAppearance(a.agent.status, translate);
@@ -1848,17 +1848,28 @@ function drawAgentOverlays(rc: RenderContext) {
     ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
     ctx.fillStyle = background; ctx.beginPath(); ctx.roundRect(card.x, card.y, card.width, card.height, 11); ctx.fill();
     ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.stroke();
-    ctx.font = '700 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = color;
-    const speaker = a.agent.role === 'boss' ? translate('role.boss') : a.agent.name.split(' ')[0];
-    const kind = a.agent.speechBubble && speech === a.agent.speechBubble ? a.agent.speechBubble.kind : undefined;
+    const speaker = agentDisplayName(a.agent, translate);
+    const simulated = speech === a.agent.ambientBubble && speech !== a.agent.speechBubble;
+    const kind = simulated ? undefined : a.agent.speechBubble?.kind;
+    // The label says what the message is; it never depends on the agent's status for real messages.
     const activityLabel =
-      kind ? translate(`kind.${kind}`)
+      simulated ? translate('bubble.social')
+      : kind ? translate(`kind.${kind}`)
       : a.agent.status === 'IN_MEETING' ? translate('bubble.meeting')
       : a.agent.status === 'PHONE_CALL' ? translate('bubble.phone')
-      : a.agent.status === 'CHATTING' || a.agent.status === 'COFFEE_BREAK' || a.agent.presentationActivity === 'chatting' || a.agent.presentationActivity === 'coffee_break' ? translate('bubble.social')
       : translate('bubble.activity');
-    const header = speech!.targetAgentName ? speaker + ' → ' + speech!.targetAgentName + ' · ' + activityLabel : speaker + ' · ' + activityLabel;
-    ctx.fillText(wrapText(header, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 12, card.y + 16);
+    // Label first so it is never truncated; the names take the remaining width.
+    const headerColor = theme === 'dark' ? color : '#3730a3';
+    const headerMax = card.width - 40;
+    ctx.font = '800 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = headerColor;
+    const labelText = wrapText(activityLabel, headerMax, t => ctx.measureText(t).width, 1)[0];
+    ctx.fillText(labelText, card.x + 12, card.y + 16);
+    const labelWidth = ctx.measureText(labelText + '  ').width;
+    const names = speech!.targetAgentName ? speaker + ' → ' + speech!.targetAgentName : speaker;
+    ctx.font = '600 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = theme === 'dark' ? '#cbd5e1' : '#334155';
+    if (headerMax - labelWidth > 20) {
+      ctx.fillText(wrapText(names, headerMax - labelWidth, t => ctx.measureText(t).width, 1)[0], card.x + 12 + labelWidth, card.y + 16);
+    }
     ctx.font = '500 12px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground;
     lines.forEach((line, i) => ctx.fillText(line, card.x + 12, card.y + 34 + i * 17));
     // Speaker dots follow a real, unexpired message, not invented dialogue.
@@ -2012,7 +2023,7 @@ function drawRoomPlaques(
     ctx.fillRect(plaqueX + 6, plaqueY + 6, 3, 10);
     ctx.textAlign = 'left';
     ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#334155';
-    ctx.fillText(label, plaqueX + 15, plaqueY + 15);
+    ctx.fillText(label, plaqueX + 15, plaqueY + 15, plaqueWidth - 20);
   }
   ctx.restore();
 }

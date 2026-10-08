@@ -23,15 +23,24 @@ npm run dev
 
 ## Required checks
 
-Before opening a pull request:
+CI (`.github/workflows/ci.yml`) runs these checks on every push and pull request. Run them locally before opening a pull request:
 
 ```bash
-npm run lint
-npm test
-npm run build
+npm audit --omit=dev            # security audit of runtime dependencies
+npm run lint                    # typecheck (tsc --noEmit)
+npm test                        # node:test suites and Vitest
+python3 tests/test_python_sdk.py   # Python SDK tests
+python3 -m pip wheel ./sdk/python -w /tmp/wheels   # Python SDK wheel builds...
+python3 -m pip install /tmp/wheels/*.whl          # ...installs...
+(cd /tmp && python3 -c "import agent_viewer")      # ...and imports
+npm run build                   # demo app
+npm run build:lib               # embeddable library
+npm run check:package           # publint and attw on the package
+docker build -f docker/Dockerfile .                    # API image (default target)
+docker build -f docker/Dockerfile --target viewer .    # office image
 ```
 
-All three checks should pass.
+All of them should pass. Install the wheel in a virtual environment so it does not touch your system Python. If you do not have Docker locally, CI still runs the image builds; mention it in the pull request.
 
 ## Pull requests
 

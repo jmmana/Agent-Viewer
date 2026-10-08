@@ -529,8 +529,10 @@ To override them, add a class with `className` and set the variables on it. The 
 ```
 
 ```tsx
-<AgentOffice className="team-office" events={events} />
-<ReplayControls className="team-replay" replay={replay} />
+<>
+  <AgentOffice className="team-office" events={events} />
+  <ReplayControls className="team-replay" replay={replay} />
+</>
 ```
 
 Notes:

@@ -1,16 +1,21 @@
 # Run from the repository root: docker compose -f docker/compose.yml up --build
+# Office: http://localhost:3000  Ingestion API: http://localhost:8787
+name: agent-viewer
+
 services:
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: npm run server
+      target: api
+    init: true
     ports:
       - "8787:8787"
     environment:
       - PORT=8787
       - AGENT_VIEWER_STORAGE=sqlite
       - AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db
+      # Must match the origin the browser loads the office from (the viewer service below).
       - AGENT_VIEWER_CORS_ORIGIN=http://localhost:3000
       - AGENT_VIEWER_MAX_BATCH_SIZE=100
       - AGENT_VIEWER_RATE_LIMIT=1000
@@ -22,11 +27,16 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: npm run preview -- --port=3000 --host=0.0.0.0
+      target: viewer
+      args:
+        # Read by Vite at build time and used by the browser, so it is the API address as seen from the
+        # host (the published port above), not http://api:8787. Change it and rebuild if you publish the
+        # API elsewhere, and update AGENT_VIEWER_CORS_ORIGIN to match.
+        VITE_AGENT_VIEWER_API_URL: http://localhost:8787
+        VITE_AGENT_VIEWER_MODE: live
+    init: true
     ports:
       - "3000:3000"
-    environment:
-      - VITE_AGENT_VIEWER_API_URL=http://localhost:8787
     depends_on:
       - api
     restart: unless-stopped

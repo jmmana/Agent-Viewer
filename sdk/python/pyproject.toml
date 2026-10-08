@@ -1,24 +1,37 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-viewer"
 version = "0.2.0"
 description = "Python client SDK for Agent Viewer multi-agent visual observability"
-readme = "../../README.md"
+readme = "README.md"
 authors = [{ name = "Juan Manuel Castillo Pinto (WarlockCode)" }]
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.9"
-dependencies = [
-    "urllib3>=1.26.0",
+# The SDK uses only the standard library (urllib), so it has no runtime dependencies.
+dependencies = []
+keywords = ["ai-agents", "agent-observability", "multi-agent", "llm", "telemetry"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Monitoring",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jmmana/Agent-Viewer"
+Documentation = "https://github.com/jmmana/Agent-Viewer/blob/main/docs/integration.md"
+Issues = "https://github.com/jmmana/Agent-Viewer/issues"
+Changelog = "https://github.com/jmmana/Agent-Viewer/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["agent_viewer*"]
+[tool.setuptools]
+# The SDK is a single module (agent_viewer.py), not a package.
+py-modules = ["agent_viewer"]

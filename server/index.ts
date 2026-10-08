@@ -9,15 +9,33 @@ import {
   normalizeCanonicalEvent,
   ValidationIssue,
 } from '../src/integrations/canonicalContract';
+import type { AgentStatus } from '../src/types/agent';
 import { createEventStore, type EventStore } from './store';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const app = express();
 const port = Number(process.env.PORT ?? 8787);
 const maxBatchSize = Number(process.env.AGENT_VIEWER_MAX_BATCH_SIZE ?? 100);
 const rateLimitMax = Number(process.env.AGENT_VIEWER_RATE_LIMIT ?? 1000);
 const rateLimitWindowMs = 60 * 1000;
+/** Upper bound of tracked client IPs before expired windows are swept. */
+const rateLimitMaxTrackedClients = 10_000;
+/** Accepted clock skew for signed webhooks, and how long a signature stays in the replay cache. */
+const webhookToleranceMs = 300_000;
+/** Upper bound of remembered webhook signatures. */
+const webhookReplayCacheMax = 10_000;
+
+/** Agent statuses the office understands. Kept exhaustive against `AgentStatus` at compile time. */
+const AGENT_STATUSES = [
+  'OFFLINE', 'IDLE', 'AVAILABLE', 'THINKING', 'READING', 'RESEARCHING', 'CODING', 'WRITING', 'TESTING',
+  'USING_TOOL', 'WAITING', 'WAITING_APPROVAL', 'BLOCKED', 'DELEGATING', 'PHONE_CALL', 'WALKING',
+  'IN_MEETING', 'COFFEE_BREAK', 'CHATTING', 'REVIEWING', 'DELIVERING', 'DONE', 'ERROR',
+] as const satisfies readonly AgentStatus[];
+type MissingAgentStatus = Exclude<AgentStatus, (typeof AGENT_STATUSES)[number]>;
+const agentStatusesAreExhaustive: [MissingAgentStatus] extends [never] ? true : never = true;
+void agentStatusesAreExhaustive;
+const AGENT_STATUS_SET: ReadonlySet<string> = new Set(AGENT_STATUSES);
 
 const store: EventStore = createEventStore();
 const clients = new Set<express.Response>();
@@ -29,6 +47,11 @@ function rateLimiter(req: express.Request, res: express.Response, next: express.
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const now = Date.now();
   let entry = rateLimits.get(ip);
+  if (!entry && rateLimits.size >= rateLimitMaxTrackedClients) {
+    for (const [key, value] of rateLimits) {
+      if (value.resetAt <= now) rateLimits.delete(key);
+    }
+  }
   if (!entry || entry.resetAt <= now) {
     entry = { count: 0, resetAt: now + rateLimitWindowMs };
     rateLimits.set(ip, entry);
@@ -82,15 +105,47 @@ app.options('*', (_req, res) => {
   res.sendStatus(204);
 });
 
+let warnedDeprecatedApiKey = false;
+
+/**
+ * API token that protects /api/v1. AGENT_VIEWER_API_TOKEN is canonical; AGENT_VIEWER_API_KEY is a
+ * deprecated alias kept for older setups. Read per request so the value can change without a restart.
+ */
+function getApiToken(): string | undefined {
+  const token = process.env.AGENT_VIEWER_API_TOKEN;
+  if (token) return token;
+
+  const legacy = process.env.AGENT_VIEWER_API_KEY;
+  if (legacy) {
+    if (!warnedDeprecatedApiKey) {
+      warnedDeprecatedApiKey = true;
+      console.warn('[agent-viewer] AGENT_VIEWER_API_KEY is deprecated; rename it to AGENT_VIEWER_API_TOKEN.');
+    }
+    return legacy;
+  }
+  return undefined;
+}
+
+/** Constant-time string comparison. Hashing first gives equal-length buffers, so length does not leak or throw. */
+function safeEqual(provided: string, expected: string): boolean {
+  const a = crypto.createHash('sha256').update(provided).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+// Rate limiting runs before authentication so failed token guesses count toward the limit.
+app.use('/api/v1', rateLimiter);
+
 // Authentication middleware for /api/v1/*
 app.use('/api/v1', (req, res, next) => {
-  // Webhooks have their own HMAC security check
-  if (req.path.startsWith('/webhooks')) return next();
+  // With a webhook secret configured, webhooks authenticate with their HMAC signature (checked in the route).
+  // Without one, they need the API token like every other ingestion endpoint.
+  if (req.path.startsWith('/webhooks') && process.env.AGENT_VIEWER_WEBHOOK_SECRET) return next();
 
-  const expectedToken = process.env.AGENT_VIEWER_API_TOKEN;
+  const expectedToken = getApiToken();
   if (!expectedToken) return next();
 
-  const authHeader = req.header('authorization');
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
   const queryToken =
     typeof req.query.token === 'string'
       ? req.query.token
@@ -98,7 +153,9 @@ app.use('/api/v1', (req, res, next) => {
         ? req.query.api_key
         : undefined;
 
-  if (authHeader === `Bearer ${expectedToken}` || queryToken === expectedToken) {
+  const headerOk = bearerMatch ? safeEqual(bearerMatch[1], expectedToken) : false;
+  const queryOk = queryToken !== undefined ? safeEqual(queryToken, expectedToken) : false;
+  if (headerOk || queryOk) {
     return next();
   }
 
@@ -107,9 +164,6 @@ app.use('/api/v1', (req, res, next) => {
     message: 'Valid Bearer token or token query parameter required',
   });
 });
-
-// Apply rate limiting to all /api/v1 routes
-app.use('/api/v1', rateLimiter);
 
 // -------------------------------------------------------------
 // Health & Ready
@@ -376,13 +430,33 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
     return;
   }
 
+  const body: unknown = req.body ?? {};
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    res.status(400).json({ error: 'validation_failed', message: 'Request body must be a JSON object' });
+    return;
+  }
+  const changes = body as Record<string, any>;
+
+  let status: AgentStatus | undefined;
+  if (changes.status !== undefined && changes.status !== null) {
+    const normalized = typeof changes.status === 'string' ? changes.status.trim().toUpperCase() : '';
+    if (!AGENT_STATUS_SET.has(normalized)) {
+      const message = `Invalid status "${String(changes.status).slice(0, 100)}". Expected one of: ${AGENT_STATUSES.join(', ')}`;
+      res.status(400).json({ error: 'validation_failed', message, issues: [{ path: 'status', message }] });
+      return;
+    }
+    status = normalized as AgentStatus;
+  }
+
+  // The path id always wins over any id in the body.
   const updated = await store.upsertAgent({
+    ...changes,
     id: agentId,
-    ...req.body,
+    status: status ?? existing.status,
   });
 
   // Emit status change or update event
-  if (req.body.status) {
+  if (status) {
     const statusEvt: CanonicalEvent = {
       schemaVersion: '1.0',
       id: `evt_status_${agentId}_${Date.now()}`,
@@ -391,8 +465,8 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
       source: `agent:${agentId}`,
       agentId,
       severity: 'normal',
-      summary: `${agentId} status updated to ${req.body.status}`,
-      payload: { status: req.body.status, statusText: req.body.statusText, workspace: req.body.workspace },
+      summary: `${agentId} status updated to ${status}`,
+      payload: { status, statusText: changes.statusText, workspace: changes.workspace },
     };
     await store.append(statusEvt);
     broadcastEvent(statusEvt);
@@ -452,46 +526,6 @@ app.get('/api/v1/sessions/:sessionId', async (req, res) => {
 // -------------------------------------------------------------
 // Generic Webhook with optional HMAC & replay protection
 // -------------------------------------------------------------
-app.post('/api/v1/webhooks/generic', async (req, res) => {
-  const secret = process.env.AGENT_VIEWER_WEBHOOK_SECRET;
-
-  if (secret) {
-    const signature = req.header('x-agent-viewer-signature');
-    const timestampStr = req.header('x-agent-viewer-timestamp');
-
-    if (!signature || !timestampStr) {
-      res.status(401).json({
-        error: 'missing_webhook_signature',
-        message: 'Headers X-Agent-Viewer-Signature and X-Agent-Viewer-Timestamp required',
-      });
-      return;
-    }
-
-    const timestamp = Number(timestampStr);
-    const now = Date.now();
-    // Replay protection: within 5 minutes
-    if (isNaN(timestamp) || Math.abs(now - timestamp) > 300_000) {
-      res.status(401).json({
-        error: 'replay_detected_or_clock_skew',
-        message: 'Webhook timestamp is expired or too far in the future',
-      });
-      return;
-    }
-
-    const rawBody = (req as any).rawBody?.toString('utf-8') ?? JSON.stringify(req.body);
-    const expected = crypto.createHmac('sha256', secret).update(`${timestampStr}.${rawBody}`).digest('hex');
-
-    const sigBuf = Buffer.from(signature);
-    const expBuf = Buffer.from(expected);
-    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-      res.status(401).json({
-        error: 'invalid_webhook_signature',
-        message: 'HMAC signature verification failed',
-      });
-      return;
-    }
-  }
-
 const GenericWebhookPayloadSchema = z.object({
   agent: z.string().max(200).optional(),
   agentId: z.string().max(200).optional(),
@@ -514,6 +548,76 @@ const GenericWebhookPayloadSchema = z.object({
     .optional(),
 });
 
+/** Signatures already accepted, mapped to the time after which their timestamp is outside the window anyway. */
+const seenWebhookSignatures = new Map<string, number>();
+
+/** Records a verified signature. Returns false when the same signature was already accepted inside the window. */
+function rememberWebhookSignature(signature: string, expiresAt: number, now: number): boolean {
+  const seenUntil = seenWebhookSignatures.get(signature);
+  if (seenUntil !== undefined && seenUntil > now) return false;
+
+  if (seenWebhookSignatures.size >= webhookReplayCacheMax) {
+    for (const [key, until] of seenWebhookSignatures) {
+      if (until <= now) seenWebhookSignatures.delete(key);
+    }
+    // Still full: evict the oldest entries. Only verified signatures get here, so filling it needs the secret.
+    for (const key of seenWebhookSignatures.keys()) {
+      if (seenWebhookSignatures.size < webhookReplayCacheMax) break;
+      seenWebhookSignatures.delete(key);
+    }
+  }
+
+  seenWebhookSignatures.set(signature, expiresAt);
+  return true;
+}
+
+app.post('/api/v1/webhooks/generic', async (req, res) => {
+  const secret = process.env.AGENT_VIEWER_WEBHOOK_SECRET;
+
+  if (secret) {
+    const signature = req.header('x-agent-viewer-signature');
+    const timestampStr = req.header('x-agent-viewer-timestamp');
+
+    if (!signature || !timestampStr) {
+      res.status(401).json({
+        error: 'missing_webhook_signature',
+        message: 'Headers X-Agent-Viewer-Signature and X-Agent-Viewer-Timestamp required',
+      });
+      return;
+    }
+
+    const timestamp = Number(timestampStr);
+    const now = Date.now();
+    // Replay protection, part 1: the timestamp must be within 5 minutes
+    if (isNaN(timestamp) || Math.abs(now - timestamp) > webhookToleranceMs) {
+      res.status(401).json({
+        error: 'replay_detected_or_clock_skew',
+        message: 'Webhook timestamp is expired or too far in the future',
+      });
+      return;
+    }
+
+    const rawBody = (req as any).rawBody?.toString('utf-8') ?? JSON.stringify(req.body);
+    const expected = crypto.createHmac('sha256', secret).update(`${timestampStr}.${rawBody}`).digest('hex');
+
+    if (!safeEqual(signature, expected)) {
+      res.status(401).json({
+        error: 'invalid_webhook_signature',
+        message: 'HMAC signature verification failed',
+      });
+      return;
+    }
+
+    // Replay protection, part 2: each signed request is accepted once inside the window
+    if (!rememberWebhookSignature(expected, timestamp + webhookToleranceMs, now)) {
+      res.status(409).json({
+        error: 'webhook_replay_detected',
+        message: 'This signed webhook was already accepted. Sign each delivery with a new timestamp',
+      });
+      return;
+    }
+  }
+
   const parseResult = GenericWebhookPayloadSchema.safeParse(req.body ?? {});
   if (!parseResult.success) {
     res.status(400).json({
@@ -528,6 +632,16 @@ const GenericWebhookPayloadSchema = z.object({
   }
 
   const payload = parseResult.data;
+  const hasUsage = payload.usage !== undefined && Object.keys(payload.usage).length > 0;
+  if (!payload.status && !payload.message && !payload.text && !payload.tool && !hasUsage) {
+    res.status(400).json({
+      error: 'unrecognized_webhook_payload',
+      message:
+        'Webhook payload does not describe any agent activity. Include at least one of "status", "message", "text", "tool" or a non-empty "usage" object',
+    });
+    return;
+  }
+
   const agentName = payload.agent || payload.agentId || 'generic-agent';
   const status = payload.status || (payload.message || payload.text ? 'THINKING' : 'IDLE');
   const message = payload.message || payload.text;

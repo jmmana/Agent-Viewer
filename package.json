@@ -93,5 +93,9 @@
       "version": ">=24.0.0",
       "onFail": "warn"
     }
-  }
+  },
+  "author": "Juan Manuel Castillo (https://github.com/jmmana)",
+  "contributors": [
+    "María Alejandra (https://github.com/Alejagop12)"
+  ]
 }

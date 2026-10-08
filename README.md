@@ -730,6 +730,12 @@ Three rules keep the product honest: never require or expose private model reaso
 
 ---
 
+## 💜 Credits
+
+- **Idea:** María Alejandra ([@Alejagop12](https://github.com/Alejagop12)). Agent Viewer started as her idea: watch AI agents work together as a team in a real office.
+- **Built by:** Juan Manuel Castillo ([@jmmana](https://github.com/jmmana)), [WarlockCode](https://github.com/jmmana).
+- **Built with AI collaborators:** Gemini, ChatGPT, Qwen Code (Alibaba), Kiro and Claude Code helped design, write, review and test this project.
+
 ## 📄 License
 
 [MIT](LICENSE). Use it, fork it, ship it.

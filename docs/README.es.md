@@ -730,6 +730,12 @@ Tres reglas mantienen honesto el producto: nunca pedir ni exponer el razonamient
 
 ---
 
+## 💜 Créditos
+
+- **Idea:** María Alejandra ([@Alejagop12](https://github.com/Alejagop12)). Agent Viewer nació de su idea: ver a los agentes de IA trabajar en equipo dentro de una oficina real.
+- **Desarrollo:** Juan Manuel Castillo ([@jmmana](https://github.com/jmmana)), [WarlockCode](https://github.com/jmmana).
+- **Con colaboradores de IA:** Gemini, ChatGPT, Qwen Code (Alibaba), Kiro y Claude Code ayudaron a diseñar, escribir, revisar y probar este proyecto.
+
 ## 📄 Licencia
 
 [MIT](../LICENSE). Úsalo, haz un fork, llévalo a producción.

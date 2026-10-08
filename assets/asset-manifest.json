@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0.0",
+  "project": "Agent Viewer Office Crew",
+  "coordinateSystem": {
+    "projection": "rectangular-2.5d",
+    "tileSize": 48,
+    "logicalSpriteFrame": {
+      "width": 64,
+      "height": 88
+    },
+    "facing": [
+      "front",
+      "back",
+      "left",
+      "right"
+    ]
+  },
+  "assets": [
+    {
+      "id": "character.ceo.idle.front",
+      "kind": "character",
+      "role": "ceo",
+      "clip": "idle",
+      "facing": "front",
+      "file": "assets/characters/ceo/idle-front.svg",
+      "mimeType": "image/svg+xml",
+      "status": "prototype",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.94
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype"
+    }
+  ]
+}

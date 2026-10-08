@@ -1,45 +1,44 @@
-# Agent Viewer Office Crew — Visual System
+# Agent Viewer Office Crew
 
-> **Implementation phase:** first character prototype; not yet integrated with the Canvas2D runtime.
+The [user-approved CEO reference sheet](../../assets/references/ceo-approved-concept.png) defines the visual identity. The earlier [CEO SVG](../../assets/characters/ceo/idle-front.svg) was an independently drawn technical placeholder. It did not reproduce the illustration and is now excluded from the runtime catalog.
 
-This directory hosts the production design contracts for the original visual assets created for Agent Viewer.
+The app uses reference-derived transparent PNGs. Public-library consumers opt in with `characterStyle="office-crew"`; existing integrations keep the procedural default. Artwork retains `prototype` status pending final visual review.
 
-## Canonical documents
+## Preview
 
-- [MASTER-DESIGN-GUIDE.es.md](MASTER-DESIGN-GUIDE.es.md) — full user-approved original Spanish art direction (six roles, offices, objects, motions, effects).
-- [STYLE-GUIDE.md](STYLE-GUIDE.md) — geometry, sizes, palette and originality contract.
-- [CHARACTERS.md](CHARACTERS.md) — six differentiated Office Crew roles and the CEO pilot.
-- [ANIMATIONS.md](ANIMATIONS.md) — frame and motion rules, mapping from observed runtime events.
-- [ASSET-CATALOG.md](ASSET-CATALOG.md) — naming, packaging, metadata and quality gates.
+Run `npm ci`, then `npm run dev`. Open `http://localhost:3000/?visualStudio=1` for the showroom, or `/` for the main app with Office Crew characters.
 
-## Pilot resource
+The showroom includes six roles, CEO poses/facings, an asset gallery, pause/reset and reduced motion. Its director moves between three rooms, works with a laptop, calls with phone/Wi-Fi effects, meets the team and visits coffee. TV headlines and activity bars are explicitly fictional. No operational state or model/token metric is modified.
 
-- [CEO front-facing idle prototype](../../assets/characters/ceo/idle-front.svg) — original SVG vector test.
-- [Asset registry](../../assets/asset-manifest.json) — includes precisely one **prototype** entry for the SVG above.
+![Office Crew visual showroom](../assets/office-crew-showroom.png)
 
-Run `node scripts/validate-visual-assets.mjs` at repository root to verify manifest metadata and files exist.
+## Delivery status
 
-## Delivery ledger
+| Component | Delivered | Remaining |
+|---|---|---|
+| Six roles | Six faithful front PNGs and high-resolution originals | Five roles' other raster directions/poses |
+| CEO | Four idle directions, work and phone poses | Raster frame cycles and seated transitions |
+| Office | 20 furniture/props, 13 electronics, nine effects | Operational-office furnishing integration |
+| Rooms | Director, meeting, coffee layouts and showroom | Other rooms in master guide |
+| Canvas2D | Sprite loading, feet anchors, rotation, timing, fallback, reduced motion | Final raster animation artwork |
+| Motion studies | 1,584 vector frames, six roles × 12 clips × four directions | Recreate final motion in the reference raster style |
 
-| Deliverable | Status |
-|---|---|
-| Approved source requirements imported | Done |
-| Visual contract and production specifications | Done |
-| Original CEO vector idle front prototype | Done (prototype, not approved) |
-| CEO character turnarounds ready for runtime | Pending |
-| Rigged/sliced production-ready CEO sprite frames | Pending |
-| Walk in four directions | Pending |
-| Work / phone / talk / meeting clips | Pending |
-| Canvas2D image loading and sprite fallback | Pending |
-| Reuse approved rig for five remaining roles | Pending |
-| Room furniture/props/effects asset pack | Pending |
+**Vector studies are technical references, not matching production artwork.** They have a [separate catalog](../../assets/characters/catalog.json), live under `assets/characters/*/vector-study/`, and are excluded from runtime/published bundles. Moving an idle sprite is scene choreography, not a finished walking cycle. The old SVG never silently replaces the illustrated character.
 
-The initial concept **reference sheet** generated during design review is distinct from the runtime vector placeholder. The concept image is not yet imported as a repository binary asset; do not link to it from production code or pretend its walk thumbnails are frames.
+## Files and checks
 
-## Integration policy
+- Runtime character exports: 256×352 RGBA; logical64×88; anchor `(0.5, 330/352)`.
+- Full generated originals: `assets/characters/<role>/source/`, never bundled.
+- [Runtime catalog](../../assets/asset-manifest.json): 53 resources, comprising 11 character poses and 42 environment assets.
+- Environment catalog: `assets/furniture/catalog.json`; room layouts: `assets/rooms/`.
+- [CEO prompt guide](PROMPTS-CEO.md), [Reviewer/Finance prompts](prompts-reviewer-finance.md), and Planner/Developer/Analyst role-local `provenance.json` record sources.
 
-1. Use the existing 24×16 rectangular Canvas2D office grid with 48px tiles.
-2. Existing procedural renderer remains working throughout the migration.
-3. Introduce new sprites via optional manifest-backed loading and graceful fallback.
-4. Do not change model/tokens/state measurements when introducing visual assets.
-5. Only merge this feature branch after in-app render, reduced-motion, camera rotation and typecheck tests pass.
+Run `npm run validate:assets`, `node scripts/generate-office-crew.mjs --check`, `npm run lint`, `npm test`, `npm run build`, `npm run build:lib` and `npm run check:package`.
+
+`generate-office-environment.mjs` regenerates original furniture/equipment/effects and layouts. `generate-office-crew.mjs` regenerates **vector studies only**, preserving PNG originals. For mechanical PNG normalization, optionally install Sharp with `npm install --no-save sharp`, then run `node scripts/normalize-character.mjs <source.png> <runtime.png>`; originals are never overwritten.
+
+## Design and attribution
+
+[Master guide](MASTER-DESIGN-GUIDE.es.md), [style](STYLE-GUIDE.md), [roles](CHARACTERS.md), [motion](ANIMATIONS.md), [catalog conventions](ASSET-CATALOG.md), [contributors](../../CONTRIBUTORS.md).
+
+ChatGPT (OpenAI Codex) is explicitly credited for this delivery. New character art must use the canonical sheet and corresponding front pose as references, preserve identity/proportions and pass visual review before registration. Reference sheets are never interpreted as finished sprite atlases.

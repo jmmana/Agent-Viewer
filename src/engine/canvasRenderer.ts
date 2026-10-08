@@ -1,5 +1,6 @@
 import { bubbleExitStyle, cameraCenter, fitBubbleNames, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
 import type { Agent } from '../types/agent';
+import type { OfficeCrewAssets } from './officeCrewAssets';
 import { isOfficeMessageKey, type OfficeTranslate } from '../content/officeMessages';
 import { aggregateModelUsage, compactTokens } from './modelOps';
 import {
@@ -40,6 +41,8 @@ export interface RenderContext {
   usageTelemetry?: boolean;
   nowMs: number;
   reducedMotion?: boolean;
+  /** Optional per-canvas sprite cache; absent keeps the procedural renderer. */
+  crewAssets?: OfficeCrewAssets;
 }
 
 /** Text settings shared by every drawing helper. */
@@ -95,7 +98,7 @@ export function renderOfficeScene(rc: RenderContext) {
   drawArchitecturalWalls(ctx, rot, theme);
 
   // 4. Depth-sorted Entities (Furniture and Agents rendered in 2.5D perspective)
-  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs, scene);
+  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs, scene, rc.crewAssets, rc.reducedMotion);
   // Room plaques are intentionally rendered after furniture/agents so static decoration can never cover them.
   drawRoomPlaques(ctx, rot, theme, scene.translate);
 
@@ -478,6 +481,29 @@ export function getAgentVisualOffsets(agents: Agent[]): Map<string, { ox: number
   return offsets;
 }
 
+/** Shared hover/click/double-click geometry, matching the sprites actually drawn on the ground plane. */
+export function findOfficeAgentAtPoint(
+  agents: Agent[], rotation: number, worldX: number, worldY: number,
+  crewAssets?: OfficeCrewAssets, radius = 32,
+): Agent | null {
+  const offsets = getAgentVisualOffsets(agents);
+  let result: Agent | null = null;
+  let nearest = Infinity;
+  for (const agent of agents) {
+    const sprite = crewAssets?.boundsFor(agent.id);
+    const world = gridToScreen(agent.x, agent.y, rotation);
+    const offset = offsets.get(agent.id) ?? { ox: 0, oy: 0 };
+    const cx = sprite ? sprite.x + sprite.width / 2 : world.x + TILE_SIZE / 2 + offset.ox;
+    const cy = sprite ? sprite.y + sprite.height / 2 : world.y + 8 + offset.oy;
+    const distance = Math.hypot(worldX - cx, worldY - cy);
+    const hit = sprite
+      ? worldX >= sprite.x && worldX <= sprite.x + sprite.width && worldY >= sprite.y && worldY <= sprite.y + sprite.height
+      : distance < radius;
+    if (hit && distance < nearest) { nearest = distance; result = agent; }
+  }
+  return result;
+}
+
 function drawDepthSortedEntities(
   ctx: CanvasRenderingContext2D,
   rot: number,
@@ -488,7 +514,9 @@ function drawDepthSortedEntities(
   timeMs: number,
   theme: 'dark' | 'light',
   nowMs: number,
-  scene: SceneText
+  scene: SceneText,
+  crewAssets?: OfficeCrewAssets,
+  reducedMotion = false
 ) {
   type DepthEntity =
     | { kind: 'furniture'; item: FurnitureItem; depth: number }
@@ -516,7 +544,7 @@ function drawDepthSortedEntities(
       renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId, scene, agents);
     } else {
       const offset = visualOffsets.get(ent.agent.id) ?? { ox: 0, oy: 0 };
-      renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme, nowMs, offset);
+      renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme, nowMs, offset, crewAssets, reducedMotion);
     }
   }
 }
@@ -1660,7 +1688,8 @@ function renderAgentItem(
   ctx: CanvasRenderingContext2D, agent: Agent, rot: number,
   selectedAgentId: string | null, hoveredAgentId: string | null,
   timeMs: number, theme: 'dark' | 'light', nowMs: number,
-  visualOffset: { ox: number; oy: number } = { ox: 0, oy: 0 }
+  visualOffset: { ox: number; oy: number } = { ox: 0, oy: 0 },
+  crewAssets?: OfficeCrewAssets, reducedMotion = false
 ) {
   const { x, y } = gridToScreen(agent.x, agent.y, rot);
   const cx = x + TILE_SIZE / 2 + visualOffset.ox;
@@ -1686,6 +1715,10 @@ function renderAgentItem(
     ctx.globalAlpha = speaking ? 0.65 + Math.sin(timeMs / 350) * 0.15 : 0.8;
     ctx.beginPath(); ctx.ellipse(cx, ground + 1, 17, 7, 0, 0, Math.PI * 2); ctx.stroke();
     ctx.globalAlpha = 1;
+  }
+  if (crewAssets?.draw(ctx, agent, rot, cx, ground, timeMs, nowMs, reducedMotion)) {
+    ctx.restore();
+    return;
   }
   // Chair and bent legs make working and meeting poses distinct from standing.
   if (seated) {
@@ -1795,14 +1828,22 @@ function drawAgentOverlays(rc: RenderContext) {
   const { ctx, agents, camera, width, height, nowMs, timeMs, theme, translate } = rc;
   const center = cameraCenter(width, height);
   const visualOffsets = getAgentVisualOffsets(agents);
-  const anchors = agents.filter(agent => camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble ?? agent.ambientBubble, nowMs)).map(agent => {
+  const visibleBodies = agents.map(agent => {
     const world = gridToScreen(agent.x, agent.y, camera.rotation);
     const offset = visualOffsets.get(agent.id) ?? { ox: 0, oy: 0 };
-    return { agent, x: center.x + (world.x + TILE_SIZE / 2 + offset.ox + camera.x) * camera.zoom,
-      y: center.y + (world.y - 13 + offset.oy + camera.y) * camera.zoom };
-  }).filter(anchor => anchor.x > -20 && anchor.x < width + 20 && anchor.y > -20 && anchor.y < height + 20);
-  // Reserve heads and room plaques before laying out cards, so labels cannot hide a character or a room name.
-  const occupied: OverlayRect[] = anchors.map(a => ({ x: a.x - 15, y: a.y - 5, width: 30, height: 46 }));
+    const sprite = rc.crewAssets?.boundsFor(agent.id);
+    const x = center.x + (world.x + TILE_SIZE / 2 + offset.ox + camera.x) * camera.zoom;
+    const y = center.y + ((sprite?.y ?? world.y - 13 + offset.oy) + camera.y) * camera.zoom;
+    const body = sprite ? {
+      x: center.x + (sprite.x + camera.x) * camera.zoom,
+      y: center.y + (sprite.y + camera.y) * camera.zoom,
+      width: sprite.width * camera.zoom, height: sprite.height * camera.zoom,
+    } : { x: x - 15, y: y - 5, width: 30, height: 46 };
+    return { agent, x, y, body };
+  }).filter(a => a.body.x + a.body.width > 0 && a.body.x < width && a.body.y + a.body.height > 0 && a.body.y < height);
+  const anchors = visibleBodies.filter(a => camera.zoom >= 0.55 || a.agent.id === rc.selectedAgentId || a.agent.id === rc.hoveredAgentId || isSpeechActive(a.agent.speechBubble ?? a.agent.ambientBubble, nowMs));
+  // Reserve the complete drawn sprites, including heads and props, even when their labels are hidden.
+  const occupied: OverlayRect[] = visibleBodies.map(a => a.body);
   occupied.push(...roomPlaqueScreenRects(ctx, rc));
   const labels = new Map<string, OverlayRect>();
   const foreground = theme === 'dark' ? '#f1f5f9' : '#0f172a';

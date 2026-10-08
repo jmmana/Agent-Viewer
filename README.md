@@ -735,6 +735,7 @@ Three rules keep the product honest: never require or expose private model reaso
 - **Idea:** María Alejandra ([@Alejagop12](https://github.com/Alejagop12)). Agent Viewer started as her idea: watch AI agents work together as a team in a real office and more control
 - **Built by:** Juan Manuel Castillo ([@jmmana](https://github.com/jmmana)), [WarlockCode](https://github.com/jmmana).
 - **Built with AI collaborators:** Gemini, ChatGPT, Qwen Code (Alibaba), Kiro and Claude Code helped design, write, review and test this project.
+- **Office Crew contributor:** [ChatGPT (OpenAI Codex)](https://chatgpt.com/) — reference-based character artwork, original office assets, animation tooling and Canvas2D integration. [Visual Studio and asset status](docs/visual-system/README.md).
 
 ## 📄 License
 

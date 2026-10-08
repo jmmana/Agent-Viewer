@@ -44,6 +44,6 @@ SVG may be used for vector prototypes and simple props; final dense body animati
 7. Cost, tokens, provider labels and social dialogue are runtime data, never decorative content.
 8. File provenance and lifecycle state remain documented.
 
-### Pilot status
+### Current delivery status
 
-`character.ceo.idle.front` is an **engineering SVG prototype** committed as a real renderable asset. The generated concept sheet remains an art reference and requires segmentation/pose consistency work before it can be used as a production spritesheet.
+`character.ceo.idle.front` now points to the reference-derived PNG. The legacy engineering SVG is preserved but excluded from the runtime catalog. The original approved sheet is archived as a style reference; it is not a production atlas. The runtime catalog includes 11 transparent character poses and 42 environment resources. The separate character catalog includes vector motion studies that must not replace these PNGs. See [current delivery ledger](README.md).

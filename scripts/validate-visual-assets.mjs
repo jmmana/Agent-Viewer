@@ -42,7 +42,7 @@ for (const [index, asset] of (catalog.assets ?? []).entries()) {
   if (typeof asset.file !== 'string') continue;
   const assetPath = resolve(root, asset.file);
   const rel = relative(root, assetPath);
-  if (rel.startsWith('..') || rel.startsWith('/') || !asset.file.startsWith('assets/')) {
+  if (rel.startsWith('..') || rel.startsWith('/') || !rel.startsWith('assets/')) {
     errors.push(`${where}.file escapes assets root: ${asset.file}`);
     continue;
   }
@@ -51,6 +51,9 @@ for (const [index, asset] of (catalog.assets ?? []).entries()) {
     continue;
   }
   const content = readFileSync(assetPath);
+  check(asset.logicalSize?.width > 0 && asset.logicalSize?.height > 0, `${where} invalid logicalSize`);
+  check(asset.anchor?.x >= 0 && asset.anchor?.x <= 1 && asset.anchor?.y >= 0 && asset.anchor?.y <= 1, `${where} normalized anchor required`);
+  check(asset.license === 'MIT' && typeof asset.provenance === 'string', `${where} missing original asset provenance/license`);
   check(content.length > 100, `${where} file is unexpectedly small`);
   const ext = extname(asset.file).toLowerCase();
   if (ext === '.svg') {
@@ -65,6 +68,7 @@ for (const [index, asset] of (catalog.assets ?? []).entries()) {
     errors.push(`${where} unsupported media extension: ${ext}`);
   }
   if (asset.kind === 'character') {
+    check(!/\/(source|vector-study)\//.test(asset.file), `${where} source artwork/studies must not enter runtime catalog`);
     check(typeof asset.role === 'string' && asset.role.length > 0, `${where} missing role`);
     check(typeof asset.clip === 'string' && asset.clip.length > 0, `${where} missing clip`);
     check(allowFacings.has(asset.facing), `${where} invalid facing`);
@@ -72,7 +76,35 @@ for (const [index, asset] of (catalog.assets ?? []).entries()) {
     check(asset.anchor?.x >= 0 && asset.anchor?.x <= 1 && asset.anchor?.y >= 0 && asset.anchor?.y <= 1, `${where} normalized anchor required`);
     check(Number.isInteger(asset.frames) && asset.frames >= 1, `${where} invalid frames`);
     check(Number.isFinite(asset.fps) && asset.fps >= 0, `${where} invalid fps`);
+    if (asset.frameFiles) {
+      check(Array.isArray(asset.frameFiles) && asset.frameFiles.length === asset.frames, `${where} frameFiles count does not match frames`);
+      check(asset.frameFiles[0] === asset.file, `${where} first frame must match file`);
+      for (const frame of asset.frameFiles) {
+        const framePath = typeof frame === 'string' ? resolve(root, frame) : '';
+        check(framePath && relative(root, framePath).startsWith('assets/') && existsSync(framePath), `${where} missing/unsafe frame path: ${frame}`);
+      }
+    }
+    if (ext === '.png') {
+      check(content.readUInt32BE(16) === 256 && content.readUInt32BE(20) === 352, `${where} runtime PNG must be 256×352`);
+      check(content[25] === 6, `${where} runtime PNG requires RGBA alpha`);
+    }
   }
+}
+
+for (const roomId of ['director-suite', 'meeting-room', 'coffee-area']) {
+  const file = resolve(root, `assets/rooms/${roomId}.json`);
+  if (!existsSync(file)) continue;
+  try {
+    const layout = JSON.parse(readFileSync(file, 'utf8'));
+    const placements = new Set();
+    for (const placement of layout.placements) {
+      check(ids.has(placement.assetId), `${roomId}: unknown asset ${placement.assetId}`);
+      check(!placements.has(placement.id), `${roomId}: duplicate placement ${placement.id}`);
+      placements.add(placement.id);
+      check(Number.isFinite(placement.x) && Number.isFinite(placement.y), `${roomId}: invalid placement coordinates`);
+    }
+    for (const placement of layout.placements) if (placement.supportPlacementId) check(placements.has(placement.supportPlacementId), `${roomId}: missing support placement`);
+  } catch (error) { errors.push(`${roomId}: invalid layout: ${error.message}`); }
 }
 
 if (errors.length) {

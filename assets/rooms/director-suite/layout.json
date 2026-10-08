@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "prototype",
+  "coordinateSystem": "rectangular-ground-pixels",
+  "tileSize": 48,
+  "placementAnchor": "asset.anchor",
+  "collisionRule": "Use asset footprint offset from placement x/y; surface-mounted children and decorative props do not block navigation.",
+  "depthRule": "Sort root placements by ground y; draw each supportPlacementId child immediately after its supporting object, keeping its own x/y placement.",
+  "provenance": "original-agent-viewer-layout-prototype",
+  "license": "MIT",
+  "id": "director-suite",
+  "size": {
+    "width": 576,
+    "height": 384
+  },
+  "placements": [
+    {
+      "id": "director-suite.1",
+      "assetId": "furniture.desk-executive",
+      "x": 280,
+      "y": 202
+    },
+    {
+      "id": "director-suite.2",
+      "assetId": "furniture.chair-executive",
+      "x": 280,
+      "y": 126
+    },
+    {
+      "id": "director-suite.3",
+      "assetId": "electronics.laptop",
+      "x": 272,
+      "y": 125,
+      "supportAssetId": "furniture.desk-executive",
+      "supportPlacementId": "director-suite.1"
+    },
+    {
+      "id": "director-suite.4",
+      "assetId": "electronics.office-phone",
+      "x": 333,
+      "y": 135,
+      "supportAssetId": "furniture.desk-executive",
+      "supportPlacementId": "director-suite.1"
+    },
+    {
+      "id": "director-suite.5",
+      "assetId": "furniture.bookshelf",
+      "x": 75,
+      "y": 135
+    },
+    {
+      "id": "director-suite.6",
+      "assetId": "furniture.plant-floor",
+      "x": 490,
+      "y": 124
+    },
+    {
+      "id": "director-suite.7",
+      "assetId": "electronics.tv-display",
+      "x": 446,
+      "y": 255
+    },
+    {
+      "id": "director-suite.8",
+      "assetId": "furniture.sofa-lounge",
+      "x": 115,
+      "y": 304
+    }
+  ],
+  "spawnPoints": [
+    {
+      "x": 288,
+      "y": 336
+    }
+  ],
+  "doorways": [
+    {
+      "x": 264,
+      "y": 384,
+      "width": 72
+    }
+  ],
+  "interactionZones": [
+    {
+      "x": 280,
+      "y": 241,
+      "action": "work"
+    },
+    {
+      "x": 446,
+      "y": 285,
+      "action": "present"
+    }
+  ]
+}

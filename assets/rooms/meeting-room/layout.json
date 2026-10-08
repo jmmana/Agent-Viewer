@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "prototype",
+  "coordinateSystem": "rectangular-ground-pixels",
+  "tileSize": 48,
+  "placementAnchor": "asset.anchor",
+  "collisionRule": "Use asset footprint offset from placement x/y; surface-mounted children and decorative props do not block navigation.",
+  "depthRule": "Sort root placements by ground y; draw each supportPlacementId child immediately after its supporting object, keeping its own x/y placement.",
+  "provenance": "original-agent-viewer-layout-prototype",
+  "license": "MIT",
+  "id": "meeting-room",
+  "size": {
+    "width": 672,
+    "height": 432
+  },
+  "placements": [
+    {
+      "id": "meeting-room.1",
+      "assetId": "furniture.meeting-table",
+      "x": 336,
+      "y": 240
+    },
+    {
+      "id": "meeting-room.2",
+      "assetId": "electronics.speakerphone",
+      "x": 336,
+      "y": 191,
+      "supportAssetId": "furniture.meeting-table",
+      "supportPlacementId": "meeting-room.1"
+    },
+    {
+      "id": "meeting-room.3",
+      "assetId": "electronics.tv-display",
+      "x": 336,
+      "y": 105
+    },
+    {
+      "id": "meeting-room.4",
+      "assetId": "electronics.conference-camera",
+      "x": 336,
+      "y": 39,
+      "supportAssetId": "electronics.tv-display",
+      "supportPlacementId": "meeting-room.3"
+    },
+    {
+      "id": "meeting-room.5",
+      "assetId": "furniture.chair-ergonomic",
+      "x": 258,
+      "y": 158
+    },
+    {
+      "id": "meeting-room.6",
+      "assetId": "furniture.chair-ergonomic",
+      "x": 258,
+      "y": 311
+    },
+    {
+      "id": "meeting-room.7",
+      "assetId": "furniture.chair-ergonomic",
+      "x": 336,
+      "y": 158
+    },
+    {
+      "id": "meeting-room.8",
+      "assetId": "furniture.chair-ergonomic",
+      "x": 336,
+      "y": 311
+    },
+    {
+      "id": "meeting-room.9",
+      "assetId": "furniture.chair-ergonomic",
+      "x": 414,
+      "y": 158
+    },
+    {
+      "id": "meeting-room.10",
+      "assetId": "furniture.chair-ergonomic",
+      "x": 414,
+      "y": 311
+    },
+    {
+      "id": "meeting-room.11",
+      "assetId": "furniture.whiteboard",
+      "x": 567,
+      "y": 203
+    },
+    {
+      "id": "meeting-room.12",
+      "assetId": "furniture.plant-floor",
+      "x": 78,
+      "y": 124
+    }
+  ],
+  "spawnPoints": [
+    {
+      "x": 120,
+      "y": 360
+    },
+    {
+      "x": 480,
+      "y": 360
+    }
+  ],
+  "doorways": [
+    {
+      "x": 84,
+      "y": 432,
+      "width": 72
+    },
+    {
+      "x": 516,
+      "y": 432,
+      "width": 72
+    }
+  ],
+  "interactionZones": [
+    {
+      "x": 258,
+      "y": 294,
+      "action": "meet"
+    },
+    {
+      "x": 336,
+      "y": 294,
+      "action": "meet"
+    },
+    {
+      "x": 414,
+      "y": 294,
+      "action": "meet"
+    },
+    {
+      "x": 258,
+      "y": 140,
+      "action": "meet"
+    },
+    {
+      "x": 336,
+      "y": 140,
+      "action": "meet"
+    },
+    {
+      "x": 414,
+      "y": 140,
+      "action": "meet"
+    },
+    {
+      "x": 567,
+      "y": 238,
+      "action": "present"
+    }
+  ]
+}

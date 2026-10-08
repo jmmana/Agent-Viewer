@@ -71,4 +71,4 @@ Numbers above are starting points for the artist, **not** existing clip claims. 
 
 ## First deliverable acceptance
 
-The pilot is acceptable when `ceo.idle.front` is in the manifest, loads from a real file and can be shown at a properly anchored office grid point. Walking/phone/work remain *planned* until frame images and orchestration are implemented.
+The runtime includes CEO idle turnarounds, work/phone poses and a simulated scene choreography. The loader supports frame files, FPS and finite/looping clips. Frame-by-frame raster walking, typing and seated transitions remain planned; 1,584 vector motion-study frames are kept separately and excluded from the default raster renderer. See [current delivery ledger](README.md).

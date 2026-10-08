@@ -1,0 +1,81 @@
+.vs-root { min-height:100vh; background:#f6f6f1; color:#22372e; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+.vs-root * { box-sizing:border-box; }
+.vs-root button,.vs-root select,.vs-root input { font:inherit; }
+.vs-root button,.vs-root select { cursor:pointer; }
+.vs-root button:disabled { cursor:default; opacity:.5; }
+.vs-root button:focus-visible,.vs-root select:focus-visible,.vs-root a:focus-visible,.vs-root input:focus-visible { outline:3px solid #15876d; outline-offset:4px; }
+.vs-shell { max-width:1536px; margin:auto; padding:0 40px; }
+.vs-header { display:flex; align-items:center; justify-content:space-between; gap:16px; height:82px; border-bottom:1px solid #dde4d9; }
+.vs-back { color:#304d40; text-decoration:none; font-weight:700; font-size:14px; display:flex; align-items:center; gap:10px; }
+.vs-badge { display:flex; align-items:center; gap:8px; font-size:10px; font-weight:700; letter-spacing:1.1px; border:1px solid #ccdcd2; border-radius:20px; padding:9px 12px; color:#34785c; background:#edf4e9; }
+.vs-badge>span,.vs-indicator { display:inline-block; width:6px; height:6px; border-radius:50%; background:#419478; }
+.vs-credit { font-size:11px; font-weight:650; color:#859086; letter-spacing:1.3px; text-transform:uppercase; }
+.vs-intro { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin:35px 0 28px; }
+.vs-eyebrow { display:flex; align-items:center; gap:7px; font-size:10px; letter-spacing:1.4px; font-weight:750; color:#568573; margin:0 0 12px; }
+.vs-intro h1 { font-size:clamp(26px,2.8vw,40px); font-weight:650; letter-spacing:-1.45px; margin:0 0 12px; line-height:1.15; }
+.vs-intro p:not(.vs-eyebrow) { margin:0; max-width:690px; font-size:13px; line-height:1.7; color:#768279; }
+.vs-intro-meta { display:flex; align-items:center; gap:20px; padding-bottom:5px; flex-shrink:0; color:#6c7b70; font-size:11px; }
+.vs-intro-meta span { display:flex; align-items:center; gap:6px; }
+.vs-workspace { display:grid; grid-template-columns:minmax(0,1fr) 280px; align-items:start; gap:20px; }
+.vs-scene-card,.vs-character-card { overflow:hidden; border:1px solid #dce2d7; border-radius:20px; background:#fffefa; box-shadow:0 5px 22px #29463106; }
+.vs-scene-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:54px; padding:14px 22px; border-bottom:1px solid #e7eade; }
+.vs-scene-toolbar>div { display:flex; align-items:center; gap:8px; font-size:11px; }
+.vs-scene-toolbar strong { font-weight:650; }
+.vs-time { color:#8e988f; margin-left:8px; font-variant-numeric:tabular-nums; }
+.vs-tag { font-size:8px; font-weight:700; color:#7f8e80; background:#f0f3e9; padding:5px 7px; border-radius:5px; letter-spacing:.5px; }
+.vs-canvas-wrap { position:relative; background:#edf0ec; }
+.vs-canvas-wrap canvas { display:block; width:100%; height:auto; aspect-ratio:1280/760; }
+.vs-loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:#eef1ecd9; font-size:13px; color:#4d6c5d; }
+.vs-controls { display:flex; align-items:center; gap:8px; padding:14px 20px 8px; }
+.vs-controls button { border:0; display:flex; align-items:center; justify-content:center; gap:6px; font-size:10px; border-radius:7px; padding:9px 12px; }
+.vs-play { color:white; background:#286d54; min-width:90px; }
+.vs-reset { background:#f1f2ec; color:#65786a; }
+.vs-view { display:flex; align-items:center; gap:5px; color:#758376; font-size:9px; }
+.vs-view select { border:1px solid #dde4d7; background:#fffefa; color:#60735c; padding:7px; border-radius:7px; font-size:9px; }
+.vs-motion { margin-left:auto; color:#758376; font-size:10px; display:flex; align-items:center; gap:5px; }
+.vs-motion input { accent-color:#286d54; }
+.vs-timeline { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); margin:8px 20px 0; border-top:1px solid #e4e7dc; gap:6px; }
+.vs-timeline button { position:relative; border:0; padding:12px 0 2px; text-align:left; background:transparent; color:#8a958c; font-size:9px; line-height:1.5; }
+.vs-timeline button>span { display:block; color:#a4ada4; font-size:8px; margin-bottom:3px; }
+.vs-timeline button.is-active { color:#296f54; font-weight:650; }
+.vs-timeline button.is-active::before { content:""; position:absolute; left:0; right:0; top:-2px; height:3px; border-radius:3px; background:#368d6e; }
+.vs-scene-description { color:#879083; font-size:10px; margin:12px 20px 18px; line-height:1.6; }
+.vs-card-heading { padding:23px 22px 17px; }
+.vs-card-heading .vs-eyebrow { font-size:9px; margin-bottom:13px; }
+.vs-card-heading h2 { font-size:24px; letter-spacing:-.7px; margin:0 0 4px; font-weight:650; }
+.vs-card-heading p { margin:0; color:#889285; font-size:11px; }
+.vs-portrait { margin:0 16px; height:240px; border-radius:15px; position:relative; background:radial-gradient(ellipse at 50% 60%,#fffdf5,#f5f0e5); display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.vs-portrait img { height:202px; width:160px; object-fit:contain; position:relative; z-index:1; filter:drop-shadow(0 8px 7px #9983671b); }
+.vs-portrait-orbit { position:absolute; width:145px; height:145px; border:1px solid color-mix(in srgb,var(--role-color) 40%,transparent); border-radius:50%; }
+.vs-portrait-orbit::after { content:""; position:absolute; inset:-22px; border:1px solid color-mix(in srgb,var(--role-color) 20%,transparent); border-radius:50%; }
+.vs-portrait-chip { position:absolute; bottom:11px; right:11px; font-size:8px; letter-spacing:.3px; border-radius:5px; background:#ffffffe6; padding:5px 7px; color:#8a927e; z-index:2; }
+.vs-missing { font-size:12px; color:#839082; }
+.vs-roles { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:15px 16px 5px; }
+.vs-roles button { display:flex; align-items:center; gap:6px; border:1px solid #e7e9df; background:#fffefa; color:#788174; font-size:10px; padding:8px 9px; border-radius:8px; min-height:33px; }
+.vs-roles button>span { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.vs-roles button>svg { margin-left:auto; }
+.vs-roles button.is-active { border-color:#b7d2c0; color:#377458; background:#edf5e9; }
+.vs-pose-controls { display:flex; gap:9px; padding:13px 16px 0; }
+.vs-pose-controls label { font-size:9px; color:#858f7e; flex:1; }
+.vs-pose-controls select { display:block; background:#fffefa; border:1px solid #dce2d5; padding:6px 7px; border-radius:7px; margin-top:6px; color:#607257; font-size:10px; width:100%; }
+.vs-character-note { font-size:9px; line-height:1.7; color:#949c8f; margin:14px 18px 18px; }
+.vs-gallery { margin:42px 0 0; }
+.vs-gallery-heading { display:flex; align-items:center; justify-content:space-between; gap:24px; margin-bottom:22px; }
+.vs-gallery-heading h2 { margin:0; font-size:23px; letter-spacing:-.6px; font-weight:650; }
+.vs-gallery-filter { display:flex; align-items:center; gap:8px; color:#899280; font-size:11px; }
+.vs-gallery-filter select { padding:9px 10px; border:1px solid #dce2d5; border-radius:8px; background:#fffefa; color:#52684c; font-size:11px; }
+.vs-gallery-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:13px; }
+.vs-asset-card { min-width:0; border:1px solid #e0e5d8; background:#fffefa; border-radius:14px; overflow:hidden; padding-bottom:14px; }
+.vs-asset-card>div { display:flex; align-items:center; justify-content:center; height:142px; margin:9px; border-radius:8px; background:linear-gradient(135deg,#eff1e8,#f7f5ed); }
+.vs-asset-card img { max-width:88%; max-height:121px; object-fit:contain; }
+.vs-asset-card strong { display:block; color:#657357; font-size:10px; font-weight:600; overflow-wrap:anywhere; padding:4px 13px; }
+.vs-asset-card>span { display:block; color:#909986; font-size:8px; padding:4px 13px 0; }
+.vs-empty,.vs-error { color:#687761; font-size:12px; }
+.vs-error { color:#a04b37; }
+.vs-footer { margin:35px 0 0; padding:23px 0; border-top:1px solid #dfe4d7; display:flex; justify-content:space-between; gap:20px; color:#8c9482; font-size:9px; }
+@media (min-width:1600px) { .vs-shell { padding:0 52px; } }
+@media (max-width:1150px) { .vs-shell { padding:0 24px; } .vs-workspace { grid-template-columns:minmax(0,1fr) 240px; gap:14px; } .vs-intro-meta { gap:10px; } .vs-portrait { height:213px; } .vs-portrait img { height:180px; } .vs-timeline button { font-size:8px; } .vs-scene-toolbar { padding:14px; } }
+@media (max-width:860px) { .vs-workspace { grid-template-columns:minmax(0,1fr); } .vs-intro-meta { display:none; } .vs-character-card { display:grid; grid-template-columns:170px minmax(0,1fr); padding:16px; gap:0 18px; } .vs-card-heading { grid-column:2; grid-row:1; padding:0 0 10px; } .vs-card-heading .vs-eyebrow { margin-bottom:7px; } .vs-portrait { grid-column:1; grid-row:1/5; height:235px; margin:0; } .vs-portrait img { height:200px; width:146px; } .vs-roles { grid-column:2; grid-template-columns:repeat(3,minmax(0,1fr)); padding:0; } .vs-pose-controls { grid-column:2; padding:10px 0 0; } .vs-character-note { grid-column:2; margin:10px 0 0; } .vs-footer { flex-wrap:wrap; } }
+@media (max-width:560px) { .vs-shell { padding:0 14px; } .vs-header { height:65px; gap:8px; } .vs-credit { display:none; } .vs-badge { font-size:8px; padding:7px 8px; letter-spacing:.6px; } .vs-back { font-size:12px; gap:6px; } .vs-intro { margin:26px 0 22px; } .vs-intro h1 { font-size:29px; letter-spacing:-1px; } .vs-intro p:not(.vs-eyebrow) { font-size:12px; } .vs-scene-toolbar { min-height:48px; padding:11px 12px; } .vs-scene-toolbar>div { font-size:9px; gap:6px; } .vs-time { font-size:8px; margin-left:2px; } .vs-tag { font-size:6px; padding:4px 5px; } .vs-controls { padding:12px 10px 7px; gap:5px; } .vs-controls button { font-size:9px; padding:8px 9px; } .vs-motion { font-size:8px; gap:3px; } .vs-motion input { width:12px; height:12px; } .vs-timeline { grid-template-columns:repeat(3,minmax(0,1fr)); margin:8px 12px 0; gap:8px; } .vs-timeline button { font-size:9px; } .vs-scene-description { margin:12px; font-size:9px; } .vs-character-card { grid-template-columns:130px minmax(0,1fr); padding:13px; gap:0 12px; } .vs-portrait { height:240px; } .vs-portrait img { width:124px; height:175px; } .vs-portrait-orbit { width:100px; height:100px; } .vs-roles { grid-template-columns:1fr 1fr; gap:4px; } .vs-roles button { font-size:9px; padding:6px; } .vs-card-heading h2 { font-size:22px; } .vs-card-heading p { font-size:9px; } .vs-card-heading .vs-eyebrow { font-size:7px; } .vs-character-note { font-size:8px; } .vs-gallery { margin-top:28px; } .vs-gallery-heading { flex-wrap:wrap; gap:15px; } .vs-gallery-heading h2 { font-size:20px; } .vs-gallery-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; } .vs-gallery-filter { font-size:10px; } }
+@media (prefers-reduced-motion:reduce) { .vs-root *, .vs-root *::before, .vs-root *::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+@media (max-width:560px) { .vs-controls { flex-wrap:wrap; } .vs-view { margin-left:auto; } .vs-motion { width:100%; justify-content:flex-end; } }

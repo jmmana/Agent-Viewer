@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Agent } from '../types/agent';
-import { CameraState, renderOfficeScene } from '../engine/canvasRenderer';
+import { CameraState, findOfficeAgentAtPoint, renderOfficeScene } from '../engine/canvasRenderer';
 import { getOfficeRenderedBounds, gridToScreen, screenToGrid } from '../engine/officeModel';
 import { compactTokens } from '../engine/modelOps';
 import { OfficeMotion } from '../engine/visualMotion';
+import { OfficeCrewAssets, type CharacterStyle } from '../engine/officeCrewAssets';
 import { cameraCenter } from '../engine/visualLayout';
 import type { OfficeMessageKey, OfficeTranslate } from '../content/officeMessages';
 import {
@@ -28,6 +29,8 @@ interface OfficeCanvasProps {
   translate: OfficeTranslate;
   /** Draw token and cost telemetry aggregated from the agents. Only the demo app turns it on. */
   usageTelemetry?: boolean;
+  /** Use bundled Office Crew sprites with a procedural fallback. Default: procedural. */
+  characterStyle?: CharacterStyle;
   /**
    * Declare the theme tokens on the canvas root. Turn it off when a parent (such as `.av-office`) already
    * declares them, so host overrides on that parent reach the toolbar too.
@@ -93,6 +96,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   theme,
   translate,
   usageTelemetry = false,
+  characterStyle = 'procedural',
   themeScope = true,
   isInspectorOpen = false,
   onToggleSidebar,
@@ -101,6 +105,16 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const motionRef = useRef(new OfficeMotion());
+  const crewAssetsRef = useRef<OfficeCrewAssets | null>(null);
+
+  useEffect(() => {
+    const assets = characterStyle === 'office-crew' ? new OfficeCrewAssets() : null;
+    crewAssetsRef.current = assets;
+    return () => {
+      assets?.dispose();
+      crewAssetsRef.current = null;
+    };
+  }, [characterStyle]);
   const visibleAgentsRef = useRef<Agent[]>(agents);
   const dragDistanceRef = useRef(0);
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
@@ -247,6 +261,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
       previousTime = time;
       const visibleAgents = motionRef.current.update(agents, deltaMs, reducedMotion);
       visibleAgentsRef.current = visibleAgents;
+      crewAssetsRef.current?.retainAgents(visibleAgents.map(agent => agent.id));
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
       const displayWidth = Math.floor(rect.width * dpr);
@@ -272,6 +287,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         timeMs: reducedMotion ? 1000 : time,
         nowMs: Date.now(),
         reducedMotion,
+        crewAssets: crewAssetsRef.current ?? undefined,
         theme,
         translate,
         usageTelemetry,
@@ -325,17 +341,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     const worldX = screenDx / camera.zoom - camera.x;
     const worldY = screenDy / camera.zoom - camera.y;
 
-    let foundAgent: Agent | null = null;
-    let minDist = 32;
-
-    for (const agent of visibleAgentsRef.current) {
-      const { x, y } = gridToScreen(agent.x, agent.y, camera.rotation);
-      const dist = Math.hypot(worldX - (x + 24), worldY - (y + 8));
-      if (dist < minDist) {
-        minDist = dist;
-        foundAgent = agent;
-      }
-    }
+    const foundAgent = findOfficeAgentAtPoint(visibleAgentsRef.current, camera.rotation, worldX, worldY, crewAssetsRef.current ?? undefined);
 
     const grid = screenToGrid(worldX, worldY, camera.rotation);
     const serverHit = modelOpsEnabled ? checkModelOpsHit(grid.gx, grid.gy) : null;
@@ -373,17 +379,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     const worldX = screenDx / camera.zoom - camera.x;
     const worldY = screenDy / camera.zoom - camera.y;
 
-    let clickedAgent: Agent | null = null;
-    let minDist = 30;
-
-    for (const agent of visibleAgentsRef.current) {
-      const { x, y } = gridToScreen(agent.x, agent.y, camera.rotation);
-      const dist = Math.hypot(worldX - (x + 24), worldY - (y + 8));
-      if (dist < minDist) {
-        minDist = dist;
-        clickedAgent = agent;
-      }
-    }
+    const clickedAgent = findOfficeAgentAtPoint(visibleAgentsRef.current, camera.rotation, worldX, worldY, crewAssetsRef.current ?? undefined, 30);
 
     if (clickedAgent) {
       onSelectAgent(clickedAgent.id);
@@ -418,17 +414,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     const worldX = screenDx / camera.zoom - camera.x;
     const worldY = screenDy / camera.zoom - camera.y;
 
-    let clickedAgent: Agent | null = null;
-    let minDist = 32;
-
-    for (const agent of visibleAgentsRef.current) {
-      const { x, y } = gridToScreen(agent.x, agent.y, camera.rotation);
-      const dist = Math.hypot(worldX - (x + 24), worldY - (y + 8));
-      if (dist < minDist) {
-        minDist = dist;
-        clickedAgent = agent;
-      }
-    }
+    const clickedAgent = findOfficeAgentAtPoint(visibleAgentsRef.current, camera.rotation, worldX, worldY, crewAssetsRef.current ?? undefined, 32);
 
     if (clickedAgent) {
       onSelectAgent(clickedAgent.id);

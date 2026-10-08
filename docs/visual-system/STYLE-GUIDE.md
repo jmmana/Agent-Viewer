@@ -36,8 +36,8 @@ The existing game engine draws a **24 × 16 rectangular office grid with 48 px s
 **Prototype baseline** (tune after in-app comparison):
 
 - Logical canvas sprite frame: **64 × 88 px** at 1×. Body should occupy roughly 36–44 px wide and 60–72 px tall within the frame.
-- Artwork source PNG/WebP: **128 × 176 px** (2×) with transparent background, or vector SVG with matching viewBox ratio.
-- Normal feet anchoring: `anchorX=0.5`, `anchorY=0.94`; anchor locates the ground contact point, not the center of the head.
+- Runtime PNG exports: **256 × 352 px** (4×) with transparent background. Original high-resolution generated sources are preserved separately and excluded from application bundles.
+- Normal feet anchoring: `anchorX=0.5`, `anchorY=330/352`; anchor locates the ground contact point, not the center of the head.
 - Preserve character scale across all poses and facing directions; choose a fixed bounding box.
 - Facing IDs: `front`, `back`, `left`, `right`. These are **world-space orientations**, not image mirroring assumptions.
 - Figure shadows should be composited by the runtime when possible to avoid a different shadow in each walk frame.

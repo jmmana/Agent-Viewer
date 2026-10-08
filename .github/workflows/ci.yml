@@ -35,6 +35,9 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
+      - name: Validate original visual assets
+        run: npm run validate:assets
+
       - name: TypeScript Tests (node + Vitest)
         run: npm test
 

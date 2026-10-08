@@ -65,15 +65,50 @@ export function formatUsage(figures: UsageFigures, locale: string | undefined, t
   return items;
 }
 
+interface UsageAccumulator {
+  events: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost: number | null;
+  currencies: Set<string>;
+}
+
+function emptyAccumulator(): UsageAccumulator {
+  return { events: 0, inputTokens: 0, outputTokens: 0, cost: 0, currencies: new Set() };
+}
+
+function addUsage(target: UsageAccumulator, input: number, output: number, cost: number | null, currency?: string): void {
+  target.events += 1;
+  target.inputTokens += input;
+  target.outputTokens += output;
+  target.cost = target.cost === null || cost === null ? null : target.cost + cost;
+  if (currency) target.currencies.add(currency);
+}
+
+function toFigures(entry: UsageAccumulator): UsageFigures {
+  if (entry.events === 0) {
+    return { totalTokens: null, inputTokens: null, outputTokens: null, cost: null, currency: undefined };
+  }
+  // Costs in different currencies cannot be added: the total is unknown.
+  const mixedCurrencies = entry.currencies.size > 1;
+  return {
+    totalTokens: entry.inputTokens + entry.outputTokens,
+    inputTokens: entry.inputTokens,
+    outputTokens: entry.outputTokens,
+    cost: mixedCurrencies ? null : entry.cost,
+    currency: entry.currencies.size === 1 ? [...entry.currencies][0] : undefined,
+  };
+}
+
 /**
  * Opt-in helper for hosts that have no usage service of their own: adds up the figures reported by
- * `llm.usage` events. It never prices tokens. If any event lacks a reported cost, or currencies differ,
- * the total cost is `null` (shown as "unknown") instead of a misleading partial sum.
+ * `llm.usage` events. It never prices tokens. The cost is `null` (shown as "unknown") when any event lacks a
+ * reported cost, when currencies differ, or when there is no usage event at all, instead of a misleading
+ * partial sum or a zero.
  */
 export function summarizeUsage(events: readonly OfficeEventInput[]): OfficeUsage {
-  const total = { inputTokens: 0, outputTokens: 0, cost: 0 as number | null, currency: undefined as string | undefined };
-  const byAgent: Record<string, { inputTokens: number; outputTokens: number; cost: number | null; currency?: string }> = {};
-  let currencies = new Set<string>();
+  const total = emptyAccumulator();
+  const byAgent = new Map<string, UsageAccumulator>();
 
   for (const raw of events) {
     const event = normalizeCanonicalEvent(raw);
@@ -83,46 +118,16 @@ export function summarizeUsage(events: readonly OfficeEventInput[]): OfficeUsage
     const output = isNumber(payload.outputTokens) ? payload.outputTokens : 0;
     const cost = isNumber(payload.cost) ? payload.cost : null;
     const currency = typeof payload.currency === 'string' ? payload.currency : undefined;
-    if (currency) currencies.add(currency);
 
-    total.inputTokens += input;
-    total.outputTokens += output;
-    total.cost = total.cost === null || cost === null ? null : total.cost + cost;
-
+    addUsage(total, input, output, cost, currency);
     const agentId = event.agentId ?? event.source.replace(/^agent:/, '');
-    const entry = byAgent[agentId] ?? { inputTokens: 0, outputTokens: 0, cost: 0 };
-    entry.inputTokens += input;
-    entry.outputTokens += output;
-    entry.cost = entry.cost === null || cost === null ? null : entry.cost + cost;
-    if (currency) entry.currency = currency;
-    byAgent[agentId] = entry;
+    const entry = byAgent.get(agentId) ?? emptyAccumulator();
+    addUsage(entry, input, output, cost, currency);
+    byAgent.set(agentId, entry);
   }
-
-  if (currencies.size > 1) {
-    total.cost = null;
-    currencies = new Set();
-  }
-  const currency = currencies.size === 1 ? [...currencies][0] : undefined;
 
   return {
-    total: {
-      totalTokens: total.inputTokens + total.outputTokens,
-      inputTokens: total.inputTokens,
-      outputTokens: total.outputTokens,
-      cost: total.cost,
-      currency,
-    },
-    byAgent: Object.fromEntries(
-      Object.entries(byAgent).map(([id, entry]) => [
-        id,
-        {
-          totalTokens: entry.inputTokens + entry.outputTokens,
-          inputTokens: entry.inputTokens,
-          outputTokens: entry.outputTokens,
-          cost: entry.cost,
-          currency: entry.currency ?? currency,
-        },
-      ]),
-    ),
+    total: toFigures(total),
+    byAgent: Object.fromEntries([...byAgent].map(([id, entry]) => [id, toFigures(entry)])),
   };
 }

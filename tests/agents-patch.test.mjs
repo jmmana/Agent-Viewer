@@ -116,7 +116,15 @@ test('PATCH rejects usage, unknown, read-only, invalid, empty, and reserved fiel
           agentId: id,
           severity: 'normal',
           summary: 'Reported usage',
-          payload: { inputTokens: 20, outputTokens: 4, cachedTokens: 1, reasoningTokens: 2, cost: 0.25 },
+          payload: {
+            provider: 'Test',
+            model: 'model',
+            inputTokens: 20,
+            outputTokens: 4,
+            cachedTokens: 1,
+            reasoningTokens: 2,
+            cost: 0.25,
+          },
         }),
       });
       assert.equal(usageResponse.status, 202);
@@ -148,11 +156,22 @@ test('PATCH rejects usage, unknown, read-only, invalid, empty, and reserved fiel
         const body = Object.fromEntries(keys.map((key) => [key, key === 'cost' ? -5 : 500]));
         await check(
           body,
-          keys.map((key) => ({ path: key, code: 'usage_not_patchable' })),
+          [
+            ...keys.map((key) => ({ path: key, code: 'usage_not_patchable' })),
+            { path: '', code: 'empty_patch' },
+          ],
           /llm\.usage/,
         );
-        await check({ cost: -5 }, [{ path: 'cost', code: 'usage_not_patchable' }], /llm\.usage/);
-        await check({ tokensInput: '500' }, [{ path: 'tokensInput', code: 'usage_not_patchable' }], /llm\.usage/);
+        await check(
+          { cost: -5 },
+          [{ path: 'cost', code: 'usage_not_patchable' }, { path: '', code: 'empty_patch' }],
+          /llm\.usage/,
+        );
+        await check(
+          { tokensInput: '500' },
+          [{ path: 'tokensInput', code: 'usage_not_patchable' }, { path: '', code: 'empty_patch' }],
+          /llm\.usage/,
+        );
       });
 
       await t.test('mixed profile and usage fields reject the entire request', async () => {
@@ -166,13 +185,19 @@ test('PATCH rejects usage, unknown, read-only, invalid, empty, and reserved fiel
 
       await t.test('unknown keys, including case variants and __proto__, are rejected', async () => {
         const check = await unchanged();
-        await check({ Cost: 1 }, [{ path: 'Cost', code: 'unknown_field' }]);
-        await check('{"__proto__":"value"}', [{ path: '__proto__', code: 'unknown_field' }]);
+        await check({ Cost: 1 }, [{ path: 'Cost', code: 'unknown_field' }, { path: '', code: 'empty_patch' }]);
+        await check('{"__proto__":"value"}', [
+          { path: '__proto__', code: 'unknown_field' },
+          { path: '', code: 'empty_patch' },
+        ]);
       });
 
       await t.test('lastSeenAt is read-only', async () => {
         const check = await unchanged();
-        await check({ lastSeenAt: 1 }, [{ path: 'lastSeenAt', code: 'read_only_field' }]);
+        await check({ lastSeenAt: 1 }, [
+          { path: 'lastSeenAt', code: 'read_only_field' },
+          { path: '', code: 'empty_patch' },
+        ]);
       });
 
       await t.test('allowed profile fields require trimmed, bounded strings', async () => {
@@ -223,6 +248,27 @@ test('PATCH rejects usage, unknown, read-only, invalid, empty, and reserved fiel
       ]);
       assert.equal(result, 'timeout');
       await reader.cancel();
+
+      const accepted = await patch(baseUrl, id, { status: 'CODING' });
+      assert.equal(accepted.status, 200);
+      const snapshot = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+      const agentTotals = snapshot.agents.reduce(
+        (totals, agent) => ({
+          input: totals.input + agent.tokensInput,
+          output: totals.output + agent.tokensOutput,
+          cached: totals.cached + agent.cachedTokens,
+          reasoning: totals.reasoning + agent.reasoningTokens,
+          cost: totals.cost + (agent.cost ?? 0),
+        }),
+        { input: 0, output: 0, cached: 0, reasoning: 0, cost: 0 },
+      );
+      assert.deepEqual(snapshot.totalTokens, {
+        input: agentTotals.input,
+        output: agentTotals.output,
+        cached: agentTotals.cached,
+        reasoning: agentTotals.reasoning,
+      });
+      assert.equal(snapshot.totalCost, agentTotals.cost);
     } finally {
       server.close();
     }

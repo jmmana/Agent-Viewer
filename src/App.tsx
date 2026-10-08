@@ -637,21 +637,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Floating Step Banner when playing demo */}
-      {isPlayingDemo && DEMO_STEPS[demoStepIndex] && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md px-5 py-2.5 rounded-full border border-sky-500/40 shadow-2xl flex items-center gap-3 z-40 animate-in fade-in slide-in-from-top-2 duration-200">
-          <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-ping" />
-          <div className="text-xs">
-            <span className="font-bold text-white block">
-              {DEMO_STEPS[demoStepIndex].title}
-            </span>
-            <span className="text-slate-400 text-[11px]">
-              {DEMO_STEPS[demoStepIndex].description}
-            </span>
-          </div>
-        </div>
-      )}
-
       {/* Settings & Pricing Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}

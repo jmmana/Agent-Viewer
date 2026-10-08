@@ -81,11 +81,14 @@ export const COFFEE_SEATS: CoffeeSeat[] = [
 
 export const AGENT_DESK_ANCHORS: Record<string, { x: number; y: number; workspace: WorkspaceZone }> = {
   'boss': { x: 3, y: 3, workspace: 'boss_office' },
+  'sales-lead': { x: 5, y: 3, workspace: 'boss_office' },
   'tech-lead': { x: 2, y: 9, workspace: 'leads_area' },
-  'research-lead': { x: 4, y: 9, workspace: 'research_area' },
+  'research-lead': { x: 4, y: 9, workspace: 'leads_area' },
   'backend-agent': { x: 8, y: 10, workspace: 'development' },
   'frontend-agent': { x: 12, y: 10, workspace: 'development' },
   'security-agent': { x: 16, y: 10, workspace: 'development' },
+  'ba-analyst-1': { x: 2, y: 14, workspace: 'research_area' },
+  'ba-analyst-2': { x: 5, y: 14, workspace: 'research_area' },
   'qa-agent': { x: 20, y: 10, workspace: 'qa_lab' },
 };
 

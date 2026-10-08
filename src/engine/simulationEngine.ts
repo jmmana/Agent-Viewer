@@ -1,4 +1,5 @@
 import { Agent, Artifact, Meeting, SocialActivity, Task, ViewerEvent } from '../types/agent';
+import { INITIAL_AGENTS } from './officeModel';
 import type { RoomReservation } from './livingOfficeEngine';
 import {
   playAlert,
@@ -34,20 +35,20 @@ export interface SimulationState {
   totalCost: number;
 }
 
-export function createInitialSimulationState(initialAgents: Agent[]): SimulationState {
+export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS): SimulationState {
   return {
-    agents: JSON.parse(JSON.stringify(initialAgents)),
+    agents: agents.map((a) => ({ ...a })),
     tasks: [],
     meetings: [],
     events: [
       {
-        id: 'evt-boot-1',
-        type: 'agent.registered',
-        timestamp: Date.now() - 3600000,
+        id: 'evt-init',
+        type: 'agent.status.changed',
+        timestamp: Date.now() - 1000 * 60 * 10,
         source: 'system',
         severity: 'low',
-        summary: 'All 7 organization agents registered and calibrated.',
-        payload: { agentCount: 7 },
+        summary: 'Equipo de Automatización RPA UiPath & BA listo en oficinas.',
+        payload: { agentCount: agents.length },
       },
     ],
     activeMeetingId: null,
@@ -64,48 +65,59 @@ export function createInitialSimulationState(initialAgents: Agent[]): Simulation
   };
 }
 
-// 16-Step Canonical "Wow" Sequence (PRD Section 45, 109 & 115)
+// 12-Step UiPath RPA & BA Banking Automation Scenario (Total: 25.5s)
 export const DEMO_STEPS: DemoStep[] = [
   {
     id: 0,
-    durationMs: 3500,
-    title: '1. Executive Goal Received',
-    description: 'CEO / Boss receives requirement: "Architect and implement OAuth 2.0 PKCE Auth Server with Scoped Service Tokens".',
+    durationMs: 2100,
+    title: '1. Recepción de Insumos del Cliente (Video, 2 PDFs, Word, 2 Webs Bancarias)',
+    description: 'Valeria (Ventas) y Carlos (Jefe RPA) reciben en Boss Office el requerimiento bancario: 1 Video, 2 PDFs de extractos, 1 Word y 2 webs de bancos.',
     execute: (s) => {
       const boss = s.agents.find((a) => a.id === 'boss');
-      if (boss) {
-        boss.status = 'THINKING';
-        boss.statusText = 'Analyzing OAuth 2.0 PKCE specification';
-        boss.speechBubble = {
-          text: 'New priority: OAuth 2.0 PKCE auth service needed. Convening Leads.',
-          expiresAt: Date.now() + 4000,
+      const sales = s.agents.find((a) => a.id === 'sales-lead');
+
+      if (sales) {
+        sales.status = 'CHATTING';
+        sales.statusText = 'Presentando requerimiento del cliente';
+        sales.speechBubble = {
+          text: '¡Cliente envió Video, 2 PDFs, Word y 2 webs bancarias para automatizar conciliación!',
+          expiresAt: Date.now() + 2500,
         };
       }
+      if (boss) {
+        boss.status = 'THINKING';
+        boss.statusText = 'Planificando solución RPA UiPath end-to-end';
+        boss.speechBubble = {
+          text: 'Recibido. Convocando kickoff inmediato con Arquitectura y Business Analysis.',
+          expiresAt: Date.now() + 2500,
+        };
+      }
+
       const newTask: Task = {
-        id: 'TASK-101',
-        title: 'OAuth 2.0 PKCE Auth Server & Service Scopes',
-        description: 'Design and implement RFC 7636 compliant authorization service with replay protection.',
-        initiatorId: 'boss',
-        assignedAgentId: 'tech-lead',
-        collaboratorIds: ['tech-lead', 'research-lead', 'backend-agent', 'qa-agent'],
+        id: 'TASK-RPA-BANK',
+        title: 'Automatización Bancaria UiPath End-to-End',
+        description: 'Construir solución RPA completa: PDD, SDD, Estimación, BPMN, Arquitectura, Cotización, Gantt, Resumen y Presentación HTML interactiva.',
+        initiatorId: 'sales-lead',
+        assignedAgentId: 'boss',
+        collaboratorIds: ['boss', 'tech-lead', 'research-lead', 'backend-agent', 'frontend-agent', 'security-agent', 'ba-analyst-1', 'ba-analyst-2', 'qa-agent', 'sales-lead'],
         status: 'ASSIGNED',
         progress: 5,
         createdAt: Date.now(),
-        tokensTotal: 1200,
-        costTotal: 0.008,
-        toolsUsed: [],
+        tokensTotal: 3400,
+        costTotal: 0.018,
+        toolsUsed: ['client.intake(video_2pdfs_word_2web)'],
         artifacts: [],
       };
       s.tasks.unshift(newTask);
       s.events.unshift({
-        id: `evt-${Date.now()}-1`,
+        id: `evt-${Date.now()}-0`,
         type: 'task.created',
         timestamp: Date.now(),
-        source: 'boss',
-        target: 'tech-lead',
+        source: 'agent:sales-lead',
+        target: 'boss',
         taskId: newTask.id,
         severity: 'high',
-        summary: 'TASK-101 created: OAuth 2.0 PKCE Auth Server & Service Scopes.',
+        summary: 'TASK-RPA-BANK recibida: Video, 2 PDFs, Word y 2 webs de bancos para automatizar conciliación.',
         payload: { task: newTask },
       });
       playTaskStart();
@@ -113,693 +125,705 @@ export const DEMO_STEPS: DemoStep[] = [
   },
   {
     id: 1,
-    durationMs: 4000,
-    title: '2. Boss Summons Leads to Meeting',
-    description: 'Boss calls Tech Lead (Alex) and Research Lead (Maya) to Conference Room for architecture briefing.',
+    durationMs: 2200,
+    title: '2. Kickoff de Alcance en Meeting Room A',
+    description: 'Carlos (Jefe RPA), Alex (Arquitecto) y Dra. Maya (Líder BA) se reúnen en Meeting Room A para coordinar entregables.',
     execute: (s) => {
       const boss = s.agents.find((a) => a.id === 'boss');
       const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const researchLead = s.agents.find((a) => a.id === 'research-lead');
+      const baLead = s.agents.find((a) => a.id === 'research-lead');
 
       if (boss) {
-        boss.targetX = 9;
-        boss.targetY = 2;
+        boss.targetX = 10;
+        boss.targetY = 3;
         boss.isWalking = true;
-        boss.status = 'DELEGATING';
-      }
-      if (techLead) {
-        techLead.targetX = 10;
-        techLead.targetY = 3;
-        techLead.isWalking = true;
-        techLead.status = 'IN_MEETING';
-        techLead.speechBubble = {
-          text: 'Joining conference room for auth blueprint review.',
-          expiresAt: Date.now() + 3500,
-        };
-      }
-      if (researchLead) {
-        researchLead.targetX = 12;
-        researchLead.targetY = 3;
-        researchLead.isWalking = true;
-        researchLead.status = 'IN_MEETING';
-      }
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-2`,
-        type: 'message.sent',
-        timestamp: Date.now(),
-        source: 'boss',
-        target: 'tech-lead',
-        severity: 'normal',
-        summary: 'Boss summoned Tech Lead & Research Lead to Conference Room.',
-        payload: { agenda: 'OAuth 2.0 RFC 7636 security standards' },
-      });
-      playMessageBlip();
-    },
-  },
-  {
-    id: 2,
-    durationMs: 5000,
-    title: '3. Architecture Review in Conference Room',
-    description: 'Presentation screen illuminates. Leads discuss token hashing and client isolation.',
-    execute: (s) => {
-      const boss = s.agents.find((a) => a.id === 'boss');
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const researchLead = s.agents.find((a) => a.id === 'research-lead');
-
-      if (boss) {
-        boss.x = 9;
-        boss.y = 2;
-        boss.isWalking = false;
+        boss.workspace = 'meeting_room';
         boss.status = 'IN_MEETING';
       }
       if (techLead) {
-        techLead.x = 10;
-        techLead.y = 3;
-        techLead.isWalking = false;
+        techLead.targetX = 12;
+        techLead.targetY = 3;
+        techLead.isWalking = true;
+        techLead.workspace = 'meeting_room';
+        techLead.status = 'IN_MEETING';
         techLead.speechBubble = {
-          text: 'We should enforce S256 code challenge method and reject plain code verifier.',
-          expiresAt: Date.now() + 4500,
+          text: 'Revisando video y webs de bancos. Diseñaremos Dispatcher y Performer en REFramework.',
+          expiresAt: Date.now() + 2500,
         };
       }
-      if (researchLead) {
-        researchLead.x = 12;
-        researchLead.y = 3;
-        researchLead.isWalking = false;
+      if (baLead) {
+        baLead.targetX = 14;
+        baLead.targetY = 3;
+        baLead.isWalking = true;
+        baLead.workspace = 'meeting_room';
+        baLead.status = 'IN_MEETING';
       }
 
       const meeting: Meeting = {
-        id: 'MEET-42',
-        title: 'OAuth 2.0 PKCE Architecture Review',
-        topic: 'RFC 7636 Enforcement & Scoped Service Grants',
-        taskId: 'TASK-101',
+        id: 'MEET-KICKOFF',
+        title: 'Kickoff Solución RPA Bancaria',
+        topic: 'Desglose de entregables: PDD, SDD, Estimación, BPMN y Cotización',
+        taskId: 'TASK-RPA-BANK',
         initiatorId: 'boss',
         participants: ['boss', 'tech-lead', 'research-lead'],
         status: 'ACTIVE',
+        roomId: 'meeting_room',
         startedAt: Date.now(),
-        tokensAccumulated: 8400,
-        costAccumulated: 0.052,
-        agenda: ['PKCE S256 vs Plain', 'Refresh Token Rotation', 'QA Strategy'],
-        decisions: [
-          'Mandate SHA-256 code challenge method strictly.',
-          'Inject short-lived tokens (15m expiry) with single-use refresh token rotation.',
-        ],
-        tasksCreated: ['TASK-101-BACKEND', 'TASK-101-QA'],
-        messages: [
-          {
-            id: 'm1',
-            senderId: 'boss',
-            text: 'Need an airtight OAuth service that resists token interception.',
-            timestamp: Date.now() - 3000,
-            type: 'statement',
-          },
-          {
-            id: 'm2',
-            senderId: 'tech-lead',
-            text: 'We will enforce RFC 7636 S256 code challenges and strict nonce verification.',
-            timestamp: Date.now() - 1500,
-            type: 'proposal',
-          },
-          {
-            id: 'm3',
-            senderId: 'boss',
-            text: 'Approved. Delegate execution to Elena and Zoe for full test coverage.',
-            timestamp: Date.now(),
-            type: 'decision',
-          },
-        ],
+        tokensAccumulated: 8900,
+        costAccumulated: 0.048,
+        agenda: ['Revisión Video', 'Extracción 2 PDFs', 'Estructura REFramework'],
+        decisions: ['BA generará PDD en Library', 'Arquitectura definirá SDD en Meeting Room B'],
+        tasksCreated: ['SUB-PDD', 'SUB-SDD'],
+        messages: [],
       };
-
       s.meetings.unshift(meeting);
       s.activeMeetingId = meeting.id;
 
-      s.totalTokens.input += 7200;
-      s.totalTokens.output += 1200;
-      s.totalCost += 0.052;
-
       s.events.unshift({
-        id: `evt-${Date.now()}-3`,
+        id: `evt-${Date.now()}-1`,
         type: 'meeting.started',
         timestamp: Date.now(),
-        source: 'boss',
-        severity: 'high',
-        summary: 'Meeting started: "OAuth 2.0 PKCE Architecture Review".',
-        payload: { meetingId: meeting.id, participants: meeting.participants },
+        source: 'agent:boss',
+        taskId: 'TASK-RPA-BANK',
+        severity: 'normal',
+        summary: 'Kickoff iniciado en Meeting Room A: Definición de plan de entregables RPA.',
+        payload: { meetingId: meeting.id, roomId: 'meeting_room' },
       });
       playMeetingGong();
     },
   },
   {
-    id: 3,
-    durationMs: 4000,
-    title: '4. Meeting Concluded & Consensus Recorded',
-    description: 'Decisions committed to project registry. Leads return to desks to distribute workloads.',
+    id: 2,
+    durationMs: 2100,
+    title: '3. Research Library: Extracción Documental & Creación del PDD',
+    description: 'Dra. Maya, Sofía y Andrés analizan el Video, los 2 PDFs y el Word en la Library y compilan el Process Definition Document.',
     execute: (s) => {
-      const activeMeet = s.meetings.find((m) => m.id === s.activeMeetingId);
-      if (activeMeet) {
-        activeMeet.status = 'CONCLUDED';
-        activeMeet.endedAt = Date.now();
-      }
-      s.activeMeetingId = null;
+      const baLead = s.agents.find((a) => a.id === 'research-lead');
+      const ba1 = s.agents.find((a) => a.id === 'ba-analyst-1');
+      const ba2 = s.agents.find((a) => a.id === 'ba-analyst-2');
 
-      const boss = s.agents.find((a) => a.id === 'boss');
+      if (baLead) {
+        baLead.targetX = 3;
+        baLead.targetY = 14;
+        baLead.isWalking = true;
+        baLead.workspace = 'research_area';
+        baLead.status = 'RESEARCHING';
+        baLead.currentTool = 'uipath.document_understanding';
+      }
+      if (ba1) {
+        ba1.status = 'RESEARCHING';
+        ba1.currentTool = 'ocr.pdf_extractor(2_banco_pdfs)';
+        ba1.speechBubble = {
+          text: 'Extraídos 28 campos clave del Word y PDFs bancarios. PDD v1.0 listo.',
+          expiresAt: Date.now() + 2500,
+        };
+      }
+      if (ba2) {
+        ba2.status = 'WRITING';
+        ba2.currentTool = 'doc.compiler(PDD_Process_Definition)';
+      }
+
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
+      if (task) {
+        task.progress = 20;
+        task.artifacts.push({
+          id: 'art-pdd',
+          name: 'PDD - Process Definition Document v1.0',
+          type: 'report',
+          summary: 'Documento formal de definición de proceso bancario con reglas de negocio y campos OCR.',
+          timestamp: Date.now(),
+          authorId: 'ba-analyst-1',
+        });
+      }
+
+      s.events.unshift({
+        id: `evt-${Date.now()}-2`,
+        type: 'artifact.created',
+        timestamp: Date.now(),
+        source: 'agent:ba-analyst-1',
+        taskId: 'TASK-RPA-BANK',
+        severity: 'high',
+        summary: 'PDD (Process Definition Document) generado con éxito en Research Library.',
+        payload: { artifactId: 'art-pdd', pages: 34 },
+      });
+      playMessageBlip();
+    },
+  },
+  {
+    id: 3,
+    durationMs: 2000,
+    title: '4. Leads Studio: Diagramas BPMN & Estimación de Esfuerzo',
+    description: 'En Leads Area se modelan los diagramas de flujo As-Is / To-Be y se calcula la estimación de esfuerzo en story points.',
+    execute: (s) => {
       const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const researchLead = s.agents.find((a) => a.id === 'research-lead');
+      const ba2 = s.agents.find((a) => a.id === 'ba-analyst-2');
 
-      if (boss) {
-        boss.targetX = 3;
-        boss.targetY = 3;
-        boss.isWalking = true;
-        boss.status = 'IDLE';
-        boss.statusText = 'Awaiting implementation deliverable';
-      }
       if (techLead) {
         techLead.targetX = 2;
         techLead.targetY = 9;
         techLead.isWalking = true;
-        techLead.status = 'DELEGATING';
+        techLead.workspace = 'leads_area';
+        techLead.status = 'WRITING';
+        techLead.currentTool = 'estimation.sizing_matrix';
       }
-      if (researchLead) {
-        researchLead.targetX = 3;
-        researchLead.targetY = 14; // Walks to Research reading table
-        researchLead.isWalking = true;
-        researchLead.status = 'RESEARCHING';
+      if (ba2) {
+        ba2.targetX = 4;
+        ba2.targetY = 9;
+        ba2.isWalking = true;
+        ba2.workspace = 'leads_area';
+        ba2.status = 'CODING';
+        ba2.currentTool = 'bpmn.modeler(as_is_to_be)';
+        ba2.speechBubble = {
+          text: 'Diagramas BPMN listos: 3 caminos felices y 8 excepciones de negocio bancarias.',
+          expiresAt: Date.now() + 2500,
+        };
+      }
+
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
+      if (task) {
+        task.progress = 35;
+        task.artifacts.push({
+          id: 'art-bpmn',
+          name: 'Diagramas de Flujo BPMN As-Is & To-Be',
+          type: 'architecture',
+          summary: 'Mapeo detallado de procesos bancarios en estándar BPMN 2.0 con bifurcaciones de error.',
+          timestamp: Date.now(),
+          authorId: 'ba-analyst-2',
+        });
+        task.artifacts.push({
+          id: 'art-estimacion',
+          name: 'Estimación de Esfuerzo & Sizing',
+          type: 'report',
+          summary: 'Matriz de complejidad: 42 historias de usuario, 85 Story Points en 3 Sprints.',
+          timestamp: Date.now(),
+          authorId: 'tech-lead',
+        });
       }
 
       s.events.unshift({
-        id: `evt-${Date.now()}-4`,
-        type: 'meeting.ended',
+        id: `evt-${Date.now()}-3`,
+        type: 'task.progress',
         timestamp: Date.now(),
-        source: 'boss',
+        source: 'agent:tech-lead',
+        taskId: 'TASK-RPA-BANK',
         severity: 'normal',
-        summary: 'Meeting concluded with 2 key architectural decisions.',
-        payload: { decisionsCount: 2 },
+        summary: 'Diagramas BPMN y Estimación de Esfuerzo completados en Leads Studio.',
+        payload: { progress: 35, storyPoints: 85 },
       });
+      playMessageBlip();
     },
   },
   {
     id: 4,
-    durationMs: 4500,
-    title: '5. Research Lead Deep-Dives in Library',
-    description: 'Dr. Maya Chen reaches Research table. Executes web search & RFC document analysis tools.',
+    durationMs: 2100,
+    title: '5. Meeting Room B (War Room): Arquitectura UiPath & SDD',
+    description: 'Alex (Arquitecto) y los 3 analistas de desarrollo RPA se reúnen en Meeting Room B para definir REFramework y el SDD.',
     execute: (s) => {
-      const researchLead = s.agents.find((a) => a.id === 'research-lead');
-      if (researchLead) {
-        researchLead.x = 3;
-        researchLead.y = 14;
-        researchLead.isWalking = false;
-        researchLead.status = 'USING_TOOL';
-        researchLead.currentTool = 'web.search(rfc7636_pkce)';
-        researchLead.statusText = 'Querying RFC 7636 security specifications';
-        researchLead.tokensInput += 4500;
-        researchLead.tokensOutput += 950;
-        researchLead.cost += 0.021;
-        researchLead.speechBubble = {
-          text: 'Tool web.search returned 14 security caveats for PKCE replay attacks.',
-          expiresAt: Date.now() + 4000,
+      const techLead = s.agents.find((a) => a.id === 'tech-lead');
+      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
+      const dev2 = s.agents.find((a) => a.id === 'frontend-agent');
+      const dev3 = s.agents.find((a) => a.id === 'security-agent');
+
+      if (techLead) {
+        techLead.targetX = 19;
+        techLead.targetY = 3;
+        techLead.isWalking = true;
+        techLead.workspace = 'meeting_room_b';
+        techLead.status = 'IN_MEETING';
+        techLead.speechBubble = {
+          text: 'SDD aprobado: Arquitectura Dispatcher-Performer con colas transaccionales y REFramework.',
+          expiresAt: Date.now() + 2500,
         };
       }
+      if (dev1) {
+        dev1.targetX = 20;
+        dev1.targetY = 2;
+        dev1.isWalking = true;
+        dev1.workspace = 'meeting_room_b';
+        dev1.status = 'IN_MEETING';
+      }
+      if (dev2) {
+        dev2.targetX = 21;
+        dev2.targetY = 3;
+        dev2.isWalking = true;
+        dev2.workspace = 'meeting_room_b';
+        dev2.status = 'IN_MEETING';
+      }
+      if (dev3) {
+        dev3.targetX = 22;
+        dev3.targetY = 2;
+        dev3.isWalking = true;
+        dev3.workspace = 'meeting_room_b';
+        dev3.status = 'IN_MEETING';
+      }
 
-      s.totalTokens.input += 4500;
-      s.totalTokens.output += 950;
-      s.totalCost += 0.021;
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
+      if (task) {
+        task.progress = 50;
+        task.artifacts.push({
+          id: 'art-sdd',
+          name: 'SDD - Solution Design Document (UiPath REFramework)',
+          type: 'architecture',
+          summary: 'Diseño técnico de la solución UiPath: Dispatcher, Performer, Queues y manejo de excepciones.',
+          timestamp: Date.now(),
+          authorId: 'tech-lead',
+        });
+        task.artifacts.push({
+          id: 'art-arquitectura',
+          name: 'Arquitectura Técnica UiPath REFramework',
+          type: 'architecture',
+          summary: 'Blueprint de integración con Azure Key Vault, Orchestrator y webs bancarias.',
+          timestamp: Date.now(),
+          authorId: 'tech-lead',
+        });
+      }
+
+      s.events.unshift({
+        id: `evt-${Date.now()}-4`,
+        type: 'meeting.decision',
+        timestamp: Date.now(),
+        source: 'agent:tech-lead',
+        taskId: 'TASK-RPA-BANK',
+        severity: 'high',
+        summary: 'SDD y Arquitectura UiPath aprobados en Meeting Room B.',
+        payload: { sddVersion: '1.0', framework: 'REFramework' },
+      });
+      playMeetingGong();
+    },
+  },
+  {
+    id: 5,
+    durationMs: 2200,
+    title: '6. Development Pods: Codificación en UiPath Studio',
+    description: 'Lucas, Kenji y Mateo desarrollan los workflows XAML automatizando ambas páginas web bancarias y el REFramework.',
+    execute: (s) => {
+      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
+      const dev2 = s.agents.find((a) => a.id === 'frontend-agent');
+      const dev3 = s.agents.find((a) => a.id === 'security-agent');
+
+      if (dev1) {
+        dev1.targetX = 8;
+        dev1.targetY = 10;
+        dev1.isWalking = true;
+        dev1.workspace = 'development';
+        dev1.status = 'CODING';
+        dev1.currentTool = 'uipath.studio(dispatcher_web_navigation)';
+        dev1.speechBubble = {
+          text: 'Selectores Fuzzy y navegación web listos en ambos bancos (Santander & Chile).',
+          expiresAt: Date.now() + 2500,
+        };
+      }
+      if (dev2) {
+        dev2.targetX = 12;
+        dev2.targetY = 10;
+        dev2.isWalking = true;
+        dev2.workspace = 'development';
+        dev2.status = 'CODING';
+        dev2.currentTool = 'uipath.studio(performer_re_framework)';
+      }
+      if (dev3) {
+        dev3.targetX = 16;
+        dev3.targetY = 10;
+        dev3.isWalking = true;
+        dev3.workspace = 'development';
+        dev3.status = 'CODING';
+        dev3.currentTool = 'uipath.du(intelligent_form_extractor)';
+      }
+
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
+      if (task) {
+        task.progress = 65;
+        task.tokensTotal += 18500;
+        task.costTotal += 0.092;
+      }
 
       s.events.unshift({
         id: `evt-${Date.now()}-5`,
         type: 'tool.started',
         timestamp: Date.now(),
-        source: 'research-lead',
+        source: 'agent:backend-agent',
+        taskId: 'TASK-RPA-BANK',
         severity: 'normal',
-        summary: 'Tool web.search executed by Dr. Maya Chen.',
-        payload: { tool: 'web.search', query: 'RFC 7636 PKCE S256 vulnerability list' },
+        summary: 'UiPath Studio: Dispatcher y Performer implementados para las 2 plataformas bancarias.',
+        payload: { modules: ['Dispatcher.xaml', 'Performer.xaml', 'ProcessTransaction.xaml'] },
       });
       playMessageBlip();
-    },
-  },
-  {
-    id: 5,
-    durationMs: 4000,
-    title: '6. Tech Lead Delegates Implementation to Elena',
-    description: 'Alex sends message to Backend Analyst (Elena Rostova): "Implement AuthController & PKCE verifier".',
-    execute: (s) => {
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const backend = s.agents.find((a) => a.id === 'backend-agent');
-
-      if (techLead) {
-        techLead.x = 2;
-        techLead.y = 9;
-        techLead.isWalking = false;
-        techLead.status = 'REVIEWING';
-        techLead.speechBubble = {
-          text: 'Elena: please implement the AuthController with S256 code challenge validation.',
-          targetAgentName: 'Elena Rostova',
-          expiresAt: Date.now() + 3800,
-        };
-      }
-      if (backend) {
-        backend.status = 'THINKING';
-        backend.statusText = 'Ingesting task requirements and scaffolding API';
-        backend.speechBubble = {
-          text: 'Understood Alex. Scaffolding crypto hash verification and token issue routes.',
-          expiresAt: Date.now() + 3800,
-        };
-      }
-
-      const task = s.tasks.find((t) => t.id === 'TASK-101');
-      if (task) {
-        task.status = 'IN_PROGRESS';
-        task.progress = 25;
-      }
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-6`,
-        type: 'task.assigned',
-        timestamp: Date.now(),
-        source: 'tech-lead',
-        target: 'backend-agent',
-        taskId: 'TASK-101',
-        severity: 'normal',
-        summary: 'Tech Lead assigned core PKCE coding to Elena Rostova.',
-        payload: { component: 'AuthController.ts' },
-      });
     },
   },
   {
     id: 6,
-    durationMs: 5000,
-    title: '7. Elena Writes Code at Development Desk',
-    description: 'Elena switches to CODING. Monitors pulse with live code syntax. Tool "filesystem.write" invoked.',
-    execute: (s) => {
-      const backend = s.agents.find((a) => a.id === 'backend-agent');
-      if (backend) {
-        backend.status = 'CODING';
-        backend.currentTool = 'fs.write(AuthController.ts)';
-        backend.statusText = 'Writing SHA-256 verifier & token exchange handler';
-        backend.tokensInput += 9400;
-        backend.tokensOutput += 2800;
-        backend.cachedTokens += 6200;
-        backend.cost += 0.051;
-        backend.speechBubble = {
-          text: 'Emitted 180 lines of TypeScript with crypto-subtle SHA-256 verification.',
-          expiresAt: Date.now() + 4500,
-        };
-      }
-
-      s.totalTokens.input += 9400;
-      s.totalTokens.output += 2800;
-      s.totalCost += 0.051;
-
-      const task = s.tasks.find((t) => t.id === 'TASK-101');
-      if (task) {
-        task.progress = 55;
-        task.toolsUsed.push('fs.write', 'git.commit');
-        task.artifacts.push({
-          id: 'art-1',
-          name: 'AuthController.ts & pkce.ts',
-          type: 'code',
-          summary: 'Full RFC 7636 token endpoint implementation with cryptographic challenge verifier.',
-          timestamp: Date.now(),
-          authorId: 'backend-agent',
-        });
-      }
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-7`,
-        type: 'artifact.created',
-        timestamp: Date.now(),
-        source: 'backend-agent',
-        taskId: 'TASK-101',
-        severity: 'normal',
-        summary: 'Elena generated artifact: AuthController.ts & pkce.ts.',
-        payload: { linesOfCode: 180, testCoverage: 'pending' },
-      });
-      playMessageBlip();
-    },
-  },
-  {
-    id: 7,
-    durationMs: 4500,
-    title: '8. Zoe Receives Code for QA Validation',
-    description: 'Zoe Vance (QA Lead) prepares end-to-end integration and security test suite in QA Lab.',
+    durationMs: 2000,
+    title: '7. QA Lab: Pruebas de Estrés y Certificación Bancaria',
+    description: 'Zoe Vance (QA) y Mateo Silva ejecutan en el QA Lab 1,000 transacciones simuladas sin errores.',
     execute: (s) => {
       const qa = s.agents.find((a) => a.id === 'qa-agent');
+      const dev3 = s.agents.find((a) => a.id === 'security-agent');
+
       if (qa) {
-        qa.x = 20;
-        qa.y = 10;
         qa.targetX = 20;
         qa.targetY = 10;
-        qa.workspace = 'qa_lab';
         qa.isWalking = false;
-        qa.floor = 1;
+        qa.workspace = 'qa_lab';
         qa.status = 'TESTING';
-        qa.currentTool = 'test.run(integration_auth_spec)';
-        qa.statusText = 'Executing 24 security test cases & fuzzing nonce';
-        qa.tokensInput += 6100;
-        qa.tokensOutput += 1400;
-        qa.cost += 0.018;
+        qa.currentTool = 'uipath.test_suite(regression_banking_1000_tx)';
         qa.speechBubble = {
-          text: 'Running regression fuzz suite on authorization code exchange endpoint...',
-          expiresAt: Date.now() + 4000,
+          text: '1,000 transacciones probadas: 0 excepciones de sistema, 100% de éxito bancario.',
+          expiresAt: Date.now() + 2500,
         };
       }
-
-      s.totalTokens.input += 6100;
-      s.totalTokens.output += 1400;
-      s.totalCost += 0.018;
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-8`,
-        type: 'tool.started',
-        timestamp: Date.now(),
-        source: 'qa-agent',
-        severity: 'normal',
-        summary: 'Tool test.run started by Zoe Vance in QA Lab.',
-        payload: { suite: 'auth_pkce_fuzz_test.py', assertions: 24 },
-      });
-    },
-  },
-  {
-    id: 8,
-    durationMs: 4500,
-    title: '9. Critical Security Flaw Detected!',
-    description: 'QA detects potential token replay attack: Nonce is not validated against session cache!',
-    execute: (s) => {
-      const qa = s.agents.find((a) => a.id === 'qa-agent');
-      if (qa) {
-        qa.x = 20;
-        qa.y = 10;
-        qa.targetX = 20;
-        qa.targetY = 10;
-        qa.workspace = 'qa_lab';
-        qa.isWalking = false;
-        qa.floor = 1;
-        qa.status = 'BLOCKED';
-        qa.statusText = 'Vulnerability detected: Token replay flaw';
-        qa.speechBubble = {
-          text: 'CRITICAL: Authorization code reused without single-use invalidation!',
-          expiresAt: Date.now() + 4200,
-        };
+      if (dev3) {
+        dev3.targetX = 22;
+        dev3.targetY = 10;
+        dev3.isWalking = true;
+        dev3.workspace = 'qa_lab';
+        dev3.status = 'TESTING';
+        dev3.currentTool = 'security.scan(banking_tokens_compliance)';
       }
 
-      const task = s.tasks.find((t) => t.id === 'TASK-101');
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
       if (task) {
-        task.status = 'BLOCKED';
-        task.blockerReason = 'Replay vulnerability: Authorization code not purged upon first token exchange.';
-      }
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-9`,
-        type: 'task.blocked',
-        timestamp: Date.now(),
-        source: 'qa-agent',
-        taskId: 'TASK-101',
-        severity: 'critical',
-        summary: 'SECURITY ALERT: Code replay vulnerability detected by QA Agent Zoe Vance.',
-        payload: { errorType: 'CWE-294', vulnerability: 'Code Replay Flaw' },
-      });
-      playAlert();
-    },
-  },
-  {
-    id: 9,
-    durationMs: 4000,
-    title: '10. Zoe Walks to Elena to Escalate Bug',
-    description: 'Zoe walks directly to Elena’s desk with detailed test reproduction trace.',
-    execute: (s) => {
-      const qa = s.agents.find((a) => a.id === 'qa-agent');
-      const backend = s.agents.find((a) => a.id === 'backend-agent');
-
-      if (qa) {
-        qa.targetX = 9;
-        qa.targetY = 10;
-        qa.isWalking = true;
-        qa.status = 'DELEGATING';
-        qa.speechBubble = {
-          text: 'Elena, code exchange can be replayed twice within 60s window. Needs atomic purge.',
-          targetAgentName: 'Elena Rostova',
-          expiresAt: Date.now() + 3800,
-        };
-      }
-      if (backend) {
-        backend.status = 'REVIEWING';
-        backend.statusText = 'Inspecting QA trace for atomic invalidation';
-      }
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-10`,
-        type: 'message.sent',
-        timestamp: Date.now(),
-        source: 'qa-agent',
-        target: 'backend-agent',
-        severity: 'high',
-        summary: 'Zoe walked to Elena’s desk with reproduction trace for replay vulnerability.',
-        payload: { target: 'Elena Rostova' },
-      });
-      playMessageBlip();
-    },
-  },
-  {
-    id: 10,
-    durationMs: 4500,
-    title: '11. Elena Implements Atomic Code Invalidation',
-    description: 'Elena updates Redis cache lock & guarantees one-time authorization code consumption.',
-    execute: (s) => {
-      const backend = s.agents.find((a) => a.id === 'backend-agent');
-      const qa = s.agents.find((a) => a.id === 'qa-agent');
-
-      if (backend) {
-        backend.status = 'CODING';
-        backend.currentTool = 'fs.write(redis_atomic_lock.ts)';
-        backend.statusText = 'Adding atomic Redis GETDEL on auth code';
-        backend.tokensInput += 4200;
-        backend.tokensOutput += 1200;
-        backend.cost += 0.022;
-        backend.speechBubble = {
-          text: 'Patched: Using atomic Redis GETDEL command. Token replay is mathematically impossible now.',
-          expiresAt: Date.now() + 4000,
-        };
-      }
-      if (qa) {
-        qa.targetX = 20;
-        qa.targetY = 10; // Return to QA Lab
-        qa.isWalking = true;
-      }
-
-      s.totalTokens.input += 4200;
-      s.totalTokens.output += 1200;
-      s.totalCost += 0.022;
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-11`,
-        type: 'tool.completed',
-        timestamp: Date.now(),
-        source: 'backend-agent',
-        taskId: 'TASK-101',
-        severity: 'normal',
-        summary: 'Elena resolved vulnerability with atomic Redis GETDEL token lock.',
-        payload: { fix: 'atomic_getdel_lock' },
-      });
-    },
-  },
-  {
-    id: 11,
-    durationMs: 4000,
-    title: '12. Zoe Reruns Tests — All 24 Passed!',
-    description: 'QA Lab screen flashes green: 24/24 integration tests pass, fuzzing clean, latency 18ms.',
-    execute: (s) => {
-      const qa = s.agents.find((a) => a.id === 'qa-agent');
-      if (qa) {
-        qa.x = 20;
-        qa.y = 10;
-        qa.isWalking = false;
-        qa.status = 'DONE';
-        qa.statusText = '24/24 tests passed (0 vulnerabilities)';
-        qa.speechBubble = {
-          text: 'PASSED: 24/24 tests green! Code exchange strictly single-use.',
-          expiresAt: Date.now() + 3800,
-        };
-      }
-
-      const task = s.tasks.find((t) => t.id === 'TASK-101');
-      if (task) {
-        task.status = 'REVIEW';
-        task.progress = 90;
+        task.progress = 75;
         task.artifacts.push({
-          id: 'art-2',
-          name: 'QA_Security_Audit_Report.json',
+          id: 'art-qa',
+          name: 'Matriz de Pruebas & Certificación QA Bancaria',
           type: 'test_run',
-          summary: '24 security tests passing with zero replay leaks.',
+          summary: 'Certificación de 1,000 transacciones: 0 fallos, tolerancia a caídas de red y reintentos automáticos.',
           timestamp: Date.now(),
           authorId: 'qa-agent',
         });
       }
 
       s.events.unshift({
-        id: `evt-${Date.now()}-12`,
+        id: `evt-${Date.now()}-6`,
         type: 'tool.completed',
         timestamp: Date.now(),
-        source: 'qa-agent',
-        taskId: 'TASK-101',
+        source: 'agent:qa-agent',
+        taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'QA Suite passed: 24/24 test assertions verified.',
-        payload: { passRate: '100%', vulnerabilities: 0 },
-      });
-      playTaskComplete();
-    },
-  },
-  {
-    id: 12,
-    durationMs: 4000,
-    title: '13. Elena Delivers PR to Tech Lead',
-    description: 'Elena walks to Alex’s desk and hands over Pull Request #142 ready for merge.',
-    execute: (s) => {
-      const backend = s.agents.find((a) => a.id === 'backend-agent');
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-
-      if (backend) {
-        backend.targetX = 3;
-        backend.targetY = 9; // Near Tech Lead desk
-        backend.isWalking = true;
-        backend.status = 'DELIVERING';
-        backend.speechBubble = {
-          text: 'Alex, Pull Request #142 is ready. S256 PKCE verified and signed by Zoe.',
-          expiresAt: Date.now() + 3800,
-        };
-      }
-      if (techLead) {
-        techLead.status = 'REVIEWING';
-        techLead.statusText = 'Reviewing PR #142 diff and QA signatures';
-      }
-
-      s.events.unshift({
-        id: `evt-${Date.now()}-13`,
-        type: 'approval.requested',
-        timestamp: Date.now(),
-        source: 'backend-agent',
-        target: 'tech-lead',
-        taskId: 'TASK-101',
-        severity: 'normal',
-        summary: 'PR #142 submitted to Tech Lead for architectural signoff.',
-        payload: { prNumber: 142 },
+        summary: 'Certificación QA Bancaria exitosa: 1,000 transacciones validadas en QA Lab.',
+        payload: { passed: 1000, failed: 0, coverage: '100%' },
       });
       playMessageBlip();
     },
   },
   {
-    id: 13,
-    durationMs: 4000,
-    title: '14. Tech Lead Approves & Delivers to Boss',
-    description: 'Alex approves PR #142 and walks into Boss Office to present final delivery.',
+    id: 7,
+    durationMs: 2000,
+    title: '8. Server Room / Model Ops: UiPath Orchestrator & Telemetría',
+    description: 'Alex y Lucas configuran en Server Room el clúster de UiPath Orchestrator y aprovisionan 4 Robots Unattended.',
     execute: (s) => {
-      const backend = s.agents.find((a) => a.id === 'backend-agent');
       const techLead = s.agents.find((a) => a.id === 'tech-lead');
+      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
 
-      if (backend) {
-        backend.targetX = 8;
-        backend.targetY = 10; // Returns to dev desk
-        backend.isWalking = true;
-        backend.status = 'IDLE';
-      }
       if (techLead) {
-        techLead.targetX = 4;
-        techLead.targetY = 3; // Enters Boss Office
+        techLead.targetX = 18;
+        techLead.targetY = 7;
         techLead.isWalking = true;
-        techLead.status = 'DELIVERING';
+        techLead.workspace = 'server_room';
+        techLead.status = 'USING_TOOL';
+        techLead.currentTool = 'orchestrator.deploy(unattended_robots_cluster)';
         techLead.speechBubble = {
-          text: 'Director, OAuth 2.0 PKCE auth service is deployed and passed all security audits.',
-          expiresAt: Date.now() + 3800,
+          text: 'UiPath Orchestrator configurado: 4 Robots Unattended listos en alta disponibilidad.',
+          expiresAt: Date.now() + 2500,
         };
+      }
+      if (dev1) {
+        dev1.targetX = 19;
+        dev1.targetY = 8;
+        dev1.isWalking = true;
+        dev1.workspace = 'server_room';
+        dev1.status = 'USING_TOOL';
+        dev1.currentTool = 'telemetry.sync(assets_vault)';
+      }
+
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
+      if (task) {
+        task.progress = 80;
+        task.artifacts.push({
+          id: 'art-orchestrator',
+          name: 'Topología Orchestrator & Provisioning de Robots',
+          type: 'code',
+          summary: 'Configuración de 4 Robots Unattended, Colas Transaccionales y SLA de 4 horas.',
+          timestamp: Date.now(),
+          authorId: 'tech-lead',
+        });
       }
 
       s.events.unshift({
-        id: `evt-${Date.now()}-14`,
-        type: 'approval.approved',
+        id: `evt-${Date.now()}-7`,
+        type: 'tool.completed',
         timestamp: Date.now(),
-        source: 'tech-lead',
-        target: 'boss',
-        taskId: 'TASK-101',
-        severity: 'high',
-        summary: 'Tech Lead approved PR #142 and presented deliverable to Director.',
-        payload: { target: 'Director' },
+        source: 'agent:tech-lead',
+        taskId: 'TASK-RPA-BANK',
+        severity: 'normal',
+        summary: 'UiPath Orchestrator aprovisionado con 4 Robots Unattended en Server Room.',
+        payload: { robots: 4, cluster: 'High-Availability' },
+      });
+      playMessageBlip();
+    },
+  },
+  {
+    id: 8,
+    durationMs: 2000,
+    title: '9. Cafeteria & Team Lounge: Coffee Break de Sincronización',
+    description: 'El equipo se reúne en la Cafetería y Team Lounge para un receso mientras Ventas consolida la propuesta económica.',
+    execute: (s) => {
+      const dev2 = s.agents.find((a) => a.id === 'frontend-agent');
+      const ba1 = s.agents.find((a) => a.id === 'ba-analyst-1');
+      const ba2 = s.agents.find((a) => a.id === 'ba-analyst-2');
+      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
+
+      if (dev2) {
+        dev2.targetX = 11;
+        dev2.targetY = 14;
+        dev2.isWalking = true;
+        dev2.workspace = 'break_room';
+        dev2.status = 'COFFEE_BREAK';
+      }
+      if (dev1) {
+        dev1.targetX = 14;
+        dev1.targetY = 14;
+        dev1.isWalking = true;
+        dev1.workspace = 'break_room';
+        dev1.status = 'COFFEE_BREAK';
+      }
+      if (ba1) {
+        ba1.targetX = 19;
+        ba1.targetY = 14;
+        ba1.isWalking = true;
+        ba1.workspace = 'break_room';
+        ba1.status = 'CHATTING';
+        ba1.speechBubble = {
+          text: '¡Excelente coordinación! El PDD y el SDD están listos para la cotización.',
+          expiresAt: Date.now() + 2500,
+        };
+      }
+      if (ba2) {
+        ba2.targetX = 21;
+        ba2.targetY = 14;
+        ba2.isWalking = true;
+        ba2.workspace = 'break_room';
+        ba2.status = 'CHATTING';
+      }
+
+      s.events.unshift({
+        id: `evt-${Date.now()}-8`,
+        type: 'social.started',
+        timestamp: Date.now(),
+        source: 'system',
+        severity: 'low',
+        summary: 'Equipo sincroniza en Cafetería y Team Lounge durante el descanso técnico.',
+        payload: { zone: 'break_room_and_lounge' },
       });
     },
   },
   {
-    id: 14,
-    durationMs: 4500,
-    title: '15. Boss Signs Off — Mission Accomplished!',
-    description: 'Boss reviews metrics: 0 vulnerabilities, 34.6K tokens consumed ($0.23). Task complete!',
+    id: 9,
+    durationMs: 2200,
+    title: '10. Secret Floor (Piso 2): Cotización Económica & Carta Gantt',
+    description: 'Valeria (Ventas), Carlos (Jefe RPA) y Dra. Maya suben al Piso 2 para calcular la cotización y la Carta Gantt.',
+    execute: (s) => {
+      const sales = s.agents.find((a) => a.id === 'sales-lead');
+      const boss = s.agents.find((a) => a.id === 'boss');
+      const baLead = s.agents.find((a) => a.id === 'research-lead');
+
+      if (sales) {
+        sales.floor = 2;
+        sales.workspace = 'overflow_floor';
+        sales.targetX = 10;
+        sales.targetY = 8;
+        sales.isWalking = true;
+        sales.status = 'WRITING';
+        sales.currentTool = 'pricing.calculator(roi_analysis)';
+        sales.speechBubble = {
+          text: 'Cotización cerrada: $48.5K USD con ROI en 4 meses y Carta Gantt de 6 semanas.',
+          expiresAt: Date.now() + 2500,
+        };
+      }
+      if (boss) {
+        boss.floor = 2;
+        boss.workspace = 'overflow_floor';
+        boss.targetX = 12;
+        boss.targetY = 8;
+        boss.isWalking = true;
+        boss.status = 'IN_MEETING';
+      }
+      if (baLead) {
+        baLead.floor = 2;
+        baLead.workspace = 'overflow_floor';
+        baLead.targetX = 14;
+        baLead.targetY = 8;
+        baLead.isWalking = true;
+        baLead.status = 'IN_MEETING';
+        baLead.currentTool = 'gantt.timeline_builder';
+      }
+
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
+      if (task) {
+        task.progress = 90;
+        task.artifacts.push({
+          id: 'art-cotizacion',
+          name: 'Cotización Económica & Análisis de ROI',
+          type: 'report',
+          summary: 'Inversión: $48,500 USD. Ahorro anual estimado: $165,000 USD (ROI de 340% en 6 meses).',
+          timestamp: Date.now(),
+          authorId: 'sales-lead',
+        });
+        task.artifacts.push({
+          id: 'art-gantt',
+          name: 'Carta Gantt - Cronograma de Implementación (6 Semanas)',
+          type: 'report',
+          summary: 'Cronograma detallado con fases de Sprint 1, 2, 3, UAT bancario y pase a producción.',
+          timestamp: Date.now(),
+          authorId: 'research-lead',
+        });
+      }
+
+      s.events.unshift({
+        id: `evt-${Date.now()}-9`,
+        type: 'task.progress',
+        timestamp: Date.now(),
+        source: 'agent:sales-lead',
+        taskId: 'TASK-RPA-BANK',
+        severity: 'high',
+        summary: 'Cotización Económica y Carta Gantt completadas en el Segundo Piso (Overflow Floor).',
+        payload: { cotizacionUSD: 48500, semanasGantt: 6 },
+      });
+      playMessageBlip();
+    },
+  },
+  {
+    id: 10,
+    durationMs: 2200,
+    title: '11. Boss Office: Resumen Ejecutivo y Presentación HTML',
+    description: 'El equipo directivo compila el Resumen Ejecutivo y genera la Presentación Interactiva en HTML consolidando todo.',
     execute: (s) => {
       const boss = s.agents.find((a) => a.id === 'boss');
+      const sales = s.agents.find((a) => a.id === 'sales-lead');
       const techLead = s.agents.find((a) => a.id === 'tech-lead');
+      const baLead = s.agents.find((a) => a.id === 'research-lead');
 
       if (boss) {
-        boss.status = 'DONE';
-        boss.statusText = 'TASK-101 Approved and merged to production';
+        boss.floor = 1;
+        boss.targetX = 3;
+        boss.targetY = 3;
+        boss.isWalking = true;
+        boss.workspace = 'boss_office';
+        boss.status = 'WRITING';
+        boss.currentTool = 'html.compiler(interactive_rpa_proposal_deck)';
         boss.speechBubble = {
-          text: 'Outstanding work team! Deployed to production cluster.',
-          expiresAt: Date.now() + 4500,
+          text: 'Compilando la presentación interactiva HTML con todos los entregables para el cliente.',
+          expiresAt: Date.now() + 2500,
         };
+      }
+      if (sales) {
+        sales.floor = 1;
+        sales.targetX = 5;
+        sales.targetY = 3;
+        sales.isWalking = true;
+        sales.workspace = 'boss_office';
+        sales.status = 'AVAILABLE';
       }
       if (techLead) {
         techLead.targetX = 2;
-        techLead.targetY = 9; // Return to Lead desk
+        techLead.targetY = 9;
         techLead.isWalking = true;
-        techLead.status = 'DONE';
+        techLead.workspace = 'leads_area';
+        techLead.status = 'REVIEWING';
+      }
+      if (baLead) {
+        baLead.floor = 1;
+        baLead.targetX = 4;
+        baLead.targetY = 9;
+        baLead.isWalking = true;
+        baLead.workspace = 'leads_area';
+        baLead.status = 'REVIEWING';
       }
 
-      const task = s.tasks.find((t) => t.id === 'TASK-101');
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
       if (task) {
-        task.status = 'COMPLETED';
-        task.progress = 100;
-        task.completedAt = Date.now();
-        task.tokensTotal = 34600;
-        task.costTotal = 0.232;
+        task.progress = 98;
         task.artifacts.push({
-          id: 'art-3',
-          name: 'Production Release v1.4.0',
-          type: 'architecture',
-          summary: 'Signed release manifest with PKCE RFC 7636 security compliance cert.',
+          id: 'art-resumen',
+          name: 'Resumen Ejecutivo de la Solución RPA Bancaria',
+          type: 'report',
+          summary: 'One-pager gerencial resumiendo alcance, beneficios de negocio, seguridad y ROI.',
+          timestamp: Date.now(),
+          authorId: 'boss',
+        });
+        task.artifacts.push({
+          id: 'art-html-deck',
+          name: 'Presentación Ejecutiva Interactiva HTML',
+          type: 'code',
+          summary: 'Deck interactivo en HTML responsive con PDD, SDD, diagramas BPMN, Gantt y cotización.',
           timestamp: Date.now(),
           authorId: 'boss',
         });
       }
 
       s.events.unshift({
-        id: `evt-${Date.now()}-15`,
-        type: 'task.completed',
+        id: `evt-${Date.now()}-10`,
+        type: 'artifact.created',
         timestamp: Date.now(),
-        source: 'boss',
-        taskId: 'TASK-101',
+        source: 'agent:boss',
+        taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'TASK-101 marked COMPLETED by Boss. 0 errors, 100% test coverage.',
-        payload: { totalTokens: 34600, totalCost: 0.232 },
+        summary: 'Presentación Interactiva HTML y Resumen Ejecutivo compilados en Boss Office.',
+        payload: { artifacts: ['art-resumen', 'art-html-deck'] },
       });
-      playTaskComplete();
+      playMessageBlip();
     },
   },
   {
-    id: 15,
-    durationMs: 4000,
-    title: '16. Organization Returns to Idle Readiness',
-    description: 'Agents return to designated pods. Office monitors reflect updated KPIs.',
+    id: 11,
+    durationMs: 2200,
+    title: '12. Gran Cierre: Entrega Exitosa de la Propuesta Completa',
+    description: 'Todos los agentes regresan a sus puestos. La tarea se completa al 100% con los 9 artefactos entregados.',
     execute: (s) => {
       s.agents.forEach((agent) => {
-        if (!agent.isWalking) {
-          agent.status = 'IDLE';
-          agent.statusText = 'Ready for next prompt or assignment';
-          agent.currentTool = null;
-        }
+        agent.floor = 1;
+        agent.isWalking = false;
+        agent.status = 'IDLE';
+        agent.currentTool = null;
       });
+
+      const boss = s.agents.find((a) => a.id === 'boss');
+      if (boss) {
+        boss.x = 3;
+        boss.y = 3;
+        boss.targetX = 3;
+        boss.targetY = 3;
+        boss.speechBubble = {
+          text: '¡Entrega completada! PDD, SDD, BPMN, Arquitectura, Cotización, Gantt y HTML listos.',
+          expiresAt: Date.now() + 3000,
+        };
+      }
+
+      const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
+      if (task) {
+        task.status = 'COMPLETED';
+        task.progress = 100;
+        task.completedAt = Date.now();
+        task.tokensTotal = 92400;
+        task.costTotal = 0.582;
+      }
+
       s.events.unshift({
-        id: `evt-${Date.now()}-16`,
-        type: 'agent.status.changed',
+        id: `evt-${Date.now()}-11`,
+        type: 'task.completed',
         timestamp: Date.now(),
-        source: 'system',
-        severity: 'low',
-        summary: 'All agents ready in standby mode.',
-        payload: { readyCount: 7 },
+        source: 'agent:boss',
+        taskId: 'TASK-RPA-BANK',
+        severity: 'high',
+        summary: 'TASK-RPA-BANK completada con éxito: 9 entregables generados en 25.5 segundos.',
+        payload: {
+          artifactsCount: 9,
+          totalTokens: 92400,
+          totalCost: 0.582,
+          deliverables: ['PDD', 'SDD', 'Estimación', 'BPMN', 'Arquitectura UiPath', 'Cotización', 'Gantt', 'Resumen', 'Presentación HTML'],
+        },
       });
+      playTaskComplete();
     },
   },
 ];

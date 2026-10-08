@@ -11,6 +11,7 @@ import {
   ZoomOut,
   Radio,
   Focus,
+  Maximize2,
   RotateCw,
   RotateCcw,
   Server,
@@ -151,7 +152,8 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
 
   /**
    * Fit-to-View: Dynamically calculates the rendered world bounding box of all
-   * office elements and scales/centers the office to occupy 78–84% of the visible canvas.
+   * office elements and scales/centers the office to occupy the complete available canvas space,
+   * extending cleanly under the floating bottom menu bar without unnecessary margins.
    */
   const fitOfficeToViewport = useCallback(
     (rotOverride?: number) => {
@@ -168,29 +170,33 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
       // Calculate exact rendered screen bounds for the current rotation
       const bounds = getOfficeRenderedBounds(currentRot);
 
-      // Usable area without clutter overlays so the office map grows much larger
-      const topPadding = 12;
-      const bottomPadding = 48;
-      const horizontalPadding = 16;
+      // Usable area: use full canvas dimensions with clean edge padding
+      const topPadding = 6;
+      const bottomPadding = 6;
+      const horizontalPadding = 8;
 
       const usableWidth = Math.max(availableWidth - horizontalPadding * 2, 100);
       const usableHeight = Math.max(availableHeight - topPadding - bottomPadding, 100);
 
-      // Office occupies ~94% of the usable canvas area to fill the screen
-      const targetCoverage = 0.94;
+      // Office occupies 99% of usable canvas area to maximize viewport usage
+      const targetCoverage = 0.99;
 
       const scaleX = (usableWidth * targetCoverage) / bounds.width;
       const scaleY = (usableHeight * targetCoverage) / bounds.height;
 
-      // Uniform scale preserving proportions
+      // Uniform scale preserving 2.5D geometric proportions
       const targetZoom = Math.min(scaleX, scaleY);
       const clampedZoom = Math.min(Math.max(targetZoom, 0.15), 2.5);
 
-      // Center exactly on the bounding box center point
+      // Center exactly on the bounding box center point.
+      // Compensate for the 24px vertical shift in cameraCenter (height / 2 - 24)
+      // so the office sits centered in the viewport and extends cleanly to the bottom edge.
+      const verticalOffset = 24 / clampedZoom;
+
       setCamera((prev) => ({
         ...prev,
         x: -bounds.centerX,
-        y: -bounds.centerY,
+        y: -bounds.centerY + verticalOffset,
         zoom: clampedZoom,
         rotation: currentRot,
       }));
@@ -198,7 +204,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     [camera.rotation]
   );
 
-  // Re-fit automatically when container resizes or inspector opens/closes
+  // Re-fit automatically when container resizes or sidebar/inspector toggles
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -206,7 +212,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     // Initial fit on mount
     fitOfficeToViewport();
 
-    // ResizeObserver watches window resize AND flex layout changes when inspector toggles
+    // ResizeObserver watches window resize AND flex layout changes when sidebar toggles
     const resizeObserver = new ResizeObserver(() => {
       fitOfficeToViewport();
     });
@@ -216,7 +222,15 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [fitOfficeToViewport, isInspectorOpen]);
+  }, [fitOfficeToViewport, isInspectorOpen, isSidebarOpen]);
+
+  // Smooth re-fit after sidebar expand/collapse transition finishes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fitOfficeToViewport();
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [isSidebarOpen, fitOfficeToViewport]);
 
   // Center on a specific agent or coordinate
   const focusOnCoordinates = (gx: number, gy: number, zoomLevel = 1.35) => {
@@ -460,106 +474,145 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden bg-slate-950 flex flex-col">
-      <canvas
-        ref={canvasRef}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onDoubleClick={handleDoubleClick}
-        onMouseLeave={() => {
-          isDraggingRef.current = false;
-          setHoveredAgentId(null);
-          setHoveredServerItem(null);
-        }}
-        onWheel={handleWheel}
-        className="w-full h-full block touch-none cursor-grab active:cursor-grabbing"
-        role="img"
-        aria-label={t(locale, 'canvas.aria')}
-      />
-
-      {/* Floating Tooltip when hovering over Model Ops servers / equipment */}
-      {hoveredServerItem && (
-        <div
-          onClick={() => onOpenModelOps?.(hoveredServerItem.provider)}
-          className="absolute top-4 left-4 z-20 flex items-center gap-2.5 bg-slate-900/95 backdrop-blur-md px-3.5 py-2 rounded-xl border border-cyan-500/50 shadow-2xl text-xs text-white cursor-pointer hover:bg-slate-850 hover:border-cyan-400 transition-all animate-in fade-in duration-100"
-          title="Haz clic para inspeccionar consumo de tokens"
-        >
-          <div className="w-8 h-8 rounded-lg bg-cyan-950 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shrink-0">
-            <Server className="w-4 h-4 animate-pulse" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-white tracking-tight">{hoveredServerItem.name}</span>
-              {hoveredServerItem.provider && (
-                <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60 font-semibold">
-                  {hoveredServerItem.provider}
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              {hoveredServerItem.detail} · <strong className="text-cyan-300 hover:underline">Abrir Consola Model Ops ⚡</strong>
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Floating Zoom Control HUD (Bottom Center) */}
-      <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-slate-900/95 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-slate-800 shadow-2xl z-20 text-xs text-slate-200">
-        <button onClick={() => fitOfficeToViewport((camera.rotation + 3) % 4)} aria-label={t(locale, 'canvas.rotateLeft')} title={t(locale, 'canvas.rotateLeft')} className="p-2 rounded-xl hover:bg-slate-800"><RotateCcw className="w-4 h-4" /></button>
-        <button onClick={() => fitOfficeToViewport((camera.rotation + 1) % 4)} aria-label={t(locale, 'canvas.rotateRight')} title={t(locale, 'canvas.rotateRight')} className="p-2 rounded-xl hover:bg-slate-800"><RotateCw className="w-4 h-4" /></button>
-        <button onClick={() => fitOfficeToViewport()} aria-label={t(locale, 'canvas.fit')} title={t(locale, 'canvas.fit')} className="p-2 rounded-xl text-sky-300 hover:bg-slate-800"><Focus className="w-4 h-4" /></button>
+    <div className="relative w-full h-full overflow-hidden bg-slate-950 flex flex-row">
+      {/* Barra Lateral Izquierda (Fija, no flotada, un icono debajo del otro en orden) */}
+      <aside className="w-12 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-3 gap-1 z-10 shrink-0 select-none">
+        {/* Rotar a la Izquierda */}
         <button
-          onClick={() => setCamera((c) => ({ ...c, zoom: Math.max(c.zoom * 0.88, 0.15) }))}
-          aria-label={t(locale, 'canvas.zoomOut')}
-          title={t(locale, 'canvas.zoomOut')}
-          className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+          onClick={() => fitOfficeToViewport((camera.rotation + 3) % 4)}
+          aria-label={t(locale, 'canvas.rotateLeft')}
+          title={t(locale, 'canvas.rotateLeft')}
+          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
         >
-          <ZoomOut className="w-4 h-4" />
+          <RotateCcw className="w-4 h-4" />
         </button>
 
-        <span className="text-[11px] font-mono text-slate-300 w-12 text-center tabular-nums font-semibold">
-          {Math.round(camera.zoom * 100)}%
-        </span>
+        {/* Rotar a la Derecha */}
+        <button
+          onClick={() => fitOfficeToViewport((camera.rotation + 1) % 4)}
+          aria-label={t(locale, 'canvas.rotateRight')}
+          title={t(locale, 'canvas.rotateRight')}
+          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+        >
+          <RotateCw className="w-4 h-4" />
+        </button>
 
+        {/* Expandir / Ajustar al espacio completo */}
+        <button
+          onClick={() => fitOfficeToViewport()}
+          aria-label={t(locale, 'canvas.fit')}
+          title="Expandir / Ajustar oficina al espacio completo"
+          className="p-2 rounded-xl text-sky-400 hover:text-white hover:bg-slate-800 transition-colors"
+        >
+          <Maximize2 className="w-4 h-4" />
+        </button>
+
+        {/* Separador */}
+        <div className="w-6 h-px bg-slate-800 my-1" />
+
+        {/* Acercar (Zoom In) */}
         <button
           onClick={() => setCamera((c) => ({ ...c, zoom: Math.min(c.zoom * 1.12, 2.5) }))}
           aria-label={t(locale, 'canvas.zoomIn')}
           title={t(locale, 'canvas.zoomIn')}
-          className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
         >
           <ZoomIn className="w-4 h-4" />
         </button>
 
-        {/* Dedicated Quick Action: Model Ops Telemetry Center */}
-        <div className="h-4 w-px bg-slate-800 mx-1" />
+        {/* Indicador de Zoom */}
+        <span className="text-[10px] font-mono text-slate-400 text-center tabular-nums font-semibold py-0.5 select-none">
+          {Math.round(camera.zoom * 100)}%
+        </span>
+
+        {/* Alejar (Zoom Out) */}
+        <button
+          onClick={() => setCamera((c) => ({ ...c, zoom: Math.max(c.zoom * 0.88, 0.15) }))}
+          aria-label={t(locale, 'canvas.zoomOut')}
+          title={t(locale, 'canvas.zoomOut')}
+          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+        >
+          <ZoomOut className="w-4 h-4" />
+        </button>
+
+        {/* Separador */}
+        <div className="w-6 h-px bg-slate-800 my-1" />
+
+        {/* Model Ops */}
         <button
           onClick={() => {
             focusOnCoordinates(20, 2, 1.45);
             onOpenModelOps?.();
           }}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-800/60 font-semibold text-[11px] shadow-sm transition-colors"
-          title="Ver Sala Model Ops y Consumo de Tokens por Proveedor y Modelo"
+          className="p-2 rounded-xl text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/70 border border-transparent hover:border-cyan-800/60 transition-colors"
+          title="Consola Model Ops (Tokens y Telemetría)"
+          aria-label="Model Ops"
         >
-          <Server className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Model Ops</span>
-          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-cyan-500/20 text-cyan-200">
-            Tokens
-          </span>
+          <Server className="w-4 h-4" />
         </button>
-      </div>
 
-      {/* Floating button to re-open sidebar when collapsed */}
-      {!isSidebarOpen && onToggleSidebar && (
-        <button
-          onClick={onToggleSidebar}
-          className="absolute top-3 right-3 z-20 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-xl border border-slate-800 shadow-xl text-xs font-semibold text-slate-200 hover:text-white hover:bg-slate-800 transition-colors"
-          title={t(locale, 'canvas.showTimeline')}
-        >
-          <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-          <span>{t(locale, 'canvas.showTimeline')}</span>
-        </button>
-      )}
+        {/* Timeline */}
+        {onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            className={`p-2 rounded-xl transition-all ${
+              isSidebarOpen
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+            title={isSidebarOpen ? 'Ocultar Timeline de actividad' : 'Expandir Timeline de actividad'}
+            aria-label="Timeline"
+          >
+            <Radio className={`w-4 h-4 ${isSidebarOpen ? 'text-white' : 'text-emerald-400 animate-pulse'}`} />
+          </button>
+        )}
+      </aside>
+
+      {/* Contenedor del Canvas de la Oficina (Completamente despejado, sin superposiciones) */}
+      <div ref={containerRef} className="relative flex-1 h-full overflow-hidden bg-slate-950">
+        <canvas
+          ref={canvasRef}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onDoubleClick={handleDoubleClick}
+          onMouseLeave={() => {
+            isDraggingRef.current = false;
+            setHoveredAgentId(null);
+            setHoveredServerItem(null);
+          }}
+          onWheel={handleWheel}
+          className="w-full h-full block touch-none cursor-grab active:cursor-grabbing"
+          role="img"
+          aria-label={t(locale, 'canvas.aria')}
+        />
+
+        {/* Floating Tooltip when hovering over Model Ops servers / equipment */}
+        {hoveredServerItem && (
+          <div
+            onClick={() => onOpenModelOps?.(hoveredServerItem.provider)}
+            className="absolute top-4 left-4 z-20 flex items-center gap-2.5 bg-slate-900/95 backdrop-blur-md px-3.5 py-2 rounded-xl border border-cyan-500/50 shadow-2xl text-xs text-white cursor-pointer hover:bg-slate-850 hover:border-cyan-400 transition-all animate-in fade-in duration-100"
+            title="Haz clic para inspeccionar consumo de tokens"
+          >
+            <div className="w-8 h-8 rounded-lg bg-cyan-950 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shrink-0">
+              <Server className="w-4 h-4 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-white tracking-tight">{hoveredServerItem.name}</span>
+                {hoveredServerItem.provider && (
+                  <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60 font-semibold">
+                    {hoveredServerItem.provider}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {hoveredServerItem.detail} · <strong className="text-cyan-300 hover:underline">Abrir Consola Model Ops ⚡</strong>
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

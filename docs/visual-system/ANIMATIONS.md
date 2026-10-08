@@ -72,3 +72,35 @@ Numbers above are starting points for the artist, **not** existing clip claims. 
 ## First deliverable acceptance
 
 The runtime includes CEO idle turnarounds, work/phone poses and a simulated scene choreography. The loader supports frame files, FPS and finite/looping clips. Frame-by-frame raster walking, typing and seated transitions remain planned; 1,584 vector motion-study frames are kept separately and excluded from the default raster renderer. See [current delivery ledger](README.md).
+
+
+## Registration workflow for production raster clips (#117)
+
+Generated illustrations are **not** registered as motion clips until the artist has
+produced real individual transparent frames. Keep original/approved source artwork
+separate from the runtime. For a CEO forward walk:
+
+1. Create `assets/animations/ceo/walk-front/00.png` through `05.png`,
+   each 256×352 RGBA with consistent head, glasses, uniform and feet anchors.
+2. Review all six frames at standard office zoom for alternate legs/arms and no
+   scrolling background, mirrored face, false prop, or floor penetration.
+3. Run `node scripts/register-office-clip.mjs ceo walk front 10`. This script
+   inspects each file and creates a **prototype** manifest entry. A static image
+   repeated six times is rejected. Explicit `--replace` is required to replace
+   a pre-existing pose/clip mapping.
+4. Run `npm run validate:assets && npm test && npm run build && npm run build:lib`.
+   Validate the clip *inside the main office*, including rotation, fallback,
+   reduced motion and replay (not only the visual showroom).
+5. Record a GIF/MP4 of actual frame progression and seek owner approval before
+   changing `status: prototype` to `status: approved`.
+
+Other supported clip/facing combinations use
+`assets/animations/<role>/<clip>-<facing>/<NN>.png`.
+`walk` requires at least six frames; other true motion sequences require at
+least two. FPS must be an integer in 1–24. Clip loops are defined centrally
+in the registrar. The manifest's `frameFiles` remains the runtime source of
+truth; the Vite loader imports only production PNG/WebP paths and deliberately
+excludes `vector-study/` and `source/` originals.
+
+**Current scope:** the loader, validation and import workflow exist; this does
+not assert that new raster CEO walking/typing/sitting frames have been drawn.

@@ -1,6 +1,7 @@
 import type { Agent, AgentRole, AgentStatus, MeetingMessage, ViewerEvent, WorkspaceZone, Task } from '../types/agent';
 import type { SimulationState } from '../engine/officeState';
 import { endMeeting, requestMeeting, routeAgent, WORKSPACE_ANCHORS } from '../engine/livingOfficeEngine';
+import { livingOfficeText } from '../content/livingOfficeMessages';
 import {
   type CanonicalEvent,
   type MessageKind,
@@ -40,6 +41,8 @@ export interface ApplyEventOptions {
   overflowFloor?: boolean;
   /** Accumulate tokens and reported costs from `llm.usage` into the state. */
   trackUsage?: boolean;
+  /** BCP 47 locale of the texts the office writes itself (room labels, status texts). Defaults to English. */
+  locale?: string;
 }
 
 function isWorkspace(value: unknown): value is WorkspaceZone {
@@ -150,7 +153,12 @@ export function applyExternalEvent(
   const incoming = normalizeCanonicalEvent(rawIncoming);
   const now = options.now ?? Date.now();
   const bubbleMs = options.bubbleMs ?? DEFAULT_BUBBLE_MS;
-  const meetingOptions = { now, narrate: options.narrate ?? true, overflowFloor: options.overflowFloor ?? true };
+  const meetingOptions = {
+    now,
+    narrate: options.narrate ?? true,
+    overflowFloor: options.overflowFloor ?? true,
+    locale: options.locale,
+  };
 
   // Check idempotency against existing events in state
   if (state.events.some((event) => event.id === incoming.id)) return;
@@ -274,7 +282,7 @@ export function applyExternalEvent(
       if (agent && agent.currentTaskId === taskId) {
         agent.currentTaskId = null;
         agent.status = 'DONE';
-        agent.statusText = 'Task completed';
+        agent.statusText = livingOfficeText(options.locale, 'status.taskCompleted');
       }
       break;
     }
@@ -284,11 +292,11 @@ export function applyExternalEvent(
       const targetTask = state.tasks.find((t) => t.id === taskId);
       if (targetTask) {
         targetTask.status = 'FAILED';
-        targetTask.blockerReason = typeof payload.error === 'string' ? payload.error : 'Execution failed';
+        targetTask.blockerReason = typeof payload.error === 'string' ? payload.error : livingOfficeText(options.locale, 'task.executionFailed');
       }
       if (agent && agent.currentTaskId === taskId) {
         agent.status = 'ERROR';
-        agent.statusText = 'Task failed';
+        agent.statusText = livingOfficeText(options.locale, 'status.taskFailed');
       }
       break;
     }
@@ -298,11 +306,11 @@ export function applyExternalEvent(
       const targetTask = state.tasks.find((t) => t.id === taskId);
       if (targetTask) {
         targetTask.status = 'BLOCKED';
-        targetTask.blockerReason = typeof payload.reason === 'string' ? payload.reason : 'Waiting on dependency';
+        targetTask.blockerReason = typeof payload.reason === 'string' ? payload.reason : livingOfficeText(options.locale, 'task.waitingOnDependency');
       }
       if (agent) {
         agent.status = 'BLOCKED';
-        agent.statusText = typeof payload.reason === 'string' ? payload.reason : 'Blocked';
+        agent.statusText = typeof payload.reason === 'string' ? payload.reason : livingOfficeText(options.locale, 'status.blocked');
       }
       break;
     }
@@ -312,8 +320,8 @@ export function applyExternalEvent(
         agent.status = 'USING_TOOL';
         agent.currentTool = typeof payload.tool === 'string' ? payload.tool : 'tool';
         agent.statusText = typeof payload.inputSummary === 'string'
-          ? `Tool: ${agent.currentTool} (${payload.inputSummary})`
-          : `Using ${agent.currentTool}`;
+          ? livingOfficeText(options.locale, 'status.toolWithInput', { tool: agent.currentTool, input: payload.inputSummary })
+          : livingOfficeText(options.locale, 'status.usingTool', { tool: agent.currentTool });
         if (incoming.taskId) {
           const task = state.tasks.find((t) => t.id === incoming.taskId);
           if (task && agent.currentTool && !task.toolsUsed.includes(agent.currentTool)) {
@@ -329,8 +337,8 @@ export function applyExternalEvent(
         agent.currentTool = null;
         agent.status = 'IDLE';
         agent.statusText = typeof payload.outputSummary === 'string'
-          ? `Tool finished: ${payload.outputSummary}`
-          : 'Tool execution finished';
+          ? livingOfficeText(options.locale, 'status.toolFinishedWith', { output: payload.outputSummary })
+          : livingOfficeText(options.locale, 'status.toolFinished');
       }
       break;
     }
@@ -339,7 +347,9 @@ export function applyExternalEvent(
       if (agent) {
         agent.currentTool = null;
         agent.status = 'ERROR';
-        agent.statusText = typeof payload.error === 'string' ? `Tool failed: ${payload.error}` : 'Tool execution failed';
+        agent.statusText = typeof payload.error === 'string'
+          ? livingOfficeText(options.locale, 'status.toolFailedWith', { error: payload.error })
+          : livingOfficeText(options.locale, 'status.toolFailed');
       }
       break;
     }
@@ -451,7 +461,7 @@ export function applyExternalEvent(
 
     case 'meeting.ended':
     case 'meeting.cancelled': {
-      if (typeof payload.meetingId === 'string') endMeeting(state, payload.meetingId, now);
+      if (typeof payload.meetingId === 'string') endMeeting(state, payload.meetingId, now, options.locale);
       break;
     }
   }

@@ -148,14 +148,14 @@ export class OfficeStore {
     this.applied = events.length;
     this.firstKey = events.length > 0 ? eventKey(events[0]) : null;
     this.lastKey = events.length > 0 ? eventKey(events[events.length - 1]) : null;
-    advanceLivingOffice(this.state, now);
+    advanceLivingOffice(this.state, now, this.locale);
     return true;
   }
 
   /** Moves the office forward in time: walks finish and meetings start. Returns true when something changed. */
   tick(now: number): boolean {
     const before = signature(this.state);
-    advanceLivingOffice(this.state, now);
+    advanceLivingOffice(this.state, now, this.locale);
     if (this.mode === 'showcase') {
       applyAmbientLife(this.state, now, this.locale.toLowerCase().startsWith('es') ? 'es' : 'en', {
         enabled: true,
@@ -186,12 +186,13 @@ export class OfficeStore {
     return {
       now,
       bubbleMs: this.bubbleMs,
-      // The engine's call lines are English-only and not marked as simulated: the library never uses them.
+      // The engine's narrated call lines are not real events and are not marked as simulated: the library never uses them.
       narrate: false,
       // The embedded office has no second-floor view, so meetings never move there.
       overflowFloor: false,
       // Usage figures come from the host (`usage` prop); the office never adds them up.
       trackUsage: false,
+      locale: this.locale,
     };
   }
 

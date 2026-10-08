@@ -1,4 +1,4 @@
-import { cameraCenter, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
+import { bubbleExitStyle, cameraCenter, fitBubbleNames, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
 import type { Agent } from '../types/agent';
 import { isOfficeMessageKey, type OfficeTranslate } from '../content/officeMessages';
 import { aggregateModelUsage, compactTokens } from './modelOps';
@@ -1840,14 +1840,21 @@ function drawAgentOverlays(rc: RenderContext) {
     const badge = labels.get(a.agent.id)!;
     const card = placeOverlay({ x: a.x - maxWidth / 2, y: badge.y - (lines.length * 17 + 40), width: maxWidth, height: lines.length * 17 + 32 }, occupied, { width, height });
     occupied.push(card);
-    const remaining = speech!.expiresAt - nowMs;
-    ctx.globalAlpha = Math.min(1, remaining / 250);
+    const exit = bubbleExitStyle(speech!.expiresAt - nowMs, rc.reducedMotion);
     const { color } = statusAppearance(a.agent.status, translate);
     ctx.strokeStyle = color; ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.moveTo(card.x + card.width / 2, card.y + card.height); ctx.lineTo(a.x, a.y - 4); ctx.stroke();
+    ctx.globalAlpha = exit.outlineAlpha;
+    ctx.beginPath(); ctx.moveTo(card.x + card.width / 2, card.y + card.height + exit.offsetY); ctx.lineTo(a.x, a.y - 4); ctx.stroke();
+    // Leaving bubbles shrink toward their pointer; the card and the text are never translucent.
+    ctx.save();
+    const pivotX = card.x + card.width / 2;
+    const pivotY = card.y + card.height;
+    ctx.translate(pivotX, pivotY + exit.offsetY); ctx.scale(exit.scale, exit.scale); ctx.translate(-pivotX, -pivotY);
+    ctx.globalAlpha = exit.cardAlpha;
     ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
     ctx.fillStyle = background; ctx.beginPath(); ctx.roundRect(card.x, card.y, card.width, card.height, 11); ctx.fill();
-    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.stroke();
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = exit.outlineAlpha; ctx.stroke(); ctx.globalAlpha = exit.cardAlpha;
     const speaker = agentDisplayName(a.agent, translate);
     const simulated = speech === a.agent.ambientBubble && speech !== a.agent.speechBubble;
     const kind = simulated ? undefined : a.agent.speechBubble?.kind;
@@ -1865,10 +1872,11 @@ function drawAgentOverlays(rc: RenderContext) {
     const labelText = wrapText(activityLabel, headerMax, t => ctx.measureText(t).width, 1)[0];
     ctx.fillText(labelText, card.x + 12, card.y + 16);
     const labelWidth = ctx.measureText(labelText + '  ').width;
-    const names = speech!.targetAgentName ? speaker + ' → ' + speech!.targetAgentName : speaker;
     ctx.font = '600 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = theme === 'dark' ? '#cbd5e1' : '#334155';
     if (headerMax - labelWidth > 20) {
-      ctx.fillText(wrapText(names, headerMax - labelWidth, t => ctx.measureText(t).width, 1)[0], card.x + 12 + labelWidth, card.y + 16);
+      // Long names are shortened fairly (both to two words, then both with an ellipsis), never just the target.
+      const names = fitBubbleNames(speaker, speech!.targetAgentName, headerMax - labelWidth, t => ctx.measureText(t).width);
+      ctx.fillText(names, card.x + 12 + labelWidth, card.y + 16);
     }
     ctx.font = '500 12px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground;
     lines.forEach((line, i) => ctx.fillText(line, card.x + 12, card.y + 34 + i * 17));
@@ -1876,6 +1884,7 @@ function drawAgentOverlays(rc: RenderContext) {
     for (let i = 0; i < 3; i++) {
       ctx.fillStyle = color; ctx.beginPath(); ctx.arc(card.x + card.width - 23 + i * 5, card.y + 13, 1.3 + Math.max(0, Math.sin(timeMs / 220 - i)) * 0.7, 0, Math.PI * 2); ctx.fill();
     }
+    ctx.restore();
     ctx.globalAlpha = 1;
   }
   ctx.restore();

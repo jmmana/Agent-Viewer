@@ -502,7 +502,7 @@ Variables del tema:
 | `--av-text-muted` | `#94a3b8` | `#475569` | Texto secundario e iconos de la barra. |
 | `--av-accent` | `#38bdf8` | `#0284c7` | Botón de ajustar, barra de posición, anillo de foco. |
 | `--av-accent-strong` | `#0ea5e9` | `#0369a1` | Botón de reproducir y velocidad elegida. |
-| `--av-accent-contrast` | `#ffffff` | `#ffffff` | Texto e iconos sobre `--av-accent-strong`. |
+| `--av-accent-contrast` | `#0f172a` | `#ffffff` | Texto e iconos sobre `--av-accent-strong`. |
 | `--av-telemetry` | `#22d3ee` | `#0e7490` | Botón y tooltip de telemetría de la app de demostración. |
 | `--av-live` | `#34d399` | `#059669` | Indicador en vivo de la app de demostración. |
 | `--av-active` | `#4f46e5` | `#4f46e5` | Botón presionado de la barra. |

@@ -7,6 +7,7 @@ import type {
   WorkspaceZone,
 } from '../types/agent';
 import { socialPack, type SocialLocale } from '../content/socialPacks';
+import { livingOfficeText } from '../content/livingOfficeMessages';
 
 export type VisibleMeetingRoomId = 'meeting_room' | 'meeting_room_b' | 'boss_office';
 export type OverflowMeetingRoomId = `overflow_meeting_${number}`;
@@ -52,6 +53,8 @@ export interface MeetingOptions {
   now?: number;
   narrate?: boolean;
   overflowFloor?: boolean;
+  /** BCP 47 locale of the texts the office writes (room labels, status texts, bubbles). Defaults to English. */
+  locale?: string;
 }
 
 export interface CoffeeSeat {
@@ -332,6 +335,7 @@ export function reserveMeetingRoom(
   options: MeetingOptions = {},
 ): RoomReservation | null {
   const now = options.now ?? Date.now();
+  const locale = options.locale;
   const occupied = new Set(
     state.roomReservations
       .filter((reservation) => reservation.floor === 1)
@@ -347,7 +351,7 @@ export function reserveMeetingRoom(
   const reservation: RoomReservation = visibleRoom
     ? {
         roomId: visibleRoom.id,
-        roomLabel: visibleRoom.label,
+        roomLabel: livingOfficeText(locale, `room.${visibleRoom.id}`),
         floor: 1,
         meetingId,
         participantIds,
@@ -359,7 +363,7 @@ export function reserveMeetingRoom(
         const number = Number(roomId.split('_').pop());
         return {
           roomId,
-          roomLabel: `Secret Room ${String(number).padStart(2, '0')}`,
+          roomLabel: livingOfficeText(locale, 'room.overflow', { number: String(number).padStart(2, '0') }),
           floor: 2 as const,
           meetingId,
           participantIds,
@@ -373,7 +377,7 @@ export function reserveMeetingRoom(
     event(
       'meeting.room.reserved',
       'system',
-      `${reservation.roomLabel} reserved for ${meetingId}.`,
+      livingOfficeText(locale, 'event.roomReserved', { room: reservation.roomLabel, meeting: meetingId }),
       {
         meetingId,
         roomId: reservation.roomId,
@@ -402,7 +406,14 @@ export function requestMeeting(
 ): Meeting {
   const now = options.now ?? Date.now();
   const narrate = options.narrate ?? true;
+  const locale = options.locale;
   const reservation = reserveMeetingRoom(state, args.id, args.participantIds, options);
+
+  // Whoever is called to a meeting leaves any simulated small talk at once.
+  for (const agentId of args.participantIds) {
+    const agent = state.agents.find((item) => item.id === agentId);
+    if (agent) clearAmbientLife(state, agent);
+  }
 
   if (!reservation) {
     // Every visible room is busy and there is no overflow floor: the participants meet where they are.
@@ -456,7 +467,7 @@ export function requestMeeting(
     event(
       'meeting.requested',
       args.initiatorId,
-      `${args.title} requested.`,
+      livingOfficeText(locale, 'event.meetingRequested', { title: args.title }),
       {
         meetingId: args.id,
         participantIds: args.participantIds,
@@ -485,17 +496,16 @@ export function requestMeeting(
       agent.statusText = '';
     } else {
     agent.status = 'PHONE_CALL';
-    agent.statusText = reservation.floor === 2
-      ? `Call received: meet upstairs in ${reservation.roomLabel}`
-      : `Call received: meeting in ${reservation.roomLabel}`;
+    agent.statusText = livingOfficeText(locale, reservation.floor === 2 ? 'status.callUpstairs' : 'status.callRoom', {
+      room: reservation.roomLabel,
+    });
     agent.speechBubble = {
-      text: index === 0
-        ? reservation.floor === 2
-          ? 'Visible rooms are full. Meet me upstairs through the secret door.'
-          : 'We need to sync. Meet me in the room.'
-        : reservation.floor === 2
-          ? 'Got it. Heading to the secret floor.'
-          : 'Got it. I am heading there.',
+      text: livingOfficeText(
+        locale,
+        index === 0
+          ? reservation.floor === 2 ? 'bubble.initiatorUpstairs' : 'bubble.initiatorRoom'
+          : reservation.floor === 2 ? 'bubble.guestUpstairs' : 'bubble.guestRoom',
+      ),
       targetAgentName: index === 0
         ? state.agents.find((item) => item.id === args.participantIds[1])?.name
         : state.agents.find((item) => item.id === args.initiatorId)?.name,
@@ -507,7 +517,7 @@ export function requestMeeting(
       event(
         'agent.phone_call.started',
         args.initiatorId,
-        `Phone call started with ${agent.name}.`,
+        livingOfficeText(locale, 'event.phoneCall', { name: agent.name }),
         {
           meetingId: args.id,
           roomId: reservation.roomId,
@@ -545,6 +555,7 @@ export function activateMeetingWhenArrived(
   state: LivingOfficeState,
   meetingId: string,
   now = Date.now(),
+  locale?: string,
 ): boolean {
   const meeting = state.meetings.find((item) => item.id === meetingId);
   const reservation = state.roomReservations.find((item) => item.meetingId === meetingId);
@@ -565,14 +576,15 @@ export function activateMeetingWhenArrived(
     const agent = state.agents.find((item) => item.id === id);
     if (!agent) continue;
     agent.status = 'IN_MEETING';
-    agent.statusText = `In meeting: ${meeting.title}`;
+    agent.statusText = livingOfficeText(locale, 'status.inMeeting', { title: meeting.title });
+    clearAmbientLife(state, agent);
   }
 
   state.events.unshift(
     event(
       'meeting.started',
       meeting.initiatorId,
-      `Meeting started: ${meeting.title}.`,
+      livingOfficeText(locale, 'event.meetingStarted', { title: meeting.title }),
       {
         meetingId,
         roomId: reservation.roomId,
@@ -587,7 +599,7 @@ export function activateMeetingWhenArrived(
   return true;
 }
 
-export function endMeeting(state: LivingOfficeState, meetingId: string, now = Date.now()): void {
+export function endMeeting(state: LivingOfficeState, meetingId: string, now = Date.now(), locale?: string): void {
   const meeting = state.meetings.find((item) => item.id === meetingId);
   const reservation = state.roomReservations.find((item) => item.meetingId === meetingId);
   if (!meeting) return;
@@ -602,9 +614,10 @@ export function endMeeting(state: LivingOfficeState, meetingId: string, now = Da
     if (!agent) continue;
     agent.floor = 1;
     agent.status = 'IDLE';
-    agent.statusText = reservation?.floor === 2
-      ? 'Returned from secret collaboration floor'
-      : 'Available after meeting';
+    agent.statusText = livingOfficeText(
+      locale,
+      reservation?.floor === 2 ? 'status.returnedFromSecretFloor' : 'status.availableAfterMeeting',
+    );
     routeAgent(agent, agent.homeWorkspace ?? homeWorkspace(agent), now);
   }
 
@@ -612,7 +625,7 @@ export function endMeeting(state: LivingOfficeState, meetingId: string, now = Da
     event(
       'meeting.ended',
       meeting.initiatorId,
-      `Meeting ended: ${meeting.title}.`,
+      livingOfficeText(locale, 'event.meetingEnded', { title: meeting.title }),
       {
         meetingId,
         roomId: reservation?.roomId,
@@ -624,7 +637,7 @@ export function endMeeting(state: LivingOfficeState, meetingId: string, now = Da
   );
 }
 
-export function advanceLivingOffice(state: LivingOfficeState, now: number): void {
+export function advanceLivingOffice(state: LivingOfficeState, now: number, locale?: string): void {
   for (const agent of state.agents) {
     if (
       agent.isWalking &&
@@ -645,19 +658,24 @@ export function advanceLivingOffice(state: LivingOfficeState, now: number): void
         if (reservation) {
           agent.floor = 2;
           agent.status = 'WALKING';
-          agent.statusText = `Entered ${reservation.roomLabel} on secret floor`;
+          agent.statusText = livingOfficeText(locale, 'status.enteredSecretRoom', { room: reservation.roomLabel });
         }
       } else if (agent.status === 'PHONE_CALL') {
         agent.status = 'WALKING';
-        agent.statusText = 'Arrived for scheduled collaboration';
+        agent.statusText = livingOfficeText(locale, 'status.arrived');
       }
     }
   }
 
   for (const meeting of state.meetings) {
     if (meeting.status === 'SCHEDULED') {
-      activateMeetingWhenArrived(state, meeting.id, now);
+      activateMeetingWhenArrived(state, meeting.id, now, locale);
     }
+  }
+
+  // Status changes can come from anywhere (demo script, events, operator): busy agents drop small talk at once.
+  for (const agent of state.agents) {
+    if (isBusyForAmbientLife(state, agent)) clearAmbientLife(state, agent);
   }
 
   for (const activity of state.socialActivities) {
@@ -690,15 +708,76 @@ export interface AmbientOptions {
 }
 
 /** Ambient memory belongs to each office state, so two offices on the same page never mix. */
-const ambientMemory = new WeakMap<LivingOfficeState, { idleSince: Map<string, number>; lastSocialAt: number }>();
+interface AmbientMemory {
+  idleSince: Map<string, number>;
+  lastSocialAt: number;
+  /** Exchange used by each running conversation, by activity id. */
+  exchangeByActivity: Map<string, string>;
+  /** Exchanges used lately, newest last, so the same lines do not come back right away. */
+  recentExchanges: string[];
+}
 
-function ambientMemoryFor(state: LivingOfficeState) {
+const ambientMemory = new WeakMap<LivingOfficeState, AmbientMemory>();
+
+function ambientMemoryFor(state: LivingOfficeState): AmbientMemory {
   let memory = ambientMemory.get(state);
   if (!memory) {
-    memory = { idleSince: new Map(), lastSocialAt: 0 };
+    memory = { idleSince: new Map(), lastSocialAt: 0, exchangeByActivity: new Map(), recentExchanges: [] };
     ambientMemory.set(state, memory);
   }
   return memory;
+}
+
+/** True when the agent takes part in a meeting that is scheduled (people walking to it) or running. */
+export function isInMeeting(state: Pick<LivingOfficeState, 'meetings' | 'roomReservations'>, agentId: string): boolean {
+  return (
+    state.meetings.some(
+      (meeting) => (meeting.status === 'SCHEDULED' || meeting.status === 'ACTIVE') && meeting.participants.includes(agentId),
+    ) || state.roomReservations.some((reservation) => reservation.participantIds.includes(agentId))
+  );
+}
+
+/**
+ * Simulated social life only uses agents with nothing to do: idle on the main floor, without a current task and
+ * outside any meeting (in it, called to it or walking to it).
+ */
+export function isBusyForAmbientLife(state: LivingOfficeState, agent: Agent): boolean {
+  return (
+    (agent.floor ?? 1) !== 1 ||
+    agent.status !== 'IDLE' ||
+    Boolean(agent.currentTaskId) ||
+    isInMeeting(state, agent.id)
+  );
+}
+
+/**
+ * Removes every trace of simulated small talk from an agent: bubble, conversation, coffee seat and mood. A
+ * conversation needs two people, so the partner stops talking too (it stays at the coffee bar) and nobody keeps
+ * talking to someone who already left.
+ */
+export function clearAmbientLife(state: LivingOfficeState, agent: Agent): void {
+  const activityId = agent.socialActivityId;
+  if (activityId) {
+    for (const partner of state.agents) {
+      if (partner.id === agent.id || partner.socialActivityId !== activityId) continue;
+      partner.socialActivityId = null;
+      partner.ambientBubble = null;
+      if (partner.presentationActivity === 'chatting') partner.presentationActivity = 'coffee_break';
+      partner.mood = 'neutral';
+    }
+    state.socialActivities = state.socialActivities.filter((activity) => activity.id !== activityId);
+  }
+  if (agent.ambientBubble) agent.ambientBubble = null;
+  if (agent.socialActivityId) agent.socialActivityId = null;
+  if (agent.presentationActivity) {
+    agent.presentationActivity = null;
+    agent.mood = 'neutral';
+  }
+  if (state.coffeeSeatAssignments?.some((item) => item.agentId === agent.id)) releaseCoffeeSeat(state, agent.id);
+}
+
+function exchangeId(locale: SocialLocale, index: number): string {
+  return `${locale}:${index}`;
 }
 
 export function applyAmbientLife(
@@ -711,50 +790,60 @@ export function applyAmbientLife(
   const memory = ambientMemoryFor(state);
   const idleSince = memory.idleSince;
 
-  const idleAgents = state.agents.filter(
-    (agent) => (agent.floor ?? 1) === 1 && agent.status === 'IDLE' && !agent.currentTaskId,
-  );
-
+  const idleAgents: Agent[] = [];
   for (const agent of state.agents) {
-    if ((agent.floor ?? 1) === 1 && agent.status === 'IDLE' && !agent.currentTaskId) {
-      if (!idleSince.has(agent.id)) idleSince.set(agent.id, now);
-    } else {
+    if (isBusyForAmbientLife(state, agent)) {
       idleSince.delete(agent.id);
-      if (agent.presentationActivity !== 'chatting' && agent.presentationActivity !== 'coffee_break') {
-        agent.socialActivityId = null;
-        releaseCoffeeSeat(state, agent.id);
-      }
+      clearAmbientLife(state, agent);
+    } else {
+      if (!idleSince.has(agent.id)) idleSince.set(agent.id, now);
+      idleAgents.push(agent);
     }
   }
 
   for (const agent of idleAgents) {
     const since = idleSince.get(agent.id) ?? now;
-    if (now - since >= options.idleGraceMs) {
+    if (!agent.presentationActivity && now - since >= options.idleGraceMs) {
       agent.presentationActivity = 'coffee_break';
       agent.mood = 'neutral';
       moveAgentToCoffeeSeat(state, agent);
     }
   }
 
+  // Forget the exchanges of conversations that already ended.
+  const running = new Set(state.socialActivities.map((activity) => activity.id));
+  for (const activityId of [...memory.exchangeByActivity.keys()]) {
+    if (!running.has(activityId)) memory.exchangeByActivity.delete(activityId);
+  }
+
   if (now - memory.lastSocialAt < options.minIntervalMs) return;
 
-  const socialCandidates = state.agents.filter(
-    (agent) =>
-      (agent.floor ?? 1) === 1 &&
-      (agent.presentationActivity === 'coffee_break' || agent.status === 'IDLE') &&
-      !agent.currentTaskId,
-  );
+  // An agent already in a conversation is not pulled into a second one.
+  const socialCandidates = idleAgents.filter((agent) => !agent.socialActivityId);
   if (socialCandidates.length < 2) return;
 
   const participants = socialCandidates.slice(0, 2);
-  const pack = socialPack(locale).filter(
-    (exchange) => options.politicsEnabled || exchange.topic !== 'politics',
-  );
+  const pack = socialPack(locale)
+    .map((exchange, index) => ({ exchange, id: exchangeId(locale, index) }))
+    .filter(({ exchange }) => options.politicsEnabled || exchange.topic !== 'politics');
   if (!pack.length) return;
 
+  // Two conversations at the same time never share an exchange, and recent ones wait their turn.
+  const inUse = new Set(memory.exchangeByActivity.values());
+  const recent = new Set(memory.recentExchanges);
   const seed = Math.abs(Math.floor(now / Math.max(options.minIntervalMs, 1))) % pack.length;
-  const exchange = pack[seed];
+  const ordered = [...pack.slice(seed), ...pack.slice(0, seed)];
+  const picked =
+    ordered.find((item) => !inUse.has(item.id) && !recent.has(item.id)) ??
+    ordered.find((item) => !inUse.has(item.id));
+  if (!picked) return;
+  const exchange = picked.exchange;
   const activityId = `social-${now}`;
+
+  memory.exchangeByActivity.set(activityId, picked.id);
+  memory.recentExchanges = [...memory.recentExchanges.filter((id) => id !== picked.id), picked.id].slice(
+    -Math.max(1, Math.floor(pack.length / 2)),
+  );
 
   state.socialActivities.unshift({
     id: activityId,
@@ -782,7 +871,7 @@ export function applyAmbientLife(
     event(
       'social.started',
       participants[0].id,
-      `Simulated ambient conversation started: ${exchange.topic}.`,
+      livingOfficeText(locale, 'event.socialStarted', { topic: livingOfficeText(locale, `topic.${exchange.topic}`) }),
       {
         activityId,
         participantIds: participants.map((agent) => agent.id),

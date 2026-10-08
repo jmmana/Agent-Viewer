@@ -502,7 +502,7 @@ Theme variables:
 | `--av-text-muted` | `#94a3b8` | `#475569` | Secondary text and toolbar icons. |
 | `--av-accent` | `#38bdf8` | `#0284c7` | Fit button, replay slider, focus ring. |
 | `--av-accent-strong` | `#0ea5e9` | `#0369a1` | Play button and selected speed. |
-| `--av-accent-contrast` | `#ffffff` | `#ffffff` | Text and icons on `--av-accent-strong`. |
+| `--av-accent-contrast` | `#0f172a` | `#ffffff` | Text and icons on `--av-accent-strong`. |
 | `--av-telemetry` | `#22d3ee` | `#0e7490` | Telemetry button and tooltip of the demo app. |
 | `--av-live` | `#34d399` | `#059669` | Live indicator of the demo app. |
 | `--av-active` | `#4f46e5` | `#4f46e5` | Pressed toolbar button. |

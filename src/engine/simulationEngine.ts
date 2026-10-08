@@ -1,7 +1,11 @@
-import { Agent, Artifact, Meeting, SocialActivity, Task, ViewerEvent } from '../types/agent';
+import { Agent, Meeting, Task, WorkspaceZone } from '../types/agent';
 import { INITIAL_AGENTS } from './officeModel';
 import type { SimulationState } from './officeState';
 export { createLiveSimulationState, type SimulationState } from './officeState';
+import { AGENT_DESK_ANCHORS, MEETING_ROOM_POLICIES, WORKSPACE_ANCHORS, routeAgent } from './livingOfficeEngine';
+import { DEMO_SCRIPT, demoText, type DemoScriptKey } from '../content/demoScript';
+import { livingOfficeText } from '../content/livingOfficeMessages';
+import type { Locale } from '../i18n';
 import {
   playAlert,
   playMeetingGong,
@@ -18,9 +22,28 @@ export interface DemoStep {
   execute: (state: SimulationState) => void;
 }
 
-export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS): SimulationState {
+/** Built-in demo texts of one agent (`agent.<id>.roleTitle` and `agent.<id>.statusText`), when it has them. */
+function demoAgentKey(agentId: string, field: 'roleTitle' | 'statusText'): DemoScriptKey | null {
+  const key = `agent.${agentId}.${field}`;
+  return Object.prototype.hasOwnProperty.call(DEMO_SCRIPT.en, key) ? (key as DemoScriptKey) : null;
+}
+
+/** Copies the agents and writes the role title and status text of the demo team in `locale`. */
+export function localizeDemoAgents(agents: Agent[], locale: Locale): Agent[] {
+  return agents.map((agent) => {
+    const roleKey = demoAgentKey(agent.id, 'roleTitle');
+    const statusKey = demoAgentKey(agent.id, 'statusText');
+    return {
+      ...agent,
+      roleTitle: roleKey ? demoText(locale, roleKey) : agent.roleTitle,
+      statusText: statusKey ? demoText(locale, statusKey) : agent.statusText,
+    };
+  });
+}
+
+export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS, locale: Locale = 'en'): SimulationState {
   return {
-    agents: agents.map((a) => ({ ...a })),
+    agents: localizeDemoAgents(agents, locale),
     tasks: [],
     meetings: [],
     events: [
@@ -30,7 +53,7 @@ export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS): 
         timestamp: Date.now() - 1000 * 60 * 10,
         source: 'system',
         severity: 'low',
-        summary: 'Equipo de Automatización RPA UiPath & BA listo en oficinas.',
+        summary: demoText(locale, 'init.event'),
         payload: { agentCount: agents.length },
       },
     ],
@@ -48,38 +71,106 @@ export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS): 
   };
 }
 
+/** Sends an agent walking to a spot of the main floor; the living office engine completes the walk. */
+function walkTo(agent: Agent, x: number, y: number, workspace: WorkspaceZone, now = Date.now()): void {
+  agent.floor = 1;
+  agent.workspace = workspace;
+  agent.targetX = x;
+  agent.targetY = y;
+  const distance = Math.hypot(agent.x - x, agent.y - y);
+  agent.isWalking = distance > 0.15;
+  if (agent.isWalking) {
+    agent.travelStartedAt = now;
+    agent.travelDurationMs = Math.max(900, Math.min(4500, distance * 350));
+  } else {
+    agent.travelStartedAt = undefined;
+    agent.travelDurationMs = undefined;
+  }
+}
+
+/** Seats an agent in a visible meeting room, so "In a meeting" always matches where it is drawn. */
+function seatInMeetingRoom(agent: Agent, roomId: 'meeting_room' | 'meeting_room_b', seatIndex: number): void {
+  const room = MEETING_ROOM_POLICIES.find((policy) => policy.id === roomId);
+  const seat = room?.seats[seatIndex % room.seats.length] ?? WORKSPACE_ANCHORS[roomId];
+  walkTo(agent, seat.x, seat.y, roomId);
+  agent.status = 'IN_MEETING';
+}
+
+/** Puts an agent on the secret second floor right away: the floor view shows it there. */
+function moveToSecondFloor(agent: Agent, x: number, y: number): void {
+  agent.floor = 2;
+  agent.workspace = 'overflow_floor';
+  agent.x = x;
+  agent.y = y;
+  agent.targetX = x;
+  agent.targetY = y;
+  agent.isWalking = false;
+  agent.travelStartedAt = undefined;
+  agent.travelDurationMs = undefined;
+}
+
+/** Brings an agent back from the second floor through the secret door and walks it to `x`, `y`. */
+function returnToMainFloor(agent: Agent, x: number, y: number, workspace: WorkspaceZone): void {
+  if ((agent.floor ?? 1) === 2) {
+    const door = WORKSPACE_ANCHORS.overflow_floor;
+    agent.x = door.x;
+    agent.y = door.y;
+  }
+  walkTo(agent, x, y, workspace);
+}
+
+function concludeMeeting(s: SimulationState, meetingId: string): void {
+  const meeting = s.meetings.find((item) => item.id === meetingId);
+  if (meeting && meeting.status !== 'CONCLUDED') {
+    meeting.status = 'CONCLUDED';
+    meeting.endedAt = Date.now();
+  }
+  s.roomReservations = s.roomReservations.filter((reservation) => reservation.meetingId !== meetingId);
+  if (s.activeMeetingId === meetingId) s.activeMeetingId = null;
+}
+
+/** Sends an agent back to its own desk. */
+function backToDesk(agent: Agent, status: Agent['status']): void {
+  const desk = AGENT_DESK_ANCHORS[agent.id];
+  if (desk) returnToMainFloor(agent, desk.x, desk.y, desk.workspace);
+  agent.status = status;
+}
+
 // 12-Step UiPath RPA & BA Banking Automation Scenario (Total: 25.5s)
-export const DEMO_STEPS: DemoStep[] = [
+/**
+ * The demo script in the given language. Every text it writes (step titles, bubbles, status texts, tasks,
+ * artifacts, meetings and event summaries) comes from `src/content/demoScript.ts`.
+ */
+export function createDemoSteps(locale: Locale = 'en'): DemoStep[] {
+  const tx = (key: DemoScriptKey, params?: Record<string, string | number>) => demoText(locale, key, params);
+  const find = (s: SimulationState, id: string) => s.agents.find((a) => a.id === id);
+  const bubble = (key: DemoScriptKey, ms = 2500) => ({ text: tx(key), expiresAt: Date.now() + ms });
+
+  return [
   {
     id: 0,
     durationMs: 2100,
-    title: '1. Recepción de Insumos del Cliente (Video, 2 PDFs, Word, 2 Webs Bancarias)',
-    description: 'Valeria (Ventas) y Carlos (Jefe RPA) reciben en Boss Office el requerimiento bancario: 1 Video, 2 PDFs de extractos, 1 Word y 2 webs de bancos.',
+    title: tx('step.0.title'),
+    description: tx('step.0.description'),
     execute: (s) => {
-      const boss = s.agents.find((a) => a.id === 'boss');
-      const sales = s.agents.find((a) => a.id === 'sales-lead');
+      const boss = find(s, 'boss');
+      const sales = find(s, 'sales-lead');
 
       if (sales) {
         sales.status = 'CHATTING';
-        sales.statusText = 'Presentando requerimiento del cliente';
-        sales.speechBubble = {
-          text: '¡Cliente envió Video, 2 PDFs, Word y 2 webs bancarias para automatizar conciliación!',
-          expiresAt: Date.now() + 2500,
-        };
+        sales.statusText = tx('step.0.sales.statusText');
+        sales.speechBubble = bubble('step.0.sales.bubble');
       }
       if (boss) {
         boss.status = 'THINKING';
-        boss.statusText = 'Planificando solución RPA UiPath end-to-end';
-        boss.speechBubble = {
-          text: 'Recibido. Convocando kickoff inmediato con Arquitectura y Business Analysis.',
-          expiresAt: Date.now() + 2500,
-        };
+        boss.statusText = tx('step.0.boss.statusText');
+        boss.speechBubble = bubble('step.0.boss.bubble');
       }
 
       const newTask: Task = {
         id: 'TASK-RPA-BANK',
-        title: 'Automatización Bancaria UiPath End-to-End',
-        description: 'Construir solución RPA completa: PDD, SDD, Estimación, BPMN, Arquitectura, Cotización, Gantt, Resumen y Presentación HTML interactiva.',
+        title: tx('step.0.task.title'),
+        description: tx('step.0.task.description'),
         initiatorId: 'sales-lead',
         assignedAgentId: 'boss',
         collaboratorIds: ['boss', 'tech-lead', 'research-lead', 'backend-agent', 'frontend-agent', 'security-agent', 'ba-analyst-1', 'ba-analyst-2', 'qa-agent', 'sales-lead'],
@@ -100,7 +191,7 @@ export const DEMO_STEPS: DemoStep[] = [
         target: 'boss',
         taskId: newTask.id,
         severity: 'high',
-        summary: 'TASK-RPA-BANK recibida: Video, 2 PDFs, Word y 2 webs de bancos para automatizar conciliación.',
+        summary: tx('step.0.event'),
         payload: { task: newTask },
       });
       playTaskStart();
@@ -109,43 +200,25 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 1,
     durationMs: 2200,
-    title: '2. Kickoff de Alcance en Meeting Room A',
-    description: 'Carlos (Jefe RPA), Alex (Arquitecto) y Dra. Maya (Líder BA) se reúnen en Meeting Room A para coordinar entregables.',
+    title: tx('step.1.title'),
+    description: tx('step.1.description'),
     execute: (s) => {
-      const boss = s.agents.find((a) => a.id === 'boss');
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const baLead = s.agents.find((a) => a.id === 'research-lead');
+      const boss = find(s, 'boss');
+      const techLead = find(s, 'tech-lead');
+      const baLead = find(s, 'research-lead');
 
-      if (boss) {
-        boss.targetX = 10;
-        boss.targetY = 3;
-        boss.isWalking = true;
-        boss.workspace = 'meeting_room';
-        boss.status = 'IN_MEETING';
-      }
+      // Everyone shown "In a meeting" sits in Meeting Room A.
+      if (boss) seatInMeetingRoom(boss, 'meeting_room', 0);
       if (techLead) {
-        techLead.targetX = 12;
-        techLead.targetY = 3;
-        techLead.isWalking = true;
-        techLead.workspace = 'meeting_room';
-        techLead.status = 'IN_MEETING';
-        techLead.speechBubble = {
-          text: 'Revisando video y webs de bancos. Diseñaremos Dispatcher y Performer en REFramework.',
-          expiresAt: Date.now() + 2500,
-        };
+        seatInMeetingRoom(techLead, 'meeting_room', 1);
+        techLead.speechBubble = bubble('step.1.techLead.bubble');
       }
-      if (baLead) {
-        baLead.targetX = 14;
-        baLead.targetY = 3;
-        baLead.isWalking = true;
-        baLead.workspace = 'meeting_room';
-        baLead.status = 'IN_MEETING';
-      }
+      if (baLead) seatInMeetingRoom(baLead, 'meeting_room', 2);
 
       const meeting: Meeting = {
         id: 'MEET-KICKOFF',
-        title: 'Kickoff Solución RPA Bancaria',
-        topic: 'Desglose de entregables: PDD, SDD, Estimación, BPMN y Cotización',
+        title: tx('step.1.meeting.title'),
+        topic: tx('step.1.meeting.topic'),
         taskId: 'TASK-RPA-BANK',
         initiatorId: 'boss',
         participants: ['boss', 'tech-lead', 'research-lead'],
@@ -154,8 +227,8 @@ export const DEMO_STEPS: DemoStep[] = [
         startedAt: Date.now(),
         tokensAccumulated: 8900,
         costAccumulated: 0.048,
-        agenda: ['Revisión Video', 'Extracción 2 PDFs', 'Estructura REFramework'],
-        decisions: ['BA generará PDD en Library', 'Arquitectura definirá SDD en Meeting Room B'],
+        agenda: [tx('step.1.meeting.agenda.0'), tx('step.1.meeting.agenda.1'), tx('step.1.meeting.agenda.2')],
+        decisions: [tx('step.1.meeting.decision.0'), tx('step.1.meeting.decision.1')],
         tasksCreated: ['SUB-PDD', 'SUB-SDD'],
         messages: [],
       };
@@ -169,7 +242,7 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:boss',
         taskId: 'TASK-RPA-BANK',
         severity: 'normal',
-        summary: 'Kickoff iniciado en Meeting Room A: Definición de plan de entregables RPA.',
+        summary: tx('step.1.event'),
         payload: { meetingId: meeting.id, roomId: 'meeting_room' },
       });
       playMeetingGong();
@@ -178,28 +251,29 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 2,
     durationMs: 2100,
-    title: '3. Research Library: Extracción Documental & Creación del PDD',
-    description: 'Dra. Maya, Sofía y Andrés analizan el Video, los 2 PDFs y el Word en la Library y compilan el Process Definition Document.',
+    title: tx('step.2.title'),
+    description: tx('step.2.description'),
     execute: (s) => {
-      const baLead = s.agents.find((a) => a.id === 'research-lead');
-      const ba1 = s.agents.find((a) => a.id === 'ba-analyst-1');
-      const ba2 = s.agents.find((a) => a.id === 'ba-analyst-2');
+      const boss = find(s, 'boss');
+      const techLead = find(s, 'tech-lead');
+      const baLead = find(s, 'research-lead');
+      const ba1 = find(s, 'ba-analyst-1');
+      const ba2 = find(s, 'ba-analyst-2');
+
+      // The kickoff is over: nobody stays "In a meeting" once the room empties.
+      concludeMeeting(s, 'MEET-KICKOFF');
+      if (boss) backToDesk(boss, 'DELEGATING');
+      if (techLead) backToDesk(techLead, 'THINKING');
 
       if (baLead) {
-        baLead.targetX = 3;
-        baLead.targetY = 14;
-        baLead.isWalking = true;
-        baLead.workspace = 'research_area';
+        walkTo(baLead, 3, 14, 'research_area');
         baLead.status = 'RESEARCHING';
         baLead.currentTool = 'uipath.document_understanding';
       }
       if (ba1) {
         ba1.status = 'RESEARCHING';
         ba1.currentTool = 'ocr.pdf_extractor(2_banco_pdfs)';
-        ba1.speechBubble = {
-          text: 'Extraídos 28 campos clave del Word y PDFs bancarios. PDD v1.0 listo.',
-          expiresAt: Date.now() + 2500,
-        };
+        ba1.speechBubble = bubble('step.2.ba1.bubble');
       }
       if (ba2) {
         ba2.status = 'WRITING';
@@ -211,9 +285,9 @@ export const DEMO_STEPS: DemoStep[] = [
         task.progress = 20;
         task.artifacts.push({
           id: 'art-pdd',
-          name: 'PDD - Process Definition Document v1.0',
+          name: tx('step.2.artifact.pdd.name'),
           type: 'report',
-          summary: 'Documento formal de definición de proceso bancario con reglas de negocio y campos OCR.',
+          summary: tx('step.2.artifact.pdd.summary'),
           timestamp: Date.now(),
           authorId: 'ba-analyst-1',
         });
@@ -226,7 +300,7 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:ba-analyst-1',
         taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'PDD (Process Definition Document) generado con éxito en Research Library.',
+        summary: tx('step.2.event'),
         payload: { artifactId: 'art-pdd', pages: 34 },
       });
       playMessageBlip();
@@ -235,31 +309,22 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 3,
     durationMs: 2000,
-    title: '4. Leads Studio: Diagramas BPMN & Estimación de Esfuerzo',
-    description: 'En Leads Area se modelan los diagramas de flujo As-Is / To-Be y se calcula la estimación de esfuerzo en story points.',
+    title: tx('step.3.title'),
+    description: tx('step.3.description'),
     execute: (s) => {
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const ba2 = s.agents.find((a) => a.id === 'ba-analyst-2');
+      const techLead = find(s, 'tech-lead');
+      const ba2 = find(s, 'ba-analyst-2');
 
       if (techLead) {
-        techLead.targetX = 2;
-        techLead.targetY = 9;
-        techLead.isWalking = true;
-        techLead.workspace = 'leads_area';
+        walkTo(techLead, 2, 9, 'leads_area');
         techLead.status = 'WRITING';
         techLead.currentTool = 'estimation.sizing_matrix';
       }
       if (ba2) {
-        ba2.targetX = 4;
-        ba2.targetY = 9;
-        ba2.isWalking = true;
-        ba2.workspace = 'leads_area';
+        walkTo(ba2, 4, 10, 'leads_area');
         ba2.status = 'CODING';
         ba2.currentTool = 'bpmn.modeler(as_is_to_be)';
-        ba2.speechBubble = {
-          text: 'Diagramas BPMN listos: 3 caminos felices y 8 excepciones de negocio bancarias.',
-          expiresAt: Date.now() + 2500,
-        };
+        ba2.speechBubble = bubble('step.3.ba2.bubble');
       }
 
       const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
@@ -267,17 +332,17 @@ export const DEMO_STEPS: DemoStep[] = [
         task.progress = 35;
         task.artifacts.push({
           id: 'art-bpmn',
-          name: 'Diagramas de Flujo BPMN As-Is & To-Be',
+          name: tx('step.3.artifact.bpmn.name'),
           type: 'architecture',
-          summary: 'Mapeo detallado de procesos bancarios en estándar BPMN 2.0 con bifurcaciones de error.',
+          summary: tx('step.3.artifact.bpmn.summary'),
           timestamp: Date.now(),
           authorId: 'ba-analyst-2',
         });
         task.artifacts.push({
           id: 'art-estimacion',
-          name: 'Estimación de Esfuerzo & Sizing',
+          name: tx('step.3.artifact.estimate.name'),
           type: 'report',
-          summary: 'Matriz de complejidad: 42 historias de usuario, 85 Story Points en 3 Sprints.',
+          summary: tx('step.3.artifact.estimate.summary'),
           timestamp: Date.now(),
           authorId: 'tech-lead',
         });
@@ -290,7 +355,7 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:tech-lead',
         taskId: 'TASK-RPA-BANK',
         severity: 'normal',
-        summary: 'Diagramas BPMN y Estimación de Esfuerzo completados en Leads Studio.',
+        summary: tx('step.3.event'),
         payload: { progress: 35, storyPoints: 85 },
       });
       playMessageBlip();
@@ -299,63 +364,57 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 4,
     durationMs: 2100,
-    title: '5. Meeting Room B (War Room): Arquitectura UiPath & SDD',
-    description: 'Alex (Arquitecto) y los 3 analistas de desarrollo RPA se reúnen en Meeting Room B para definir REFramework y el SDD.',
+    title: tx('step.4.title'),
+    description: tx('step.4.description'),
     execute: (s) => {
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
-      const dev2 = s.agents.find((a) => a.id === 'frontend-agent');
-      const dev3 = s.agents.find((a) => a.id === 'security-agent');
+      const techLead = find(s, 'tech-lead');
+      const devs = ['backend-agent', 'frontend-agent', 'security-agent'].map((id) => find(s, id));
 
+      // The architecture review happens inside Meeting Room B, one seat per participant.
       if (techLead) {
-        techLead.targetX = 19;
-        techLead.targetY = 3;
-        techLead.isWalking = true;
-        techLead.workspace = 'meeting_room_b';
-        techLead.status = 'IN_MEETING';
-        techLead.speechBubble = {
-          text: 'SDD aprobado: Arquitectura Dispatcher-Performer con colas transaccionales y REFramework.',
-          expiresAt: Date.now() + 2500,
-        };
+        seatInMeetingRoom(techLead, 'meeting_room_b', 0);
+        techLead.speechBubble = bubble('step.4.techLead.bubble');
       }
-      if (dev1) {
-        dev1.targetX = 20;
-        dev1.targetY = 2;
-        dev1.isWalking = true;
-        dev1.workspace = 'meeting_room_b';
-        dev1.status = 'IN_MEETING';
-      }
-      if (dev2) {
-        dev2.targetX = 21;
-        dev2.targetY = 3;
-        dev2.isWalking = true;
-        dev2.workspace = 'meeting_room_b';
-        dev2.status = 'IN_MEETING';
-      }
-      if (dev3) {
-        dev3.targetX = 22;
-        dev3.targetY = 2;
-        dev3.isWalking = true;
-        dev3.workspace = 'meeting_room_b';
-        dev3.status = 'IN_MEETING';
-      }
+      devs.forEach((dev, index) => {
+        if (dev) seatInMeetingRoom(dev, 'meeting_room_b', index + 1);
+      });
+
+      const meeting: Meeting = {
+        id: 'MEET-SDD',
+        title: tx('step.4.meeting.title'),
+        topic: tx('step.4.meeting.topic'),
+        taskId: 'TASK-RPA-BANK',
+        initiatorId: 'tech-lead',
+        participants: ['tech-lead', 'backend-agent', 'frontend-agent', 'security-agent'],
+        status: 'ACTIVE',
+        roomId: 'meeting_room_b',
+        startedAt: Date.now(),
+        tokensAccumulated: 12400,
+        costAccumulated: 0.067,
+        agenda: [],
+        decisions: [tx('step.4.techLead.bubble')],
+        tasksCreated: [],
+        messages: [],
+      };
+      s.meetings.unshift(meeting);
+      s.activeMeetingId = meeting.id;
 
       const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
       if (task) {
         task.progress = 50;
         task.artifacts.push({
           id: 'art-sdd',
-          name: 'SDD - Solution Design Document (UiPath REFramework)',
+          name: tx('step.4.artifact.sdd.name'),
           type: 'architecture',
-          summary: 'Diseño técnico de la solución UiPath: Dispatcher, Performer, Queues y manejo de excepciones.',
+          summary: tx('step.4.artifact.sdd.summary'),
           timestamp: Date.now(),
           authorId: 'tech-lead',
         });
         task.artifacts.push({
           id: 'art-arquitectura',
-          name: 'Arquitectura Técnica UiPath REFramework',
+          name: tx('step.4.artifact.architecture.name'),
           type: 'architecture',
-          summary: 'Blueprint de integración con Azure Key Vault, Orchestrator y webs bancarias.',
+          summary: tx('step.4.artifact.architecture.summary'),
           timestamp: Date.now(),
           authorId: 'tech-lead',
         });
@@ -368,8 +427,8 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:tech-lead',
         taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'SDD y Arquitectura UiPath aprobados en Meeting Room B.',
-        payload: { sddVersion: '1.0', framework: 'REFramework' },
+        summary: tx('step.4.event'),
+        payload: { meetingId: meeting.id, sddVersion: '1.0', framework: 'REFramework' },
       });
       playMeetingGong();
     },
@@ -377,38 +436,30 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 5,
     durationMs: 2200,
-    title: '6. Development Pods: Codificación en UiPath Studio',
-    description: 'Lucas, Kenji y Mateo desarrollan los workflows XAML automatizando ambas páginas web bancarias y el REFramework.',
+    title: tx('step.5.title'),
+    description: tx('step.5.description'),
     execute: (s) => {
-      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
-      const dev2 = s.agents.find((a) => a.id === 'frontend-agent');
-      const dev3 = s.agents.find((a) => a.id === 'security-agent');
+      const techLead = find(s, 'tech-lead');
+      const dev1 = find(s, 'backend-agent');
+      const dev2 = find(s, 'frontend-agent');
+      const dev3 = find(s, 'security-agent');
+
+      concludeMeeting(s, 'MEET-SDD');
+      if (techLead) backToDesk(techLead, 'REVIEWING');
 
       if (dev1) {
-        dev1.targetX = 8;
-        dev1.targetY = 10;
-        dev1.isWalking = true;
-        dev1.workspace = 'development';
+        walkTo(dev1, 8, 10, 'development');
         dev1.status = 'CODING';
         dev1.currentTool = 'uipath.studio(dispatcher_web_navigation)';
-        dev1.speechBubble = {
-          text: 'Selectores Fuzzy y navegación web listos en ambos bancos (Santander & Chile).',
-          expiresAt: Date.now() + 2500,
-        };
+        dev1.speechBubble = bubble('step.5.dev1.bubble');
       }
       if (dev2) {
-        dev2.targetX = 12;
-        dev2.targetY = 10;
-        dev2.isWalking = true;
-        dev2.workspace = 'development';
+        walkTo(dev2, 12, 10, 'development');
         dev2.status = 'CODING';
         dev2.currentTool = 'uipath.studio(performer_re_framework)';
       }
       if (dev3) {
-        dev3.targetX = 16;
-        dev3.targetY = 10;
-        dev3.isWalking = true;
-        dev3.workspace = 'development';
+        walkTo(dev3, 16, 10, 'development');
         dev3.status = 'CODING';
         dev3.currentTool = 'uipath.du(intelligent_form_extractor)';
       }
@@ -427,7 +478,7 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:backend-agent',
         taskId: 'TASK-RPA-BANK',
         severity: 'normal',
-        summary: 'UiPath Studio: Dispatcher y Performer implementados para las 2 plataformas bancarias.',
+        summary: tx('step.5.event'),
         payload: { modules: ['Dispatcher.xaml', 'Performer.xaml', 'ProcessTransaction.xaml'] },
       });
       playMessageBlip();
@@ -436,29 +487,20 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 6,
     durationMs: 2000,
-    title: '7. QA Lab: Pruebas de Estrés y Certificación Bancaria',
-    description: 'Zoe Vance (QA) y Mateo Silva ejecutan en el QA Lab 1,000 transacciones simuladas sin errores.',
+    title: tx('step.6.title'),
+    description: tx('step.6.description'),
     execute: (s) => {
-      const qa = s.agents.find((a) => a.id === 'qa-agent');
-      const dev3 = s.agents.find((a) => a.id === 'security-agent');
+      const qa = find(s, 'qa-agent');
+      const dev3 = find(s, 'security-agent');
 
       if (qa) {
-        qa.targetX = 20;
-        qa.targetY = 10;
-        qa.isWalking = false;
-        qa.workspace = 'qa_lab';
+        walkTo(qa, 20, 10, 'qa_lab');
         qa.status = 'TESTING';
         qa.currentTool = 'uipath.test_suite(regression_banking_1000_tx)';
-        qa.speechBubble = {
-          text: '1,000 transacciones probadas: 0 excepciones de sistema, 100% de éxito bancario.',
-          expiresAt: Date.now() + 2500,
-        };
+        qa.speechBubble = bubble('step.6.qa.bubble');
       }
       if (dev3) {
-        dev3.targetX = 22;
-        dev3.targetY = 10;
-        dev3.isWalking = true;
-        dev3.workspace = 'qa_lab';
+        walkTo(dev3, 22, 10, 'qa_lab');
         dev3.status = 'TESTING';
         dev3.currentTool = 'security.scan(banking_tokens_compliance)';
       }
@@ -468,9 +510,9 @@ export const DEMO_STEPS: DemoStep[] = [
         task.progress = 75;
         task.artifacts.push({
           id: 'art-qa',
-          name: 'Matriz de Pruebas & Certificación QA Bancaria',
+          name: tx('step.6.artifact.qa.name'),
           type: 'test_run',
-          summary: 'Certificación de 1,000 transacciones: 0 fallos, tolerancia a caídas de red y reintentos automáticos.',
+          summary: tx('step.6.artifact.qa.summary'),
           timestamp: Date.now(),
           authorId: 'qa-agent',
         });
@@ -483,7 +525,7 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:qa-agent',
         taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'Certificación QA Bancaria exitosa: 1,000 transacciones validadas en QA Lab.',
+        summary: tx('step.6.event'),
         payload: { passed: 1000, failed: 0, coverage: '100%' },
       });
       playMessageBlip();
@@ -492,29 +534,21 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 7,
     durationMs: 2000,
-    title: '8. Server Room / Model Ops: UiPath Orchestrator & Telemetría',
-    description: 'Alex y Lucas configuran en Server Room el clúster de UiPath Orchestrator y aprovisionan 4 Robots Unattended.',
+    title: tx('step.7.title'),
+    description: tx('step.7.description'),
     execute: (s) => {
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
+      const techLead = find(s, 'tech-lead');
+      const dev1 = find(s, 'backend-agent');
 
+      // Both work inside the Model Ops room (grid rows 0 to 5), not in the QA lab below it.
       if (techLead) {
-        techLead.targetX = 18;
-        techLead.targetY = 7;
-        techLead.isWalking = true;
-        techLead.workspace = 'server_room';
+        walkTo(techLead, 19, 4, 'server_room');
         techLead.status = 'USING_TOOL';
         techLead.currentTool = 'orchestrator.deploy(unattended_robots_cluster)';
-        techLead.speechBubble = {
-          text: 'UiPath Orchestrator configurado: 4 Robots Unattended listos en alta disponibilidad.',
-          expiresAt: Date.now() + 2500,
-        };
+        techLead.speechBubble = bubble('step.7.techLead.bubble');
       }
       if (dev1) {
-        dev1.targetX = 19;
-        dev1.targetY = 8;
-        dev1.isWalking = true;
-        dev1.workspace = 'server_room';
+        walkTo(dev1, 21, 4.5, 'server_room');
         dev1.status = 'USING_TOOL';
         dev1.currentTool = 'telemetry.sync(assets_vault)';
       }
@@ -524,9 +558,9 @@ export const DEMO_STEPS: DemoStep[] = [
         task.progress = 80;
         task.artifacts.push({
           id: 'art-orchestrator',
-          name: 'Topología Orchestrator & Provisioning de Robots',
+          name: tx('step.7.artifact.orchestrator.name'),
           type: 'code',
-          summary: 'Configuración de 4 Robots Unattended, Colas Transaccionales y SLA de 4 horas.',
+          summary: tx('step.7.artifact.orchestrator.summary'),
           timestamp: Date.now(),
           authorId: 'tech-lead',
         });
@@ -539,7 +573,7 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:tech-lead',
         taskId: 'TASK-RPA-BANK',
         severity: 'normal',
-        summary: 'UiPath Orchestrator aprovisionado con 4 Robots Unattended en Server Room.',
+        summary: tx('step.7.event'),
         payload: { robots: 4, cluster: 'High-Availability' },
       });
       playMessageBlip();
@@ -548,44 +582,29 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 8,
     durationMs: 2000,
-    title: '9. Cafeteria & Team Lounge: Coffee Break de Sincronización',
-    description: 'El equipo se reúne en la Cafetería y Team Lounge para un receso mientras Ventas consolida la propuesta económica.',
+    title: tx('step.8.title'),
+    description: tx('step.8.description'),
     execute: (s) => {
-      const dev2 = s.agents.find((a) => a.id === 'frontend-agent');
-      const ba1 = s.agents.find((a) => a.id === 'ba-analyst-1');
-      const ba2 = s.agents.find((a) => a.id === 'ba-analyst-2');
-      const dev1 = s.agents.find((a) => a.id === 'backend-agent');
+      const dev2 = find(s, 'frontend-agent');
+      const ba1 = find(s, 'ba-analyst-1');
+      const ba2 = find(s, 'ba-analyst-2');
+      const dev1 = find(s, 'backend-agent');
 
       if (dev2) {
-        dev2.targetX = 11;
-        dev2.targetY = 14;
-        dev2.isWalking = true;
-        dev2.workspace = 'break_room';
+        walkTo(dev2, 11, 14, 'break_room');
         dev2.status = 'COFFEE_BREAK';
       }
       if (dev1) {
-        dev1.targetX = 14;
-        dev1.targetY = 14;
-        dev1.isWalking = true;
-        dev1.workspace = 'break_room';
+        walkTo(dev1, 14, 14, 'break_room');
         dev1.status = 'COFFEE_BREAK';
       }
       if (ba1) {
-        ba1.targetX = 19;
-        ba1.targetY = 14;
-        ba1.isWalking = true;
-        ba1.workspace = 'break_room';
+        walkTo(ba1, 19, 14, 'break_room');
         ba1.status = 'CHATTING';
-        ba1.speechBubble = {
-          text: '¡Excelente coordinación! El PDD y el SDD están listos para la cotización.',
-          expiresAt: Date.now() + 2500,
-        };
+        ba1.speechBubble = bubble('step.8.ba1.bubble');
       }
       if (ba2) {
-        ba2.targetX = 21;
-        ba2.targetY = 14;
-        ba2.isWalking = true;
-        ba2.workspace = 'break_room';
+        walkTo(ba2, 21, 14, 'break_room');
         ba2.status = 'CHATTING';
       }
 
@@ -595,7 +614,7 @@ export const DEMO_STEPS: DemoStep[] = [
         timestamp: Date.now(),
         source: 'system',
         severity: 'low',
-        summary: 'Equipo sincroniza en Cafetería y Team Lounge durante el descanso técnico.',
+        summary: tx('step.8.event'),
         payload: { zone: 'break_room_and_lounge' },
       });
     },
@@ -603,60 +622,72 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 9,
     durationMs: 2200,
-    title: '10. Secret Floor (Piso 2): Cotización Económica & Carta Gantt',
-    description: 'Valeria (Ventas), Carlos (Jefe RPA) y Dra. Maya suben al Piso 2 para calcular la cotización y la Carta Gantt.',
+    title: tx('step.9.title'),
+    description: tx('step.9.description'),
     execute: (s) => {
-      const sales = s.agents.find((a) => a.id === 'sales-lead');
-      const boss = s.agents.find((a) => a.id === 'boss');
-      const baLead = s.agents.find((a) => a.id === 'research-lead');
+      const sales = find(s, 'sales-lead');
+      const boss = find(s, 'boss');
+      const baLead = find(s, 'research-lead');
+      const meetingId = 'MEET-QUOTE';
+      const participants = [sales, boss, baLead].filter((agent): agent is Agent => Boolean(agent));
 
+      // The three work in a secret room of the second floor: the reservation makes that floor show them.
+      participants.forEach((agent, index) => {
+        moveToSecondFloor(agent, 10 + index * 2, 8);
+        agent.status = 'IN_MEETING';
+      });
       if (sales) {
-        sales.floor = 2;
-        sales.workspace = 'overflow_floor';
-        sales.targetX = 10;
-        sales.targetY = 8;
-        sales.isWalking = true;
-        sales.status = 'WRITING';
         sales.currentTool = 'pricing.calculator(roi_analysis)';
-        sales.speechBubble = {
-          text: 'Cotización cerrada: $48.5K USD con ROI en 4 meses y Carta Gantt de 6 semanas.',
-          expiresAt: Date.now() + 2500,
-        };
+        sales.speechBubble = bubble('step.9.sales.bubble');
       }
-      if (boss) {
-        boss.floor = 2;
-        boss.workspace = 'overflow_floor';
-        boss.targetX = 12;
-        boss.targetY = 8;
-        boss.isWalking = true;
-        boss.status = 'IN_MEETING';
-      }
-      if (baLead) {
-        baLead.floor = 2;
-        baLead.workspace = 'overflow_floor';
-        baLead.targetX = 14;
-        baLead.targetY = 8;
-        baLead.isWalking = true;
-        baLead.status = 'IN_MEETING';
-        baLead.currentTool = 'gantt.timeline_builder';
-      }
+      if (baLead) baLead.currentTool = 'gantt.timeline_builder';
+
+      const meeting: Meeting = {
+        id: meetingId,
+        title: tx('step.9.meeting.title'),
+        topic: tx('step.9.meeting.topic'),
+        taskId: 'TASK-RPA-BANK',
+        initiatorId: 'sales-lead',
+        participants: participants.map((agent) => agent.id),
+        status: 'ACTIVE',
+        roomId: 'overflow_meeting_1',
+        startedAt: Date.now(),
+        tokensAccumulated: 9600,
+        costAccumulated: 0.051,
+        agenda: [],
+        decisions: [],
+        tasksCreated: [],
+        messages: [],
+      };
+      s.meetings.unshift(meeting);
+      s.roomReservations = s.roomReservations.filter((reservation) => reservation.meetingId !== meetingId);
+      s.roomReservations.push({
+        roomId: 'overflow_meeting_1',
+        roomLabel: livingOfficeText(locale, 'room.overflow', { number: '01' }),
+        floor: 2,
+        meetingId,
+        participantIds: participants.map((agent) => agent.id),
+        reservedAt: Date.now(),
+        status: 'ACTIVE',
+      });
+      s.activeMeetingId = meetingId;
 
       const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
       if (task) {
         task.progress = 90;
         task.artifacts.push({
           id: 'art-cotizacion',
-          name: 'Cotización Económica & Análisis de ROI',
+          name: tx('step.9.artifact.quote.name'),
           type: 'report',
-          summary: 'Inversión: $48,500 USD. Ahorro anual estimado: $165,000 USD (ROI de 340% en 6 meses).',
+          summary: tx('step.9.artifact.quote.summary'),
           timestamp: Date.now(),
           authorId: 'sales-lead',
         });
         task.artifacts.push({
           id: 'art-gantt',
-          name: 'Carta Gantt - Cronograma de Implementación (6 Semanas)',
+          name: tx('step.9.artifact.gantt.name'),
           type: 'report',
-          summary: 'Cronograma detallado con fases de Sprint 1, 2, 3, UAT bancario y pase a producción.',
+          summary: tx('step.9.artifact.gantt.summary'),
           timestamp: Date.now(),
           authorId: 'research-lead',
         });
@@ -669,8 +700,8 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:sales-lead',
         taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'Cotización Económica y Carta Gantt completadas en el Segundo Piso (Overflow Floor).',
-        payload: { cotizacionUSD: 48500, semanasGantt: 6 },
+        summary: tx('step.9.event'),
+        payload: { meetingId, quoteUsd: 48500, ganttWeeks: 6 },
       });
       playMessageBlip();
     },
@@ -678,48 +709,33 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 10,
     durationMs: 2200,
-    title: '11. Boss Office: Resumen Ejecutivo y Presentación HTML',
-    description: 'El equipo directivo compila el Resumen Ejecutivo y genera la Presentación Interactiva en HTML consolidando todo.',
+    title: tx('step.10.title'),
+    description: tx('step.10.description'),
     execute: (s) => {
-      const boss = s.agents.find((a) => a.id === 'boss');
-      const sales = s.agents.find((a) => a.id === 'sales-lead');
-      const techLead = s.agents.find((a) => a.id === 'tech-lead');
-      const baLead = s.agents.find((a) => a.id === 'research-lead');
+      const boss = find(s, 'boss');
+      const sales = find(s, 'sales-lead');
+      const techLead = find(s, 'tech-lead');
+      const baLead = find(s, 'research-lead');
+
+      concludeMeeting(s, 'MEET-QUOTE');
 
       if (boss) {
-        boss.floor = 1;
-        boss.targetX = 3;
-        boss.targetY = 3;
-        boss.isWalking = true;
-        boss.workspace = 'boss_office';
+        returnToMainFloor(boss, 3, 3, 'boss_office');
         boss.status = 'WRITING';
         boss.currentTool = 'html.compiler(interactive_rpa_proposal_deck)';
-        boss.speechBubble = {
-          text: 'Compilando la presentación interactiva HTML con todos los entregables para el cliente.',
-          expiresAt: Date.now() + 2500,
-        };
+        boss.speechBubble = bubble('step.10.boss.bubble');
       }
       if (sales) {
-        sales.floor = 1;
-        sales.targetX = 5;
-        sales.targetY = 3;
-        sales.isWalking = true;
-        sales.workspace = 'boss_office';
+        returnToMainFloor(sales, 5, 3, 'boss_office');
         sales.status = 'AVAILABLE';
+        sales.currentTool = null;
       }
       if (techLead) {
-        techLead.targetX = 2;
-        techLead.targetY = 9;
-        techLead.isWalking = true;
-        techLead.workspace = 'leads_area';
+        walkTo(techLead, 2, 9, 'leads_area');
         techLead.status = 'REVIEWING';
       }
       if (baLead) {
-        baLead.floor = 1;
-        baLead.targetX = 4;
-        baLead.targetY = 9;
-        baLead.isWalking = true;
-        baLead.workspace = 'leads_area';
+        returnToMainFloor(baLead, 4, 9, 'leads_area');
         baLead.status = 'REVIEWING';
       }
 
@@ -728,17 +744,17 @@ export const DEMO_STEPS: DemoStep[] = [
         task.progress = 98;
         task.artifacts.push({
           id: 'art-resumen',
-          name: 'Resumen Ejecutivo de la Solución RPA Bancaria',
+          name: tx('step.10.artifact.summary.name'),
           type: 'report',
-          summary: 'One-pager gerencial resumiendo alcance, beneficios de negocio, seguridad y ROI.',
+          summary: tx('step.10.artifact.summary.summary'),
           timestamp: Date.now(),
           authorId: 'boss',
         });
         task.artifacts.push({
           id: 'art-html-deck',
-          name: 'Presentación Ejecutiva Interactiva HTML',
+          name: tx('step.10.artifact.deck.name'),
           type: 'code',
-          summary: 'Deck interactivo en HTML responsive con PDD, SDD, diagramas BPMN, Gantt y cotización.',
+          summary: tx('step.10.artifact.deck.summary'),
           timestamp: Date.now(),
           authorId: 'boss',
         });
@@ -751,7 +767,7 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:boss',
         taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'Presentación Interactiva HTML y Resumen Ejecutivo compilados en Boss Office.',
+        summary: tx('step.10.event'),
         payload: { artifacts: ['art-resumen', 'art-html-deck'] },
       });
       playMessageBlip();
@@ -760,27 +776,26 @@ export const DEMO_STEPS: DemoStep[] = [
   {
     id: 11,
     durationMs: 2200,
-    title: '12. Gran Cierre: Entrega Exitosa de la Propuesta Completa',
-    description: 'Todos los agentes regresan a sus puestos. La tarea se completa al 100% con los 9 artefactos entregados.',
+    title: tx('step.11.title'),
+    description: tx('step.11.description'),
     execute: (s) => {
+      for (const meeting of s.meetings) {
+        if (meeting.status === 'ACTIVE' || meeting.status === 'SCHEDULED') concludeMeeting(s, meeting.id);
+      }
       s.agents.forEach((agent) => {
-        agent.floor = 1;
-        agent.isWalking = false;
-        agent.status = 'IDLE';
         agent.currentTool = null;
+        const desk = AGENT_DESK_ANCHORS[agent.id];
+        if (desk) {
+          returnToMainFloor(agent, desk.x, desk.y, desk.workspace);
+        } else {
+          if ((agent.floor ?? 1) === 2) returnToMainFloor(agent, agent.x, agent.y, 'break_room');
+          routeAgent(agent, agent.workspace === 'overflow_floor' ? 'break_room' : agent.workspace);
+        }
+        agent.status = 'IDLE';
       });
 
-      const boss = s.agents.find((a) => a.id === 'boss');
-      if (boss) {
-        boss.x = 3;
-        boss.y = 3;
-        boss.targetX = 3;
-        boss.targetY = 3;
-        boss.speechBubble = {
-          text: '¡Entrega completada! PDD, SDD, BPMN, Arquitectura, Cotización, Gantt y HTML listos.',
-          expiresAt: Date.now() + 3000,
-        };
-      }
+      const boss = find(s, 'boss');
+      if (boss) boss.speechBubble = bubble('step.11.boss.bubble', 3000);
 
       const task = s.tasks.find((t) => t.id === 'TASK-RPA-BANK');
       if (task) {
@@ -798,25 +813,30 @@ export const DEMO_STEPS: DemoStep[] = [
         source: 'agent:boss',
         taskId: 'TASK-RPA-BANK',
         severity: 'high',
-        summary: 'TASK-RPA-BANK completada con éxito: 9 entregables generados en 25.5 segundos.',
+        summary: tx('step.11.event'),
         payload: {
           artifactsCount: 9,
           totalTokens: 92400,
           totalCost: 0.582,
-          deliverables: ['PDD', 'SDD', 'Estimación', 'BPMN', 'Arquitectura UiPath', 'Cotización', 'Gantt', 'Resumen', 'Presentación HTML'],
+          deliverables: ['art-pdd', 'art-sdd', 'art-estimacion', 'art-bpmn', 'art-arquitectura', 'art-cotizacion', 'art-gantt', 'art-resumen', 'art-html-deck'],
         },
       });
       playTaskComplete();
     },
   },
-];
+  ];
+}
+
+/** The demo script in English, kept for callers that do not pass a locale. */
+export const DEMO_STEPS: DemoStep[] = createDemoSteps('en');
 
 // Helper to launch a custom prompt/task simulation
 export function triggerCustomTaskSimulation(
   state: SimulationState,
   title: string,
   description: string,
-  assignedRole: 'backend_engineer' | 'frontend_engineer' | 'research_lead' | 'qa_engineer' | 'security_analyst'
+  assignedRole: 'backend_engineer' | 'frontend_engineer' | 'research_lead' | 'qa_engineer' | 'security_analyst',
+  locale: Locale = 'en',
 ): Task {
   const targetAgent = state.agents.find((a) => a.role === assignedRole) || state.agents[3];
   const boss = state.agents.find((a) => a.id === 'boss');
@@ -842,19 +862,19 @@ export function triggerCustomTaskSimulation(
 
   if (boss) {
     boss.speechBubble = {
-      text: `Dispatching ${taskId}: "${title}" to ${targetAgent.name}.`,
+      text: demoText(locale, 'custom.boss.bubble', { taskId, title, agent: targetAgent.name }),
       expiresAt: Date.now() + 4000,
     };
   }
 
   targetAgent.status = 'CODING';
-  targetAgent.statusText = `Executing ${taskId}: ${title}`;
+  targetAgent.statusText = demoText(locale, 'custom.agent.statusText', { taskId, title });
   targetAgent.currentTaskId = taskId;
   targetAgent.tokensInput += 4200;
   targetAgent.tokensOutput += 850;
   targetAgent.cost += 0.024;
   targetAgent.speechBubble = {
-    text: `Received assignment: ${title}. Starting execution now.`,
+    text: demoText(locale, 'custom.agent.bubble', { title }),
     expiresAt: Date.now() + 4000,
   };
 
@@ -870,7 +890,7 @@ export function triggerCustomTaskSimulation(
     target: targetAgent.id,
     taskId,
     severity: 'high',
-    summary: `Task ${taskId} initiated: "${title}" assigned to ${targetAgent.name}.`,
+    summary: demoText(locale, 'custom.event', { taskId, title, agent: targetAgent.name }),
     payload: { title, description },
   });
 

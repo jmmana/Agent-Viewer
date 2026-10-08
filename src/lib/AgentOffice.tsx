@@ -105,7 +105,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   const rootClass = ['av-office', `av-theme-${theme}`, className].filter(Boolean).join(' ');
 
   return (
-    <section className={rootClass} style={style} aria-label={ariaLabel ?? translate('office.label')} data-mode={mode}>
+    <section className={rootClass} style={style} lang={locale} aria-label={ariaLabel ?? translate('office.label')} data-mode={mode}>
       <div className="av-office-stage">
         <OfficeCanvas
           agents={snapshot.agents}

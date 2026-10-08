@@ -65,6 +65,30 @@ export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS): 
   };
 }
 
+/**
+ * Creates a clean, empty state for real live multi-agent streaming mode.
+ * Contains 0 seeded agents, 0 synthetic tokens, 0 synthetic cost.
+ */
+export function createLiveSimulationState(): SimulationState {
+  return {
+    agents: [],
+    tasks: [],
+    meetings: [],
+    events: [],
+    activeMeetingId: null,
+    roomReservations: [],
+    socialActivities: [],
+    coffeeSeatAssignments: [],
+    totalTokens: {
+      input: 0,
+      output: 0,
+      cached: 0,
+      reasoning: 0,
+    },
+    totalCost: 0,
+  };
+}
+
 // 12-Step UiPath RPA & BA Banking Automation Scenario (Total: 25.5s)
 export const DEMO_STEPS: DemoStep[] = [
   {

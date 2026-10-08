@@ -1633,9 +1633,9 @@ function renderAgentItem(
   const ground = y + TILE_SIZE / 2 + 12 + visualOffset.oy;
   const phase = [...agent.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
   const walking = agent.isWalking;
-  const speaking = isSpeechActive(agent.speechBubble, nowMs);
+  const speaking = isSpeechActive(agent.speechBubble ?? agent.ambientBubble, nowMs);
   const typing = !walking && ['CODING', 'TESTING', 'USING_TOOL', 'WRITING'].includes(agent.status);
-  const seated = !walking && (typing || agent.status === 'IN_MEETING');
+  const seated = !walking && (typing || agent.status === 'IN_MEETING' || agent.status === 'COFFEE_BREAK' || agent.presentationActivity === 'coffee_break' || agent.presentationActivity === 'chatting');
   const selected = agent.id === selectedAgentId;
   const hovered = agent.id === hoveredAgentId;
   const cycle = timeMs / 130 + phase;
@@ -1752,7 +1752,7 @@ function drawAgentOverlays(rc: RenderContext) {
   const { ctx, agents, camera, width, height, nowMs, timeMs, theme } = rc;
   const center = cameraCenter(width, height);
   const visualOffsets = getAgentVisualOffsets(agents);
-  const anchors = agents.filter(agent => camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble, nowMs)).map(agent => {
+  const anchors = agents.filter(agent => camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble ?? agent.ambientBubble, nowMs)).map(agent => {
     const world = gridToScreen(agent.x, agent.y, camera.rotation);
     const offset = visualOffsets.get(agent.id) ?? { ox: 0, oy: 0 };
     return { agent, x: center.x + (world.x + TILE_SIZE / 2 + offset.ox + camera.x) * camera.zoom,
@@ -1787,15 +1787,15 @@ function drawAgentOverlays(rc: RenderContext) {
     ctx.fillText(wrapText(subtitle, card.width - 20, t => ctx.measureText(t).width, 1)[0], card.x + 10, card.y + 30);
   }
   for (const a of anchors) {
-    if (!isSpeechActive(a.agent.speechBubble, nowMs)) continue;
-    const speech = a.agent.speechBubble!;
+    const speech = a.agent.speechBubble ?? a.agent.ambientBubble;
+    if (!isSpeechActive(speech, nowMs)) continue;
     ctx.font = '500 12px "Plus Jakarta Sans", sans-serif';
     const maxWidth = Math.min(250, width - 32);
-    const lines = wrapText(speech.text, maxWidth - 24, t => ctx.measureText(t).width, 2);
+    const lines = wrapText(speech!.text, maxWidth - 24, t => ctx.measureText(t).width, 2);
     const badge = labels.get(a.agent.id)!;
     const card = placeOverlay({ x: a.x - maxWidth / 2, y: badge.y - (lines.length * 17 + 40), width: maxWidth, height: lines.length * 17 + 32 }, occupied, { width, height });
     occupied.push(card);
-    const remaining = speech.expiresAt - nowMs;
+    const remaining = speech!.expiresAt - nowMs;
     ctx.globalAlpha = Math.min(1, remaining / 250);
     const { color } = statusAppearance(a.agent.status);
     ctx.strokeStyle = color; ctx.lineWidth = 1.2;
@@ -1808,9 +1808,9 @@ function drawAgentOverlays(rc: RenderContext) {
     const activityLabel =
       a.agent.status === 'IN_MEETING' ? 'MEETING'
       : a.agent.status === 'PHONE_CALL' ? 'PHONE'
-      : a.agent.status === 'CHATTING' || a.agent.status === 'COFFEE_BREAK' ? 'SOCIAL · SIMULATED'
+      : a.agent.status === 'CHATTING' || a.agent.status === 'COFFEE_BREAK' || a.agent.presentationActivity === 'chatting' || a.agent.presentationActivity === 'coffee_break' ? 'SOCIAL · SIMULATED'
       : 'ACTIVITY';
-    const header = speech.targetAgentName ? speaker + ' → ' + speech.targetAgentName + ' · ' + activityLabel : speaker + ' · ' + activityLabel;
+    const header = speech!.targetAgentName ? speaker + ' → ' + speech!.targetAgentName + ' · ' + activityLabel : speaker + ' · ' + activityLabel;
     ctx.fillText(wrapText(header, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 12, card.y + 16);
     ctx.font = '500 12px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground;
     lines.forEach((line, i) => ctx.fillText(line, card.x + 12, card.y + 34 + i * 17));
@@ -1826,8 +1826,9 @@ function drawAgentOverlays(rc: RenderContext) {
 function drawMessageConnections(ctx: CanvasRenderingContext2D, rot: number, agents: Agent[], timeMs: number, nowMs: number) {
   ctx.save();
   for (const agent of agents) {
-    if (!isSpeechActive(agent.speechBubble, nowMs) || !agent.speechBubble?.targetAgentName) continue;
-    const target = agents.find(a => a.id !== agent.id && (a.name === agent.speechBubble!.targetAgentName || a.name.startsWith(agent.speechBubble!.targetAgentName!)));
+    const bubble = agent.speechBubble ?? agent.ambientBubble;
+    if (!isSpeechActive(bubble, nowMs) || !bubble?.targetAgentName) continue;
+    const target = agents.find(a => a.id !== agent.id && (a.name === bubble!.targetAgentName || a.name.startsWith(bubble!.targetAgentName!)));
     if (!target) continue;
     const from = gridToScreen(agent.x, agent.y, rot); const to = gridToScreen(target.x, target.y, rot);
     const ax = from.x + 24, ay = from.y + 24, bx = to.x + 24, by = to.y + 24;

@@ -1,0 +1,114 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { app } from '../server/index.ts';
+
+function startTestServer() {
+  return new Promise((resolve) => {
+    const server = http.createServer(app);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({ server, port, baseUrl: `http://127.0.0.1:${port}` });
+    });
+  });
+}
+
+test('SSE: client receives real-time events on SSE stream without token', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/events/stream`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'text/event-stream');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    // Read initial connect message
+    const initial = await reader.read();
+    assert.ok(decoder.decode(initial.value).includes('connected'));
+
+    // Emit an event
+    const postRes = await fetch(`${baseUrl}/api/v1/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        schemaVersion: '1.0',
+        id: 'evt_sse_test_1',
+        type: 'agent.message.sent',
+        timestamp: Date.now(),
+        source: 'agent:tester',
+        summary: 'SSE test message',
+        payload: { text: 'Hello SSE World' },
+      }),
+    });
+    assert.equal(postRes.status, 202);
+
+    // Read streamed event
+    const chunk = await reader.read();
+    const text = decoder.decode(chunk.value);
+    assert.ok(text.includes('id: evt_sse_test_1'));
+    assert.ok(text.includes('Hello SSE World'));
+    // Ensure onmessage compatible format (data field without blocking custom event)
+    assert.ok(text.includes('data: {'));
+
+    await reader.cancel();
+  } finally {
+    server.close();
+  }
+});
+
+test('SSE: token authentication works via query parameter for EventSource compatibility', async () => {
+  const secretToken = 'test-sse-secure-token-123';
+  process.env.AGENT_VIEWER_API_TOKEN = secretToken;
+
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    // 1. Connection without token fails with 401
+    const unauthRes = await fetch(`${baseUrl}/api/v1/events/stream`);
+    assert.equal(unauthRes.status, 401);
+    const unauthJson = await unauthRes.json();
+    assert.equal(unauthJson.error, 'unauthorized');
+
+    // 2. Connection with token in query param succeeds
+    const authRes = await fetch(`${baseUrl}/api/v1/events/stream?token=${secretToken}`);
+    assert.equal(authRes.status, 200);
+
+    const reader = authRes.body.getReader();
+    const decoder = new TextDecoder();
+
+    const initial = await reader.read();
+    assert.ok(decoder.decode(initial.value).includes('connected'));
+
+    // Emit event with token in header
+    const postRes = await fetch(`${baseUrl}/api/v1/events`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${secretToken}`,
+      },
+      body: JSON.stringify({
+        schemaVersion: '1.0',
+        id: 'evt_sse_test_auth',
+        type: 'agent.status.changed',
+        timestamp: Date.now(),
+        source: 'agent:auth-tester',
+        summary: 'Status changed',
+        payload: { status: 'WORKING' },
+      }),
+    });
+    assert.equal(postRes.status, 202);
+
+    const chunk = await reader.read();
+    const text = decoder.decode(chunk.value);
+    assert.ok(text.includes('id: evt_sse_test_auth'));
+    assert.ok(text.includes('WORKING'));
+
+    await reader.cancel();
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});

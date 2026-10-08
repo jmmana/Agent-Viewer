@@ -1,7 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
+
+let _DatabaseSync: any = null;
+function getDatabaseSync(): any {
+  if (!_DatabaseSync) {
+    const req = createRequire(import.meta.url);
+    const sqliteMod = req('node:sqlite');
+    _DatabaseSync = sqliteMod.DatabaseSync;
+  }
+  return _DatabaseSync;
+}
 
 export interface RuntimeRecord {
   id: string;
@@ -441,7 +451,7 @@ export class MemoryEventStore implements EventStore {
 // SQLite Event Store (using Node 22 node:sqlite)
 // -------------------------------------------------------------
 export class SQLiteEventStore implements EventStore {
-  private db: DatabaseSync;
+  private db: any;
   private memoryFallback: MemoryEventStore;
   private filePath: string;
 
@@ -452,7 +462,8 @@ export class SQLiteEventStore implements EventStore {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    this.db = new DatabaseSync(filePath);
+    const DBSync = getDatabaseSync();
+    this.db = new DBSync(filePath);
     this.memoryFallback = new MemoryEventStore();
     this.initSchema();
   }

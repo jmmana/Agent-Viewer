@@ -101,3 +101,38 @@ test('Webhook: HMAC security verifies signature and rejects tampered bodies or r
     server.close();
   }
 });
+
+test('Webhook stability: invalid payload {"message": 123} returns 400, /health stays 200, malformed JSON returns 400 JSON', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    // 1. Invalid message type (number instead of string) -> 400
+    const res1 = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 123 }),
+    });
+    assert.equal(res1.status, 400);
+    const json1 = await res1.json();
+    assert.equal(json1.error, 'validation_failed');
+
+    // 2. /health remains 200 and healthy
+    const healthRes = await fetch(`${baseUrl}/health`);
+    assert.equal(healthRes.status, 200);
+    const healthJson = await healthRes.json();
+    assert.equal(healthJson.ok, true);
+    assert.equal(healthJson.status, 'healthy');
+
+    // 3. Malformed JSON payload -> 400 in JSON
+    const resMalformed = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"invalid": json',
+    });
+    assert.equal(resMalformed.status, 400);
+    const malformedJson = await resMalformed.json();
+    assert.equal(malformedJson.error, 'bad_request');
+  } finally {
+    server.close();
+  }
+});

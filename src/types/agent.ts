@@ -113,6 +113,12 @@ export interface Agent {
   startedAt: number;
   mood?: AgentMood;
   socialActivityId?: string | null;
+  presentationActivity?: 'coffee_break' | 'chatting' | 'walking_to_break' | null;
+  ambientBubble?: {
+    text: string;
+    targetAgentName?: string;
+    expiresAt: number;
+  } | null;
   speechBubble: {
     text: string;
     targetAgentName?: string;

@@ -3,6 +3,7 @@ import { Agent, AgentStatus, PricingConfig, ViewerEvent } from './types/agent';
 import { DEFAULT_PRICING, INITIAL_AGENTS } from './engine/officeModel';
 import {
   createInitialSimulationState,
+  createLiveSimulationState,
   DEMO_STEPS,
   SimulationState,
   triggerCustomTaskSimulation,
@@ -26,11 +27,25 @@ import { detectLocale, Locale, persistLocale } from './i18n';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
-import { clearSession, loadSession, saveSession } from './engine/sessionStorage';
+import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 
 export default function App() {
+  const isLiveMode = typeof window !== 'undefined' && (
+    import.meta.env.VITE_AGENT_VIEWER_MODE === 'live' ||
+    new URLSearchParams(window.location.search).get('mode') === 'live'
+  );
+
+  const [isLiveConnected, setIsLiveConnected] = useState(false);
+
   // Master Simulation State
   const [simState, setSimState] = useState<SimulationState>(() => {
+    const isLive = typeof window !== 'undefined' && (
+      import.meta.env.VITE_AGENT_VIEWER_MODE === 'live' ||
+      new URLSearchParams(window.location.search).get('mode') === 'live'
+    );
+    if (isLive) {
+      return createLiveSimulationState();
+    }
     const restored = typeof window !== 'undefined' ? loadSession(window.localStorage) : null;
     return restored ?? createInitialSimulationState(INITIAL_AGENTS);
   });
@@ -70,12 +85,16 @@ export default function App() {
     persistLocale(locale);
   }, [locale]);
 
+  const sessionWriterRef = useRef<ReturnType<typeof createThrottledSessionWriter> | null>(null);
+  if (!sessionWriterRef.current && typeof window !== 'undefined') {
+    sessionWriterRef.current = createThrottledSessionWriter(window.localStorage, 1000);
+  }
+
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      saveSession(window.localStorage, simState);
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [simState]);
+    if (sessionWriterRef.current && !isLiveMode) {
+      sessionWriterRef.current.schedule(simState);
+    }
+  }, [simState, isLiveMode]);
 
   // Keep a ref to current simulation state to avoid stale closure during step execution
   const simStateRef = useRef(simState);
@@ -163,10 +182,14 @@ export default function App() {
   }, [ambientSocialEnabled, politicsChatterEnabled, locale]);
 
   useEffect(() => {
-    const apiBase = import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined;
-    if (!apiBase) return;
+    const apiBase = (import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined) || (isLiveMode ? 'http://localhost:8787' : undefined);
+    if (!apiBase) {
+      setIsLiveConnected(false);
+      return;
+    }
 
     const connection = connectEventStream(apiBase, (incoming) => {
+      setIsLiveConnected(true);
       setSimState((prevState) => {
         const nextState: SimulationState = {
           ...prevState,
@@ -190,8 +213,11 @@ export default function App() {
       });
     });
 
-    return () => connection.close();
-  }, []);
+    return () => {
+      connection.close();
+      setIsLiveConnected(false);
+    };
+  }, [isLiveMode]);
 
   // Demo playback timer
   useEffect(() => {
@@ -509,6 +535,8 @@ export default function App() {
         locale={locale}
         onChangeLocale={setLocale}
         onOpenModelOps={() => handleOpenModelOps()}
+        isLiveMode={isLiveMode}
+        isLiveConnected={isLiveConnected}
       />
 
       {/* Main View Area */}

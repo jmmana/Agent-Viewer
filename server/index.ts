@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import dotenv from 'dotenv';
+import { z } from 'zod';
 import {
   type CanonicalEvent,
   validateCanonicalEvent,
@@ -49,6 +50,15 @@ app.use(
   })
 );
 
+// Malformed JSON handler
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err instanceof SyntaxError && 'body' in err) {
+    res.status(400).json({ error: 'bad_request', message: 'Malformed JSON payload' });
+    return;
+  }
+  next(err);
+});
+
 // CORS configuration
 app.use((req, res, next) => {
   const allowedOrigin = process.env.AGENT_VIEWER_CORS_ORIGIN ?? '*';
@@ -80,11 +90,21 @@ app.use('/api/v1', (req, res, next) => {
   if (!expectedToken) return next();
 
   const authHeader = req.header('authorization');
-  if (authHeader !== `Bearer ${expectedToken}`) {
-    res.status(401).json({ error: 'unauthorized', message: 'Valid Bearer token required in Authorization header' });
-    return;
+  const queryToken =
+    typeof req.query.token === 'string'
+      ? req.query.token
+      : typeof req.query.api_key === 'string'
+        ? req.query.api_key
+        : undefined;
+
+  if (authHeader === `Bearer ${expectedToken}` || queryToken === expectedToken) {
+    return next();
   }
-  next();
+
+  res.status(401).json({
+    error: 'unauthorized',
+    message: 'Valid Bearer token or token query parameter required',
+  });
 });
 
 // Apply rate limiting to all /api/v1 routes
@@ -117,9 +137,9 @@ app.get('/ready', async (_req, res) => {
   }
 });
 
-// Helper to broadcast event to SSE subscribers
+// Helper to broadcast event to SSE subscribers (without named event so EventSource.onmessage receives all)
 function broadcastEvent(event: CanonicalEvent) {
-  const frame = `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
   for (const client of clients) {
     try {
       client.write(frame);
@@ -283,7 +303,7 @@ app.get('/api/v1/events/stream', async (req, res) => {
     const missed = await store.list({ afterId: lastEventId, limit: 100 });
     // missed events are descending; replay in chronological order
     for (const evt of missed.reverse()) {
-      res.write(`id: ${evt.id}\nevent: ${evt.type}\ndata: ${JSON.stringify(evt)}\n\n`);
+      res.write(`id: ${evt.id}\ndata: ${JSON.stringify(evt)}\n\n`);
     }
   }
 
@@ -468,9 +488,44 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     }
   }
 
-  const payload = req.body ?? {};
+const GenericWebhookPayloadSchema = z.object({
+  agent: z.string().max(200).optional(),
+  agentId: z.string().max(200).optional(),
+  status: z.string().max(100).optional(),
+  statusText: z.string().max(500).optional(),
+  message: z.string().max(5000).optional(),
+  text: z.string().max(5000).optional(),
+  tool: z.string().max(200).optional(),
+  usage: z
+    .object({
+      provider: z.string().max(100).optional(),
+      model: z.string().max(100).optional(),
+      inputTokens: z.number().int().nonnegative().optional(),
+      outputTokens: z.number().int().nonnegative().optional(),
+      cachedTokens: z.number().int().nonnegative().optional(),
+      reasoningTokens: z.number().int().nonnegative().optional(),
+      cost: z.number().nonnegative().optional(),
+      latencyMs: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+});
+
+  const parseResult = GenericWebhookPayloadSchema.safeParse(req.body ?? {});
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: 'Invalid webhook payload structure',
+      issues: parseResult.error.issues.map((i) => ({
+        path: i.path.join('.'),
+        message: i.message,
+      })),
+    });
+    return;
+  }
+
+  const payload = parseResult.data;
   const agentName = payload.agent || payload.agentId || 'generic-agent';
-  const status = payload.status || (payload.message ? 'THINKING' : 'IDLE');
+  const status = payload.status || (payload.message || payload.text ? 'THINKING' : 'IDLE');
   const message = payload.message || payload.text;
   const tool = payload.tool;
   const usage = payload.usage;
@@ -544,6 +599,15 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   });
 });
 
+// Safe global error handler returning JSON without stack traces or absolute paths
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const status = typeof err?.status === 'number' ? err.status : 500;
+  res.status(status).json({
+    error: err?.code || 'internal_server_error',
+    message: err?.message ? String(err.message).slice(0, 200) : 'An internal error occurred',
+  });
+});
+
 let serverInstance: any = null;
 const isDirectRun =
   process.argv[1] &&
@@ -551,6 +615,10 @@ const isDirectRun =
     process.argv[1].endsWith('server/index.js') ||
     process.argv[1].endsWith('server') ||
     (process.env.npm_lifecycle_event === 'server'));
+
+export function startServer(portToListen = port) {
+  return app.listen(portToListen);
+}
 
 if (isDirectRun && process.env.NODE_ENV !== 'test') {
   serverInstance = app.listen(port, () => {

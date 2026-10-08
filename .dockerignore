@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+.env*
+!.env.example
+__pycache__
+*.pyc
+data
+*.db*
+.venv
+.git
+.github
+tests
+coverage
+*.log

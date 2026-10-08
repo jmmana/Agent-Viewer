@@ -67,10 +67,10 @@ export const LlmUsagePayloadSchema = z.object({
   outputTokens: z.number().int().nonnegative('Expected non-negative integer'),
   cachedTokens: z.number().int().nonnegative('Expected non-negative integer').optional().default(0),
   reasoningTokens: z.number().int().nonnegative('Expected non-negative integer').optional().default(0),
-  latencyMs: z.number().int().nonnegative('Expected non-negative integer').optional(),
-  requestId: z.string().optional(),
-  cost: z.number().nonnegative('Cost cannot be negative').nullable().optional().default(null),
-  costSource: z.enum(['provider-reported', 'estimated', 'unknown']).optional().default('unknown'),
+  latencyMs: z.number().int().nonnegative('Expected non-negative integer').nullish(),
+  requestId: z.string().nullish(),
+  cost: z.number().nonnegative('Cost cannot be negative').nullish().default(null),
+  costSource: z.enum(['provider-reported', 'estimated', 'unknown']).nullish().default('unknown'),
 });
 
 export type LlmUsagePayload = z.infer<typeof LlmUsagePayloadSchema>;
@@ -108,68 +108,68 @@ export const AgentStatusChangedPayloadSchema = z.object({
 
 export const AgentMessageSentPayloadSchema = z.object({
   text: z.string().min(1, 'Message text is required'),
-  targetAgentName: z.string().optional(),
-  targetAgentId: z.string().optional(),
+  targetAgentName: z.string().nullish(),
+  targetAgentId: z.string().nullish(),
 });
 
 export const TaskCreatedPayloadSchema = z.object({
-  id: z.string().optional(),
+  id: z.string().nullish(),
   title: z.string().min(1, 'Task title is required'),
-  description: z.string().optional().default(''),
-  assignedAgentId: z.string().optional(),
-  collaboratorIds: z.array(z.string()).optional().default([]),
+  description: z.string().nullish().default(''),
+  assignedAgentId: z.string().nullish(),
+  collaboratorIds: z.array(z.string()).nullish().default([]),
 });
 
 export const TaskAssignedPayloadSchema = z.object({
-  taskId: z.string().optional(),
+  taskId: z.string().nullish(),
   assignedAgentId: z.string().min(1, 'assignedAgentId is required'),
-  collaboratorIds: z.array(z.string()).optional(),
+  collaboratorIds: z.array(z.string()).nullish(),
 });
 
 export const TaskProgressPayloadSchema = z.object({
-  taskId: z.string().optional(),
-  progress: z.number().min(0).max(100, 'Progress must be between 0 and 100').optional(),
-  status: z.string().optional(),
-  statusText: z.string().optional(),
-  artifacts: z.array(z.any()).optional(),
+  taskId: z.string().nullish(),
+  progress: z.number().min(0).max(100, 'Progress must be between 0 and 100').nullish(),
+  status: z.string().nullish(),
+  statusText: z.string().nullish(),
+  artifacts: z.array(z.any()).nullish(),
 });
 
 export const TaskCompletedPayloadSchema = z.object({
-  taskId: z.string().optional(),
-  summary: z.string().optional(),
-  durationMs: z.number().int().nonnegative().optional(),
+  taskId: z.string().nullish(),
+  summary: z.string().nullish(),
+  durationMs: z.number().int().nonnegative().nullish(),
 });
 
 export const TaskFailedPayloadSchema = z.object({
-  taskId: z.string().optional(),
-  error: z.string().optional(),
-  blockerReason: z.string().optional(),
+  taskId: z.string().nullish(),
+  error: z.string().nullish(),
+  blockerReason: z.string().nullish(),
 });
 
 export const TaskBlockedPayloadSchema = z.object({
-  taskId: z.string().optional(),
-  reason: z.string().optional().default('Blocked on dependency'),
+  taskId: z.string().nullish(),
+  reason: z.string().nullish().default('Blocked on dependency'),
 });
 
 export const ToolStartedPayloadSchema = z.object({
   tool: z.string().min(1, 'Tool name is required'),
-  toolCallId: z.string().optional(),
-  inputSummary: z.string().optional(),
-  category: z.string().optional(),
+  toolCallId: z.string().nullish(),
+  inputSummary: z.string().nullish(),
+  category: z.string().nullish(),
 });
 
 export const ToolCompletedPayloadSchema = z.object({
   tool: z.string().min(1, 'Tool name is required'),
-  toolCallId: z.string().optional(),
-  outputSummary: z.string().optional(),
-  durationMs: z.number().int().nonnegative().optional(),
+  toolCallId: z.string().nullish(),
+  outputSummary: z.string().nullish(),
+  durationMs: z.number().int().nonnegative().nullish(),
 });
 
 export const ToolFailedPayloadSchema = z.object({
   tool: z.string().min(1, 'Tool name is required'),
-  toolCallId: z.string().optional(),
-  error: z.string().optional(),
-  durationMs: z.number().int().nonnegative().optional(),
+  toolCallId: z.string().nullish(),
+  error: z.string().nullish(),
+  durationMs: z.number().int().nonnegative().nullish(),
 });
 
 export const MeetingRequestedPayloadSchema = z.object({
@@ -258,11 +258,12 @@ export const CanonicalEventEnvelopeSchema = z.object({
   id: z.string().min(1, 'Event ID must be a non-empty string'),
   type: z.string().min(1, 'Event type is required'),
   timestamp: z.number().int().positive('Timestamp must be a positive integer in milliseconds'),
-  runtimeId: z.string().optional(),
-  sessionId: z.string().optional(),
+  runtimeId: z.string().nullish(),
+  sessionId: z.string().nullish(),
   source: z.string().min(1, 'Source is required'),
-  agentId: z.string().optional(),
-  taskId: z.string().optional(),
+  target: z.string().nullish(),
+  agentId: z.string().nullish(),
+  taskId: z.string().nullish(),
   severity: z.enum(['low', 'normal', 'high', 'critical']).optional().default('normal'),
   summary: z.string().min(1, 'Summary is required'),
   payload: z.record(z.string(), z.any()).default({}),
@@ -372,11 +373,11 @@ export function validateCanonicalEvent(input: unknown): ValidationResult<Canonic
     id: validatedEnvelope.id,
     type: canonicalType,
     timestamp: validatedEnvelope.timestamp,
-    runtimeId: validatedEnvelope.runtimeId,
-    sessionId: validatedEnvelope.sessionId,
+    runtimeId: validatedEnvelope.runtimeId ?? undefined,
+    sessionId: validatedEnvelope.sessionId ?? undefined,
     source: validatedEnvelope.source,
-    agentId,
-    taskId: validatedEnvelope.taskId ?? validatedEnvelope.payload?.taskId,
+    agentId: agentId ?? undefined,
+    taskId: (validatedEnvelope.taskId ?? validatedEnvelope.payload?.taskId) ?? undefined,
     severity: validatedEnvelope.severity as EventSeverity,
     summary: validatedEnvelope.summary,
     payload: validatedPayload as Record<string, any>,

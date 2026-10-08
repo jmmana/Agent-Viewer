@@ -598,11 +598,13 @@ export function advanceLivingOffice(state: LivingOfficeState, now: number): void
         if (!agent || agent.socialActivityId !== activity.id) continue;
         agent.socialActivityId = null;
         agent.mood = 'neutral';
-        if (agent.status === 'CHATTING') {
-          agent.status = 'COFFEE_BREAK';
-          agent.statusText = 'Coffee break';
+        if (agent.presentationActivity === 'chatting') {
+          agent.presentationActivity = 'coffee_break';
           moveAgentToCoffeeSeat(state, agent);
+        } else if (agent.presentationActivity === 'coffee_break') {
+          agent.presentationActivity = null;
         }
+        agent.ambientBubble = null;
       }
     }
   }
@@ -638,7 +640,7 @@ export function applyAmbientLife(
       if (!idleSince.has(agent.id)) idleSince.set(agent.id, now);
     } else {
       idleSince.delete(agent.id);
-      if (agent.status !== 'CHATTING' && agent.status !== 'COFFEE_BREAK') {
+      if (agent.presentationActivity !== 'chatting' && agent.presentationActivity !== 'coffee_break') {
         agent.socialActivityId = null;
         releaseCoffeeSeat(state, agent.id);
       }
@@ -648,8 +650,7 @@ export function applyAmbientLife(
   for (const agent of idleAgents) {
     const since = idleSince.get(agent.id) ?? now;
     if (now - since >= options.idleGraceMs) {
-      agent.status = 'COFFEE_BREAK';
-      agent.statusText = 'Idle · grabbing coffee';
+      agent.presentationActivity = 'coffee_break';
       agent.mood = 'neutral';
       moveAgentToCoffeeSeat(state, agent);
     }
@@ -660,7 +661,7 @@ export function applyAmbientLife(
   const socialCandidates = state.agents.filter(
     (agent) =>
       (agent.floor ?? 1) === 1 &&
-      (agent.status === 'COFFEE_BREAK' || agent.status === 'IDLE') &&
+      (agent.presentationActivity === 'coffee_break' || agent.status === 'IDLE') &&
       !agent.currentTaskId,
   );
   if (socialCandidates.length < 2) return;
@@ -686,12 +687,11 @@ export function applyAmbientLife(
   });
 
   participants.forEach((agent, index) => {
-    agent.status = 'CHATTING';
-    agent.statusText = `Ambient chat · ${exchange.topic}`;
+    agent.presentationActivity = 'chatting';
     agent.socialActivityId = activityId;
     agent.mood = exchange.lines[index].mood;
     moveAgentToCoffeeSeat(state, agent);
-    agent.speechBubble = {
+    agent.ambientBubble = {
       text: exchange.lines[index].text,
       targetAgentName: participants[(index + 1) % participants.length].name,
       expiresAt: now + 8500 + index * 1200,

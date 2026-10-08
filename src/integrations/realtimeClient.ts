@@ -1,5 +1,6 @@
 import type { ExternalEventEnvelope } from './eventIngestion';
 import { validateExternalEvent } from './eventIngestion';
+import { CANONICAL_EVENT_TYPES } from './canonicalContract';
 
 export type RealtimeStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error' | 'closed';
 
@@ -110,11 +111,14 @@ export function connectEventStream(
 
     updateStatus(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
-    // Build URL with optional lastEventId query parameter for standard EventSource recovery
+    // Build URL with optional lastEventId and token query parameter
     let streamUrl = `${cleanBaseUrl}/api/v1/events/stream`;
     const params = new URLSearchParams();
     if (lastEventId) {
       params.set('lastEventId', lastEventId);
+    }
+    if (options.token) {
+      params.set('token', options.token);
     }
     const queryString = params.toString();
     if (queryString) {
@@ -135,6 +139,13 @@ export function connectEventStream(
         if (msg.lastEventId) lastEventId = msg.lastEventId;
         handleIncomingEvent(msg.data, msg.lastEventId);
       };
+
+      for (const eventType of CANONICAL_EVENT_TYPES) {
+        source.addEventListener(eventType, (msg: any) => {
+          if (msg.lastEventId) lastEventId = msg.lastEventId;
+          handleIncomingEvent(msg.data, msg.lastEventId);
+        });
+      }
 
       source.addEventListener('heartbeat', () => {
         resetHeartbeatWatchdog();

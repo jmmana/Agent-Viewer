@@ -30,7 +30,7 @@ export function placeOverlay(preferred: OverlayRect, occupied: readonly OverlayR
 }
 
 /** Wall-clock expiry matches the Date.now() timestamps supplied by the event layer. */
-export function isSpeechActive(speech: { text: string; expiresAt: number } | null, nowMs: number): boolean {
+export function isSpeechActive(speech: { text: string; expiresAt: number } | null | undefined, nowMs: number): boolean {
   return !!speech && !!speech.text.trim() && speech.expiresAt > nowMs;
 }
 

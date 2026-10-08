@@ -3,8 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - main
-      - 'feature/**'
+      - '**'
   pull_request:
     branches:
       - main
@@ -22,14 +21,28 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install
-        run: npm install --no-audit --no-fund
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Security audit
+        run: npm audit --omit=dev
 
       - name: Typecheck
         run: npm run lint
 
-      - name: Tests
+      - name: TypeScript Tests
         run: npm test
 
-      - name: Build
+      - name: Python SDK Tests
+        run: python3 tests/test_python_sdk.py
+
+      - name: Build frontend
         run: npm run build
+
+      - name: Docker Build
+        run: docker build .

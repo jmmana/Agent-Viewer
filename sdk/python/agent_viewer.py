@@ -123,10 +123,13 @@ class AgentHandle:
     def message(self, text: str, target_agent_name: Optional[str] = None) -> None:
         """Display an observable speech bubble for the agent."""
         self._ensure_registered()
+        payload = {"text": text}
+        if target_agent_name is not None:
+            payload["targetAgentName"] = target_agent_name
         self.viewer.emit(
             "agent.message.sent",
             f"{self.name}: {text[:60]}",
-            {"text": text, "targetAgentName": target_agent_name},
+            payload,
             agent_id=self.id,
             source=f"agent:{self.id}",
         )
@@ -134,10 +137,13 @@ class AgentHandle:
     def tool_started(self, tool: str, input_summary: Optional[str] = None) -> None:
         """Report tool call start."""
         self._ensure_registered()
+        payload = {"tool": tool}
+        if input_summary is not None:
+            payload["inputSummary"] = input_summary
         self.viewer.emit(
             "tool.started",
             f"Started {tool}: {input_summary}" if input_summary else f"Started tool {tool}",
-            {"tool": tool, "inputSummary": input_summary},
+            payload,
             agent_id=self.id,
             source=f"agent:{self.id}",
         )
@@ -145,10 +151,13 @@ class AgentHandle:
     def tool_completed(self, tool: str, output_summary: Optional[str] = None) -> None:
         """Report tool call completion."""
         self._ensure_registered()
+        payload = {"tool": tool}
+        if output_summary is not None:
+            payload["outputSummary"] = output_summary
         self.viewer.emit(
             "tool.completed",
             f"Completed {tool}: {output_summary}" if output_summary else f"Completed tool {tool}",
-            {"tool": tool, "outputSummary": output_summary},
+            payload,
             agent_id=self.id,
             source=f"agent:{self.id}",
         )
@@ -173,27 +182,29 @@ class AgentHandle:
         cached_tokens: int = 0,
         reasoning_tokens: int = 0,
         cost: Optional[float] = None,
-        cost_source: str = "unknown",
+        cost_source: Optional[str] = None,
         latency_ms: Optional[int] = None,
         request_id: Optional[str] = None,
     ) -> None:
         """Report token and cost usage."""
         self._ensure_registered()
+        resolved_cost_source = cost_source or ("provider-reported" if cost is not None else "unknown")
+        payload = {
+            "provider": provider,
+            "model": model,
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "cachedTokens": cached_tokens,
+            "reasoningTokens": reasoning_tokens,
+            "cost": cost,
+            "costSource": resolved_cost_source,
+            "latencyMs": latency_ms,
+            "requestId": request_id,
+        }
         self.viewer.emit(
             "llm.usage",
             f"{provider}/{model} tokens ({input_tokens}+{output_tokens})",
-            {
-                "provider": provider,
-                "model": model,
-                "inputTokens": input_tokens,
-                "outputTokens": output_tokens,
-                "cachedTokens": cached_tokens,
-                "reasoningTokens": reasoning_tokens,
-                "cost": cost,
-                "costSource": cost_source if cost is not None else "unknown",
-                "latencyMs": latency_ms,
-                "requestId": request_id,
-            },
+            {k: v for k, v in payload.items() if v is not None},
             agent_id=self.id,
             source=f"agent:{self.id}",
         )
@@ -266,7 +277,7 @@ class AgentViewer:
         event_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Emit a single canonical event to the Agent Viewer API."""
-        event = {
+        raw_event = {
             "schemaVersion": "1.0",
             "id": event_id or f"evt_{uuid.uuid4().hex[:12]}",
             "type": event_type,
@@ -279,8 +290,9 @@ class AgentViewer:
             "agentId": agent_id,
             "severity": severity,
             "summary": summary,
-            "payload": payload,
+            "payload": {k: v for k, v in payload.items() if v is not None} if isinstance(payload, dict) else payload,
         }
+        event = {k: v for k, v in raw_event.items() if v is not None}
         return self._post_with_retry("/api/v1/events", event, idempotency_key=event["id"])
 
     def emit_batch(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -315,6 +327,12 @@ class AgentViewer:
                 "activeAgentsCount": active_agents_count or len(self._agents),
             },
         )
+
+    def health(self) -> Dict[str, Any]:
+        """Check server health."""
+        req = urllib.request.Request(f"{self.url}/health", headers=self._build_headers(), method="GET")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
     def snapshot(self) -> Dict[str, Any]:
         """Fetch current snapshot from the server."""

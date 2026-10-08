@@ -131,3 +131,42 @@ test('i18n has English and Spanish room labels', () => {
   assert.equal(t('en', 'rooms.meeting_room_b'), 'MEETING ROOM B');
   assert.equal(t('es', 'rooms.meeting_room_b'), 'SALA DE REUNIÓN B');
 });
+
+test('ambient life preserves authoritative agent.status as IDLE over 60 seconds of simulation', async () => {
+  const { applyAmbientLife } = await import('../src/engine/livingOfficeEngine.ts');
+  const s = state(4);
+  for (const a of s.agents) {
+    a.status = 'IDLE';
+    a.currentTaskId = null;
+    a.floor = 1;
+  }
+
+  const start = Date.now();
+  // Simulate 60 seconds in steps of 2 seconds
+  for (let sec = 0; sec <= 60; sec += 2) {
+    applyAmbientLife(s, start + sec * 1000, 'en', {
+      enabled: true,
+      politicsEnabled: false,
+      idleGraceMs: 5000,
+      minIntervalMs: 10000,
+    });
+    advanceLivingOffice(s, start + sec * 1000);
+  }
+
+  // Authoritative work status must remain IDLE
+  for (const a of s.agents) {
+    assert.equal(a.status, 'IDLE');
+  }
+});
+
+test('clean live mode starts with exactly 0 agents and 0 tokens', async () => {
+  const { createLiveSimulationState } = await import('../src/engine/simulationEngine.ts');
+  const liveState = createLiveSimulationState();
+
+  assert.equal(liveState.agents.length, 0);
+  assert.equal(liveState.totalTokens.input, 0);
+  assert.equal(liveState.totalTokens.output, 0);
+  assert.equal(liveState.totalTokens.cached, 0);
+  assert.equal(liveState.totalTokens.reasoning, 0);
+  assert.equal(liveState.totalCost, 0);
+});

@@ -40,6 +40,8 @@ interface TopBarProps {
   locale: Locale;
   onChangeLocale: (locale: Locale) => void;
   onOpenModelOps?: () => void;
+  isLiveMode?: boolean;
+  isLiveConnected?: boolean;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -63,6 +65,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   locale,
   onChangeLocale,
   onOpenModelOps,
+  isLiveMode = false,
+  isLiveConnected = false,
 }) => {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled());
 
@@ -91,7 +95,20 @@ export const TopBar: React.FC<TopBarProps> = ({
         <span className="text-xs text-slate-400 hidden 2xl:inline">
           {t(locale, 'app.subtitle')}
         </span>
-        <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-200" title={t(locale, 'demo.title')}>{t(locale, 'demo.label')}</span>
+        {isLiveConnected ? (
+          <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-300 flex items-center gap-1.5" title="Live stream active">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            LIVE
+          </span>
+        ) : isLiveMode ? (
+          <span className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-400">
+            CONNECTING
+          </span>
+        ) : (
+          <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-200" title={t(locale, 'demo.title')}>
+            {t(locale, 'demo.label')}
+          </span>
+        )}
       </div>
 
       {/* Zone 2: Navigation Links (Single-line, clean tabs) */}
@@ -150,58 +167,60 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       {/* Zone 3: Demo Controls & Telemetry Stats */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* Live Replay / Demo Controls */}
-        <div className="flex items-center gap-1.5 bg-slate-950/80 px-2 py-1 rounded-lg border border-slate-800">
-          <button
-            onClick={onTogglePlayDemo}
-            title={isPlayingDemo ? t(locale, 'controls.pause') : t(locale, 'controls.play')}
-            className={`p-1.5 rounded transition-colors ${
-              isPlayingDemo
-                ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
-                : 'bg-emerald-600 text-white hover:bg-emerald-500'
-            }`}
-          >
-            {isPlayingDemo ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-          </button>
+        {/* Live Replay / Demo Controls (hidden in live mode) */}
+        {!isLiveMode && (
+          <div className="flex items-center gap-1.5 bg-slate-950/80 px-2 py-1 rounded-lg border border-slate-800">
+            <button
+              onClick={onTogglePlayDemo}
+              title={isPlayingDemo ? t(locale, 'controls.pause') : t(locale, 'controls.play')}
+              className={`p-1.5 rounded transition-colors ${
+                isPlayingDemo
+                  ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                  : 'bg-emerald-600 text-white hover:bg-emerald-500'
+              }`}
+            >
+              {isPlayingDemo ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+            </button>
 
-          <button
-            onClick={onStepForward}
-            title={t(locale, 'controls.step')}
-            disabled={isPlayingDemo || demoStepIndex >= totalDemoSteps - 1}
-            className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition-colors"
-          >
-            <SkipForward className="w-3.5 h-3.5" />
-          </button>
+            <button
+              onClick={onStepForward}
+              title={t(locale, 'controls.step')}
+              disabled={isPlayingDemo || demoStepIndex >= totalDemoSteps - 1}
+              className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            >
+              <SkipForward className="w-3.5 h-3.5" />
+            </button>
 
-          <button
-            onClick={onResetDemo}
-            title={t(locale, 'controls.reset')}
-            className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
+            <button
+              onClick={onResetDemo}
+              title={t(locale, 'controls.reset')}
+              className="p-1.5 rounded text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
 
-          {/* Speed selector */}
-          <div className="flex items-center text-[11px] font-mono text-slate-400 ml-1">
-            {[1, 2, 5].map((spd) => (
-              <button
-                key={spd}
-                onClick={() => onChangeSpeed(spd)}
-                className={`px-1.5 py-0.5 rounded transition-colors ${
-                  playbackSpeed === spd
-                    ? 'text-sky-400 font-semibold bg-sky-500/10'
-                    : 'hover:text-slate-200'
-                }`}
-              >
-                {spd}x
-              </button>
-            ))}
+            {/* Speed selector */}
+            <div className="flex items-center text-[11px] font-mono text-slate-400 ml-1">
+              {[1, 2, 5].map((spd) => (
+                <button
+                  key={spd}
+                  onClick={() => onChangeSpeed(spd)}
+                  className={`px-1.5 py-0.5 rounded transition-colors ${
+                    playbackSpeed === spd
+                      ? 'text-sky-400 font-semibold bg-sky-500/10'
+                      : 'hover:text-slate-200'
+                  }`}
+                >
+                  {spd}x
+                </button>
+              ))}
+            </div>
+
+            <span className="text-[11px] font-mono text-slate-500 px-1 border-l border-slate-800 tabular-nums">
+              {t(locale, 'controls.stepLabel')} {demoStepIndex + 1}/{totalDemoSteps}
+            </span>
           </div>
-
-          <span className="text-[11px] font-mono text-slate-500 px-1 border-l border-slate-800 tabular-nums">
-            {t(locale, 'controls.stepLabel')} {demoStepIndex + 1}/{totalDemoSteps}
-          </span>
-        </div>
+        )}
 
         {/* Global Live Tokens & Cost Pill (Interactive Model Ops Launcher) */}
         <button

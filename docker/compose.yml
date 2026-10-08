@@ -1,8 +1,9 @@
+# Run from the repository root: docker compose -f docker/compose.yml up --build
 services:
   api:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     command: npm run server
     ports:
       - "8787:8787"
@@ -19,8 +20,8 @@ services:
 
   viewer:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     command: npm run preview -- --port=3000 --host=0.0.0.0
     ports:
       - "3000:3000"

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import express from 'express';
 import dotenv from 'dotenv';
 import { z } from 'zod';
@@ -113,12 +114,15 @@ app.use('/api/v1', rateLimiter);
 // -------------------------------------------------------------
 // Health & Ready
 // -------------------------------------------------------------
+/** Single source of the version: package.json, the same number the release tag uses. */
+const SERVER_VERSION: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
     status: 'healthy',
     service: 'agent-viewer',
-    version: '1.0.0',
+    version: SERVER_VERSION,
     schemaVersion: '1.0',
     clientsConnected: clients.size,
   });

@@ -5,7 +5,7 @@ import { getOfficeRenderedBounds, gridToScreen, screenToGrid } from '../engine/o
 import { compactTokens } from '../engine/modelOps';
 import { OfficeMotion } from '../engine/visualMotion';
 import { cameraCenter } from '../engine/visualLayout';
-import { Locale, t } from '../i18n';
+import type { OfficeMessageKey, OfficeTranslate } from '../content/officeMessages';
 import {
   ZoomIn,
   ZoomOut,
@@ -25,7 +25,14 @@ interface OfficeCanvasProps {
   onOpenModelOps?: (providerFilter?: string) => void;
   activeMeetingId: string | null;
   theme: 'dark' | 'light';
-  locale: Locale;
+  translate: OfficeTranslate;
+  /** Draw token and cost telemetry aggregated from the agents. Only the demo app turns it on. */
+  usageTelemetry?: boolean;
+  /**
+   * Declare the theme tokens on the canvas root. Turn it off when a parent (such as `.av-office`) already
+   * declares them, so host overrides on that parent reach the toolbar too.
+   */
+  themeScope?: boolean;
   isInspectorOpen?: boolean;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
@@ -34,80 +41,46 @@ interface OfficeCanvasProps {
 interface ServerHitInfo {
   type: 'rack' | 'noc' | 'workstation' | 'plaque' | 'room';
   provider?: string;
-  name: string;
-  detail: string;
+  name: OfficeMessageKey;
+  detail: OfficeMessageKey;
 }
 
 function checkModelOpsHit(gx: number, gy: number): ServerHitInfo | null {
   if (gx < 17 || gx > 23 || gy < 0 || gy > 5) return null;
 
-  // Server rack 1: OpenAI (gridX: 18, gridY: 1)
+  // Server racks (gridY 1..2 on gx 18, 20, 22) and the local rack (gx 22, gy 3..4)
   if (gx === 18 && (gy === 1 || gy === 2)) {
-    return {
-      type: 'rack',
-      provider: 'OpenAI',
-      name: 'Nodo Servidor OpenAI',
-      detail: 'Modelos: gpt-4o, o1-mini · Tokens de prompts y razonamiento',
-    };
+    return { type: 'rack', provider: 'OpenAI', name: 'modelOps.rack.openai', detail: 'modelOps.rack.openaiDetail' };
   }
-  // Server rack 2: Anthropic (gridX: 20, gridY: 1)
   if (gx === 20 && (gy === 1 || gy === 2)) {
-    return {
-      type: 'rack',
-      provider: 'Anthropic',
-      name: 'Nodo Servidor Anthropic',
-      detail: 'Modelos: claude-3-5-sonnet, haiku · Código y UI',
-    };
+    return { type: 'rack', provider: 'Anthropic', name: 'modelOps.rack.anthropic', detail: 'modelOps.rack.anthropicDetail' };
   }
-  // Server rack 3: Google Gemini (gridX: 22, gridY: 1)
   if (gx === 22 && (gy === 1 || gy === 2)) {
-    return {
-      type: 'rack',
-      provider: 'Google Gemini',
-      name: 'Nodo Servidor Google Gemini',
-      detail: 'Modelos: gemini-2.5-pro, flash · 2M ventana de contexto',
-    };
+    return { type: 'rack', provider: 'Google Gemini', name: 'modelOps.rack.gemini', detail: 'modelOps.rack.geminiDetail' };
   }
-  // Server rack 4: Local Ollama (gridX: 22, gridY: 3)
   if (gx === 22 && (gy === 3 || gy === 4)) {
-    return {
-      type: 'rack',
-      provider: 'Local (Ollama)',
-      name: 'Rack On-Premise Local',
-      detail: 'Modelos: llama-3.3-70b, deepseek · Cómputo local sin coste de nube',
-    };
+    return { type: 'rack', provider: 'Local (Ollama)', name: 'modelOps.rack.local', detail: 'modelOps.rack.localDetail' };
   }
   // NOC Display Screen (gridX: 20..21, gridY: 0)
   if ((gx === 20 || gx === 21) && gy === 0) {
-    return {
-      type: 'noc',
-      name: 'Pantalla Central NOC Model Ops',
-      detail: 'Telemetría en vivo del flujo global de tokens',
-    };
+    return { type: 'noc', name: 'modelOps.noc', detail: 'modelOps.nocDetail' };
   }
   // Telemetry Workstation (gridX: 18, gridY: 4)
   if (gx === 18 && (gy === 3 || gy === 4)) {
-    return {
-      type: 'workstation',
-      name: 'Estación de Telemetría Model Ops',
-      detail: 'Monitoreo de latencia, caché y throughput',
-    };
+    return { type: 'workstation', name: 'modelOps.workstation', detail: 'modelOps.workstationDetail' };
   }
   // Room Threshold plaque (gy: 5)
   if (gy === 5) {
-    return {
-      type: 'plaque',
-      name: 'Consola Central de Operaciones',
-      detail: 'Abrir panel interactivo de consumo de tokens',
-    };
+    return { type: 'plaque', name: 'modelOps.plaque', detail: 'modelOps.plaqueDetail' };
   }
 
   // Any other tile in server_room
-  return {
-    type: 'room',
-    name: 'Sala Model Ops & Token Center',
-    detail: 'Monitorización de infraestructura LLM y consumo',
-  };
+  return { type: 'room', name: 'modelOps.room', detail: 'modelOps.roomDetail' };
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
@@ -118,7 +91,9 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   onOpenModelOps,
   activeMeetingId,
   theme,
-  locale,
+  translate,
+  usageTelemetry = false,
+  themeScope = true,
   isInspectorOpen = false,
   onToggleSidebar,
   isSidebarOpen = false,
@@ -128,10 +103,12 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   const motionRef = useRef(new OfficeMotion());
   const visibleAgentsRef = useRef<Agent[]>(agents);
   const dragDistanceRef = useRef(0);
-  const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
   const [hoveredServerItem, setHoveredServerItem] = useState<ServerHitInfo | null>(null);
+  const modelOpsEnabled = Boolean(onOpenModelOps);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
     const update = () => setReducedMotion(preference.matches);
     preference.addEventListener('change', update);
@@ -211,6 +188,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
 
     // Initial fit on mount
     fitOfficeToViewport();
+    if (typeof ResizeObserver === 'undefined') return;
 
     // ResizeObserver watches window resize AND flex layout changes when sidebar toggles
     const resizeObserver = new ResizeObserver(() => {
@@ -295,7 +273,8 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         nowMs: Date.now(),
         reducedMotion,
         theme,
-        locale,
+        translate,
+        usageTelemetry,
       });
 
       ctx.restore();
@@ -308,7 +287,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, locale, reducedMotion]);
+  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, translate, usageTelemetry, reducedMotion]);
 
   // Mouse drag & pan
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -359,7 +338,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     }
 
     const grid = screenToGrid(worldX, worldY, camera.rotation);
-    const serverHit = checkModelOpsHit(grid.gx, grid.gy);
+    const serverHit = modelOpsEnabled ? checkModelOpsHit(grid.gx, grid.gy) : null;
 
     if (foundAgent) {
       setHoveredAgentId(foundAgent.id);
@@ -412,6 +391,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     }
 
     // Check click on Model Ops server equipment or room
+    if (!modelOpsEnabled) return;
     const grid = screenToGrid(worldX, worldY, camera.rotation);
     const serverHit = checkModelOpsHit(grid.gx, grid.gy);
     if (serverHit) {
@@ -456,6 +436,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
       return;
     }
 
+    if (!modelOpsEnabled) return;
     const grid = screenToGrid(worldX, worldY, camera.rotation);
     const serverHit = checkModelOpsHit(grid.gx, grid.gy);
     if (serverHit) {
@@ -473,103 +454,95 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     });
   };
 
+  const zoomLabel = translate('canvas.zoomLevel', { percent: Math.round(camera.zoom * 100) });
+
   return (
-    <div className="relative w-full h-full overflow-hidden bg-slate-950 flex flex-row">
-      {/* Barra Lateral Izquierda (Fija, no flotada, un icono debajo del otro en orden) */}
-      <aside className="w-12 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-3 gap-1 z-10 shrink-0 select-none">
-        {/* Rotar a la Izquierda */}
+    <div className={themeScope ? `av-canvas-root av-theme-${theme}` : 'av-canvas-root'}>
+      <div className="av-toolbar" role="toolbar" aria-label={translate('canvas.toolbar')}>
         <button
+          type="button"
+          className="av-tool-btn"
           onClick={() => fitOfficeToViewport((camera.rotation + 3) % 4)}
-          aria-label={t(locale, 'canvas.rotateLeft')}
-          title={t(locale, 'canvas.rotateLeft')}
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          aria-label={translate('canvas.rotateLeft')}
+          title={translate('canvas.rotateLeft')}
         >
-          <RotateCcw className="w-4 h-4" />
+          <RotateCcw className="av-icon" aria-hidden="true" />
         </button>
-
-        {/* Rotar a la Derecha */}
         <button
+          type="button"
+          className="av-tool-btn"
           onClick={() => fitOfficeToViewport((camera.rotation + 1) % 4)}
-          aria-label={t(locale, 'canvas.rotateRight')}
-          title={t(locale, 'canvas.rotateRight')}
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          aria-label={translate('canvas.rotateRight')}
+          title={translate('canvas.rotateRight')}
         >
-          <RotateCw className="w-4 h-4" />
+          <RotateCw className="av-icon" aria-hidden="true" />
         </button>
-
-        {/* Expandir / Ajustar al espacio completo */}
         <button
+          type="button"
+          className="av-tool-btn av-tool-btn--accent"
           onClick={() => fitOfficeToViewport()}
-          aria-label={t(locale, 'canvas.fit')}
-          title="Expandir / Ajustar oficina al espacio completo"
-          className="p-2 rounded-xl text-sky-400 hover:text-white hover:bg-slate-800 transition-colors"
+          aria-label={translate('canvas.fit')}
+          title={translate('canvas.fit')}
         >
-          <Maximize2 className="w-4 h-4" />
+          <Maximize2 className="av-icon" aria-hidden="true" />
         </button>
 
-        {/* Separador */}
-        <div className="w-6 h-px bg-slate-800 my-1" />
+        <div className="av-toolbar-sep" aria-hidden="true" />
 
-        {/* Acercar (Zoom In) */}
         <button
+          type="button"
+          className="av-tool-btn"
           onClick={() => setCamera((c) => ({ ...c, zoom: Math.min(c.zoom * 1.12, 2.5) }))}
-          aria-label={t(locale, 'canvas.zoomIn')}
-          title={t(locale, 'canvas.zoomIn')}
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          aria-label={translate('canvas.zoomIn')}
+          title={translate('canvas.zoomIn')}
         >
-          <ZoomIn className="w-4 h-4" />
+          <ZoomIn className="av-icon" aria-hidden="true" />
         </button>
-
-        {/* Indicador de Zoom */}
-        <span className="text-[10px] font-mono text-slate-400 text-center tabular-nums font-semibold py-0.5 select-none">
+        <span className="av-zoom-level" aria-label={zoomLabel} title={zoomLabel}>
           {Math.round(camera.zoom * 100)}%
         </span>
-
-        {/* Alejar (Zoom Out) */}
         <button
+          type="button"
+          className="av-tool-btn"
           onClick={() => setCamera((c) => ({ ...c, zoom: Math.max(c.zoom * 0.88, 0.15) }))}
-          aria-label={t(locale, 'canvas.zoomOut')}
-          title={t(locale, 'canvas.zoomOut')}
-          className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          aria-label={translate('canvas.zoomOut')}
+          title={translate('canvas.zoomOut')}
         >
-          <ZoomOut className="w-4 h-4" />
+          <ZoomOut className="av-icon" aria-hidden="true" />
         </button>
 
-        {/* Separador */}
-        <div className="w-6 h-px bg-slate-800 my-1" />
+        {(modelOpsEnabled || onToggleSidebar) && <div className="av-toolbar-sep" aria-hidden="true" />}
 
-        {/* Model Ops */}
-        <button
-          onClick={() => {
-            focusOnCoordinates(20, 2, 1.45);
-            onOpenModelOps?.();
-          }}
-          className="p-2 rounded-xl text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/70 border border-transparent hover:border-cyan-800/60 transition-colors"
-          title="Consola Model Ops (Tokens y Telemetría)"
-          aria-label="Model Ops"
-        >
-          <Server className="w-4 h-4" />
-        </button>
-
-        {/* Timeline */}
-        {onToggleSidebar && (
+        {modelOpsEnabled && (
           <button
-            onClick={onToggleSidebar}
-            className={`p-2 rounded-xl transition-all ${
-              isSidebarOpen
-                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-            title={isSidebarOpen ? 'Ocultar Timeline de actividad' : 'Expandir Timeline de actividad'}
-            aria-label="Timeline"
+            type="button"
+            className="av-tool-btn av-tool-btn--telemetry"
+            onClick={() => {
+              focusOnCoordinates(20, 2, 1.45);
+              onOpenModelOps?.();
+            }}
+            aria-label={translate('canvas.modelOps')}
+            title={translate('canvas.modelOps')}
           >
-            <Radio className={`w-4 h-4 ${isSidebarOpen ? 'text-white' : 'text-emerald-400 animate-pulse'}`} />
+            <Server className="av-icon" aria-hidden="true" />
           </button>
         )}
-      </aside>
 
-      {/* Contenedor del Canvas de la Oficina (Completamente despejado, sin superposiciones) */}
-      <div ref={containerRef} className="relative flex-1 h-full overflow-hidden bg-slate-950">
+        {onToggleSidebar && (
+          <button
+            type="button"
+            className={`av-tool-btn${isSidebarOpen ? ' av-tool-btn--active' : ''}`}
+            onClick={onToggleSidebar}
+            aria-pressed={isSidebarOpen}
+            aria-label={translate(isSidebarOpen ? 'canvas.hideTimeline' : 'canvas.showTimeline')}
+            title={translate(isSidebarOpen ? 'canvas.hideTimeline' : 'canvas.showTimeline')}
+          >
+            <Radio className={`av-icon${isSidebarOpen ? '' : ' av-icon--live'}`} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+
+      <div ref={containerRef} className="av-stage">
         <canvas
           ref={canvasRef}
           onMouseDown={handleMouseDown}
@@ -582,35 +555,31 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
             setHoveredServerItem(null);
           }}
           onWheel={handleWheel}
-          className="w-full h-full block touch-none cursor-grab active:cursor-grabbing"
+          className="av-canvas"
           role="img"
-          aria-label={t(locale, 'canvas.aria')}
+          aria-label={translate('canvas.aria')}
         />
 
-        {/* Floating Tooltip when hovering over Model Ops servers / equipment */}
         {hoveredServerItem && (
-          <div
+          <button
+            type="button"
+            className="av-tooltip"
             onClick={() => onOpenModelOps?.(hoveredServerItem.provider)}
-            className="absolute top-4 left-4 z-20 flex items-center gap-2.5 bg-slate-900/95 backdrop-blur-md px-3.5 py-2 rounded-xl border border-cyan-500/50 shadow-2xl text-xs text-white cursor-pointer hover:bg-slate-850 hover:border-cyan-400 transition-all animate-in fade-in duration-100"
-            title="Haz clic para inspeccionar consumo de tokens"
+            title={translate('modelOps.hint')}
           >
-            <div className="w-8 h-8 rounded-lg bg-cyan-950 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shrink-0">
-              <Server className="w-4 h-4 animate-pulse" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-white tracking-tight">{hoveredServerItem.name}</span>
-                {hoveredServerItem.provider && (
-                  <span className="text-[10px] font-mono text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60 font-semibold">
-                    {hoveredServerItem.provider}
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                {hoveredServerItem.detail} · <strong className="text-cyan-300 hover:underline">Abrir Consola Model Ops ⚡</strong>
-              </p>
-            </div>
-          </div>
+            <span className="av-tooltip-icon" aria-hidden="true">
+              <Server className="av-icon" />
+            </span>
+            <span className="av-tooltip-body">
+              <span className="av-tooltip-title">
+                {translate(hoveredServerItem.name)}
+                {hoveredServerItem.provider && <span className="av-tooltip-tag">{hoveredServerItem.provider}</span>}
+              </span>
+              <span className="av-tooltip-detail">
+                {translate(hoveredServerItem.detail)} · <strong>{translate('modelOps.open')}</strong>
+              </span>
+            </span>
+          </button>
         )}
       </div>
     </div>

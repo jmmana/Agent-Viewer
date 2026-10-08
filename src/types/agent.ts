@@ -2,6 +2,10 @@
  * Universal Agent Event Schema & Core Types for Agent Viewer
  */
 
+import type { MessageKind } from '../integrations/canonicalTypes';
+
+export type { MessageKind };
+
 export type AgentRole =
   | 'boss'
   | 'tech_lead'
@@ -92,6 +96,8 @@ export interface Agent {
   currentTaskId: string | null;
   currentTool: string | null;
   workspace: WorkspaceZone;
+  /** Where the agent returns after a meeting. Set by `agent.registered` when the runtime sends a workspace. */
+  homeWorkspace?: WorkspaceZone;
   floor?: number;
   x: number;
   y: number;
@@ -123,6 +129,8 @@ export interface Agent {
     text: string;
     targetAgentName?: string;
     expiresAt: number;
+    /** What the message does (proposal, objection, decision...). Comes from the event, never invented. */
+    kind?: MessageKind;
   } | null;
 }
 
@@ -179,7 +187,7 @@ export interface MeetingMessage {
   senderId: string;
   text: string;
   timestamp: number;
-  type: 'statement' | 'proposal' | 'decision' | 'question';
+  type: MessageKind;
 }
 
 export interface ToolCall {

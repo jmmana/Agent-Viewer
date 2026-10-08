@@ -22,7 +22,7 @@
   <a href="#canonical-event-contract">Event Contract</a> ·
   <a href="#framework-compatibility">Frameworks</a> ·
   <a href="#python-and-typescript-sdks">SDKs</a> ·
-  <a href="#reusable-library">React Library</a> ·
+  <a href="#embed-the-office-in-your-react-app">React Library</a> ·
   <a href="README.es.md">Español</a>
 </p>
 
@@ -63,6 +63,36 @@ curl -X POST http://localhost:8787/api/v1/events \
 ```
 
 The character in the office will immediately display the speech card in real time!
+
+---
+
+## Embed the office in your React app
+
+Agent Viewer is also a React library: `@warlockcode/agent-viewer` 0.2.0 (ES modules only, React and React DOM 19 as peer dependencies). The office is drawn only from the events you pass, never computes usage, and does not inject styles. Publication on npm is coming soon; until then, install it from the GitHub release:
+
+```bash
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.0/warlockcode-agent-viewer-0.2.0.tgz
+```
+
+```tsx
+import { AgentOffice, type AgentProfile, type OfficeEventInput } from '@warlockcode/agent-viewer';
+import '@warlockcode/agent-viewer/style.css';
+
+const agents: AgentProfile[] = [
+  { id: 'planner', name: 'Nova', roleTitle: 'Planner', workspace: 'leads_area' },
+  { id: 'builder', name: 'Atlas', roleTitle: 'Builder', workspace: 'development' },
+];
+const events: OfficeEventInput[] = [
+  { id: 'e1', type: 'agent.status.changed', timestamp: 1767225600000, source: 'agent:builder', agentId: 'builder', payload: { status: 'CODING' } },
+  { id: 'e2', type: 'agent.message.sent', timestamp: 1767225601000, source: 'agent:planner', agentId: 'planner', payload: { text: 'Ship the parser first.', kind: 'proposal', targetAgentId: 'builder' } },
+];
+
+export function TeamOffice() {
+  return <div style={{ height: 520 }}><AgentOffice agents={agents} events={events} /></div>;
+}
+```
+
+Append new events to the array for live activity, or use `useEventReplay` and `ReplayControls` to replay a recorded run. Props, event mapping, translations, theming, usage rules and video export are covered in the [library guide](docs/library.md).
 
 ---
 
@@ -195,31 +225,6 @@ await agent.usage({
   cost: 0.012,
 });
 await agent.done('Pull request opened');
-```
-
----
-
-## Reusable Library
-
-Agent Viewer is also packaged as a standalone, embeddable React component via `src/lib`:
-
-```tsx
-import { AgentOffice } from '@warlockcode/agent-viewer';
-
-export function Dashboard() {
-  return (
-    <div className="w-full h-[600px] border rounded-xl overflow-hidden">
-      <AgentOffice
-        agents={activeAgents}
-        locale="en"
-        theme="dark"
-        mode="live"
-        showUsage={true}
-        onSelectAgent={(id) => console.log('Selected:', id)}
-      />
-    </div>
-  );
-}
 ```
 
 ---

@@ -22,7 +22,7 @@
   <a href="#contrato-canónico-de-eventos">Contrato de eventos</a> ·
   <a href="#compatibilidad-con-frameworks">Frameworks</a> ·
   <a href="#sdks-en-python-y-typescript">SDKs</a> ·
-  <a href="#librería-reutilizable">Librería React</a> ·
+  <a href="#integra-la-oficina-en-tu-app-react">Librería React</a> ·
   <a href="README.md">English</a>
 </p>
 
@@ -63,6 +63,36 @@ curl -X POST http://localhost:8787/api/v1/events \
 ```
 
 ¡El personaje en la oficina mostrará de inmediato el mensaje en su tarjeta de diálogo en tiempo real!
+
+---
+
+## Integra la oficina en tu app React
+
+Agent Viewer también es una librería React: `@warlockcode/agent-viewer` 0.2.0 (solo módulos ES, con React y React DOM 19 como dependencias peer). La oficina se dibuja solo con los eventos que le pasas, nunca calcula consumo y no inyecta estilos. La publicación en npm llegará pronto; mientras tanto, instálala desde la release de GitHub:
+
+```bash
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.0/warlockcode-agent-viewer-0.2.0.tgz
+```
+
+```tsx
+import { AgentOffice, type AgentProfile, type OfficeEventInput } from '@warlockcode/agent-viewer';
+import '@warlockcode/agent-viewer/style.css';
+
+const agents: AgentProfile[] = [
+  { id: 'planner', name: 'Nova', roleTitle: 'Planificadora', workspace: 'leads_area' },
+  { id: 'builder', name: 'Atlas', roleTitle: 'Desarrollador', workspace: 'development' },
+];
+const events: OfficeEventInput[] = [
+  { id: 'e1', type: 'agent.status.changed', timestamp: 1767225600000, source: 'agent:builder', agentId: 'builder', payload: { status: 'CODING' } },
+  { id: 'e2', type: 'agent.message.sent', timestamp: 1767225601000, source: 'agent:planner', agentId: 'planner', payload: { text: 'Primero el parser.', kind: 'proposal', targetAgentId: 'builder' } },
+];
+
+export function OficinaDelEquipo() {
+  return <div style={{ height: 520 }}><AgentOffice agents={agents} events={events} locale="es" /></div>;
+}
+```
+
+Agrega eventos nuevos al arreglo para ver la actividad en vivo, o usa `useEventReplay` y `ReplayControls` para repetir una ejecución grabada. Las props, el efecto de cada evento, las traducciones, los temas, las reglas de consumo y la exportación de video están en la [guía de la librería](docs/library.es.md).
 
 ---
 
@@ -153,31 +183,6 @@ agent.tool_completed("extractor_financiero", output_summary="42 páginas procesa
 agent.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
 agent.message("¡Análisis preliminar concluido!")
 agent.done("Resumen listo para el equipo")
-```
-
----
-
-## Librería Reutilizable
-
-Agent Viewer se exporta como componente React embebible a través de `src/lib`:
-
-```tsx
-import { AgentOffice } from '@warlockcode/agent-viewer';
-
-export function MiPanel() {
-  return (
-    <div className="w-full h-[600px] border rounded-xl overflow-hidden">
-      <AgentOffice
-        agents={agentesActivos}
-        locale="es"
-        theme="dark"
-        mode="live"
-        showUsage={true}
-        onSelectAgent={(id) => console.log('Seleccionado:', id)}
-      />
-    </div>
-  );
-}
 ```
 
 ---

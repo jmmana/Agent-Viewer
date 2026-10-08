@@ -35,7 +35,7 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
-      - name: TypeScript Tests
+      - name: TypeScript Tests (node + Vitest)
         run: npm test
 
       - name: Python SDK Tests
@@ -44,5 +44,11 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Build library
+        run: npm run build:lib
+
+      - name: Check package (publint + attw)
+        run: npm run check:package
+
       - name: Docker Build
-        run: docker build .
+        run: docker build -f docker/Dockerfile .

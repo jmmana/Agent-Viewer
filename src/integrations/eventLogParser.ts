@@ -17,7 +17,7 @@ export interface EventLogParseResult {
 
 /**
  * Parses a Canonical JSONL V1 file or text string into validated CanonicalEvent objects.
- * Also detects and converts OTLP JSON traces if present.
+ * OTLP JSON traces are detected and reported as not supported yet.
  * Invalid lines are captured in `issues` without aborting the entire parse.
  */
 export async function parseEventLog(
@@ -47,29 +47,17 @@ export async function parseEventLog(
 
   const trimmed = content.trim();
 
-  // 1. Detect OTLP JSON format
+  // OTLP traces are recognized but not converted yet: say so instead of failing silently.
   if (trimmed.startsWith('{') && trimmed.includes('"resourceSpans"')) {
-    try {
-      const parsedOtlp = JSON.parse(trimmed);
-      const { fromOtlpJson } = await import('./otel/index');
-      const otlpResult = fromOtlpJson(parsedOtlp);
-      return {
-        events: otlpResult.events,
-        issues: otlpResult.issues.map((msg, i) => ({ line: i + 1, error: msg })),
-        totalLines: 1,
-        format: 'otlp',
-      };
-    } catch (err: any) {
-      return {
-        events: [],
-        issues: [{ line: 1, error: `Invalid OTLP JSON: ${err?.message || 'Parse error'}` }],
-        totalLines: 1,
-        format: 'otlp',
-      };
-    }
+    return {
+      events: [],
+      issues: [{ line: 1, error: 'OTLP traces are not supported yet. Export the run as canonical JSONL V1.' }],
+      totalLines: 1,
+      format: 'otlp',
+    };
   }
 
-  // 2. Parse Canonical JSONL V1 format (one JSON object per line)
+  // Canonical JSONL V1 format (one JSON object per line) (one JSON object per line)
   const lines = content.split(/\r?\n/);
   const events: CanonicalEvent[] = [];
   const issues: EventLogParseIssue[] = [];

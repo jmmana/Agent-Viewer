@@ -1,8 +1,0 @@
-{
-  "name": "Agent Viewer",
-  "description": "Open-source visual observability for AI agents in an interactive animated virtual office.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}

@@ -167,7 +167,7 @@ describe('Office Crew sprite loading and projection', () => {
       file: frames[0], frameFiles: frames, frames: 3, fps: 5, loop: true,
     }), asset()]);
     expect(h.draw(0, { isWalking: true })).toBe(false); // async image loads
-    expect(h.images).toHaveLength(3); // preloads the entire raster sequence
+    expect(h.images).toHaveLength(4); // three raster frames plus idle fallback (eager preload)
     h.load();
     expect(h.draw(0, { isWalking: true })).toBe(true);
     expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[0]);
@@ -179,7 +179,7 @@ describe('Office Crew sprite loading and projection', () => {
     expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[0]);
     expect(h.draw(800, { isWalking: true }, true)).toBe(true);
     expect(h.drawImage.mock.lastCall?.[0]).toBe(h.images[0]);
-    expect(h.factory).toHaveBeenCalledTimes(3);
+    expect(h.factory).toHaveBeenCalledTimes(4);
   });
 
   it('holds the first animation frame with reduced motion and detaches pending callbacks on disposal', () => {

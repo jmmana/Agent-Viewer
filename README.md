@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/React-19-149ECA?style=for-the-badge&logo=react&logoColor=white" alt="React 19" />
   <img src="https://img.shields.io/badge/TypeScript-types%20included-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript types included" />
   <img src="https://img.shields.io/badge/Canvas2D-renderer-22d3ee?style=for-the-badge&logo=html5&logoColor=white" alt="Canvas2D renderer" />
-  <img src="https://img.shields.io/badge/Node-%E2%89%A524-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 24 or later" />
+  <img src="https://img.shields.io/badge/Node-%E2%89%A524-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 24 or later to work on the repository" />
   <img src="https://img.shields.io/badge/i18n-EN%20%7C%20ES-a855f7?style=for-the-badge" alt="English and Spanish" />
   <a href="#-roadmap"><img src="https://img.shields.io/badge/npm-coming%20soon-lightgrey?style=for-the-badge&logo=npm&logoColor=white" alt="npm package coming soon" /></a>
 </p>
@@ -91,23 +91,23 @@ These are design rules, enforced in code, not marketing:
 
 ## ⚡ Quickstart
 
-Requires Node.js 24 or later.
+Working on the repository requires Node.js 24 or later. Apps that only install the library need React 19, nothing else.
 
 ```bash
 git clone https://github.com/jmmana/Agent-Viewer.git
 cd Agent-Viewer
 npm ci
-npm run dev:full   # office on :3000, ingestion server on :8787
+npm run dev:full   # ingestion server on :8787 + office on :3000 in live mode
 ```
 
-| Open | What you get |
-|---|---|
-| **http://localhost:3000** | The demo: the full living office with a simulated team. Press **Space** (or Play) to run the scripted demonstration. |
-| **http://localhost:3000/?mode=live** | Live mode: an empty office, no seeded agents and no synthetic tokens, streaming from the server on port 8787. |
+| Command | Open | What you get |
+|---|---|---|
+| `npm run dev:full` | **http://localhost:3000** | Live mode: an empty office (no seeded agents, no synthetic tokens) streaming from the server on port 8787. Events you send appear right away. |
+| `npm run dev` | **http://localhost:3000** | The demo: the full living office with a simulated team and simulated data. Press **Space** (or Play) to run the scripted demonstration. Add `?mode=live` (or set `VITE_AGENT_VIEWER_MODE=live`) to switch it to live mode. |
 
 ### Send your first events
 
-With the office open in live mode, run this in another terminal:
+With `npm run dev:full` running, send these from another terminal and watch them land:
 
 ```bash
 # 1. A planner joins the office and sits in Architecture
@@ -631,12 +631,12 @@ The signature is compared in constant time. Expired timestamps and bad signature
 
 ## 🔧 Configuration
 
-Copy [`server/.env.example`](server/.env.example) to `.env` at the repository root (`cp server/.env.example .env`). The server reads it on start; Vite reads the `VITE_` variables when the demo app is built or served.
+Create your `.env` at the repository root from the example: `cp server/.env.example .env` ([`server/.env.example`](server/.env.example)). The server reads it on start; Vite reads the `VITE_` variables when the demo app is built or served.
 
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Server port. |
-| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development. |
+| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development. `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
@@ -644,7 +644,7 @@ Copy [`server/.env.example`](server/.env.example) to `.env` at the repository ro
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
-| `VITE_AGENT_VIEWER_MODE` | none | Demo app: `live` boots in live mode, like `?mode=live`. |
+| `VITE_AGENT_VIEWER_MODE` | none | Demo app: `live` boots in live mode, like `?mode=live`. `npm run dev:full` sets it for you. |
 
 ---
 

@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/React-19-149ECA?style=for-the-badge&logo=react&logoColor=white" alt="React 19" />
   <img src="https://img.shields.io/badge/TypeScript-tipos%20incluidos-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="Tipos de TypeScript incluidos" />
   <img src="https://img.shields.io/badge/Canvas2D-renderizado-22d3ee?style=for-the-badge&logo=html5&logoColor=white" alt="Renderizado con Canvas2D" />
-  <img src="https://img.shields.io/badge/Node-%E2%89%A524-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 24 o superior" />
+  <img src="https://img.shields.io/badge/Node-%E2%89%A524-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 24 o superior para trabajar en el repositorio" />
   <img src="https://img.shields.io/badge/i18n-ES%20%7C%20EN-a855f7?style=for-the-badge" alt="Español e inglés" />
   <a href="#-hoja-de-ruta"><img src="https://img.shields.io/badge/npm-muy%20pronto-lightgrey?style=for-the-badge&logo=npm&logoColor=white" alt="Paquete npm muy pronto" /></a>
 </p>
@@ -91,23 +91,23 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 
 ## ⚡ Inicio rápido
 
-Requiere Node.js 24 o superior.
+Para trabajar en el repositorio necesitas Node.js 24 o superior. Las apps que solo instalan la librería necesitan React 19, nada más.
 
 ```bash
 git clone https://github.com/jmmana/Agent-Viewer.git
 cd Agent-Viewer
 npm ci
-npm run dev:full   # oficina en :3000, servidor de ingesta en :8787
+npm run dev:full   # servidor de ingesta en :8787 + oficina en :3000 en modo en vivo
 ```
 
-| Abre | Qué ves |
-|---|---|
-| **http://localhost:3000** | La demo: la oficina viva completa con un equipo simulado. Pulsa **Espacio** (o Play) para correr la secuencia de demostración. |
-| **http://localhost:3000/?mode=live** | Modo en vivo: una oficina vacía, sin agentes precargados ni tokens sintéticos, conectada al servidor del puerto 8787. |
+| Comando | Abre | Qué ves |
+|---|---|---|
+| `npm run dev:full` | **http://localhost:3000** | Modo en vivo: una oficina vacía (sin agentes precargados ni tokens sintéticos) conectada al servidor del puerto 8787. Los eventos que envíes aparecen de inmediato. |
+| `npm run dev` | **http://localhost:3000** | La demo: la oficina viva completa con un equipo simulado y datos simulados. Pulsa **Espacio** (o Play) para correr la secuencia de demostración. Agrega `?mode=live` (o define `VITE_AGENT_VIEWER_MODE=live`) para pasarla a modo en vivo. |
 
 ### Envía tus primeros eventos
 
-Con la oficina abierta en modo en vivo, ejecuta esto en otra terminal:
+Con `npm run dev:full` corriendo, envía esto desde otra terminal y míralo llegar:
 
 ```bash
 # 1. Una planificadora entra a la oficina y se sienta en Arquitectura
@@ -631,12 +631,12 @@ La firma se compara en tiempo constante. Las marcas de tiempo vencidas y las fir
 
 ## 🔧 Configuración
 
-Copia [`server/.env.example`](../server/.env.example) a `.env` en la raíz del repositorio (`cp server/.env.example .env`). El servidor lo lee al arrancar; Vite lee las variables `VITE_` cuando se compila o se sirve la app de demostración.
+Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env.example .env` ([`server/.env.example`](../server/.env.example)). El servidor lo lee al arrancar; Vite lee las variables `VITE_` cuando se compila o se sirve la app de demostración.
 
 | Variable | Por defecto | Qué hace |
 |---|---|---|
 | `PORT` | `8787` | Puerto del servidor. |
-| `AGENT_VIEWER_API_TOKEN` | vacío | Protege `/api/v1/*`. Los clientes envían `Authorization: Bearer <token>`, o `?token=` (o `?api_key=`) para `EventSource`. Vacío significa abierto, para desarrollo local. |
+| `AGENT_VIEWER_API_TOKEN` | vacío | Protege `/api/v1/*`. Los clientes envían `Authorization: Bearer <token>`, o `?token=` (o `?api_key=`) para `EventSource`. Vacío significa abierto, para desarrollo local. `AGENT_VIEWER_API_KEY`, que todavía leen los adaptadores de ejemplo, es un alias obsoleto. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` si no se define | Orígenes de navegador permitidos, separados por comas. `server/.env.example` trae `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` o `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | Archivo SQLite cuando el almacenamiento es `sqlite`. |
@@ -644,7 +644,7 @@ Copia [`server/.env.example`](../server/.env.example) a `.env` en la raíz del r
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Peticiones por minuto por IP en `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | vacío | Activa la verificación HMAC del webhook genérico. |
 | `VITE_AGENT_VIEWER_API_URL` | ninguno | App de demostración: servidor del que recibe el flujo. Sin ella, solo el modo en vivo se conecta (a `http://localhost:8787`). |
-| `VITE_AGENT_VIEWER_MODE` | ninguno | App de demostración: `live` arranca en modo en vivo, igual que `?mode=live`. |
+| `VITE_AGENT_VIEWER_MODE` | ninguno | App de demostración: `live` arranca en modo en vivo, igual que `?mode=live`. `npm run dev:full` la define por ti. |
 
 ---
 

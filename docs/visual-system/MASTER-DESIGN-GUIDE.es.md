@@ -998,3 +998,292 @@ Debe parecer una mezcla entre:
 - Señal Wi‑Fi
 - Señal de llamada
 - Check de tarea
+- Alerta
+- Engranajes
+- Paneles de actividad
+
+---
+
+# 11. TV, noticias y pantallas vivas
+
+## 11.1 TV con noticias
+Debe haber al menos una TV o pantalla en zonas comunes o sala de reuniones que muestre:
+- noticias tecnológicas
+- dashboards de sistema
+- noticias de empresa
+- paneles de actividad
+- métricas
+
+### Estilo visual
+- no saturado
+- moderno
+- legible
+- puede mostrar titulares ficticios
+- puede mostrar gráficas simples
+
+## 11.2 Casos de uso
+- En coffee area: noticias generales
+- En director suite: tablero ejecutivo
+- En sala de reuniones: presentación
+- En analysis room: dashboards
+
+---
+
+# 12. Estados visuales del sistema
+
+## 12.1 Estados de agente
+- Idle
+- Thinking
+- Planning
+- Coding
+- Reviewing
+- Analyzing
+- In meeting
+- On call
+- Syncing
+- Reporting
+- Blocked
+- Completed
+
+## 12.2 Indicadores visuales
+### Thinking
+- bombillo
+- puntos suspensivos
+- leve brillo
+
+### Coding
+- ícono de terminal
+- pequeños brackets
+- mini líneas de código
+
+### Reviewing
+- clipboard
+- check / cross
+- comentario
+
+### On call
+- teléfono
+- ondas
+- Wi‑Fi
+- mini timer opcional
+
+### Blocked
+- triángulo de alerta
+- expresión preocupada
+
+### Completed
+- check verde
+- destello leve
+
+---
+
+# 13. Reglas de composición visual
+
+## 13.1 En personajes
+- No sobrecargar
+- Máximo 1 prop principal y 1 secundario visible
+- Ropa limpia y consistente
+- Diferencia de rol obvia
+
+## 13.2 En salas
+- Detalle visible pero sin ruido
+- Deben leerse rápido los elementos clave
+- Siempre incluir señal de propósito de la sala
+
+## 13.3 En animaciones
+- Simples
+- Repetibles
+- Claras
+- No excesivas
+
+---
+
+# 14. Prompt maestro para crear personajes base
+
+## 14.1 Prompt general de estilo
+**Prompt:**
+
+Crear un personaje original para “Agent Viewer”, un sistema visual de observabilidad para agentes de IA, con estética de oficina moderna. El personaje debe verse como un trabajador de oficina simpático y profesional, en estilo 2D cartoon corporativo, con formas redondeadas, líneas limpias, colores sólidos, sombras suaves y apariencia premium. Debe tener cuerpo tipo cápsula u ovalado vertical, brazos visibles, piernas pequeñas visibles, rostro minimalista y lentes como rasgo distintivo. No usar visor ni mochila. Debe vestir ropa de oficina y sostener una laptop, tablet, clipboard, teléfono o taza de café según su rol. Debe sentirse original, amigable, tecnológico y fácilmente animable. Fondo blanco o transparente si se requiere asset individual. Evitar parecer una copia de videojuegos conocidos.
+
+---
+
+# 15. Prompt maestro para crear cada rol
+
+## 15.1 CEO
+**Prompt:**
+
+Crear un personaje original de oficina para Agent Viewer con rol de CEO. Estilo 2D cartoon corporativo premium, simpático pero profesional. Debe tener lentes rectangulares elegantes, blazer azul oscuro, ropa ejecutiva, postura segura, expresión tranquila y liderazgo visible. Debe sostener una tablet premium o smartphone corporativo. Debe lucir como un líder estratégico que toma decisiones y supervisa al equipo. Incluir versiones de expresión neutral, pensando, aprobando y en reunión. Hacerlo fácil de animar en una oficina virtual.
+
+---
+
+## 15.2 Planner
+**Prompt:**
+
+Crear un personaje original de oficina para Agent Viewer con rol de Planner. Estilo 2D cartoon corporativo, moderno y tecnológico. Debe tener lentes redondos o semi ovalados, ropa profesional en tonos morado y azul, postura activa y gestualidad de coordinación. Debe llevar un clipboard, tablet o libreta de planificación. Debe parecer alguien que propone estrategias, organiza flujos y coordina agentes. Incluir expresiones de proponiendo, pensando y explicando. Debe ser fácil de animar.
+
+---
+
+## 15.3 Developer
+**Prompt:**
+
+Crear un personaje original de oficina para Agent Viewer con rol de Developer. Estilo 2D cartoon corporativo con toque tech. Debe tener lentes modernos rectangulares, ropa business casual o hoodie tech elegante, laptop como prop principal y actitud concentrada. La paleta debe usar azules y cian. Debe parecer una persona que programa, integra herramientas y resuelve problemas técnicos. Incluir versiones de coding, debugging, blocked y completed. Debe ser fácilmente animable.
+
+---
+
+## 15.4 Analyst
+**Prompt:**
+
+Crear un personaje original de oficina para Agent Viewer con rol de Analyst. Estilo 2D cartoon corporativo. Debe tener lentes grandes y aspecto observador, vestuario profesional en tonos verde y teal, y sostener una tablet o laptop con dashboards. Debe parecer alguien analítico, detallista y orientado a datos. Incluir expresiones de investigando, descubriendo hallazgos y reportando. Fácil de animar.
+
+---
+
+## 15.5 Reviewer
+**Prompt:**
+
+Crear un personaje original de oficina para Agent Viewer con rol de Reviewer. Estilo 2D cartoon corporativo serio y claro. Debe tener lentes delgados, ropa formal en tonos naranja, rojo tenue y gris, y sostener un clipboard, tablet de revisión o sello visual de aprobación. Debe verse como alguien que audita, valida y objeta cuando hace falta. Incluir expresiones de review, objeción y aprobación. Fácil de animar.
+
+---
+
+## 15.6 Finance
+**Prompt:**
+
+Crear un personaje original de oficina para Agent Viewer con rol de Finance. Estilo 2D cartoon corporativo elegante. Debe tener lentes rectangulares clásicos, vestuario formal en tonos verde oscuro y gris, y props como tablet con cifras, reporte financiero o calculadora digital. Debe verse como alguien que revisa costos, ROI, presupuesto y aprobaciones financieras. Incluir expresiones de estimando, evaluando riesgo y aprobando costos. Fácil de animar.
+
+---
+
+# 16. Prompt maestro para oficinas y salas
+
+## 16.1 Oficina general
+**Prompt:**
+
+Crear una oficina virtual para “Agent Viewer”, un sistema visual de observabilidad para agentes de IA. Debe verse como una oficina moderna, tecnológica, modular y profesional. Estilo 2D cartoon corporativo premium, limpio y detallado. Incluir escritorios, sillas ergonómicas, laptops, monitores, televisores o pantallas, teléfonos, plantas, máquinas de café, salas de reuniones y espacios funcionales para equipos como CEO, Planner, Developer, Analyst, Reviewer y Finance. La oficina debe transmitir productividad, colaboración y vida de oficina. Incluir elementos tecnológicos como dashboards, pantallas con noticias, paneles de actividad, señal Wi‑Fi y ambiente acogedor.
+
+---
+
+## 16.2 Sala de reuniones
+**Prompt:**
+
+Crear una sala de reuniones moderna para Agent Viewer, estilo 2D cartoon corporativo premium. Debe incluir mesa central, sillas, TV o pantalla grande, speakerphone, cámara para videollamadas, pizarra, planta y ambiente profesional. Debe estar diseñada para que varios personajes se reúnan, hablen y tomen decisiones.
+
+---
+
+## 16.3 Coffee area
+**Prompt:**
+
+Crear una zona de café para Agent Viewer, estilo 2D cartoon corporativo premium. Debe incluir máquina de café, tazas, barra, sillas o sofá, planta decorativa y una TV mostrando noticias tecnológicas o dashboards. Debe transmitir un espacio cálido y humano dentro de una oficina tecnológica.
+
+---
+
+# 17. Prompt maestro para animaciones
+
+## 17.1 Movimiento básico
+**Prompt:**
+
+Diseñar animaciones 2D para personajes de oficina de Agent Viewer. Los personajes deben caminar con pasos cortos y simpáticos, mover ligeramente los brazos, detenerse con naturalidad y girar suavemente. Deben poder animarse en estados como thinking, coding, reviewing, analyzing, in meeting, on call, blocked y completed. Las animaciones deben ser simples, claras, profesionales y fáciles de repetir en loop.
+
+---
+
+## 17.2 Llamada y Wi‑Fi
+**Prompt:**
+
+Diseñar una animación 2D de llamada para personajes de oficina de Agent Viewer. El personaje debe levantar un teléfono o activar una llamada desde un dispositivo, y deben aparecer efectos visuales de conexión como ondas, señal Wi‑Fi, pequeños destellos cian y un ícono de llamada. Debe verse moderno, tecnológico y claro, sin exageración.
+
+---
+
+## 17.3 Reunión
+**Prompt:**
+
+Diseñar una animación 2D de reunión para personajes de oficina de Agent Viewer. Varios agentes deben caminar hasta la sala, ubicarse alrededor de una mesa y mostrar turnos de conversación mediante burbujas con etiquetas como PROPOSES, OBJECTS, AGREES y DECIDES. Debe sentirse como una colaboración de equipo profesional.
+
+---
+
+# 18. Reglas de originalidad obligatorias
+
+## 18.1 Sí hacer
+- Crear siluetas propias
+- Usar lentes en lugar de visor
+- Usar laptop, tablet, café, clipboard, teléfono
+- Diseñar ropa de oficina
+- Diseñar salas corporativas
+- Tener lenguaje visual propio
+- Tener animaciones propias
+
+## 18.2 No hacer
+- No copiar personajes de otras IP
+- No usar visor
+- No usar mochila
+- No copiar la proporción exacta de personajes famosos
+- No replicar sprites
+- No replicar animaciones reconocibles
+- No usar logos o assets de terceros
+
+---
+
+# 19. Orden recomendado de producción visual
+
+## 19.1 Fase 1
+- Crear style guide base
+- Crear personaje base masculino/neutro
+- Crear personaje base femenino/neutro
+- Definir paleta final
+
+## 19.2 Fase 2
+- Crear 6 roles
+- Crear props por rol
+- Crear expresiones por rol
+
+## 19.3 Fase 3
+- Crear idle pose
+- Crear walk cycle
+- Crear talking pose
+- Crear thinking pose
+- Crear blocked pose
+- Crear completed pose
+- Crear on-call pose
+
+## 19.4 Fase 4
+- Crear oficinas
+- Crear salas
+- Crear muebles
+- Crear pantallas
+- Crear TV con noticias
+- Crear coffee area
+
+## 19.5 Fase 5
+- Crear escenas de interacción
+- Reuniones
+- Llamadas
+- Colaboración
+- Trabajo en escritorio
+- Debugging
+- Aprobaciones
+- Reportes
+
+---
+
+# 20. Prompt final integral para ChatGPT
+
+## 20.1 Prompt maestro completo
+**Prompt:**
+
+Quiero diseñar el sistema visual completo de “Agent Viewer”, una oficina virtual para observabilidad de agentes de IA. Necesito que crees personajes originales de oficina en estilo 2D cartoon corporativo premium, con formas redondeadas, aspecto simpático pero profesional, lentes como rasgo distintivo, ropa de oficina y props tecnológicos como laptop, tablet, clipboard, teléfono y café. No deben usar visor ni mochila. Deben verse originales y no parecer copia de franquicias conocidas.
+
+Debes crear un sistema consistente de 6 roles visuales: CEO, Planner, Developer, Analyst, Reviewer y Finance. Cada uno debe diferenciarse por paleta, ropa, lentes, props, postura, expresiones y animaciones. También necesito guía para sus movimientos y estados: caminar, pensar, hablar, revisar, analizar, reunirse, hacer llamadas, mostrar señal Wi‑Fi, bloquearse y completar tareas.
+
+Además, necesito diseñar las oficinas y salas del sistema: director suite, planning room, development area, analysis room, review area, finance desk, meeting room y coffee area. Estas salas deben incluir muebles y props como escritorios, sillas, PCs, laptops, teléfonos, televisores, pantallas con dashboards o noticias, plantas, cafetera, pizarras y mesas de reuniones.
+
+Quiero que todo se vea tecnológico, profesional, vivo, moderno y fácilmente animable, como un producto visual premium para representar agentes de IA trabajando dentro de una oficina.
+
+---
+
+# 21. Resultado esperado final
+Con este documento, cualquier generación visual futura debe producir:
+- personajes consistentes,
+- roles diferenciados,
+- oficinas coherentes,
+- props claros,
+- animaciones entendibles,
+- lenguaje visual original,
+- una identidad propia para Agent Viewer.
+
+---

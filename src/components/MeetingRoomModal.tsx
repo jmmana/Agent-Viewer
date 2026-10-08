@@ -1,7 +1,8 @@
 import React from 'react';
 import { Meeting, Agent } from '../types/agent';
 import type { Locale } from '../i18n';
-import { t } from '../i18n';
+import { t, type TranslationKey } from '../i18n';
+import { localizeDemoText } from '../content/demoScript';
 import {
   Users,
   Sparkles,
@@ -43,18 +44,18 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
             <h2 className="text-lg font-bold text-white font-sans">{t(locale, 'meetings.title')}</h2>
             {activeMeeting && activeMeeting.status === 'ACTIVE' && (
               <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 uppercase font-mono animate-pulse">
-                Live In Session
+                {t(locale, 'meetings.live')}
               </span>
             )}
           </div>
           <p className="text-xs text-slate-400">
-            Multi-agent deliberation, architectural alignment, consensus building, and decisions.
+            {t(locale, 'meetings.subtitle')}
           </p>
         </div>
       </div>
 
       {!activeMeeting ? (
-        <div className="text-center py-20 bg-slate-900/40 rounded-xl border border-slate-800 text-xs text-slate-500">
+        <div className="text-center py-20 bg-slate-900/40 rounded-xl border border-slate-800 text-xs text-slate-400">
           {t(locale, 'meetings.empty')}
         </div>
       ) : (
@@ -67,22 +68,22 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
                   {activeMeeting.id}
                 </span>
                 <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
-                  <Clock className="w-3.5 h-3.5" />
+                  <Clock className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>
-                    Started {new Date(activeMeeting.startedAt).toLocaleTimeString()}
+                    {t(locale, 'meetings.startedAt', { time: new Date(activeMeeting.startedAt).toLocaleTimeString(locale) })}
                   </span>
                 </div>
               </div>
 
-              <h3 className="text-base font-bold text-white">{activeMeeting.title}</h3>
+              <h3 className="text-base font-bold text-white">{localizeDemoText(activeMeeting.title, locale)}</h3>
               <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-lg border border-slate-800/80">
-                {activeMeeting.topic}
+                {localizeDemoText(activeMeeting.topic, locale)}
               </p>
 
               {/* Agenda Items */}
               <div className="space-y-1.5 pt-2">
                 <span className="text-[11px] font-semibold uppercase text-slate-400 tracking-wide block">
-                  Agenda Items
+                  {t(locale, 'meetings.agenda')}
                 </span>
                 <div className="flex flex-wrap gap-2">
                   {activeMeeting.agenda.map((ag, i) => (
@@ -90,7 +91,7 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
                       key={i}
                       className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 text-xs text-slate-300 font-medium"
                     >
-                      {i + 1}. {ag}
+                      {t(locale, 'meetings.agendaItem', { index: i + 1, item: localizeDemoText(ag, locale) })}
                     </span>
                   ))}
                 </div>
@@ -101,11 +102,11 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-4">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wide flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-sky-400" />
-                  Deliberation Transcript
+                  <MessageSquare className="w-4 h-4 text-sky-400" aria-hidden="true" />
+                  {t(locale, 'meetings.transcript')}
                 </h4>
-                <span className="text-xs text-slate-500 font-mono">
-                  {activeMeeting.messages.length} exchanges
+                <span className="text-xs text-slate-400 font-mono">
+                  {t(locale, 'meetings.exchanges', { count: activeMeeting.messages.length })}
                 </span>
               </div>
 
@@ -127,13 +128,14 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
                     >
                       <div className="flex items-center justify-between">
                         <button
+                          type="button"
                           onClick={() => onSelectAgent(msg.senderId)}
                           className="font-bold text-sky-400 hover:underline"
                         >
                           {getAgentName(msg.senderId)}
                         </button>
-                        <span className="text-[10px] font-mono uppercase text-slate-500">
-                          {msg.type}
+                        <span className="text-[10px] font-mono uppercase text-slate-400">
+                          {t(locale, `kind.${msg.type}` as TranslationKey)}
                         </span>
                       </div>
                       <p className="text-slate-200 leading-relaxed font-sans">{msg.text}</p>
@@ -147,8 +149,8 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
             {activeMeeting.decisions.length > 0 && (
               <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-3">
                 <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wide flex items-center gap-2">
-                  <FileCheck className="w-4 h-4" />
-                  Consensus & Decisions Recorded
+                  <FileCheck className="w-4 h-4" aria-hidden="true" />
+                  {t(locale, 'meetings.decisions')}
                 </h4>
                 <div className="space-y-2">
                   {activeMeeting.decisions.map((dec, i) => (
@@ -156,8 +158,8 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
                       key={i}
                       className="flex items-start gap-2.5 p-2.5 rounded-lg bg-slate-950 border border-emerald-900/40 text-xs text-slate-200"
                     >
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                      <span>{dec}</span>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{localizeDemoText(dec, locale)}</span>
                     </div>
                   ))}
                 </div>
@@ -170,23 +172,23 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
             {/* Meeting Telemetry */}
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-3 font-mono tabular-nums">
               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide">
-                Meeting Telemetry
+                {t(locale, 'meetings.telemetry')}
               </h4>
               <div className="space-y-2">
                 <div className="flex justify-between text-xs py-1 border-b border-slate-800">
-                  <span className="text-slate-400">Tokens Burned</span>
+                  <span className="text-slate-400">{t(locale, 'meetings.tokens')}</span>
                   <span className="font-bold text-sky-400">
                     {activeMeeting.tokensAccumulated.toLocaleString()}
                   </span>
                 </div>
                 <div className="flex justify-between text-xs py-1 border-b border-slate-800">
-                  <span className="text-slate-400">Session Cost</span>
+                  <span className="text-slate-400">{t(locale, 'meetings.cost')}</span>
                   <span className="font-bold text-emerald-400">
                     ${activeMeeting.costAccumulated.toFixed(3)}
                   </span>
                 </div>
                 <div className="flex justify-between text-xs py-1">
-                  <span className="text-slate-400">Tasks Spawned</span>
+                  <span className="text-slate-400">{t(locale, 'meetings.tasksSpawned')}</span>
                   <span className="font-bold text-indigo-400">
                     {activeMeeting.tasksCreated.length}
                   </span>
@@ -197,14 +199,15 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
             {/* Seated Attendees */}
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-3">
               <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide flex items-center gap-2">
-                <Users className="w-4 h-4 text-indigo-400" />
-                Seated Attendees ({activeMeeting.participants.length})
+                <Users className="w-4 h-4 text-indigo-400" aria-hidden="true" />
+                {t(locale, 'meetings.attendees', { count: activeMeeting.participants.length })}
               </h4>
               <div className="space-y-2">
                 {activeMeeting.participants.map((pid) => {
                   const ag = agents.find((a) => a.id === pid);
                   return (
                     <button
+                      type="button"
                       key={pid}
                       onClick={() => onSelectAgent(pid)}
                       className="w-full flex items-center justify-between p-2.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-left transition-colors"
@@ -214,10 +217,10 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
                           {getAgentName(pid)}
                         </span>
                         <span className="text-[11px] text-slate-400">
-                          {ag?.roleTitle || 'Participant'}
+                          {ag?.roleTitle ? localizeDemoText(ag.roleTitle, locale) : t(locale, 'meetings.participant')}
                         </span>
                       </div>
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true" />
                     </button>
                   );
                 })}

@@ -84,12 +84,12 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Zone 1: Single text element Brand mark */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-sm shadow-indigo-500/20">
+          <div aria-hidden="true" className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-sm shadow-indigo-500/20">
             <span className="text-xs tracking-tighter font-mono">AV</span>
           </div>
-          <span className="text-base font-bold tracking-tight text-white font-sans">
+          <h1 className="text-base font-bold tracking-tight text-white font-sans">
             Agent Viewer
-          </span>
+          </h1>
         </div>
         <div className="h-4 w-px bg-slate-700" />
         <span className="text-xs text-slate-400 hidden 2xl:inline">
@@ -220,13 +220,13 @@ export const TopBar: React.FC<TopBarProps> = ({
                       : 'hover:text-slate-200'
                   }`}
                 >
-                  {spd}x
+                  {t(locale, 'controls.speedShort', { speed: spd })}
                 </button>
               ))}
             </div>
 
             <span className="text-[11px] font-mono text-slate-400 px-1 border-l border-slate-800 tabular-nums">
-              {t(locale, 'controls.stepLabel')} {demoStepIndex + 1}/{totalDemoSteps}
+              {t(locale, 'controls.stepCounter', { label: t(locale, 'controls.stepLabel'), current: demoStepIndex + 1, total: totalDemoSteps })}
             </span>
           </div>
         )}
@@ -267,8 +267,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           onChange={(event) => onChangeLocale(event.target.value as Locale)}
           className="bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200"
         >
-          <option value="en">EN</option>
-          <option value="es">ES</option>
+          <option value="en" lang="en" aria-label={t(locale, 'controls.languageEn')}>EN</option>
+          <option value="es" lang="es" aria-label={t(locale, 'controls.languageEs')}>ES</option>
         </select>
 
         {/* Audio Toggle */}

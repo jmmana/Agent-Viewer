@@ -61,3 +61,68 @@ export function wrapText(text: string, maxWidth: number, measure: (text: string)
   }
   return lines.length ? lines : [''];
 }
+
+const NAME_ARROW = ' → ';
+
+/** Cuts `text` to `maxWidth`, ending with an ellipsis when something was removed. */
+export function ellipsize(text: string, maxWidth: number, measure: (text: string) => number): string {
+  if (measure(text) <= maxWidth) return text;
+  let out = text;
+  while (out && measure(out + '…') > maxWidth) out = out.slice(0, -1);
+  return out.trimEnd() + '…';
+}
+
+/**
+ * Fits "speaker → target" into the header of a speech bubble. Long names are shortened fairly: first both keep
+ * only their first two words, then both are cut with an ellipsis, sharing the width so the target is never
+ * the only one cut.
+ */
+export function fitBubbleNames(
+  speaker: string,
+  target: string | undefined,
+  maxWidth: number,
+  measure: (text: string) => number,
+): string {
+  const from = speaker.trim();
+  const to = target?.trim() || undefined;
+  const join = (a: string, b?: string) => (b ? a + NAME_ARROW + b : a);
+  const full = join(from, to);
+  if (measure(full) <= maxWidth) return full;
+
+  const twoWords = (name: string) => name.split(/\s+/).slice(0, 2).join(' ');
+  const shortFrom = twoWords(from);
+  const shortTo = to ? twoWords(to) : undefined;
+  const short = join(shortFrom, shortTo);
+  if (measure(short) <= maxWidth) return short;
+  if (!shortTo) return ellipsize(shortFrom, maxWidth, measure);
+
+  const available = Math.max(0, maxWidth - measure(NAME_ARROW));
+  const fromWidth = measure(shortFrom);
+  const toWidth = measure(shortTo);
+  let fromMax = available / 2;
+  let toMax = available / 2;
+  // A name shorter than its half gives the rest of its space to the other one.
+  if (fromWidth < fromMax) toMax = available - fromWidth;
+  else if (toWidth < toMax) fromMax = available - toWidth;
+  return ellipsize(shortFrom, fromMax, measure) + NAME_ARROW + ellipsize(shortTo, toMax, measure);
+}
+
+/** How long a speech bubble takes to leave, in milliseconds. */
+export const BUBBLE_EXIT_MS = 220;
+
+/**
+ * Exit animation of a speech bubble. The card and its text stay fully opaque (a translucent card would let the
+ * office show through the text); the bubble shrinks and drops toward its agent while only the outline and the
+ * pointer fade.
+ */
+export function bubbleExitStyle(remainingMs: number, reducedMotion = false): {
+  scale: number;
+  offsetY: number;
+  cardAlpha: number;
+  outlineAlpha: number;
+} {
+  if (reducedMotion) return { scale: 1, offsetY: 0, cardAlpha: 1, outlineAlpha: 1 };
+  const progress = Math.min(1, Math.max(0, 1 - remainingMs / BUBBLE_EXIT_MS));
+  const eased = progress * progress;
+  return { scale: 1 - 0.35 * eased, offsetY: 10 * eased, cardAlpha: 1, outlineAlpha: 1 - progress };
+}

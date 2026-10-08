@@ -38,7 +38,7 @@ const EN = {
   // Step 1
   'step.0.title': '1. Client inputs received (video, 2 PDFs, Word file, 2 bank websites)',
   'step.0.description':
-    'Valeria (Sales) and Carlos (RPA Lead) receive the banking request in the Boss Office: 1 video, 2 statement PDFs, 1 Word file and 2 bank websites.',
+    'Valeria (Sales) and Carlos (RPA Lead) receive the banking request in the Director Suite: 1 video, 2 statement PDFs, 1 Word file and 2 bank websites.',
   'step.0.sales.statusText': 'Presenting the client request',
   'step.0.sales.bubble': 'The client sent a video, 2 PDFs, a Word file and 2 bank websites to automate reconciliation!',
   'step.0.boss.statusText': 'Planning an end-to-end UiPath RPA solution',
@@ -58,29 +58,29 @@ const EN = {
   'step.1.meeting.agenda.0': 'Video review',
   'step.1.meeting.agenda.1': 'Extraction of the 2 PDFs',
   'step.1.meeting.agenda.2': 'REFramework structure',
-  'step.1.meeting.decision.0': 'BA will produce the PDD in the Library',
+  'step.1.meeting.decision.0': 'BA will produce the PDD in the Research Library',
   'step.1.meeting.decision.1': 'Architecture will define the SDD in Meeting Room B',
   'step.1.event': 'Kickoff started in Meeting Room A: defining the RPA deliverables plan.',
 
   // Step 3
   'step.2.title': '3. Research Library: document extraction and PDD',
   'step.2.description':
-    'Dr. Maya, Sofía and Andrés analyze the video, the 2 PDFs and the Word file in the Library and compile the Process Definition Document.',
+    'Dr. Maya, Sofía and Andrés analyze the video, the 2 PDFs and the Word file in the Research Library and compile the Process Definition Document.',
   'step.2.ba1.bubble': 'Extracted 28 key fields from the Word file and the bank PDFs. PDD v1.0 is ready.',
   'step.2.artifact.pdd.name': 'PDD - Process Definition Document v1.0',
   'step.2.artifact.pdd.summary': 'Formal definition of the banking process with business rules and OCR fields.',
   'step.2.event': 'PDD (Process Definition Document) generated successfully in the Research Library.',
 
   // Step 4
-  'step.3.title': '4. Leads Studio: BPMN diagrams and effort estimate',
+  'step.3.title': '4. Architecture area: BPMN diagrams and effort estimate',
   'step.3.description':
-    'In the Leads Area the team models the as-is and to-be flow diagrams and estimates the effort in story points.',
+    'In the Architecture area the team models the as-is and to-be flow diagrams and estimates the effort in story points.',
   'step.3.ba2.bubble': 'BPMN diagrams ready: 3 happy paths and 8 banking business exceptions.',
   'step.3.artifact.bpmn.name': 'BPMN As-Is and To-Be Flow Diagrams',
   'step.3.artifact.bpmn.summary': 'Detailed BPMN 2.0 map of the banking processes, including error branches.',
   'step.3.artifact.estimate.name': 'Effort Estimate and Sizing',
   'step.3.artifact.estimate.summary': 'Complexity matrix: 42 user stories, 85 story points over 3 sprints.',
-  'step.3.event': 'BPMN diagrams and effort estimate completed in the Leads Studio.',
+  'step.3.event': 'BPMN diagrams and effort estimate completed in the Architecture area.',
 
   // Step 5
   'step.4.title': '5. Meeting Room B (War Room): UiPath architecture and SDD',
@@ -92,9 +92,11 @@ const EN = {
   'step.4.artifact.architecture.name': 'UiPath REFramework Technical Architecture',
   'step.4.artifact.architecture.summary': 'Integration blueprint with Azure Key Vault, Orchestrator and the bank websites.',
   'step.4.event': 'SDD and UiPath architecture approved in Meeting Room B.',
+  'step.4.meeting.title': 'UiPath Architecture and SDD Review',
+  'step.4.meeting.topic': 'Dispatcher-Performer design, transactional queues and REFramework',
 
   // Step 6
-  'step.5.title': '6. Development Pods: building in UiPath Studio',
+  'step.5.title': '6. Engineering: building in UiPath Studio',
   'step.5.description':
     'Lucas, Kenji and Mateo build the XAML workflows that automate both bank websites and the REFramework.',
   'step.5.dev1.bubble': 'Fuzzy selectors and web navigation ready for both banks (Santander and Chile).',
@@ -109,34 +111,36 @@ const EN = {
   'step.6.event': 'Banking QA certification passed: 1,000 transactions validated in the QA Lab.',
 
   // Step 8
-  'step.7.title': '8. Server Room / Model Ops: UiPath Orchestrator and telemetry',
+  'step.7.title': '8. Model Ops room: UiPath Orchestrator and telemetry',
   'step.7.description':
-    'Alex and Lucas set up the UiPath Orchestrator cluster in the Server Room and provision 4 unattended robots.',
+    'Alex and Lucas set up the UiPath Orchestrator cluster in the Model Ops room and provision 4 unattended robots.',
   'step.7.techLead.bubble': 'UiPath Orchestrator configured: 4 unattended robots ready in high availability.',
   'step.7.artifact.orchestrator.name': 'Orchestrator Topology and Robot Provisioning',
   'step.7.artifact.orchestrator.summary': 'Setup of 4 unattended robots, transactional queues and a 4-hour SLA.',
-  'step.7.event': 'UiPath Orchestrator provisioned with 4 unattended robots in the Server Room.',
+  'step.7.event': 'UiPath Orchestrator provisioned with 4 unattended robots in the Model Ops room.',
 
   // Step 9
-  'step.8.title': '9. Cafeteria and Team Lounge: sync coffee break',
+  'step.8.title': '9. Espresso bar and Team Lounge: sync coffee break',
   'step.8.description':
-    'The team gathers in the Cafeteria and the Team Lounge for a break while Sales consolidates the commercial proposal.',
+    'The team gathers at the espresso bar and the Team Lounge for a break while Sales consolidates the commercial proposal.',
   'step.8.ba1.bubble': 'Great coordination! The PDD and the SDD are ready for the quote.',
-  'step.8.event': 'The team syncs in the Cafeteria and the Team Lounge during the technical break.',
+  'step.8.event': 'The team syncs at the espresso bar and the Team Lounge during the technical break.',
 
   // Step 10
-  'step.9.title': '10. Secret Floor (Floor 2): commercial quote and Gantt chart',
+  'step.9.title': '10. Secret floor (floor 2): commercial quote and Gantt chart',
   'step.9.description':
-    'Valeria (Sales), Carlos (RPA Lead) and Dr. Maya go up to Floor 2 to work out the quote and the Gantt chart.',
+    'Valeria (Sales), Carlos (RPA Lead) and Dr. Maya go up to the secret floor 2 to work out the quote and the Gantt chart.',
   'step.9.sales.bubble': 'Quote closed: $48.5K USD with ROI in 4 months and a 6-week Gantt chart.',
   'step.9.artifact.quote.name': 'Commercial Quote and ROI Analysis',
   'step.9.artifact.quote.summary': 'Investment: $48,500 USD. Estimated annual savings: $165,000 USD (340% ROI in 6 months).',
   'step.9.artifact.gantt.name': 'Gantt Chart - Implementation Schedule (6 Weeks)',
   'step.9.artifact.gantt.summary': 'Detailed schedule with Sprints 1, 2 and 3, banking UAT and go-live.',
-  'step.9.event': 'Commercial quote and Gantt chart completed on the second floor (Overflow Floor).',
+  'step.9.event': 'Commercial quote and Gantt chart completed on the secret second floor.',
+  'step.9.meeting.title': 'Commercial Quote and Gantt Chart',
+  'step.9.meeting.topic': 'Investment, ROI and the 6-week implementation schedule',
 
   // Step 11
-  'step.10.title': '11. Boss Office: executive summary and HTML presentation',
+  'step.10.title': '11. Director Suite: executive summary and HTML presentation',
   'step.10.description':
     'The leadership team compiles the executive summary and builds the interactive HTML presentation that brings everything together.',
   'step.10.boss.bubble': 'Compiling the interactive HTML presentation with every deliverable for the client.',
@@ -144,7 +148,7 @@ const EN = {
   'step.10.artifact.summary.summary': 'Management one-pager summarizing scope, business benefits, security and ROI.',
   'step.10.artifact.deck.name': 'Interactive HTML Executive Presentation',
   'step.10.artifact.deck.summary': 'Responsive interactive HTML deck with the PDD, SDD, BPMN diagrams, Gantt chart and quote.',
-  'step.10.event': 'Interactive HTML presentation and executive summary compiled in the Boss Office.',
+  'step.10.event': 'Interactive HTML presentation and executive summary compiled in the Director Suite.',
 
   // Step 12
   'step.11.title': '12. Grand finale: the complete proposal is delivered',
@@ -188,7 +192,7 @@ const ES: DemoScriptTexts = {
 
   'step.0.title': '1. Recepción de Insumos del Cliente (Video, 2 PDFs, Word, 2 Webs Bancarias)',
   'step.0.description':
-    'Valeria (Ventas) y Carlos (Jefe RPA) reciben en Boss Office el requerimiento bancario: 1 Video, 2 PDFs de extractos, 1 Word y 2 webs de bancos.',
+    'Valeria (Ventas) y Carlos (Jefe RPA) reciben en Dirección el requerimiento bancario: 1 Video, 2 PDFs de extractos, 1 Word y 2 webs de bancos.',
   'step.0.sales.statusText': 'Presentando requerimiento del cliente',
   'step.0.sales.bubble': '¡Cliente envió Video, 2 PDFs, Word y 2 webs bancarias para automatizar conciliación!',
   'step.0.boss.statusText': 'Planificando solución RPA UiPath end-to-end',
@@ -198,87 +202,91 @@ const ES: DemoScriptTexts = {
     'Construir solución RPA completa: PDD, SDD, Estimación, BPMN, Arquitectura, Cotización, Gantt, Resumen y Presentación HTML interactiva.',
   'step.0.event': 'TASK-RPA-BANK recibida: Video, 2 PDFs, Word y 2 webs de bancos para automatizar conciliación.',
 
-  'step.1.title': '2. Kickoff de Alcance en Meeting Room A',
+  'step.1.title': '2. Kickoff de alcance en la Sala de reunión A',
   'step.1.description':
-    'Carlos (Jefe RPA), Alex (Arquitecto) y Dra. Maya (Líder BA) se reúnen en Meeting Room A para coordinar entregables.',
+    'Carlos (Jefe RPA), Alex (Arquitecto) y Dra. Maya (Líder BA) se reúnen en la Sala de reunión A para coordinar entregables.',
   'step.1.techLead.bubble': 'Revisando video y webs de bancos. Diseñaremos Dispatcher y Performer en REFramework.',
   'step.1.meeting.title': 'Kickoff Solución RPA Bancaria',
   'step.1.meeting.topic': 'Desglose de entregables: PDD, SDD, Estimación, BPMN y Cotización',
   'step.1.meeting.agenda.0': 'Revisión Video',
   'step.1.meeting.agenda.1': 'Extracción 2 PDFs',
   'step.1.meeting.agenda.2': 'Estructura REFramework',
-  'step.1.meeting.decision.0': 'BA generará PDD en Library',
-  'step.1.meeting.decision.1': 'Arquitectura definirá SDD en Meeting Room B',
-  'step.1.event': 'Kickoff iniciado en Meeting Room A: Definición de plan de entregables RPA.',
+  'step.1.meeting.decision.0': 'BA generará el PDD en la Biblioteca I+D',
+  'step.1.meeting.decision.1': 'Arquitectura definirá el SDD en la Sala de reunión B',
+  'step.1.event': 'Kickoff iniciado en la Sala de reunión A: definición del plan de entregables RPA.',
 
-  'step.2.title': '3. Research Library: Extracción Documental & Creación del PDD',
+  'step.2.title': '3. Biblioteca I+D: extracción documental y creación del PDD',
   'step.2.description':
-    'Dra. Maya, Sofía y Andrés analizan el Video, los 2 PDFs y el Word en la Library y compilan el Process Definition Document.',
+    'Dra. Maya, Sofía y Andrés analizan el Video, los 2 PDFs y el Word en la Biblioteca I+D y compilan el Process Definition Document.',
   'step.2.ba1.bubble': 'Extraídos 28 campos clave del Word y PDFs bancarios. PDD v1.0 listo.',
   'step.2.artifact.pdd.name': 'PDD - Documento de Definición del Proceso v1.0',
   'step.2.artifact.pdd.summary': 'Documento formal de definición de proceso bancario con reglas de negocio y campos OCR.',
-  'step.2.event': 'PDD (Process Definition Document) generado con éxito en Research Library.',
+  'step.2.event': 'PDD (Process Definition Document) generado con éxito en la Biblioteca I+D.',
 
-  'step.3.title': '4. Leads Studio: Diagramas BPMN & Estimación de Esfuerzo',
+  'step.3.title': '4. Arquitectura: diagramas BPMN y estimación de esfuerzo',
   'step.3.description':
-    'En Leads Area se modelan los diagramas de flujo As-Is / To-Be y se calcula la estimación de esfuerzo en story points.',
+    'En el área de Arquitectura se modelan los diagramas de flujo As-Is / To-Be y se calcula la estimación de esfuerzo en story points.',
   'step.3.ba2.bubble': 'Diagramas BPMN listos: 3 caminos felices y 8 excepciones de negocio bancarias.',
   'step.3.artifact.bpmn.name': 'Diagramas de Flujo BPMN As-Is & To-Be',
   'step.3.artifact.bpmn.summary': 'Mapeo detallado de procesos bancarios en estándar BPMN 2.0 con bifurcaciones de error.',
   'step.3.artifact.estimate.name': 'Estimación de Esfuerzo & Sizing',
   'step.3.artifact.estimate.summary': 'Matriz de complejidad: 42 historias de usuario, 85 Story Points en 3 Sprints.',
-  'step.3.event': 'Diagramas BPMN y Estimación de Esfuerzo completados en Leads Studio.',
+  'step.3.event': 'Diagramas BPMN y Estimación de Esfuerzo completados en el área de Arquitectura.',
 
-  'step.4.title': '5. Meeting Room B (War Room): Arquitectura UiPath & SDD',
+  'step.4.title': '5. Sala de reunión B (War Room): arquitectura UiPath y SDD',
   'step.4.description':
-    'Alex (Arquitecto) y los 3 analistas de desarrollo RPA se reúnen en Meeting Room B para definir REFramework y el SDD.',
+    'Alex (Arquitecto) y los 3 analistas de desarrollo RPA se reúnen en la Sala de reunión B para definir REFramework y el SDD.',
   'step.4.techLead.bubble': 'SDD aprobado: Arquitectura Dispatcher-Performer con colas transaccionales y REFramework.',
   'step.4.artifact.sdd.name': 'SDD - Documento de Diseño de la Solución (UiPath REFramework)',
   'step.4.artifact.sdd.summary': 'Diseño técnico de la solución UiPath: Dispatcher, Performer, Queues y manejo de excepciones.',
   'step.4.artifact.architecture.name': 'Arquitectura Técnica UiPath REFramework',
   'step.4.artifact.architecture.summary': 'Blueprint de integración con Azure Key Vault, Orchestrator y webs bancarias.',
-  'step.4.event': 'SDD y Arquitectura UiPath aprobados en Meeting Room B.',
+  'step.4.event': 'SDD y Arquitectura UiPath aprobados en la Sala de reunión B.',
+  'step.4.meeting.title': 'Revisión de Arquitectura UiPath y SDD',
+  'step.4.meeting.topic': 'Diseño Dispatcher-Performer, colas transaccionales y REFramework',
 
-  'step.5.title': '6. Development Pods: Codificación en UiPath Studio',
+  'step.5.title': '6. Ingeniería: desarrollo en UiPath Studio',
   'step.5.description':
     'Lucas, Kenji y Mateo desarrollan los workflows XAML automatizando ambas páginas web bancarias y el REFramework.',
   'step.5.dev1.bubble': 'Selectores Fuzzy y navegación web listos en ambos bancos (Santander & Chile).',
   'step.5.event': 'UiPath Studio: Dispatcher y Performer implementados para las 2 plataformas bancarias.',
 
-  'step.6.title': '7. QA Lab: Pruebas de Estrés y Certificación Bancaria',
-  'step.6.description': 'Zoe Vance (QA) y Mateo Silva ejecutan en el QA Lab 1,000 transacciones simuladas sin errores.',
+  'step.6.title': '7. Lab QA: pruebas de estrés y certificación bancaria',
+  'step.6.description': 'Zoe Vance (QA) y Mateo Silva ejecutan en el Lab QA 1,000 transacciones simuladas sin errores.',
   'step.6.qa.bubble': '1,000 transacciones probadas: 0 excepciones de sistema, 100% de éxito bancario.',
   'step.6.artifact.qa.name': 'Matriz de Pruebas & Certificación QA Bancaria',
   'step.6.artifact.qa.summary':
     'Certificación de 1,000 transacciones: 0 fallos, tolerancia a caídas de red y reintentos automáticos.',
-  'step.6.event': 'Certificación QA Bancaria exitosa: 1,000 transacciones validadas en QA Lab.',
+  'step.6.event': 'Certificación QA Bancaria exitosa: 1,000 transacciones validadas en el Lab QA.',
 
-  'step.7.title': '8. Server Room / Model Ops: UiPath Orchestrator & Telemetría',
+  'step.7.title': '8. Sala Model Ops: UiPath Orchestrator y telemetría',
   'step.7.description':
-    'Alex y Lucas configuran en Server Room el clúster de UiPath Orchestrator y aprovisionan 4 Robots Unattended.',
+    'Alex y Lucas configuran en la sala Model Ops el clúster de UiPath Orchestrator y aprovisionan 4 Robots Unattended.',
   'step.7.techLead.bubble': 'UiPath Orchestrator configurado: 4 Robots Unattended listos en alta disponibilidad.',
   'step.7.artifact.orchestrator.name': 'Topología Orchestrator & Provisioning de Robots',
   'step.7.artifact.orchestrator.summary': 'Configuración de 4 Robots Unattended, Colas Transaccionales y SLA de 4 horas.',
-  'step.7.event': 'UiPath Orchestrator aprovisionado con 4 Robots Unattended en Server Room.',
+  'step.7.event': 'UiPath Orchestrator aprovisionado con 4 Robots Unattended en la sala Model Ops.',
 
-  'step.8.title': '9. Cafeteria & Team Lounge: Coffee Break de Sincronización',
+  'step.8.title': '9. Café y Sala del equipo: pausa de sincronización',
   'step.8.description':
-    'El equipo se reúne en la Cafetería y Team Lounge para un receso mientras Ventas consolida la propuesta económica.',
+    'El equipo se reúne en el café y la Sala del equipo para un receso mientras Ventas consolida la propuesta económica.',
   'step.8.ba1.bubble': '¡Excelente coordinación! El PDD y el SDD están listos para la cotización.',
-  'step.8.event': 'Equipo sincroniza en Cafetería y Team Lounge durante el descanso técnico.',
+  'step.8.event': 'Equipo sincroniza en el café y la Sala del equipo durante el descanso técnico.',
 
-  'step.9.title': '10. Secret Floor (Piso 2): Cotización Económica & Carta Gantt',
+  'step.9.title': '10. Piso secreto (piso 2): cotización económica y Carta Gantt',
   'step.9.description':
-    'Valeria (Ventas), Carlos (Jefe RPA) y Dra. Maya suben al Piso 2 para calcular la cotización y la Carta Gantt.',
+    'Valeria (Ventas), Carlos (Jefe RPA) y Dra. Maya suben al piso secreto 2 para calcular la cotización y la Carta Gantt.',
   'step.9.sales.bubble': 'Cotización cerrada: $48.5K USD con ROI en 4 meses y Carta Gantt de 6 semanas.',
   'step.9.artifact.quote.name': 'Cotización Económica & Análisis de ROI',
   'step.9.artifact.quote.summary':
     'Inversión: $48,500 USD. Ahorro anual estimado: $165,000 USD (ROI de 340% en 6 meses).',
   'step.9.artifact.gantt.name': 'Carta Gantt - Cronograma de Implementación (6 Semanas)',
   'step.9.artifact.gantt.summary': 'Cronograma detallado con fases de Sprint 1, 2, 3, UAT bancario y pase a producción.',
-  'step.9.event': 'Cotización Económica y Carta Gantt completadas en el Segundo Piso (Overflow Floor).',
+  'step.9.event': 'Cotización Económica y Carta Gantt completadas en el piso secreto 2.',
+  'step.9.meeting.title': 'Cotización Económica y Carta Gantt',
+  'step.9.meeting.topic': 'Inversión, ROI y cronograma de implementación de 6 semanas',
 
-  'step.10.title': '11. Boss Office: Resumen Ejecutivo y Presentación HTML',
+  'step.10.title': '11. Dirección: resumen ejecutivo y presentación HTML',
   'step.10.description':
     'El equipo directivo compila el Resumen Ejecutivo y genera la Presentación Interactiva en HTML consolidando todo.',
   'step.10.boss.bubble': 'Compilando la presentación interactiva HTML con todos los entregables para el cliente.',
@@ -286,7 +294,7 @@ const ES: DemoScriptTexts = {
   'step.10.artifact.summary.summary': 'One-pager gerencial resumiendo alcance, beneficios de negocio, seguridad y ROI.',
   'step.10.artifact.deck.name': 'Presentación Ejecutiva Interactiva HTML',
   'step.10.artifact.deck.summary': 'Deck interactivo en HTML responsive con PDD, SDD, diagramas BPMN, Gantt y cotización.',
-  'step.10.event': 'Presentación Interactiva HTML y Resumen Ejecutivo compilados en Boss Office.',
+  'step.10.event': 'Presentación Interactiva HTML y Resumen Ejecutivo compilados en Dirección.',
 
   'step.11.title': '12. Gran Cierre: Entrega Exitosa de la Propuesta Completa',
   'step.11.description':
@@ -308,4 +316,27 @@ export const DEMO_SCRIPT_KEYS = Object.keys(EN) as DemoScriptKey[];
 /** Returns one demo text in the given locale, with its `{placeholders}` filled from `params`. */
 export function demoText(locale: Locale, key: DemoScriptKey, params?: OfficeMessageParams): string {
   return formatMessage(DEMO_SCRIPT[locale][key], params);
+}
+
+const DEMO_TEXT_LOOKUP: ReadonlyMap<string, DemoScriptKey> = (() => {
+  const lookup = new Map<string, DemoScriptKey>();
+  for (const key of DEMO_SCRIPT_KEYS) {
+    if (EN[key].includes('{')) continue;
+    lookup.set(EN[key], key);
+    lookup.set(ES[key], key);
+  }
+  return lookup;
+})();
+
+/**
+ * Shows a stored demo text in the current locale.
+ *
+ * The simulation keeps plain strings in its state (agents, tasks, events, meetings), written in the locale that
+ * was active when each step ran or in the Spanish defaults of `INITIAL_AGENTS`. When `text` is exactly one of the
+ * built-in demo texts, in any language, this returns the same text in `locale`; anything else (real events, user
+ * input, templates with parameters) is returned unchanged.
+ */
+export function localizeDemoText(text: string, locale: Locale): string {
+  const key = DEMO_TEXT_LOOKUP.get(text);
+  return key ? DEMO_SCRIPT[locale][key] : text;
 }

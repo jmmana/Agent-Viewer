@@ -20,6 +20,7 @@ import {
   Maximize2,
 } from 'lucide-react';
 import { t, type Locale, type TranslationKey } from '../i18n';
+import { localizeDemoText } from '../content/demoScript';
 
 interface LiveTimelineSidebarProps {
   isOpen: boolean;
@@ -161,6 +162,7 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md">
         <div role="group" aria-label={t(locale, 'sidebar.views')} className="flex items-center gap-1 bg-slate-950/80 p-0.5 rounded-lg border border-slate-800">
           <button
+            type="button"
             onClick={() => setActiveTab('timeline')}
             aria-pressed={activeTab === 'timeline'}
             className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-colors ${
@@ -241,9 +243,16 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-200 font-medium line-clamp-1 mb-2">
-                {activeTask.title}
+                {localizeDemoText(activeTask.title, locale)}
               </p>
-              <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                role="progressbar"
+                aria-label={t(locale, 'sidebar.taskProgress', { task: activeTask.id })}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={activeTask.progress}
+                className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden"
+              >
                 <div
                   className="h-full bg-indigo-500 rounded-full transition-all duration-300"
                   style={{ width: `${activeTask.progress}%` }}
@@ -308,7 +317,7 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
           <div className="flex-1 overflow-y-auto p-4 space-y-3 relative">
             {filteredEvents.length === 0 ? (
               <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
-                <Radio className="w-6 h-6 text-slate-500 animate-pulse" aria-hidden="true" />
+                <Radio className="w-6 h-6 text-slate-400 animate-pulse" aria-hidden="true" />
                 <span>{t(locale, 'sidebar.waiting')}</span>
               </div>
             ) : (
@@ -348,9 +357,9 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
                                 title={t(locale, 'sidebar.selectAgent', { name: sourceAgent.name })}
                                 className="font-semibold text-xs text-white hover:text-sky-400 min-w-0 text-left transition-colors flex items-center gap-1"
                               >
-                                <span className="truncate">{sourceAgent.name}</span>
-                                <span className="text-[10px] text-slate-400 font-normal truncate">
-                                  ({sourceAgent.roleTitle})
+                                <span className="shrink-0 max-w-[70%] truncate">{sourceAgent.name}</span>
+                                <span className="min-w-0 text-[10px] text-slate-400 font-normal truncate">
+                                  ({localizeDemoText(sourceAgent.roleTitle, locale)})
                                 </span>
                               </button>
                             )}
@@ -371,7 +380,7 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
 
                         {/* Summary / Text */}
                         <p className="text-xs text-slate-200 leading-relaxed mb-2 font-normal">
-                          {ev.summary}
+                          {localizeDemoText(ev.summary, locale)}
                         </p>
 
                         {/* Payload / Tool Details Tag */}
@@ -389,10 +398,12 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
                               {statusLabel(sourceAgent.status)}
                             </span>
                             <button
+                              type="button"
                               onClick={() => {
                                 onSelectAgent(sourceAgent.id);
                                 onFocusAgent(sourceAgent);
                               }}
+                              aria-label={t(locale, 'sidebar.focusAgentInOffice', { name: sourceAgent.name })}
                               className="inline-flex items-center gap-1 text-[10px] text-slate-400 hover:text-sky-400 transition-colors"
                             >
                               <Eye className="w-3 h-3" aria-hidden="true" />
@@ -425,13 +436,13 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
 
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-1">
-                <h3
+                <h2
                   onDoubleClick={() => onOpenAgentDetailModal && onOpenAgentDetailModal(selectedAgent.id)}
                   title={t(locale, 'sidebar.detailHint')}
                   className="font-bold text-white text-sm truncate cursor-pointer hover:text-sky-300 transition-colors"
                 >
                   {selectedAgent.name}
-                </h3>
+                </h2>
                 <div className="flex items-center gap-1">
                   {onOpenAgentDetailModal && (
                     <button
@@ -453,7 +464,7 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
                   </button>
                 </div>
               </div>
-              <p className="text-xs text-sky-400 font-medium">{selectedAgent.roleTitle}</p>
+              <p className="text-xs text-sky-400 font-medium">{localizeDemoText(selectedAgent.roleTitle, locale)}</p>
               <p className="text-[11px] text-slate-400 font-mono mt-0.5">
                 {selectedAgent.provider} · {selectedAgent.model}
               </p>
@@ -486,7 +497,7 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
               {t(locale, 'sidebar.currentActivity')}
             </span>
             <p className="text-xs text-slate-300 italic bg-slate-950/50 p-2.5 rounded-lg border border-slate-800/60">
-              "{selectedAgent.statusText}"
+              "{localizeDemoText(selectedAgent.statusText, locale)}"
             </p>
           </div>
 

@@ -1,7 +1,8 @@
 import React from 'react';
 import { Task, Agent } from '../types/agent';
 import type { Locale } from '../i18n';
-import { t } from '../i18n';
+import { t, type TranslationKey } from '../i18n';
+import { localizeDemoText } from '../content/demoScript';
 import {
   Layers,
   CheckCircle2,
@@ -63,10 +64,11 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
           </p>
         </div>
         <button
+          type="button"
           onClick={onOpenNewTask}
           className="px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors shadow-sm"
         >
-          + {t(locale, 'tasks.create')}
+          {t(locale, 'tasks.createButton', { label: t(locale, 'tasks.create') })}
         </button>
       </div>
 
@@ -77,40 +79,40 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
         </h3>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <div className="bg-slate-950 px-3 py-2 rounded-lg border border-slate-800 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-indigo-400" />
-            <span className="font-semibold text-white">Director</span>
-            <span className="text-slate-500">Objective</span>
+            <span aria-hidden="true" className="w-2 h-2 rounded-full bg-indigo-400" />
+            <span className="font-semibold text-white">{t(locale, 'tasks.dag.director')}</span>
+            <span className="text-slate-400">{t(locale, 'tasks.dag.directorDetail')}</span>
           </div>
 
-          <ArrowRight className="w-4 h-4 text-slate-600" />
+          <ArrowRight className="w-4 h-4 text-slate-500" aria-hidden="true" />
 
           <div className="bg-slate-950 px-3 py-2 rounded-lg border border-slate-800 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-sky-400" />
-            <span className="font-semibold text-white">Tech & Research Leads</span>
-            <span className="text-slate-500">Architecture & Specs</span>
+            <span aria-hidden="true" className="w-2 h-2 rounded-full bg-sky-400" />
+            <span className="font-semibold text-white">{t(locale, 'tasks.dag.leads')}</span>
+            <span className="text-slate-400">{t(locale, 'tasks.dag.leadsDetail')}</span>
           </div>
 
-          <ArrowRight className="w-4 h-4 text-slate-600" />
+          <ArrowRight className="w-4 h-4 text-slate-500" aria-hidden="true" />
 
           <div className="bg-slate-950 px-3 py-2 rounded-lg border border-slate-800 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-amber-400" />
-            <span className="font-semibold text-white">Engineering Pod</span>
-            <span className="text-slate-500">Code & Tools</span>
+            <span aria-hidden="true" className="w-2 h-2 rounded-full bg-amber-400" />
+            <span className="font-semibold text-white">{t(locale, 'tasks.dag.engineering')}</span>
+            <span className="text-slate-400">{t(locale, 'tasks.dag.engineeringDetail')}</span>
           </div>
 
-          <ArrowRight className="w-4 h-4 text-slate-600" />
+          <ArrowRight className="w-4 h-4 text-slate-500" aria-hidden="true" />
 
           <div className="bg-slate-950 px-3 py-2 rounded-lg border border-slate-800 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-purple-400" />
-            <span className="font-semibold text-white">QA Lab</span>
-            <span className="text-slate-500">Security & Tests</span>
+            <span aria-hidden="true" className="w-2 h-2 rounded-full bg-purple-400" />
+            <span className="font-semibold text-white">{t(locale, 'tasks.dag.qa')}</span>
+            <span className="text-slate-400">{t(locale, 'tasks.dag.qaDetail')}</span>
           </div>
 
-          <ArrowRight className="w-4 h-4 text-slate-600" />
+          <ArrowRight className="w-4 h-4 text-slate-500" aria-hidden="true" />
 
           <div className="bg-slate-950 px-3 py-2 rounded-lg border border-emerald-800/80 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span className="font-semibold text-emerald-400">Release Verified</span>
+            <span aria-hidden="true" className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="font-semibold text-emerald-400">{t(locale, 'tasks.dag.release')}</span>
           </div>
         </div>
       </div>
@@ -118,7 +120,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
       {/* Task Cards List */}
       <div className="space-y-4">
         {tasks.length === 0 ? (
-          <div className="text-center py-16 bg-slate-900/40 rounded-xl border border-slate-800 text-xs text-slate-500">
+          <div className="text-center py-16 bg-slate-900/40 rounded-xl border border-slate-800 text-xs text-slate-400">
             {t(locale, 'tasks.empty')}
           </div>
         ) : (
@@ -126,7 +128,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
             <div
               key={task.id}
               onDoubleClick={() => onOpenAgentDetail && onOpenAgentDetail(task.assignedAgentId)}
-              title="Doble clic para ver expediente completo del agente asignado"
+              title={t(locale, 'tasks.cardHint')}
               className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-4 hover:border-slate-700 transition-colors cursor-pointer select-none"
             >
               {/* Task Header */}
@@ -136,10 +138,10 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
                     <span className="font-mono text-xs text-sky-400 bg-sky-950/80 px-2 py-0.5 rounded border border-sky-800/60 font-semibold">
                       {task.id}
                     </span>
-                    <h3 className="text-base font-bold text-white">{task.title}</h3>
+                    <h3 className="text-base font-bold text-white">{localizeDemoText(task.title, locale)}</h3>
                   </div>
                   <p className="text-xs text-slate-400 leading-relaxed max-w-2xl">
-                    {task.description}
+                    {localizeDemoText(task.description, locale)}
                   </p>
                 </div>
 
@@ -149,16 +151,16 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
                     task.status
                   )}`}
                 >
-                  {task.status}
+                  {t(locale, `taskStatus.${task.status}` as TranslationKey)}
                 </span>
               </div>
 
               {/* Blocker alert if blocked */}
               {task.status === 'BLOCKED' && task.blockerReason && (
                 <div className="flex items-start gap-2.5 p-3 rounded-lg bg-rose-950/50 border border-rose-900/60 text-xs text-rose-300">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" aria-hidden="true" />
                   <div>
-                    <span className="font-semibold block text-rose-200">Execution Blocked</span>
+                    <span className="font-semibold block text-rose-200">{t(locale, 'tasks.blocked')}</span>
                     <p>{task.blockerReason}</p>
                   </div>
                 </div>
@@ -170,7 +172,14 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
                   <span>{t(locale, 'tasks.progress')}</span>
                   <span className="text-slate-200 font-semibold">{task.progress}%</span>
                 </div>
-                <div className="w-full h-2 rounded-full bg-slate-950 overflow-hidden border border-slate-800">
+                <div
+                  role="progressbar"
+                  aria-label={t(locale, 'tasks.progressLabel', { task: task.id })}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={task.progress}
+                  className="w-full h-2 rounded-full bg-slate-950 overflow-hidden border border-slate-800"
+                >
                   <div
                     className={`h-full rounded-full transition-all duration-500 ${
                       task.status === 'BLOCKED'
@@ -187,13 +196,14 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
               {/* Task Metadata & Telemetry Breakdown */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-slate-950 p-3 rounded-lg border border-slate-800/80 font-mono tabular-nums">
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.assignedLead')}</span>
+                  <span className="text-[10px] text-slate-400 block uppercase">{t(locale, 'tasks.assignedLead')}</span>
                   <button
+                    type="button"
                     onClick={() => {
                       onSelectAgent(task.assignedAgentId);
                       if (onOpenAgentDetail) onOpenAgentDetail(task.assignedAgentId);
                     }}
-                    title="Clic para ver expediente completo"
+                    title={t(locale, 'tasks.leadHint', { name: getAgentName(task.assignedAgentId) })}
                     className="font-medium text-sky-400 hover:text-sky-300 hover:underline"
                   >
                     {getAgentName(task.assignedAgentId)}
@@ -201,19 +211,19 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
                 </div>
 
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.tokens')}</span>
+                  <span className="text-[10px] text-slate-400 block uppercase">{t(locale, 'tasks.tokens')}</span>
                   <span className="font-bold text-slate-200">
                     {task.tokensTotal.toLocaleString()}
                   </span>
                 </div>
 
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.totalCost')}</span>
+                  <span className="text-[10px] text-slate-400 block uppercase">{t(locale, 'tasks.totalCost')}</span>
                   <span className="font-bold text-emerald-400">${task.costTotal.toFixed(3)}</span>
                 </div>
 
                 <div>
-                  <span className="text-[10px] text-slate-500 block uppercase">{t(locale, 'tasks.collaborators')}</span>
+                  <span className="text-[10px] text-slate-400 block uppercase">{t(locale, 'tasks.collaborators')}</span>
                   <span className="text-slate-300">
                     {task.collaboratorIds.map((id) => getAgentName(id).split(' ')[0]).join(', ')}
                   </span>
@@ -224,7 +234,7 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
               {task.artifacts.length > 0 && (
                 <div className="space-y-2">
                   <span className="text-xs font-semibold text-slate-400 block uppercase tracking-wide">
-                    {t(locale, 'tasks.deliverables')} ({task.artifacts.length})
+                    {t(locale, 'tasks.deliverablesCount', { label: t(locale, 'tasks.deliverables'), count: task.artifacts.length })}
                   </span>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     {task.artifacts.map((art) => (
@@ -234,18 +244,18 @@ export const TaskBoard: React.FC<TaskBoardProps> = ({
                       >
                         <div className="p-2 rounded bg-indigo-950/60 border border-indigo-800/60 text-indigo-400">
                           {art.type === 'code' ? (
-                            <FileCode className="w-4 h-4" />
+                            <FileCode className="w-4 h-4" aria-hidden="true" />
                           ) : art.type === 'test_run' ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" aria-hidden="true" />
                           ) : (
-                            <FileText className="w-4 h-4 text-amber-400" />
+                            <FileText className="w-4 h-4 text-amber-400" aria-hidden="true" />
                           )}
                         </div>
                         <div className="space-y-0.5 text-xs">
-                          <span className="font-semibold text-slate-200 block">{art.name}</span>
-                          <p className="text-slate-400 leading-snug text-[11px]">{art.summary}</p>
-                          <span className="text-[10px] text-slate-500 font-mono">
-                            Author: {getAgentName(art.authorId)}
+                          <span className="font-semibold text-slate-200 block">{localizeDemoText(art.name, locale)}</span>
+                          <p className="text-slate-400 leading-snug text-[11px]">{localizeDemoText(art.summary, locale)}</p>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {t(locale, 'tasks.author', { name: getAgentName(art.authorId) })}
                           </span>
                         </div>
                       </div>

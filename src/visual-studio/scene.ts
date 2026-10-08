@@ -1,4 +1,4 @@
-import { assetUrls, findCharacter, roomLayouts, studioAssets, type StudioAsset } from './assets';
+import { assetUrls, findCharacter, roomLayouts, studioAssets, studioFrameFile, type StudioAsset } from './assets';
 
 export const WORLD = { width: 1280, height: 760 };
 export const sceneViews = {
@@ -95,9 +95,9 @@ export function drawScene(ctx: CanvasRenderingContext2D, images: Map<string, HTM
 
   type DrawItem = { depth: number; render: () => void };
   const items: DrawItem[] = [];
-  const drawAsset = (asset: StudioAsset | undefined, x: number, y: number, scale: number) => {
+  const drawAsset = (asset: StudioAsset | undefined, x: number, y: number, scale: number, frameFile?: string) => {
     if (!asset) return;
-    const image = images.get(asset.file);
+    const image = images.get(frameFile ?? asset.file);
     if (!image) return;
     const width = asset.logicalSize.width * scale;
     const height = asset.logicalSize.height * scale;
@@ -146,9 +146,14 @@ export function drawScene(ctx: CanvasRenderingContext2D, images: Map<string, HTM
         ctx.strokeStyle = '#14a68b'; ctx.lineWidth = 2;
         ctx.beginPath(); ctx.ellipse(x, y - 1, 34, 9, 0, 0, Math.PI * 2); ctx.stroke();
       }
-      const bob = moving && !reduced ? Math.sin(seconds * 14) * 1.6 : 0;
-      drawAsset(asset, x, y + bob, 1.08);
-      if (!asset || !images.has(asset.file)) label(ctx, `${role}: recurso pendiente`, x, y - 48, '#646f76', 10, 'center');
+      const hasRealWalk = moving && asset?.clip === 'walk' && (asset.frameFiles?.length ?? 0) > 1;
+      const bob = moving && !reduced && !hasRealWalk ? Math.sin(seconds * 14) * 1.6 : 0;
+      const actualFrameFile = asset ? studioFrameFile(asset, seconds, reduced) : undefined;
+      drawAsset(asset, x, y + bob, 1.08, actualFrameFile);
+      if (!asset || (actualFrameFile && !images.has(actualFrameFile)))
+        label(ctx, `${role}: recurso pendiente`, x, y - 48, '#646f76', 10, 'center');
+      if (moving && !hasRealWalk)
+        label(ctx, 'Caminar: frames raster pendientes', x, y - 59, '#9c6032', 9, 'center');
       label(ctx, role === 'ceo' ? 'Director' : role.charAt(0).toUpperCase() + role.slice(1), x, y + 17, '#47534f', 10, 'center');
     } });
   };
@@ -158,7 +163,7 @@ export function drawScene(ctx: CanvasRenderingContext2D, images: Map<string, HTM
   actor('finance', 310, 695);
   actor('developer', 405, 354);
   const director = directorPosition(seconds);
-  actor('ceo', director.x, director.y, seconds < 7 ? 'work' : seconds < 14 ? 'phone' : 'idle', director.facing, director.moving);
+  actor('ceo', director.x, director.y, director.moving ? 'walk' : seconds < 7 ? 'work' : seconds < 14 ? 'phone' : 'idle', director.facing, director.moving);
   for (const item of items.sort((a, b) => a.depth - b.depth)) item.render();
   if (seconds >= 7 && seconds < 14) {
     drawAsset(studioAssets.find(asset => asset.id === 'effect.call'), director.x + 48, director.y - 76, .85);

@@ -45,7 +45,7 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
-    "build:lib": "vite build --mode lib && tsc -p tsconfig.lib.json && node scripts/fix-dts-extensions.mjs dist-lib && cp src/lib/agent-viewer.css dist-lib/agent-viewer.css",
+    "build:lib": "vite build --mode lib && tsc -p src/lib/tsconfig.json && node scripts/fix-dts-extensions.mjs dist-lib && cp src/lib/agent-viewer.css dist-lib/agent-viewer.css",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-lib server.js",
     "lint": "tsc --noEmit",

@@ -1,3 +1,4 @@
+# Dockerfile-specific ignore file (BuildKit): applies to docker build -f docker/Dockerfile .
 node_modules
 dist
 dist-lib

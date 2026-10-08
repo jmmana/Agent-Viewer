@@ -40,7 +40,7 @@ The runtime dependencies are `lucide-react` (icons) and `zod` (strict event vali
 Publication on npm is coming soon. Until then, install the package from the GitHub release asset:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.0/warlockcode-agent-viewer-0.2.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
 ```
 
 The package name is `@warlockcode/agent-viewer` in both cases, so your imports will not change when you switch to the npm registry.

@@ -40,7 +40,7 @@ Las dependencias de ejecución son `lucide-react` (iconos) y `zod` (validación 
 La publicación en npm llegará pronto. Mientras tanto, instala el paquete desde el archivo de la release de GitHub:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.0/warlockcode-agent-viewer-0.2.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
 ```
 
 El nombre del paquete es `@warlockcode/agent-viewer` en ambos casos, así que tus importaciones no cambian cuando pases al registro de npm.

@@ -2,8 +2,15 @@
  * `agent-viewer` command line. Each command module is loaded on demand, so `claude-hook` and `send` start fast
  * and never load the server, express or zod.
  */
-import { CliUsageError, parseCliArgs, USAGE, type CliCommand } from './args.ts';
-import { packageInfo } from './packageInfo.ts';
+import { armHookGuard } from './hookBudget.ts';
+import type { CliCommand } from './args.ts';
+
+// The hook's hard stop goes first. Static imports are evaluated before this line, so the only one is the
+// dependency-free budget module; the parser and everything else load after the guard is armed.
+if (process.argv[2] === 'claude-hook') armHookGuard();
+
+const { CliUsageError, parseCliArgs, USAGE } = await import('./args.ts');
+const { packageInfo } = await import('./packageInfo.ts');
 
 async function run(command: CliCommand): Promise<number> {
   switch (command.command) {

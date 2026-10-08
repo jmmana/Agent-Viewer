@@ -10,16 +10,64 @@ import { CliUsageError, parseCliArgs } from '../cli/args.ts';
 import { buildSendEvents } from '../cli/send.ts';
 import { normalizeStatus } from '../cli/statuses.ts';
 import { resolveConnection, writeSessionFile } from '../cli/connection.ts';
-import { curlExample, displayHost, officeUrl } from '../cli/start.ts';
+import { createLaunchCodes, curlExample, displayHost, exposureWarning, launchUrl, officeUrl, resolveStartToken } from '../cli/start.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliEntry = path.join(repoRoot, 'cli', 'index.ts');
 
 test('CLI args: start defaults are local, tokened and open the browser', () => {
-  const start = parseCliArgs([], '/work');
+  const start = parseCliArgs([], '/work', {});
   assert.deepEqual(start, { command: 'start', port: 8787, host: '127.0.0.1', token: undefined, demo: false, open: true, record: undefined });
-  assert.deepEqual(parseCliArgs(['start', '--no-open'], '/work').open, false);
+  assert.deepEqual(parseCliArgs(['start', '--no-open'], '/work', {}).open, false);
+});
+
+test('CLI args: PORT and AGENT_VIEWER_HOST are the defaults of --port and --host, and flags win', () => {
+  const env = { PORT: '9123', AGENT_VIEWER_HOST: '0.0.0.0' };
+  assert.equal(parseCliArgs([], '/work', env).port, 9123);
+  assert.equal(parseCliArgs([], '/work', env).host, '0.0.0.0');
+  assert.equal(parseCliArgs(['--port', '4000', '--host', '127.0.0.1'], '/work', env).port, 4000);
+  assert.equal(parseCliArgs(['--port', '4000', '--host', '127.0.0.1'], '/work', env).host, '127.0.0.1');
+  // The defaults the Docker image passes first are overridden by a later flag.
+  assert.equal(parseCliArgs(['--port', '8787', '--no-open', '--port', '9000'], '/work', {}).port, 9000);
+  assert.equal(parseCliArgs([], '/work', { PORT: '', AGENT_VIEWER_HOST: '  ' }).port, 8787);
+  assert.equal(parseCliArgs([], '/work', { PORT: '', AGENT_VIEWER_HOST: '  ' }).host, '127.0.0.1');
+  // HOST is not read: tcsh exports it with the machine name, which would expose the server.
+  assert.equal(parseCliArgs([], '/work', { HOST: 'my-laptop' }).host, '127.0.0.1');
+  assert.throws(() => parseCliArgs([], '/work', { PORT: 'http' }), /PORT must be a number/);
+});
+
+test('CLI start token: empty or blank variables never turn authentication off', () => {
+  for (const value of ['', ' ', '\n']) {
+    const { token, source } = resolveStartToken(undefined, { AGENT_VIEWER_API_TOKEN: value });
+    assert.equal(source, 'generated');
+    assert.match(token, /^av_[\w-]{32}$/);
+  }
+  assert.deepEqual(resolveStartToken(undefined, { AGENT_VIEWER_API_TOKEN: ' abc \n' }), { token: 'abc', source: 'env' });
+  assert.deepEqual(resolveStartToken(undefined, { AGENT_VIEWER_API_TOKEN: '', AGENT_VIEWER_API_KEY: 'old' }), { token: 'old', source: 'legacy-env' });
+  assert.deepEqual(resolveStartToken('flag', { AGENT_VIEWER_API_TOKEN: 'env' }), { token: 'flag', source: 'flag' });
+  assert.throws(() => writeSessionFile({ url: 'http://x', token: '', pid: 1, startedAt: 0 }, { AGENT_VIEWER_HOME: os.tmpdir() }), /empty token/);
+});
+
+test('CLI start: launch codes work once and expire, and the browser URL carries no token', () => {
+  let now = 1_000;
+  const codes = createLaunchCodes('secret', () => now);
+  const code = codes.issue();
+  assert.equal(codes.redeem('nope'), undefined);
+  assert.equal(codes.redeem(code), 'secret');
+  assert.equal(codes.redeem(code), undefined, 'single use');
+  const late = codes.issue();
+  now += 120_001;
+  assert.equal(codes.redeem(late), undefined, 'expired');
+  assert.equal(codes.redeem(undefined), undefined);
+  const url = launchUrl('http://127.0.0.1:8787', code, false);
+  assert.equal(url, `http://127.0.0.1:8787/?mode=live#launch=${code}`);
+  assert.doesNotMatch(url, /secret|token/);
+});
+
+test('CLI start: the exposure warning says what stays public', () => {
+  assert.match(exposureWarning('0.0.0.0', false), /\/api\/v1 needs the token.*office page and \/health are public/);
+  assert.match(exposureWarning('0.0.0.0', true), /AGENT_VIEWER_WEBHOOK_SECRET signature instead of the token/);
 });
 
 test('CLI args: start options', () => {
@@ -132,10 +180,12 @@ test('CLI end to end: start, send an event, read it back from the API and the li
   const home = mkdtempSync(path.join(os.tmpdir(), 'av-e2e-'));
   const record = path.join(home, 'run.jsonl');
   const port = await freePort();
-  const env = { ...process.env, AGENT_VIEWER_HOME: home };
+  // An empty AGENT_VIEWER_API_TOKEN, as `export AGENT_VIEWER_API_TOKEN=` leaves it, must not open the API.
+  const env = { ...process.env, AGENT_VIEWER_HOME: home, AGENT_VIEWER_API_TOKEN: '' };
   delete env.AGENT_VIEWER_URL;
-  delete env.AGENT_VIEWER_API_TOKEN;
   delete env.AGENT_VIEWER_API_KEY;
+  delete env.PORT;
+  delete env.AGENT_VIEWER_HOST;
   // The server sources need tsx; the published CLI runs from the bundle in dist-cli/.
   const server = spawn(process.execPath, ['--import', 'tsx', cliEntry, '--no-open', '--port', String(port), '--record', record], {
     cwd: repoRoot,
@@ -162,6 +212,13 @@ test('CLI end to end: start, send an event, read it back from the API and the li
     const health = await (await fetch(`${base}/health`)).json();
     assert.equal(health.ok, true);
     assert.equal((await fetch(`${base}/api/v1/events`)).status, 401, 'the API needs the token');
+    assert.equal((await fetch(`${base}/api/v1/snapshot`)).status, 401, 'the API needs the token');
+    const session = JSON.parse(readFileSync(path.join(home, 'session.json'), 'utf8'));
+    assert.equal(session.token, token, 'the session file holds the generated token, never an empty one');
+
+    // A launch code is not the token, and an unknown one is refused.
+    const refused = await fetch(`${base}/api/cli/launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"code":"nope"}' });
+    assert.equal(refused.status, 404);
 
     // What the office receives: the live stream.
     const stream = await fetch(`${base}/api/v1/events/stream?token=${encodeURIComponent(token)}`);

@@ -3,6 +3,9 @@ import type { CanonicalEvent, CanonicalEventType } from '../src/integrations/can
 import type { AgentStatus, WorkspaceZone } from '../src/types/agent.ts';
 import type { ClaudeHookCommand } from './args.ts';
 import { postEvents, resolveConnection } from './connection.ts';
+import { armHookGuard, HOOK_BUDGET_MS } from './hookBudget.ts';
+
+export { HOOK_BUDGET_MS };
 
 /**
  * Claude Code hooks adapter.
@@ -295,8 +298,6 @@ export function translateClaudeHook(input: ClaudeHookInput, options: TranslateOp
   return events;
 }
 
-/** Total time the hook may take from process start, network included. Claude Code is never kept waiting. */
-export const HOOK_BUDGET_MS = 400;
 const MAX_INPUT_BYTES = 16 * 1024 * 1024;
 
 function debug(message: string): void {
@@ -327,9 +328,9 @@ function readStdin(limitBytes: number): Promise<string | undefined> {
  */
 export async function runClaudeHook(command: ClaudeHookCommand): Promise<number> {
   const elapsed = () => performance.now();
-  // Hard stop: whatever happens (slow server, open stdin), the process ends inside the budget.
-  const guard = setTimeout(() => process.exit(0), Math.max(50, Math.floor(HOOK_BUDGET_MS - elapsed())));
-  guard.unref();
+  // Hard stop: whatever happens (slow server, open stdin), the process ends inside the budget. The entry point
+  // arms the same guard before it loads this module; this one covers callers that import it directly.
+  armHookGuard();
 
   if (process.stdin.isTTY) {
     process.stderr.write('agent-viewer claude-hook reads a Claude Code hook event from stdin. See docs/claude-code.md.\n');

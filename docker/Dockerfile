@@ -42,12 +42,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/" || exit 1
 CMD ["node", "static-server.mjs"]
 
-# Ingestion API (default target): npm run server, with SQLite persistence in /app/data.
+# Ingestion API (published as ghcr.io/jmmana/agent-viewer:<version>-api), with SQLite persistence in /app/data.
+# It listens on every interface, so it never runs without a token: AGENT_VIEWER_API_TOKEN when set, else a
+# token generated on first start, saved in /app/data/api-token and printed in the logs
+# (docker/api-entrypoint.mjs).
 FROM deps AS api
 ENV NODE_ENV=production \
     PORT=8787 \
     AGENT_VIEWER_STORAGE=sqlite \
-    AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db
+    AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db \
+    AGENT_VIEWER_TOKEN_FILE=/app/data/api-token
 COPY . .
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
@@ -55,7 +59,7 @@ VOLUME ["/app/data"]
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/health" || exit 1
-CMD ["npm", "run", "server"]
+CMD ["node", "/app/docker/api-entrypoint.mjs"]
 
 # Build of the `agent-viewer` CLI: the server bundled for Node plus the office prebuilt for same-origin use.
 FROM deps AS cli-build
@@ -64,22 +68,26 @@ RUN npm run build:cli
 
 # Office and API in one container (default target): `docker run -p 8787:8787 ghcr.io/jmmana/agent-viewer`.
 # Only the runtime dependencies are installed. The token is printed on start; set AGENT_VIEWER_API_TOKEN to
-# choose it. Inside the container the server has to listen on every interface for the published port to work.
+# choose it. Inside the container the server has to listen on every interface for the published port to work,
+# so AGENT_VIEWER_HOST is 0.0.0.0. docker/app-entrypoint.sh adds the flags given to `docker run IMAGE ...` to
+# these defaults instead of replacing them; change the port with `-e PORT=...` (or `--port`, which the health
+# check follows too).
 FROM node:24-alpine AS app
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8787 \
+    AGENT_VIEWER_HOST=0.0.0.0 \
     AGENT_VIEWER_HOME=/app/data \
     AGENT_VIEWER_STORAGE=sqlite \
     AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --omit=peer --ignore-scripts && npm cache clean --force
 COPY --from=cli-build /app/dist-cli ./dist-cli
-RUN mkdir -p /app/data && chown node:node /app/data
+COPY docker/app-entrypoint.sh docker/healthcheck.mjs ./docker/
+RUN chmod 0755 docker/app-entrypoint.sh && mkdir -p /app/data && chown node:node /app/data
 USER node
 VOLUME ["/app/data"]
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/health" || exit 1
-ENTRYPOINT ["node", "dist-cli/cli.js"]
-CMD ["--host", "0.0.0.0", "--port", "8787", "--no-open"]
+  CMD node /app/docker/healthcheck.mjs || exit 1
+ENTRYPOINT ["/app/docker/app-entrypoint.sh"]

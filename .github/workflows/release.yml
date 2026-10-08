@@ -155,3 +155,26 @@ jobs:
           labels: ${{ steps.api-meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # GHCR creates a new package as private, and the GITHUB_TOKEN cannot change that. Until the owner makes it
+      # public once, `docker pull` without logging in fails. The summary says so on every release.
+      - name: Image visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          visibility=$(gh api "/users/${GITHUB_REPOSITORY_OWNER}/packages/container/agent-viewer" --jq .visibility 2>/dev/null || echo unknown)
+          settings="https://github.com/users/${GITHUB_REPOSITORY_OWNER}/packages/container/agent-viewer/settings"
+          {
+            echo "## Container images"
+            echo ""
+            echo "Published \`${IMAGE}\` (office and API) and the \`-api\` tags (API only)."
+            echo ""
+            echo "Package visibility: **${visibility}**."
+            if [ "$visibility" != "public" ]; then
+              echo ""
+              echo "GHCR creates new packages as **private**, and this workflow cannot change that. If this is the first publish (or the visibility above is not public), make the package public once so \`docker pull ${IMAGE}\` works without logging in: open ${settings}, then Danger Zone > Change visibility > Public."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$visibility" != "public" ]; then
+            echo "::warning title=GHCR package visibility::${IMAGE} is ${visibility}. Make it public once in ${settings} (Danger Zone > Change visibility)."
+          fi

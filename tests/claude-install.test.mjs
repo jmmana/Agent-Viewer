@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,9 @@ import {
   lineDiff,
   planInstall,
   planUninstall,
+  readInstallRecord,
+  runInstall,
+  writeFileAtomic,
   InstallError,
 } from '../cli/claudeInstall.ts';
 import { CLAUDE_HOOK_EVENTS } from '../cli/claudeHook.ts';
@@ -39,7 +42,7 @@ test('Claude install: the handler runs this CLI in exec form', () => {
     type: 'command',
     command: '/usr/local/bin/node',
     args: ['/opt/av/node_modules/@warlockcode/agent-viewer/dist-cli/cli.js', 'claude-hook'],
-    timeout: 5,
+    timeout: 1,
   });
   assert.equal(isAgentViewerHandler(handler), true);
   assert.equal(isAgentViewerHandler({ type: 'command', command: 'npx @warlockcode/agent-viewer claude-hook' }), true);
@@ -85,9 +88,121 @@ test('Claude install: uninstall restores the file byte for byte', () => {
     assert.equal(removed.changed, true);
     assert.equal(removed.after, original);
   }
-  // A file install created is removed again.
+  // A file install created is removed again, when the install record says so.
   const created = planInstall(null, handler);
-  assert.equal(planUninstall(created.after).after, null);
+  assert.equal(planUninstall(created.after, 'f', { createdFile: true, createdDir: true, events: [], hooks: false }).after, null);
+});
+
+test('Claude install: the hook timeout is 1 second on every event, below the SessionEnd budget', () => {
+  const after = JSON.parse(planInstall(null, buildHookHandler()).after);
+  for (const event of CLAUDE_HOOK_EVENTS) {
+    const ours = after.hooks[event].flatMap((group) => group.hooks).filter(isAgentViewerHandler);
+    assert.equal(ours[0].timeout, 1, event);
+  }
+});
+
+test('Claude install: a second install is a no-op with empty containers and inline empty hooks', () => {
+  const originals = [
+    '{\n  "hooks": {\n    "Stop": []\n  }\n}\n',
+    '{"hooks": {}}',
+    '{"hooks":{"SessionEnd":[],"Stop":[]},"model":"opus"}\n',
+    '{}\n',
+    '{}',
+    '',
+  ];
+  for (const original of originals) {
+    const once = planInstall(original, handler);
+    assert.equal(once.changed, true, JSON.stringify(original));
+    const twice = planInstall(once.after, handler);
+    assert.equal(twice.changed, false, `second install of ${JSON.stringify(original)}`);
+    assert.equal(twice.after, once.after);
+    assert.match(twice.summary, /already installed.*nothing to change/);
+    assert.doesNotMatch(twice.summary, /Adds/);
+  }
+  // An older handler (another path) is replaced in place, keeping the event order.
+  const old = buildHookHandler({ nodePath: '/old/node', scriptPath: '/old/agent-viewer/dist-cli/cli.js' });
+  const oldText = planInstall('{"hooks": {"Stop": []}}\n', old).after;
+  const updated = planInstall(oldText, handler);
+  assert.equal(updated.changed, true);
+  assert.match(updated.summary, /^Updates/);
+  assert.deepEqual(Object.keys(JSON.parse(updated.after).hooks), Object.keys(JSON.parse(oldText).hooks));
+  assert.equal(planInstall(updated.after, handler).changed, false);
+});
+
+test('Claude install: uninstall keeps what existed before install, as the record says', () => {
+  const cases = [
+    { original: '{}\n', record: { createdFile: false, createdDir: false, events: [], hooks: false } },
+    { original: '{"hooks": {}}\n', record: { createdFile: false, createdDir: false, events: [], hooks: true } },
+    { original: '{\n  "hooks": {\n    "Stop": []\n  }\n}\n', record: { createdFile: false, createdDir: false, events: ['Stop'], hooks: true } },
+  ];
+  for (const { original, record } of cases) {
+    const installed = planInstall(original, handler);
+    assert.deepEqual(installed.existing, { events: record.events, hooks: record.hooks });
+    const removed = planUninstall(installed.after, 'f', record);
+    assert.equal(removed.after, original, `round trip of ${JSON.stringify(original)}`);
+    assert.doesNotMatch(removed.summary, /install created/);
+  }
+  // Without a record nothing that may have been there before is deleted: the file stays.
+  const created = planInstall(null, handler);
+  const kept = planUninstall(created.after);
+  assert.equal(kept.changed, true);
+  assert.deepEqual(JSON.parse(kept.after), {});
+});
+
+test('Claude install: writes go through a temporary file and keep links and permissions', () => {
+  const dir = tempProject();
+  try {
+    const real = path.join(dir, 'real.json');
+    const link = path.join(dir, 'link.json');
+    writeFileSync(real, '{}\n');
+    if (process.platform !== 'win32') chmodSync(real, 0o600);
+    symlinkSync(real, link);
+    writeFileAtomic(link, '{"a": 1}\n');
+    assert.equal(lstatSync(link).isSymbolicLink(), true, 'the link stays a link');
+    assert.equal(readFileSync(real, 'utf8'), '{"a": 1}\n');
+    if (process.platform !== 'win32') assert.equal(statSync(real).mode & 0o777, 0o600);
+    assert.deepEqual(readdirSync(dir).sort(), ['link.json', 'real.json'], 'no temporary file is left');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Claude install: a file edited while the prompt waits is not overwritten', async () => {
+  const project = tempProject();
+  const home = tempProject();
+  const file = path.join(project, '.claude', 'settings.local.json');
+  const log = console.log;
+  const error = console.error;
+  const errors = [];
+  console.log = () => {};
+  console.error = (message) => { errors.push(String(message)); };
+  try {
+    mkdirSync(path.join(project, '.claude'));
+    writeFileSync(file, '{"model": "opus"}\n');
+    const command = { command: 'install', target: 'claude-code', project, yes: false, includeSummaries: false };
+    const code = await runInstall(command, {
+      env: { AGENT_VIEWER_HOME: home },
+      confirm: async () => {
+        writeFileSync(file, '{"model": "sonnet"}\n');
+        return true;
+      },
+    });
+    assert.equal(code, 1);
+    assert.equal(readFileSync(file, 'utf8'), '{"model": "sonnet"}\n', 'the edit made during the prompt survives');
+    assert.match(errors.join('\n'), /changed while waiting/);
+    assert.equal(readInstallRecord(file, { AGENT_VIEWER_HOME: home }), undefined, 'no record without a write');
+
+    // Confirmed with no edit in between: written, and the record notes what was there.
+    assert.equal(await runInstall(command, { env: { AGENT_VIEWER_HOME: home }, confirm: async () => true }), 0);
+    assert.match(readFileSync(file, 'utf8'), /claude-hook/);
+    assert.deepEqual(readInstallRecord(file, { AGENT_VIEWER_HOME: home }), { createdFile: false, createdDir: false, events: [], hooks: false });
+    assert.deepEqual(readdirSync(path.join(project, '.claude')), ['settings.local.json'], 'no temporary file is left');
+  } finally {
+    console.log = log;
+    console.error = error;
+    rmSync(project, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('Claude install: hand-formatted files keep every byte of their own text', () => {
@@ -135,9 +250,14 @@ test('Claude install: refuses files it cannot edit safely', () => {
   assert.throws(() => planInstall('{"hooks": {"Stop": {}}}', handler), InstallError);
 });
 
+// The install record goes to AGENT_VIEWER_HOME: a temporary folder, never the real ~/.agent-viewer.
+const stateHome = mkdtempSync(path.join(os.tmpdir(), 'av-state-'));
+test.after(() => rmSync(stateHome, { recursive: true, force: true }));
+
 function run(args, cwd) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cliEntry, ...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const env = { ...process.env, AGENT_VIEWER_HOME: stateHome };
+    const child = spawn(process.execPath, [cliEntry, ...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -199,5 +319,47 @@ test('Claude install CLI: without --yes and without a terminal, nothing is writt
     assert.equal(existsSync(path.join(project, '.claude')), false);
   } finally {
     rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('Claude install CLI: a second install says there is nothing to change', { timeout: 30_000 }, async () => {
+  const project = tempProject();
+  try {
+    assert.equal((await run(['install', 'claude-code', '--project', project, '--yes'])).code, 0);
+    const file = path.join(project, '.claude', 'settings.local.json');
+    const first = readFileSync(file, 'utf8');
+    const again = await run(['install', 'claude-code', '--project', project, '--yes']);
+    assert.equal(again.code, 0, again.stderr);
+    assert.match(again.stdout, /already installed.*nothing to change/);
+    assert.doesNotMatch(again.stdout, /Adds an Agent Viewer hook/);
+    assert.equal(readFileSync(file, 'utf8'), first);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('Claude install CLI: uninstall keeps a settings file and a .claude folder that existed before', { timeout: 30_000 }, async () => {
+  const emptyDir = tempProject();
+  const emptyFile = tempProject();
+  try {
+    mkdirSync(path.join(emptyDir, '.claude'));
+    assert.equal((await run(['install', 'claude-code', '--project', emptyDir, '--yes'])).code, 0);
+    const removedFile = await run(['uninstall', 'claude-code', '--project', emptyDir, '--yes']);
+    assert.equal(removedFile.code, 0, removedFile.stderr);
+    assert.match(removedFile.stdout, /removed: install created it/);
+    assert.deepEqual(readdirSync(emptyDir), ['.claude'], 'the empty .claude folder that was there stays');
+    assert.deepEqual(readdirSync(path.join(emptyDir, '.claude')), []);
+
+    mkdirSync(path.join(emptyFile, '.claude'));
+    const file = path.join(emptyFile, '.claude', 'settings.local.json');
+    writeFileSync(file, '{}\n');
+    assert.equal((await run(['install', 'claude-code', '--project', emptyFile, '--yes'])).code, 0);
+    const kept = await run(['uninstall', 'claude-code', '--project', emptyFile, '--yes']);
+    assert.equal(kept.code, 0, kept.stderr);
+    assert.doesNotMatch(kept.stdout, /install created it/);
+    assert.equal(readFileSync(file, 'utf8'), '{}\n', 'the file that was there comes back byte for byte');
+  } finally {
+    rmSync(emptyDir, { recursive: true, force: true });
+    rmSync(emptyFile, { recursive: true, force: true });
   }
 });

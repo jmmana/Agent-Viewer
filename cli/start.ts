@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -16,10 +16,69 @@ export function displayHost(host: string): string {
   return host.includes(':') ? `[${host}]` : host;
 }
 
-/** The office URL. The token travels in the fragment, which the browser never sends to any server. */
+/**
+ * The office URL. The token travels in the fragment, which the browser never sends to any server, and the
+ * office removes it from the address bar as soon as it has read it.
+ */
 export function officeUrl(baseUrl: string, token: string | undefined, demo: boolean): string {
   const query = demo ? '' : '?mode=live';
   return `${baseUrl}/${query}${token ? `#token=${encodeURIComponent(token)}` : ''}`;
+}
+
+/** The URL handed to the browser: a single-use launch code instead of the token, so argv never holds it. */
+export function launchUrl(baseUrl: string, code: string, demo: boolean): string {
+  const query = demo ? '' : '?mode=live';
+  return `${baseUrl}/${query}#launch=${encodeURIComponent(code)}`;
+}
+
+/** Path where the office trades a launch code for the session token. Outside /api/v1, so it needs no token. */
+export const LAUNCH_PATH = '/api/cli/launch';
+const LAUNCH_TTL_MS = 120_000;
+
+/**
+ * Single-use launch codes. The CLI opens the browser with a code instead of the token: the code shows up in
+ * the process list and in the browser history, but it works once, for two minutes, and only on this server.
+ */
+export function createLaunchCodes(token: string, now: () => number = Date.now) {
+  const codes = new Map<string, number>();
+  const digest = (value: string) => createHash('sha256').update(value).digest();
+  return {
+    issue(): string {
+      const code = randomBytes(18).toString('base64url');
+      codes.set(code, now() + LAUNCH_TTL_MS);
+      return code;
+    },
+    redeem(code: unknown): string | undefined {
+      if (typeof code !== 'string' || code === '') return undefined;
+      const wanted = digest(code);
+      for (const [candidate, expiresAt] of codes) {
+        if (timingSafeEqual(digest(candidate), wanted)) {
+          codes.delete(candidate);
+          return expiresAt >= now() ? token : undefined;
+        }
+      }
+      return undefined;
+    },
+  };
+}
+
+/** A token from the environment. Empty or blank values count as unset, so they never disable the token. */
+function envToken(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const value = env[name]?.trim();
+  return value ? value : undefined;
+}
+
+/**
+ * The session token: `--token`, then `AGENT_VIEWER_API_TOKEN`, then the deprecated `AGENT_VIEWER_API_KEY`, then
+ * a new random token. Never empty: an empty variable would otherwise turn authentication off.
+ */
+export function resolveStartToken(flag: string | undefined, env: NodeJS.ProcessEnv = process.env): { token: string; source: 'flag' | 'env' | 'legacy-env' | 'generated' } {
+  if (flag !== undefined && flag.trim() !== '') return { token: flag, source: 'flag' };
+  const fromEnv = envToken(env, 'AGENT_VIEWER_API_TOKEN');
+  if (fromEnv) return { token: fromEnv, source: 'env' };
+  const legacy = envToken(env, 'AGENT_VIEWER_API_KEY');
+  if (legacy) return { token: legacy, source: 'legacy-env' };
+  return { token: `av_${randomBytes(24).toString('base64url')}`, source: 'generated' };
 }
 
 /** A test command for the printed banner: the generic webhook builds the events from a flat body. */
@@ -49,12 +108,17 @@ export interface RunningViewer {
   url: string;
   token: string;
   port: number;
+  /** A new single-use code that the office trades for the token (see `launchUrl`). */
+  issueLaunchCode: () => string;
   close: () => Promise<void>;
 }
 
 /** Starts the ingestion server and serves the prebuilt office from the same origin. */
 export async function startViewer(command: StartCommand): Promise<RunningViewer> {
-  const token = command.token ?? process.env.AGENT_VIEWER_API_TOKEN ?? `av_${randomBytes(24).toString('base64url')}`;
+  const { token, source } = resolveStartToken(command.token);
+  if (source === 'legacy-env') {
+    console.warn('agent-viewer: AGENT_VIEWER_API_KEY is deprecated; rename it to AGENT_VIEWER_API_TOKEN.');
+  }
   // The server module reads its configuration when it is imported, so set it first.
   process.env.AGENT_VIEWER_EMBEDDED = '1';
   process.env.AGENT_VIEWER_API_TOKEN = token;
@@ -64,6 +128,17 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
     import('../server/index.ts'),
     import('express'),
   ]);
+
+  const launchCodes = createLaunchCodes(token);
+  app.post(LAUNCH_PATH, (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const granted = launchCodes.redeem((req.body as { code?: unknown } | undefined)?.code);
+    if (!granted) {
+      res.status(404).json({ error: 'launch_code_invalid', message: 'Unknown, used or expired launch code' });
+      return;
+    }
+    res.json({ token: granted });
+  });
 
   const viewerDir = path.join(packageInfo().root, 'dist-cli', 'viewer');
   const hasViewer = existsSync(path.join(viewerDir, 'index.html'));
@@ -137,7 +212,13 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
     return closing;
   };
 
-  return { url, token, port, close };
+  return { url, token, port, issueLaunchCode: () => launchCodes.issue(), close };
+}
+
+/** What a non-loopback bind exposes, for the start banner. */
+export function exposureWarning(host: string, webhookSecret: boolean): string {
+  const webhooks = webhookSecret ? ' Webhooks accept a valid AGENT_VIEWER_WEBHOOK_SECRET signature instead of the token.' : '';
+  return `Warning: listening on ${host}, so other machines on the network can reach it. /api/v1 needs the token above.${webhooks} The office page and /health are public.`;
 }
 
 /** Runs `agent-viewer` (start). Resolves when the server stops. */
@@ -172,9 +253,10 @@ export async function runStart(command: StartCommand): Promise<number> {
   ];
   console.log(lines.join('\n'));
   if (!LOOPBACK.has(command.host)) {
-    console.log(`  Warning: listening on ${command.host}, so other machines on the network can reach it. The token still protects /api/v1.\n`);
+    console.log(`  ${exposureWarning(command.host, Boolean(process.env.AGENT_VIEWER_WEBHOOK_SECRET))}\n`);
   }
-  if (command.open) openBrowser(office);
+  // The browser gets a single-use launch code, not the token: argv is visible to other local processes.
+  if (command.open) openBrowser(launchUrl(viewer.url, viewer.issueLaunchCode(), command.demo));
 
   await new Promise<void>((resolve) => {
     // The handlers stay installed while closing: npx forwards Ctrl+C to the child on top of the terminal's own

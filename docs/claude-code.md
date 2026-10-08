@@ -52,7 +52,7 @@ Never sent: tool arguments and results (commands, file contents, search patterns
 
 ## It never slows Claude Code down
 
-The hook writes nothing to stdout and always exits with code `0`. It gives itself 400 ms from process start: if the office is not running or does not answer, it stops quietly within that time. When the office is up, a hook takes well under 100 ms on a typical laptop. Claude Code's own `timeout` (5 seconds) is set only as a safety net.
+The hook writes nothing to stdout and always exits with code `0`. It gives itself 400 ms from process start: if the office is not running or does not answer, it stops quietly within that time. When the office is up, a hook takes well under 100 ms on a typical laptop. Each handler also sets Claude Code's own `timeout` to 1 second (Claude Code reads it in seconds) only as a safety net. It stays below the short budget Claude Code gives `SessionEnd` hooks when it exits, so installing Agent Viewer never makes Claude Code slower to quit.
 
 ## What install writes
 
@@ -63,11 +63,11 @@ Only `<project>/.claude/settings.local.json`, the per-project file Claude Code k
   "type": "command",
   "command": "/usr/local/bin/node",
   "args": ["/path/to/@warlockcode/agent-viewer/dist-cli/cli.js", "claude-hook"],
-  "timeout": 5
+  "timeout": 1
 }
 ```
 
-Installing again replaces the handlers instead of adding a second copy. Options: `--include-summaries`, and `--url` / `--token` to point the hook at a fixed server (the token is then stored in that file). Without them the hook finds the running `agent-viewer` on its own.
+Installing again replaces the handlers instead of adding a second copy; when they are already up to date it says so and writes nothing. The change is written only if the file did not change while you were reading the prompt (otherwise nothing is written and you run the command again), and it goes through a temporary file and a rename, so the file is never left half written. Options: `--include-summaries`, and `--url` / `--token` to point the hook at a fixed server (the token is then stored in that file). Without them the hook finds the running `agent-viewer` on its own.
 
 The handler uses the path of the CLI you ran. If you clean the npx cache, run `install claude-code` again; or install the package globally (`npm install -g @warlockcode/agent-viewer`) for a stable path.
 
@@ -77,7 +77,9 @@ The handler uses the path of the CLI you ran. If you clean the npx cache, run `i
 npx @warlockcode/agent-viewer uninstall claude-code
 ```
 
-It shows the change, asks, and removes exactly what install added: its handlers, plus the event lists, the `hooks` key and the file itself when install created them. Install edits the file as text and keeps every other byte (your spacing, line endings and key order), so after uninstall the file is byte for byte what it was. One corner case: containers that were already empty before install (a file holding just `{}`, `"hooks": {}` or an empty event list) look the same as the ones install creates, so uninstall removes them too.
+It shows the change, asks, and removes exactly what install added: its handlers, plus the event lists, the `hooks` key, the file and the `.claude/` folder when install created them. Install edits the file as text and keeps every other byte (your spacing, line endings and key order), so after uninstall the file is byte for byte what it was, including containers that were already empty before (a file holding just `{}`, `"hooks": {}`, an empty event list or an empty `.claude/` folder).
+
+To tell those apart, install keeps a small note of what was already there in `~/.agent-viewer/claude-code-installs.json` (or `$AGENT_VIEWER_HOME`). Without that note (another machine, or the folder was deleted), uninstall removes the handlers and the event lists and `hooks` key they leave empty, but keeps the file (as `{}` at worst) and the `.claude/` folder.
 
 ## Troubleshooting
 

@@ -27,22 +27,32 @@ It prints something like this and opens the office in your browser:
 
 Paste the `curl` command in another terminal and an agent called `demo` walks into the office.
 
-Requires Node.js 24 or later, the version it is tested on. Stop it with `Ctrl+C`.
+Requires Node.js 22.13 or later (the package declares it in `engines`, so npm warns on older versions); it is tested on Node 24. Stop it with `Ctrl+C`.
 
 ## Options
 
 | Option | Default | What it does |
 |---|---|---|
-| `--port <n>` | `8787` | Port for the office and the API. `0` picks a free port. |
-| `--host <address>` | `127.0.0.1` | Interface to listen on. The default accepts only this machine. `0.0.0.0` exposes it to your network (the token still protects `/api/v1`). |
-| `--token <token>` | `AGENT_VIEWER_API_TOKEN`, or a new random token | Token for `/api/v1`. Clients send `Authorization: Bearer <token>`. |
+| `--port <n>` | `PORT`, or `8787` | Port for the office and the API. `0` picks a free port. |
+| `--host <address>` | `AGENT_VIEWER_HOST`, or `127.0.0.1` | Interface to listen on. The default accepts only this machine. `0.0.0.0` exposes it to your network: `/api/v1` still needs the token, but the office page and `/health` are public, and with `AGENT_VIEWER_WEBHOOK_SECRET` set the webhooks accept a valid signature instead of the token. The plain `HOST` variable is not read, because some shells (tcsh) export it with the machine name. |
+| `--token <token>` | `AGENT_VIEWER_API_TOKEN`, else the deprecated `AGENT_VIEWER_API_KEY`, else a new random token | Token for `/api/v1`. Clients send `Authorization: Bearer <token>`. An empty or blank variable counts as unset, so the CLI never runs without a token. |
 | `--demo` | off | Opens the office with the simulated demo team. Your events still arrive on top of it. |
 | `--no-open` | opens | Do not open the browser. |
 | `--record <file>` | off | Appends every accepted event to a [canonical JSONL V1](event-log.md) file, ready to replay or export to video. |
 
-The office URL carries the token in its fragment (`#token=...`). Browsers never send the fragment to a server, so it does not end up in logs.
+### Where the token travels
 
-The server keeps events in memory. Set `AGENT_VIEWER_STORAGE=sqlite` (and optionally `AGENT_VIEWER_SQLITE_PATH`) to persist them. The other server variables in the [README](../README.md#-configuration) apply too. A `.env` file in the current folder is not read: the CLI is configured by its flags and the environment.
+- **The printed office URL** carries the token in its fragment (`#token=...`). Browsers do not send the fragment to the server. As soon as the office reads it, it removes it from the address bar and from the history entry (`history.replaceState`), and keeps it in that tab's `sessionStorage` so a reload still connects. The URL stays visible in your terminal, where it was printed.
+- **The browser the CLI opens** never gets the token: the command line of a process is visible to other local processes, so the CLI passes a single-use launch code instead (`#launch=...`). The office trades it for the token once (`POST /api/cli/launch`), and the code expires after two minutes. It is removed from the address bar the same way.
+- **The live stream** sends the token in an `Authorization: Bearer` header over a streamed `fetch`, so it does not appear in URLs, the server's access logs or a proxy's logs. Only a browser whose `fetch` cannot stream (no `ReadableStream`) falls back to `EventSource`, which cannot send headers: the token then goes in the `?token=` query parameter of `/api/v1/events/stream`, where an access log in front of the server can record it.
+
+### Environment
+
+The server keeps events in memory. Set `AGENT_VIEWER_STORAGE=sqlite` (and optionally `AGENT_VIEWER_SQLITE_PATH`) to persist them. The other server variables in the [README](../README.md#-configuration) apply too (`AGENT_VIEWER_CORS_ORIGIN`, `AGENT_VIEWER_MAX_BATCH_SIZE`, `AGENT_VIEWER_RATE_LIMIT`, `AGENT_VIEWER_WEBHOOK_SECRET`), with these differences:
+
+- `PORT` and `AGENT_VIEWER_HOST` are the defaults of `--port` and `--host`; the flags win.
+- `AGENT_VIEWER_API_TOKEN` (or the deprecated `AGENT_VIEWER_API_KEY`, read with a warning) chooses the token. Unlike `npm run server`, an empty value never means "open": the CLI generates a token.
+- A `.env` file in the current folder is not read: the CLI is configured by its flags and the environment.
 
 ## Send an event without writing JSON
 
@@ -80,7 +90,18 @@ The same command, packaged:
 docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer
 ```
 
-Open the office URL the container prints. Inside the container the server listens on every interface so the published port works; `-p 127.0.0.1:8787:8787` keeps it on your machine. Set `-e AGENT_VIEWER_API_TOKEN=...` to choose the token, and mount `/app/data` to keep the SQLite database. Images are published on every release tag: `:<version>` and `:latest` (office and API), `:<version>-api` and `:latest-api` (API only, as in `docker/compose.yml`).
+Open the office URL the container prints. Inside the container the server listens on every interface (`AGENT_VIEWER_HOST=0.0.0.0` in the image) so the published port works; `-p 127.0.0.1:8787:8787` keeps it on your machine. Set `-e AGENT_VIEWER_API_TOKEN=...` to choose the token, and mount `/app/data` to keep the SQLite database.
+
+Flags after the image name are added to the image defaults, not swapped for them: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer --token my-token --demo` still listens on every interface and never tries to open a browser. Change the port with `-e PORT=9000 -p 9000:9000` (or `--port 9000`; the health check follows the port the server really uses). Other commands run as given, for example `docker run --rm ghcr.io/jmmana/agent-viewer --version`.
+
+Images are published on every release tag:
+
+| Tags | What runs | Token |
+|---|---|---|
+| `:<version>`, `:<major>.<minor>`, `:latest` | Office and API (this CLI) | `AGENT_VIEWER_API_TOKEN`, or a new token printed on every start. |
+| `:<version>-api`, `:<major>.<minor>-api`, `:latest-api` | API only (`npm run server`, as in `docker/compose.yml`) | `AGENT_VIEWER_API_TOKEN`; otherwise a token generated on first start, saved in `/app/data/api-token` (kept across restarts with a volume on `/app/data`) and printed in the logs. The API image never runs open. |
+
+> **Maintainers:** GitHub Container Registry creates a new package as **private**, and the release workflow cannot change that. After the first image is published, make it public once, or the `docker run` above fails for everyone else: on GitHub, open the `agent-viewer` package, then **Package settings > Danger Zone > Change visibility > Public**. The release run summary shows the current visibility and a warning while it is not public.
 
 ## Exit codes
 

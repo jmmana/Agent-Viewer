@@ -103,7 +103,7 @@ Levanta el servidor de ingesta y la oficina juntos en `http://127.0.0.1:8787`, a
 npx @warlockcode/agent-viewer send --agent demo --status working --message "Hola"
 ```
 
-Las opciones (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) están en la [guía de la CLI](cli.md) (en inglés). Lo mismo con Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer`. Mientras el paquete no esté en npm y la próxima versión no publique la imagen, ejecuta el `.tgz` de la versión con `npx ./warlockcode-agent-viewer-<versión>.tgz`.
+Las opciones (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) están en la [guía de la CLI](cli.md) (en inglés). Lo mismo con Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (las opciones después del nombre de la imagen se suman a sus valores por defecto; etiquetas y tokens en la [guía de la CLI](cli.md#docker)). Mientras el paquete no esté en npm y la próxima versión no publique la imagen, ejecuta el `.tgz` de la versión con `npx ./warlockcode-agent-viewer-<versión>.tgz`.
 
 ### Mira trabajar a Claude Code
 
@@ -177,7 +177,9 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compilada en **:3000**. Abre **http://localhost:3000/?mode=live** para ver el flujo.
+Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compilada en **:3000**. La API nunca corre sin token: define `AGENT_VIEWER_API_TOKEN` antes de `up` para elegirlo, o lee el que genera con `docker compose -f docker/compose.yml logs api`. Luego abre **http://localhost:3000/?mode=live#token=&lt;token&gt;** para ver el flujo (la oficina quita el token de la barra de direcciones en cuanto lo lee).
+
+> **Mantenedores:** GitHub Container Registry crea el paquete `ghcr.io/jmmana/agent-viewer` como privado, y el flujo de publicación no puede cambiarlo. Después de la primera versión que lo publique, hazlo público una vez en la página del paquete: **Package settings > Danger Zone > Change visibility > Public**. El resumen de la ejecución de la publicación muestra la visibilidad actual.
 
 ---
 
@@ -662,7 +664,7 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | Variable | Por defecto | Qué hace |
 |---|---|---|
 | `PORT` | `8787` | Puerto del servidor. |
-| `AGENT_VIEWER_API_TOKEN` | vacío | Protege `/api/v1/*`. Los clientes envían `Authorization: Bearer <token>`, o `?token=` (o `?api_key=`) para `EventSource`. Vacío significa abierto, para desarrollo local. `AGENT_VIEWER_API_KEY`, que todavía leen los adaptadores de ejemplo, es un alias obsoleto. |
+| `AGENT_VIEWER_API_TOKEN` | vacío | Protege `/api/v1/*`. Los clientes envían `Authorization: Bearer <token>`, o `?token=` (o `?api_key=`) para `EventSource`. Vacío significa abierto, para desarrollo local con `npm run server`; la CLI `agent-viewer` y las imágenes Docker nunca corren abiertas (un valor en blanco cuenta como no definido y se genera un token). `AGENT_VIEWER_API_KEY`, que todavía leen los adaptadores de ejemplo, es un alias obsoleto. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` si no se define | Orígenes de navegador permitidos, separados por comas. `server/.env.example` trae `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` o `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | Archivo SQLite cuando el almacenamiento es `sqlite`. |

@@ -224,3 +224,12 @@ test('Claude hook process: posts the translated events to the server with the to
     server.close();
   }
 });
+
+test('Claude hook: the entry point arms the hard stop before it evaluates any other module', () => {
+  const source = readFileSync(new URL('../cli/index.ts', import.meta.url), 'utf8');
+  const valueImports = [...source.matchAll(/^import\s+(?!type\b)[^;]*?from\s+'([^']+)';/gm)].map((match) => match[1]);
+  assert.deepEqual(valueImports, ['./hookBudget.ts'], 'static imports run before the guard, so only the budget module may be one');
+  const guard = source.indexOf("if (process.argv[2] === 'claude-hook') armHookGuard();");
+  assert.ok(guard > 0);
+  assert.ok(guard < source.indexOf('await import('), 'the guard is armed before the parser loads');
+});

@@ -28,6 +28,7 @@ export function sessionFilePath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 export function writeSessionFile(info: SessionInfo, env: NodeJS.ProcessEnv = process.env): string {
+  if (info.token !== undefined && info.token.trim() === '') throw new Error('Refusing to write an empty token to the session file');
   const file = sessionFilePath(env);
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   writeFileSync(file, `${JSON.stringify(info, null, 2)}\n`, { mode: 0o600 });
@@ -71,7 +72,7 @@ export function resolveConnection(
 ): Connection {
   const session = flags.url || env.AGENT_VIEWER_URL ? undefined : readSessionFile(env);
   const url = (flags.url || env.AGENT_VIEWER_URL || session?.url || DEFAULT_URL).replace(/\/+$/, '');
-  const token = flags.token || env.AGENT_VIEWER_API_TOKEN || session?.token || undefined;
+  const token = flags.token || env.AGENT_VIEWER_API_TOKEN?.trim() || session?.token || undefined;
   return { url, token };
 }
 

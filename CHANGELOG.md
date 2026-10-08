@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `agent-viewer` command, shipped in the npm package (`npx @warlockcode/agent-viewer`): starts the ingestion server and serves the prebuilt office in live mode from the same port. It listens on `127.0.0.1` by default, generates a session token unless `--token` (or `AGENT_VIEWER_API_TOKEN`) is given, prints the office URL, the token and a ready `curl` command, and opens the browser. Options `--port`, `--host`, `--token`, `--demo`, `--no-open` and `--record <file.jsonl>` (canonical JSONL V1). Guide: [docs/cli.md](docs/cli.md).
+- `agent-viewer send --agent <id> --status <status> [--message <text>]` posts a canonical event without writing JSON, and finds the running viewer on its own.
+- Claude Code adapter: `agent-viewer claude-hook` translates the official Claude Code hooks (sessions, prompts, tools, notifications, subagents, stop) into V1 events, with each subagent as its own agent. Only tool names, agent types, timings and statuses are sent; `--include-summaries` adds a trimmed final message on request. The hook never blocks Claude Code: it writes nothing to stdout, always exits 0, and stops within 400 ms when the office is down. `agent-viewer install claude-code` and `uninstall claude-code` edit only `<project>/.claude/settings.local.json`, after showing the change and asking. Guide: [docs/claude-code.md](docs/claude-code.md).
+- Docker image on GitHub Container Registry, published by the release workflow on every `v*` tag: `ghcr.io/jmmana/agent-viewer` (office and API in one container, new default `app` target of `docker/Dockerfile`) and the `-api` tags (API only). Multi-architecture (amd64, arm64), non-root, with a health check.
+- The demo app reads the API token from the URL fragment (`#token=...`) or the `token` query parameter, and `VITE_AGENT_VIEWER_API_URL=same-origin` streams from the server that serves the page.
+
+### Changed
+- `express` is now a runtime dependency (the CLI runs the server from the installed package). `dotenv` stays a development dependency: the server loads `.env` only when run directly.
+- `startServer(port, host?)` accepts the interface to bind, and `onEventAccepted(listener)` reports every accepted event.
+- CI builds the CLI, runs it from the packed tarball and builds both Docker targets.
+
 ## [0.2.0] - 2026-10-08
 
 First release of the embeddable library as the package `@warlockcode/agent-viewer`. Until it is published on npm (coming soon), it is installed from the GitHub release asset. While the package is at 0.x, its API may still change between minor versions. The guide is in [docs/library.md](docs/library.md) ([español](docs/library.es.md)).

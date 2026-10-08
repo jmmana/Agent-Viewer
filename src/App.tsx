@@ -28,6 +28,7 @@ import { detectLocale, Locale, persistLocale } from './i18n';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
+import { resolveLiveConnection } from './integrations/liveConnection';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
 import { Upload, AlertCircle } from 'lucide-react';
@@ -188,7 +189,11 @@ export default function App() {
   }, [ambientSocialEnabled, politicsChatterEnabled, locale]);
 
   useEffect(() => {
-    const apiBase = (import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined) || (isLiveMode ? 'http://localhost:8787' : undefined);
+    const { apiBase, token } = resolveLiveConnection(
+      window.location,
+      import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined,
+      isLiveMode,
+    );
     if (!apiBase) {
       setIsLiveConnected(false);
       return;
@@ -217,7 +222,7 @@ export default function App() {
         applyExternalEvent(nextState, incoming);
         return nextState;
       });
-    });
+    }, undefined, { token });
 
     return () => {
       connection.close();

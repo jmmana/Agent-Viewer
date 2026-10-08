@@ -91,6 +91,30 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 
 ## ⚡ Inicio rápido
 
+### Un solo comando
+
+```bash
+npx @warlockcode/agent-viewer
+```
+
+Levanta el servidor de ingesta y la oficina juntos en `http://127.0.0.1:8787`, abre el navegador e imprime el token de la sesión y un comando `curl` que puedes pegar para que aparezca tu primer agente. Después, sin escribir JSON:
+
+```bash
+npx @warlockcode/agent-viewer send --agent demo --status working --message "Hola"
+```
+
+Las opciones (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) están en la [guía de la CLI](cli.md) (en inglés). Lo mismo con Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer`. Mientras el paquete no esté en npm y la próxima versión no publique la imagen, ejecuta el `.tgz` de la versión con `npx ./warlockcode-agent-viewer-<versión>.tgz`.
+
+### Mira trabajar a Claude Code
+
+```bash
+npx @warlockcode/agent-viewer install claude-code   # en tu proyecto; muestra el cambio y pregunta antes
+```
+
+Tus sesiones de Claude Code y sus subagentes aparecen en la oficina: herramientas, traspasos y cuándo Claude te espera. Solo viajan nombres de herramientas, tipos de agente, tiempos y estados; nunca argumentos, prompts, código ni rutas. Instalación, privacidad y desinstalación: [claude-code.md](claude-code.md) (en inglés).
+
+### Desde el repositorio
+
 Para trabajar en el repositorio necesitas Node.js 24 o superior. Las apps que solo instalan la librería necesitan React 19, nada más.
 
 ```bash
@@ -409,6 +433,8 @@ Madurez honesta, para que sepas qué te llevas:
 | Integración | Dónde | Madurez |
 |---|---|---|
 | **API REST, lotes, SSE** | [`server/`](../server/index.ts) | ✅ **Estable.** Cubierta por pruebas de integración, de SSE y de seguridad del webhook en CI. |
+| **Claude Code** | [`agent-viewer install claude-code`](claude-code.md) | ✅ **Estable.** Hooks oficiales de Claude Code: sesiones, subagentes como agentes propios, herramientas y esperas. Pruebas con fixtures de cada tipo de hook demuestran que no salen argumentos ni contenido. |
+| **CLI** | [`npx @warlockcode/agent-viewer`](cli.md) | ✅ **Estable.** Servidor y oficina en un comando, y `send` para eventos rápidos. Prueba de punta a punta en CI. |
 | **Webhook genérico** | `POST /api/v1/webhooks/generic` | ✅ **Estable.** Cuerpo plano, firma HMAC-SHA256 opcional con ventana anti repetición de 5 minutos. |
 | **SDK de Python** | [`sdk/python/`](../sdk/python/agent_viewer.py) | ✅ **Estable.** Solo biblioteca estándar, probado contra un servidor real en CI. Todavía no está en PyPI. |
 | **SDK de TypeScript** | [`sdk/typescript/`](../sdk/typescript/index.ts) | ✅ **Estable.** Probado en CI. Aún no es un paquete aparte: impórtalo desde una copia del repositorio. |

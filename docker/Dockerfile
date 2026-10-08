@@ -2,11 +2,14 @@
 #
 # Agent Viewer images. Build from the repository root (docker/Dockerfile.dockerignore applies):
 #
+#   docker build -f docker/Dockerfile -t agent-viewer .                  # office + API in one container
 #   docker build -f docker/Dockerfile --target api -t agent-viewer-api .
 #   docker build -f docker/Dockerfile --target viewer \
 #     --build-arg VITE_AGENT_VIEWER_API_URL=http://localhost:8787 -t agent-viewer-viewer .
 #
-# Without --target the last stage (api) is built. docker/compose.yml builds and runs both.
+# Without --target the last stage (app) is built: the `agent-viewer` CLI serving the office and the API on
+# port 8787. It is the image published as ghcr.io/jmmana/agent-viewer. docker/compose.yml runs api and viewer
+# as two services instead.
 
 # Shared dependency layer. The ingestion server runs TypeScript through tsx and uses express, which are
 # devDependencies, so the full dependency tree is installed.
@@ -53,3 +56,30 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/health" || exit 1
 CMD ["npm", "run", "server"]
+
+# Build of the `agent-viewer` CLI: the server bundled for Node plus the office prebuilt for same-origin use.
+FROM deps AS cli-build
+COPY . .
+RUN npm run build:cli
+
+# Office and API in one container (default target): `docker run -p 8787:8787 ghcr.io/jmmana/agent-viewer`.
+# Only the runtime dependencies are installed. The token is printed on start; set AGENT_VIEWER_API_TOKEN to
+# choose it. Inside the container the server has to listen on every interface for the published port to work.
+FROM node:24-alpine AS app
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=8787 \
+    AGENT_VIEWER_HOME=/app/data \
+    AGENT_VIEWER_STORAGE=sqlite \
+    AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --omit=peer --ignore-scripts && npm cache clean --force
+COPY --from=cli-build /app/dist-cli ./dist-cli
+RUN mkdir -p /app/data && chown node:node /app/data
+USER node
+VOLUME ["/app/data"]
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/health" || exit 1
+ENTRYPOINT ["node", "dist-cli/cli.js"]
+CMD ["--host", "0.0.0.0", "--port", "8787", "--no-open"]

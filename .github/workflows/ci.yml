@@ -53,11 +53,32 @@ jobs:
       - name: Build library
         run: npm run build:lib
 
+      - name: Build CLI (bundled server and prebuilt office)
+        run: npm run build:cli
+
+      - name: CLI smoke test from the packed tarball
+        run: |
+          npm pack --ignore-scripts
+          mkdir -p /tmp/cli-smoke && cd /tmp/cli-smoke
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE"/warlockcode-agent-viewer-*.tgz
+          AGENT_VIEWER_HOME=/tmp/cli-smoke/home npx agent-viewer --no-open --port 4871 --token ci-token > cli.log 2>&1 &
+          CLI_PID=$!
+          for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:4871/health && break; sleep 0.2; done
+          curl -fsS http://127.0.0.1:4871/ | grep -q '<div id="root">'
+          AGENT_VIEWER_HOME=/tmp/cli-smoke/home npx agent-viewer send --agent ci --status working --message "hello from CI"
+          curl -fsS -H "Authorization: Bearer ci-token" "http://127.0.0.1:4871/api/v1/events?agentId=ci" | grep -q '"agentId":"ci"'
+          kill "$CLI_PID"
+          rm -f "$GITHUB_WORKSPACE"/warlockcode-agent-viewer-*.tgz
+
       - name: Check package (publint + attw)
         run: npm run check:package
 
-      - name: Docker Build
+      - name: Docker Build (office + API image, the published default)
         run: docker build -f docker/Dockerfile .
+
+      - name: Docker Build (API image)
+        run: docker build -f docker/Dockerfile --target api .
 
       - name: Docker Build (viewer image)
         run: docker build -f docker/Dockerfile --target viewer --build-arg VITE_AGENT_VIEWER_API_URL=http://localhost:8787 .

@@ -1,0 +1,18 @@
+{
+  "session_id": "f3b1c2d4-0000-4000-8000-SECRETSESSION",
+  "prompt_id": "550e8400-e29b-41d4-a716-SECRETPROMPTID",
+  "transcript_path": "/Users/SECRET-user/.claude/projects/SECRET-project/transcript.jsonl",
+  "cwd": "/Users/SECRET-user/code/SECRET-project",
+  "scratchpad_dir": "/tmp/claude-1000/SECRET-scratch",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test -- SECRET",
+    "description": "SECRET run"
+  },
+  "tool_use_id": "toolu_01FAIL",
+  "error": "Exit code 1\nError: Cannot find module SECRET at /Users/SECRET-user/x.js",
+  "is_interrupt": false,
+  "duration_ms": 4187
+}

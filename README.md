@@ -91,6 +91,30 @@ These are design rules, enforced in code, not marketing:
 
 ## ⚡ Quickstart
 
+### One command
+
+```bash
+npx @warlockcode/agent-viewer
+```
+
+Starts the ingestion server and the office together on `http://127.0.0.1:8787`, opens your browser and prints the session token and a `curl` command you can paste to make your first agent appear. Then, without JSON:
+
+```bash
+npx @warlockcode/agent-viewer send --agent demo --status working --message "Hello"
+```
+
+Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). The same with Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer`. Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
+
+### Watch Claude Code work
+
+```bash
+npx @warlockcode/agent-viewer install claude-code   # in your project, shows the change and asks first
+```
+
+Your Claude Code sessions and their subagents appear in the office: tools, handoffs, and when Claude waits for you. Only tool names, agent types, timings and statuses are sent, never arguments, prompts, code or paths. Setup, privacy and uninstall: [docs/claude-code.md](docs/claude-code.md).
+
+### From the repository
+
 Working on the repository requires Node.js 24 or later. Apps that only install the library need React 19, nothing else.
 
 ```bash
@@ -409,6 +433,8 @@ Honest maturity, so you know what you are getting:
 | Integration | Where | Maturity |
 |---|---|---|
 | **REST API, batch, SSE** | [`server/`](server/index.ts) | ✅ **Stable.** Covered by integration, SSE and webhook security tests in CI. |
+| **Claude Code** | [`agent-viewer install claude-code`](docs/claude-code.md) | ✅ **Stable.** Official Claude Code hooks: sessions, subagents as their own agents, tools, waiting for you. Fixture tests for every hook type prove no arguments or content leave the machine. |
+| **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. Not on PyPI yet. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |

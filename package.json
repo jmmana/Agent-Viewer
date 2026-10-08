@@ -1,7 +1,7 @@
 {
   "name": "@warlockcode/agent-viewer",
   "version": "0.2.0",
-  "description": "Open-source visual observability for AI agents in an interactive animated virtual office",
+  "description": "Open-source visual observability for AI agents in an interactive animated virtual office, with a one-command CLI and a Claude Code adapter",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -20,11 +20,16 @@
     "react",
     "canvas",
     "visualization",
-    "virtual-office"
+    "virtual-office",
+    "claude-code",
+    "cli"
   ],
   "sideEffects": [
     "**/*.css"
   ],
+  "bin": {
+    "agent-viewer": "./dist-cli/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist-lib/lib/index.d.ts",
@@ -37,6 +42,7 @@
   "types": "./dist-lib/lib/index.d.ts",
   "files": [
     "dist-lib",
+    "dist-cli",
     "CHANGELOG.md"
   ],
   "publishConfig": {
@@ -46,22 +52,25 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "build:lib": "vite build --mode lib && tsc -p src/lib/tsconfig.json && node scripts/fix-dts-extensions.mjs dist-lib && node -e \"require('node:fs').copyFileSync('src/lib/agent-viewer.css','dist-lib/agent-viewer.css')\"",
+    "build:cli": "node scripts/build-cli.mjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist dist-lib server.js",
+    "clean": "rm -rf dist dist-lib dist-cli server.js",
     "lint": "tsc --noEmit",
     "test": "npm run test:node && npm run test:unit",
     "test:node": "tsx --test tests/*.test.mjs",
     "test:unit": "vitest run",
     "check:package": "publint --strict && attw --pack . --profile esm-only --exclude-entrypoints ./style.css",
-    "prepack": "npm run build:lib",
+    "prepack": "npm run build:lib && npm run build:cli",
     "server": "tsx server/index.ts",
-    "dev:full": "node scripts/dev-full.mjs"
+    "dev:full": "node scripts/dev-full.mjs",
+    "cli": "tsx cli/index.ts"
   },
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "dependencies": {
+    "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "zod": "^4.6.5"
   },
@@ -76,7 +85,6 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
-    "express": "^4.21.2",
     "jsdom": "^29.1.1",
     "publint": "^0.3.25",
     "react": "^19.0.1",

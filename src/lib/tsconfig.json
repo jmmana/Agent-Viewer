@@ -4,10 +4,11 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "declarationMap": true,
     "outDir": "../../dist-lib",
     "rootDir": "..",
     "types": []
   },
-  "include": ["index.ts"]
+  "include": [
+    "index.ts"
+  ]
 }

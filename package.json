@@ -45,7 +45,7 @@
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
-    "build:lib": "vite build --mode lib && tsc -p src/lib/tsconfig.json && node scripts/fix-dts-extensions.mjs dist-lib && cp src/lib/agent-viewer.css dist-lib/agent-viewer.css",
+    "build:lib": "vite build --mode lib && tsc -p src/lib/tsconfig.json && node scripts/fix-dts-extensions.mjs dist-lib && node -e \"require('node:fs').copyFileSync('src/lib/agent-viewer.css','dist-lib/agent-viewer.css')\"",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-lib server.js",
     "lint": "tsc --noEmit",
@@ -55,10 +55,7 @@
     "check:package": "publint --strict && attw --pack . --profile esm-only --exclude-entrypoints ./style.css",
     "prepack": "npm run build:lib",
     "server": "tsx server/index.ts",
-    "dev:full": "sh -c 'npm run server & npm run dev'"
-  },
-  "engines": {
-    "node": ">=24.0.0"
+    "dev:full": "node scripts/dev-full.mjs"
   },
   "peerDependencies": {
     "react": "^19.0.0",
@@ -89,5 +86,12 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "vitest": "^5.0.3"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=24.0.0",
+      "onFail": "warn"
+    }
   }
 }

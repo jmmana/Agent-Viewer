@@ -28,6 +28,8 @@ import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngi
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
+import { parseEventLog } from './integrations/eventLogParser';
+import { Upload, AlertCircle } from 'lucide-react';
 
 export default function App() {
   const isLiveMode = typeof window !== 'undefined' && (
@@ -36,6 +38,8 @@ export default function App() {
   );
 
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
 
   // Master Simulation State
   const [simState, setSimState] = useState<SimulationState>(() => {
@@ -508,8 +512,61 @@ export default function App() {
   const overflowReservations = simState.roomReservations.filter((reservation) => reservation.floor === 2);
   const mainFloorAgents = simState.agents.filter((agent) => (agent.floor ?? 1) === 1);
 
+  const handleFileDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    setDropError(null);
+
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+
+    try {
+      const parsed = await parseEventLog(file);
+      if (parsed.events.length === 0) {
+        setDropError('File contains 0 valid canonical events');
+        return;
+      }
+      // Replay all events into a fresh state
+      const nextState = createLiveSimulationState();
+      for (const evt of parsed.events) {
+        applyExternalEvent(nextState, evt);
+      }
+      setSimState(nextState);
+    } catch (err: any) {
+      setDropError(err?.message || 'Failed to read event log file');
+    }
+  };
+
   return (
-    <div className={`w-screen h-screen flex flex-col bg-slate-950 font-sans overflow-hidden select-none ${theme}`}>
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsDragOver(true);
+      }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={handleFileDrop}
+      className={`w-screen h-screen flex flex-col bg-slate-950 font-sans overflow-hidden select-none relative ${theme}`}
+    >
+      {/* Drag & drop overlay */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 bg-slate-950/85 backdrop-blur-sm border-2 border-dashed border-sky-400 flex flex-col items-center justify-center text-sky-200">
+          <Upload className="w-12 h-12 mb-3 animate-bounce text-sky-400" />
+          <p className="text-lg font-bold">Drop JSONL / OTLP log to Replay</p>
+          <p className="text-sm text-slate-400 mt-1">Replay past agent sessions without a server</p>
+        </div>
+      )}
+
+      {/* File error toast */}
+      {dropError && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs px-4 py-2.5 rounded-xl shadow-2xl">
+          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <span>{dropError}</span>
+          <button onClick={() => setDropError(null)} className="ml-3 text-rose-400 hover:text-white font-bold">
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Top Bar (Follows Top Bar Contract) */}
       <TopBar
         currentTab={currentTab}

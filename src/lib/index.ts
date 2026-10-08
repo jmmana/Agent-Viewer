@@ -29,3 +29,13 @@ export {
 
 export { connectEventStream } from '../integrations/realtimeClient';
 export type { RealtimeConnection, RealtimeStatus, RealtimeConnectionOptions } from '../integrations/realtimeClient';
+
+// Event log parser and replay engine
+export { parseEventLog, MAX_EVENT_LOG_SIZE_BYTES } from '../integrations/eventLogParser';
+export type { EventLogParseResult, EventLogParseIssue } from '../integrations/eventLogParser';
+export { SessionReplayPlayer } from '../integrations/replayEngine';
+export type { ReplayOptions } from '../integrations/replayEngine';
+
+// Video recording export
+export { recordReplay, isRecordingSupported, getSupportedMimeType } from './recordReplay';
+export type { RecordReplayOptions } from './recordReplay';

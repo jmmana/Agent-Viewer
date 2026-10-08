@@ -5,6 +5,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: process.env.GITHUB_PAGES === 'true' || process.env.VITE_BASE_PATH
+      ? (process.env.VITE_BASE_PATH || '/Agent-Viewer/')
+      : '/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

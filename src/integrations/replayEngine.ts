@@ -50,6 +50,45 @@ export class SessionReplayPlayer {
     this.speed = Math.max(0.25, Math.min(10, multiplier));
   }
 
+  get progressRatio(): number {
+    if (this.events.length === 0) return 0;
+    return Math.min(1, this.currentIndex / this.events.length);
+  }
+
+  get currentTimestamp(): number | null {
+    if (this.events.length === 0) return null;
+    const index = Math.max(0, Math.min(this.events.length - 1, this.currentIndex - 1));
+    return this.events[index]?.timestamp ?? null;
+  }
+
+  jumpTo(targetIndex: number, createCleanStateFn: () => SimulationState): SimulationState {
+    const wasPlaying = this.isPlaying;
+    this.pause();
+
+    const bounded = Math.max(0, Math.min(this.events.length, targetIndex));
+    const nextState = createCleanStateFn();
+
+    for (let i = 0; i < bounded; i++) {
+      applyExternalEvent(nextState, this.events[i]);
+    }
+
+    this.currentIndex = bounded;
+    if (bounded > 0) {
+      this.onStep?.(this.events[bounded - 1], bounded - 1, this.events.length);
+    }
+
+    if (wasPlaying && bounded < this.events.length) {
+      this.play(nextState);
+    }
+
+    return nextState;
+  }
+
+  seekRatio(ratio: number, createCleanStateFn: () => SimulationState): SimulationState {
+    const target = Math.round(ratio * this.events.length);
+    return this.jumpTo(target, createCleanStateFn);
+  }
+
   step(state: SimulationState): boolean {
     if (this.currentIndex >= this.events.length) {
       this.pause();

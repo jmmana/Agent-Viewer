@@ -11,6 +11,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "tsx --test tests/*.test.mjs",
+    "capture": "node scripts/capture.mjs",
     "server": "tsx server/index.ts",
     "dev:full": "sh -c 'npm run server & npm run dev'"
   },

@@ -426,7 +426,7 @@ Todos los adaptadores respetan la misma frontera de confianza: de tu runtime sol
 
 ### SDK de Python
 
-Un solo archivo sin dependencias de terceros. Agrega `sdk/python` al `PYTHONPATH` (o copia `agent_viewer.py` a tu proyecto):
+Un solo módulo sin dependencias de terceros. Instálalo desde un clon con `pip install ./sdk/python` (o copia `agent_viewer.py` a tu proyecto):
 
 ```python
 import os
@@ -729,6 +729,12 @@ Tres reglas mantienen honesto el producto: nunca pedir ni exponer el razonamient
 <p align="center"><sub>Renderizado Canvas2D · validación con Zod · Server-Sent Events · Vitest y node:test · publint y attw</sub></p>
 
 ---
+
+## 💜 Créditos
+
+- **Idea:** María Alejandra ([@Alejagop12](https://github.com/Alejagop12)). Agent Viewer nació de su idea: ver a los agentes de IA trabajar en equipo dentro de una oficina real.
+- **Desarrollo:** Juan Manuel Castillo ([@jmmana](https://github.com/jmmana)), [WarlockCode](https://github.com/jmmana).
+- **Con colaboradores de IA:** Gemini, ChatGPT, Qwen Code (Alibaba), Kiro y Claude Code ayudaron a diseñar, escribir, revisar y probar este proyecto.
 
 ## 📄 Licencia
 

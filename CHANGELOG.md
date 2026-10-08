@@ -25,6 +25,9 @@ First release of the embeddable library as the package `@warlockcode/agent-viewe
 - `computeReplaySchedule`, and new `recordReplay` options: `agents`, `mode`, `maxGapMs`, `tailMs`, `maxDurationMs`, `locale`, `messages`, `t` and `usage`.
 
 ### Changed
+- Repository layout: community files in `.github/`, Docker files in `docker/`, `.env.example` in `server/`, the Spanish README in `docs/`, one `vite.config.ts` for the app, the library and the tests.
+- `AGENT_VIEWER_API_TOKEN` is the API token variable; `AGENT_VIEWER_API_KEY` still works as a deprecated alias.
+- New README in English and Spanish with current screenshots and GIFs.
 - Two offices on the same page never share state. The library uses no `localStorage`, no timers that invent data and no global keyboard shortcuts, and nothing runs on import.
 - `recordReplay` draws on its own offscreen canvas, keeps the pacing of the original run, and never computes usage: the title and the usage figures appear only when passed.
 - The `workspace` of an agent profile is its home: a new agent appears at its desk, and returns there after a meeting.
@@ -35,6 +38,13 @@ First release of the embeddable library as the package `@warlockcode/agent-viewe
 - OTLP import removed: it loaded a module that did not exist. `parseEventLog` now reports that OTLP traces are not supported yet.
 - Video export: `recordReplay` passed a canvas where the renderer expected a 2D context, so it failed on the first frame.
 - An unknown `workspace` value in an event no longer crashes the engine; it is ignored.
+
+- Server hardening: rate limiting runs before authentication; tokens are compared in constant time; signed webhooks cannot be replayed inside the timestamp window; without a webhook secret, webhooks need the API token; the generic webhook rejects payloads that map to no known event; `PATCH /api/v1/agents/:id` keeps the path id and rejects unknown statuses.
+- The SQLite store honors `afterId` on reconnect and keeps the full event (with a migration for older databases).
+- `npm run dev:full` starts the office in live mode, so events sent to the server appear right away.
+- The Python SDK installs with `pip install ./sdk/python` (the wheel was empty before) and has no unused dependencies.
+- Docker: the viewer image is built with the API URL, so it connects to the API; the API is the default target.
+- Speech bubbles always show the message kind, use the full speaker name, are opaque and readable in the light theme, and real messages are never labeled as simulated. Labels on screens, desks and plaques fit their surface.
 
 ### Removed
 - `metadata.json`: nothing in the repository referenced it.

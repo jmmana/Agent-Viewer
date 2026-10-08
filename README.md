@@ -426,7 +426,7 @@ Every adapter follows the same trust boundary: only observable states, messages 
 
 ### Python SDK
 
-A single file with no third-party dependencies. Add `sdk/python` to `PYTHONPATH` (or copy `agent_viewer.py` into your project):
+A single module with no third-party dependencies. Install it from a clone with `pip install ./sdk/python` (or copy `agent_viewer.py` into your project):
 
 ```python
 import os
@@ -729,6 +729,12 @@ Three rules keep the product honest: never require or expose private model reaso
 <p align="center"><sub>Canvas2D rendering · Zod validation · Server-Sent Events · Vitest and node:test · publint and attw</sub></p>
 
 ---
+
+## 💜 Credits
+
+- **Idea:** María Alejandra ([@Alejagop12](https://github.com/Alejagop12)). Agent Viewer started as her idea: watch AI agents work together as a team in a real office and more control
+- **Built by:** Juan Manuel Castillo ([@jmmana](https://github.com/jmmana)), [WarlockCode](https://github.com/jmmana).
+- **Built with AI collaborators:** Gemini, ChatGPT, Qwen Code (Alibaba), Kiro and Claude Code helped design, write, review and test this project.
 
 ## 📄 License
 

@@ -97,7 +97,8 @@ describe('renderOfficeScene: canvas texts', () => {
     expect(texts).toContain('Ana Rivas');
     expect(texts).toContain('Desarrollador · Programando');
     expect(texts).toContain('Probando');
-    expect(texts).toContain('Ana → Bruno Díaz · OBJETA');
+    expect(texts).toContain('OBJETA');
+    expect(texts).toContain('Ana Rivas → Bruno Díaz');
     expect(texts.join('\n')).toContain('La migración rompe');
   });
 
@@ -122,6 +123,21 @@ describe('renderOfficeScene: canvas texts', () => {
     expect(findEnglishLeaks(texts)).toEqual([]);
   });
 
+  it('never labels a real message as simulated, whatever the agent status', () => {
+    const snapshot = buildOfficeSnapshot(
+      [
+        registered('ana', 'Ana Rivas', { workspace: 'leads_area' }, { at: T0 }),
+        statusChanged('ana', 'CHATTING', { at: T0 + 10 }),
+        messageSent('ana', 'Video recibido.', {}, { at: T0 + 20 }),
+      ],
+      { now: NOW },
+    );
+    const texts = draw(spanish, { agents: snapshot.agents });
+    expect(texts.join('\n')).toContain('Video recibido.');
+    expect(texts).not.toContain('SOCIAL · SIMULADO');
+    expect(texts).toContain('ACTIVIDAD');
+  });
+
   it('uses the Spanish kind label in the header of a meeting message', () => {
     const snapshot = buildOfficeSnapshot(
       [
@@ -133,7 +149,8 @@ describe('renderOfficeScene: canvas texts', () => {
       { now: NOW },
     );
     const texts = draw(spanish, { agents: snapshot.agents });
-    expect(texts).toContain('Bruno · ACUERDA');
+    expect(texts).toContain('DE ACUERDO');
+    expect(texts).toContain('Bruno Díaz');
     expect(findEnglishLeaks(texts)).toEqual([]);
   });
 
@@ -155,7 +172,8 @@ describe('renderOfficeScene: canvas texts', () => {
   it('finds English texts when the scene is drawn in English (control)', () => {
     const texts = draw(english);
     expect(texts).toContain('ENGINEERING');
-    expect(texts).toContain('Ana → Bruno Díaz · OBJECTS');
+    expect(texts).toContain('OBJECTS');
+    expect(texts).toContain('Ana Rivas → Bruno Díaz');
     expect(findEnglishLeaks(texts).length).toBeGreaterThan(5);
   });
 
@@ -164,6 +182,6 @@ describe('renderOfficeScene: canvas texts', () => {
     const texts = draw(custom);
     expect(texts).toContain('TALLER DE CÓDIGO');
     expect(texts).not.toContain('INGENIERÍA');
-    expect(texts).toContain('Ana → Bruno Díaz · SE OPONE');
+    expect(texts).toContain('SE OPONE');
   });
 });

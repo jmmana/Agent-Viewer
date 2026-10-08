@@ -221,7 +221,7 @@ const ES: OfficeMessages = {
   'kind.answer': 'RESPONDE',
   'kind.objection': 'OBJETA',
   'kind.critique': 'CRITICA',
-  'kind.agreement': 'ACUERDA',
+  'kind.agreement': 'DE ACUERDO',
   'kind.summary': 'RESUME',
   'kind.decision': 'DECIDE',
 

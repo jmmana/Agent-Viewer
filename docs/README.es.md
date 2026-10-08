@@ -426,7 +426,7 @@ Todos los adaptadores respetan la misma frontera de confianza: de tu runtime sol
 
 ### SDK de Python
 
-Un solo archivo sin dependencias de terceros. Agrega `sdk/python` al `PYTHONPATH` (o copia `agent_viewer.py` a tu proyecto):
+Un solo módulo sin dependencias de terceros. Instálalo desde un clon con `pip install ./sdk/python` (o copia `agent_viewer.py` a tu proyecto):
 
 ```python
 import os

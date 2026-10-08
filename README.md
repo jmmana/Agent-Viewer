@@ -426,7 +426,7 @@ Every adapter follows the same trust boundary: only observable states, messages 
 
 ### Python SDK
 
-A single file with no third-party dependencies. Add `sdk/python` to `PYTHONPATH` (or copy `agent_viewer.py` into your project):
+A single module with no third-party dependencies. Install it from a clone with `pip install ./sdk/python` (or copy `agent_viewer.py` into your project):
 
 ```python
 import os

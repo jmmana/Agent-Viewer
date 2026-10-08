@@ -247,3 +247,41 @@ describe('idempotency and clock', () => {
     expect(ana.model).toBe('gpt-x');
   });
 });
+
+describe('applyExternalEvent: agents named by a runtime', () => {
+  it('registers an agent from an explicit agentId even when the source is a runtime', () => {
+    const state = createLiveSimulationState();
+    applyExternalEvent(state, {
+      ...statusChanged('carla', 'THINKING', { at: T0 }),
+      source: 'runtime:aqa',
+    }, PROFESSIONAL);
+    expect(agentIn(state, 'carla').status).toBe('THINKING');
+  });
+
+  it('does not invent an agent for the runtime itself', () => {
+    const state = createLiveSimulationState();
+    applyExternalEvent(state, {
+      ...makeEvent('runtime.heartbeat', 'ignored', {}, { at: T0 }),
+      agentId: undefined,
+      source: 'runtime:aqa',
+    }, PROFESSIONAL);
+    expect(state.agents).toHaveLength(0);
+  });
+});
+
+describe('applyExternalEvent: return after a meeting', () => {
+  it('walks an agent without a home desk back to where it was before the meeting', () => {
+    const state = apply(createLiveSimulationState(), [
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      registered('bruno', 'Bruno Díaz', {}, { at: T0 + 10 }),
+      statusChanged('ana', 'IDLE', { at: T0 + 20 }),
+    ]);
+    const before = agentIn(state, 'ana').workspace;
+    apply(state, [
+      meetingRequested('ana', 'm-1', ['ana', 'bruno'], { at: T0 + 100 }),
+      makeEvent('meeting.ended', 'ana', { meetingId: 'm-1' }, { at: T0 + 200 }),
+    ]);
+    expect(agentIn(state, 'ana').workspace).toBe(before);
+    expect(agentIn(state, 'ana').workspace).not.toBe('break_room');
+  });
+});

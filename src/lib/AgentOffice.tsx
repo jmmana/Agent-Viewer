@@ -114,6 +114,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           activeMeetingId={snapshot.activeMeetingId}
           theme={theme}
           translate={translate}
+          themeScope={false}
         />
 
         {snapshot.agents.length === 0 && (

@@ -6,7 +6,8 @@ import { applyExternalEvent, DEFAULT_BUBBLE_MS, type ApplyEventOptions } from '.
 
 /**
  * `professional`: only what the events say. No ambient life, no invented lines, no hidden floor.
- * `showcase`: adds the living office (coffee breaks and chats marked as simulated) for demos.
+ * `showcase`: adds the living office for demos: idle agents take coffee breaks and chat, and those chats
+ * are marked as simulated. Meeting requests never get invented lines in either mode.
  */
 export type OfficeMode = 'professional' | 'showcase';
 
@@ -182,11 +183,11 @@ export class OfficeStore {
   }
 
   private applyOptions(now: number): ApplyEventOptions {
-    const professional = this.mode === 'professional';
     return {
       now,
       bubbleMs: this.bubbleMs,
-      narrate: !professional,
+      // The engine's call lines are English-only and not marked as simulated: the library never uses them.
+      narrate: false,
       // The embedded office has no second-floor view, so meetings never move there.
       overflowFloor: false,
       // Usage figures come from the host (`usage` prop); the office never adds them up.

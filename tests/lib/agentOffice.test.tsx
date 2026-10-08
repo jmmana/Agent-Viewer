@@ -365,3 +365,14 @@ describe('AgentOffice: independent instances', () => {
     expect(within(screen.getByRole('region', { name: 'South team' })).getByText('Elena Soto (copy): Idle')).toBeTruthy();
   });
 });
+
+describe('AgentOffice: theme tokens', () => {
+  it('declares the theme once on the office root so host overrides reach the toolbar', () => {
+    const { container } = render(<AgentOffice theme="light" />);
+    const root = container.querySelector('.av-office');
+    const canvasRoot = container.querySelector('.av-canvas-root');
+    expect(root?.classList.contains('av-theme-light')).toBe(true);
+    expect(canvasRoot).not.toBeNull();
+    expect(canvasRoot?.className).not.toMatch(/av-theme-/);
+  });
+});

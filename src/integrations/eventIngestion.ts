@@ -162,7 +162,9 @@ export function applyExternalEvent(
 
   // Requirement 12: Auto-registration.
   // If an event mentions an agent that does not yet exist, auto-register it!
-  if (!agent && agentId && agentId !== 'external-runtime' && agentId !== 'system' && !incoming.source.startsWith('runtime:')) {
+  // An explicit agentId always names an agent; a bare `runtime:` source is the runtime itself, not an agent.
+  const namesAnAgent = Boolean(incoming.agentId) || !incoming.source.startsWith('runtime:');
+  if (!agent && agentId && agentId !== 'external-runtime' && agentId !== 'system' && namesAnAgent) {
     const newAgent = createDefaultAgent(
       agentId,
       now,

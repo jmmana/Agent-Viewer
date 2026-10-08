@@ -474,6 +474,11 @@ export function requestMeeting(
     const agent = state.agents.find((item) => item.id === agentId);
     if (!agent) continue;
 
+    // Remember where an agent without a home desk was, so it walks back there after the meeting.
+    if (!agent.homeWorkspace && agent.role === 'custom' && agent.workspace !== 'overflow_floor') {
+      agent.homeWorkspace = agent.workspace;
+    }
+
     if (!narrate) {
       // Only the real event speaks: the participant just walks to the room.
       agent.status = 'WALKING';

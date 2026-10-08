@@ -38,13 +38,12 @@ describe('Professional mode shows only what the events say', () => {
     expect(snapshot.meetings[0].messages).toEqual([]);
   });
 
-  it('narrates the meeting request in showcase mode', () => {
+  it('never invents lines for a meeting request, not even in showcase mode', () => {
     const snapshot = buildOfficeSnapshot(withMeeting, { mode: 'showcase', now: NOW });
 
     for (const item of snapshot.agents) {
-      expect(item.status).toBe('PHONE_CALL');
-      expect(item.speechBubble?.text).toBeTruthy();
-      expect(item.speechBubble!.expiresAt).toBeGreaterThan(NOW);
+      expect(item.status).not.toBe('PHONE_CALL');
+      expect(item.speechBubble).toBeNull();
     }
   });
 
@@ -157,13 +156,19 @@ describe('OfficeStore: incremental updates and rebuilds', () => {
   });
 
   it('rebuilds when the mode changes', () => {
-    const events = [...pair, meetingRequested('ana', 'm-1', ['ana', 'bruno'], { at: T0 + 1_000 })];
-    const store = new OfficeStore({ mode: 'professional' });
-    store.sync(events, undefined, NOW);
-    expect(agent(store.snapshot(), 'ana').speechBubble).toBeNull();
+    const hasAmbientLife = (snapshot: ReturnType<OfficeStore['snapshot']>) =>
+      snapshot.agents.some((item) => item.ambientBubble || item.presentationActivity);
 
-    store.sync(events, undefined, NOW, { mode: 'showcase' });
-    expect(agent(store.snapshot(), 'ana').status).toBe('PHONE_CALL');
+    const store = new OfficeStore({ mode: 'professional' });
+    store.sync(pair, undefined, NOW);
+    store.tick(NOW + 1);
+    store.tick(NOW + 30_000);
+    expect(hasAmbientLife(store.snapshot())).toBe(false);
+
+    store.sync(pair, undefined, NOW, { mode: 'showcase' });
+    store.tick(NOW + 1);
+    store.tick(NOW + 30_000);
+    expect(hasAmbientLife(store.snapshot())).toBe(true);
   });
 
   it('keeps the relative timing of a batch of past events', () => {

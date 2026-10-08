@@ -28,6 +28,11 @@ interface OfficeCanvasProps {
   translate: OfficeTranslate;
   /** Draw token and cost telemetry aggregated from the agents. Only the demo app turns it on. */
   usageTelemetry?: boolean;
+  /**
+   * Declare the theme tokens on the canvas root. Turn it off when a parent (such as `.av-office`) already
+   * declares them, so host overrides on that parent reach the toolbar too.
+   */
+  themeScope?: boolean;
   isInspectorOpen?: boolean;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
@@ -88,6 +93,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   theme,
   translate,
   usageTelemetry = false,
+  themeScope = true,
   isInspectorOpen = false,
   onToggleSidebar,
   isSidebarOpen = false,
@@ -451,7 +457,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   const zoomLabel = translate('canvas.zoomLevel', { percent: Math.round(camera.zoom * 100) });
 
   return (
-    <div className={`av-canvas-root av-theme-${theme}`}>
+    <div className={themeScope ? `av-canvas-root av-theme-${theme}` : 'av-canvas-root'}>
       <div className="av-toolbar" role="toolbar" aria-label={translate('canvas.toolbar')}>
         <button
           type="button"

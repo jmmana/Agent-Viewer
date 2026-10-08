@@ -12,6 +12,11 @@ export interface StudioAsset {
   anchor: { x: number; y: number };
   screenRect?: { x: number; y: number; width: number; height: number };
   status?: string;
+  /** A verified raster animation: frame paths are resolved by assetUrls. */
+  frameFiles?: string[];
+  frames?: number;
+  fps?: number;
+  loop?: boolean;
 }
 export interface RoomLayout {
   id: string;
@@ -21,6 +26,7 @@ export interface RoomLayout {
 
 const files = import.meta.glob<string>([
   '../../assets/characters/*/*.{svg,png,webp}',
+  '../../assets/animations/**/*.{png,webp}',
   '../../assets/furniture/*.svg',
   '../../assets/electronics/*.svg',
   '../../assets/effects/*.svg',
@@ -30,6 +36,21 @@ export const assetUrls = Object.fromEntries(Object.entries(files).map(([path, ur
 export const studioAssets = manifest.assets as StudioAsset[];
 const layoutFiles = import.meta.glob<RoomLayout>('../../assets/rooms/**/layout.json', { eager: true, import: 'default' });
 export const roomLayouts = Object.fromEntries(Object.values(layoutFiles).map(layout => [layout.id, layout]));
+/**
+ * Return the source for one *actual* raster frame, not a translated static pose.
+ * Finite clips hold their final image; reduced motion always uses the first image.
+ */
+export function studioFrameFile(
+  asset: Pick<StudioAsset, 'file' | 'frameFiles' | 'fps' | 'loop'>,
+  seconds: number,
+  reducedMotion = false,
+): string {
+  const files = asset.frameFiles?.length ? asset.frameFiles : [asset.file];
+  if (reducedMotion || files.length < 2 || !asset.fps || asset.fps <= 0) return files[0];
+  const index = Math.floor(Math.max(0, seconds) * asset.fps);
+  return files[asset.loop ? index % files.length : Math.min(index, files.length - 1)];
+}
+
 export const roles = [
   { id: 'ceo', name: 'Director', title: 'Coordina al equipo', color: '#f2ba54' },
   { id: 'planner', name: 'Planner', title: 'Organiza las tareas', color: '#a789e6' },

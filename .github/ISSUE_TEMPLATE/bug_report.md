@@ -23,7 +23,7 @@ A clear and concise description of what you expected to happen.
 - Node.js version: [e.g. 24.0.0]
 - Python version (if SDK): [e.g. 3.11]
 - Browser (if UI): [e.g. Chrome, Firefox]
-- Agent Viewer version: [e.g. 1.0.0]
+- Agent Viewer version: [e.g. 0.2.0]
 
 **Additional context**
 Add any other context or logs about the problem here.

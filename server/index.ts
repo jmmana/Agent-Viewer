@@ -15,6 +15,9 @@ import { createEventStore, type EventStore } from './store';
 dotenv.config({ quiet: true });
 
 const app = express();
+// Express 5 defaults to the "simple" query parser. Keep the "extended" (qs) parser of Express 4 so query
+// strings such as `?type[a]=b` keep parsing the same way.
+app.set('query parser', 'extended');
 const port = Number(process.env.PORT ?? 8787);
 const maxBatchSize = Number(process.env.AGENT_VIEWER_MAX_BATCH_SIZE ?? 100);
 const rateLimitMax = Number(process.env.AGENT_VIEWER_RATE_LIMIT ?? 1000);
@@ -101,7 +104,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.options('*', (_req, res) => {
+// Express 5 (path-to-regexp 8) needs a named wildcard; `/{*path}` also matches `/`, like `*` did in Express 4.
+app.options('/{*path}', (_req, res) => {
   res.sendStatus(204);
 });
 
@@ -212,7 +216,8 @@ function broadcastEvent(event: CanonicalEvent) {
 // -------------------------------------------------------------
 app.post('/api/v1/events', async (req, res) => {
   const idempotencyKey = req.header('idempotency-key');
-  let body = req.body;
+  // Express 5 leaves req.body undefined when the request has no JSON body (Express 4 set it to {}).
+  let body = req.body ?? {};
 
   if (idempotencyKey && !body.id) {
     body = { ...body, id: idempotencyKey };
@@ -597,7 +602,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
       return;
     }
 
-    const rawBody = (req as any).rawBody?.toString('utf-8') ?? JSON.stringify(req.body);
+    const rawBody = (req as any).rawBody?.toString('utf-8') ?? JSON.stringify(req.body ?? {});
     const expected = crypto.createHmac('sha256', secret).update(`${timestampStr}.${rawBody}`).digest('hex');
 
     if (!safeEqual(signature, expected)) {
@@ -717,9 +722,16 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   });
 });
 
-// Safe global error handler returning JSON without stack traces or absolute paths
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  const status = typeof err?.status === 'number' ? err.status : 500;
+// Safe global error handler returning JSON without stack traces or absolute paths.
+// Express 5 also routes rejected promises from async handlers here.
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // A stream (SSE) that already sent its headers cannot get a JSON error; let Express close the connection.
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+  // Express 5 throws on status codes that are not integers between 100 and 999.
+  const status = Number.isInteger(err?.status) && err.status >= 100 && err.status <= 999 ? err.status : 500;
   res.status(status).json({
     error: err?.code || 'internal_server_error',
     message: err?.message ? String(err.message).slice(0, 200) : 'An internal error occurred',
@@ -739,7 +751,9 @@ export function startServer(portToListen = port) {
 }
 
 if (isDirectRun && process.env.NODE_ENV !== 'test') {
-  serverInstance = app.listen(port, () => {
+  // Express 5 passes listen errors (for example EADDRINUSE) to this callback instead of emitting them unhandled.
+  serverInstance = app.listen(port, (err?: Error) => {
+    if (err) throw err;
     console.log(`Agent Viewer ingestion server listening on http://localhost:${port}`);
   });
 }

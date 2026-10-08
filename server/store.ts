@@ -533,20 +533,16 @@ export class SQLiteEventStore implements EventStore {
         last_seen_at INTEGER
       );
     `);
+
+    // Migration: databases created before 0.2.0 have no event_json column. Their rows stay readable
+    // through the legacy column mapping in rowToEvent; new rows store the full canonical event.
+    const columns = this.db.prepare('PRAGMA table_info(events)').all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === 'event_json')) {
+      this.db.exec('ALTER TABLE events ADD COLUMN event_json TEXT');
+    }
   }
 
-  async append(event: CanonicalEvent): Promise<{ accepted: boolean; duplicate: boolean }> {
-    const checkStmt = this.db.prepare('SELECT id FROM events WHERE id = ?');
-    const existing = checkStmt.get(event.id);
-    if (existing) {
-      return { accepted: true, duplicate: true };
-    }
-
-    const insertStmt = this.db.prepare(`
-      INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
+  private insertEvent(insertStmt: any, event: CanonicalEvent): void {
     insertStmt.run(
       event.id,
       event.type,
@@ -558,8 +554,52 @@ export class SQLiteEventStore implements EventStore {
       event.severity,
       event.summary,
       JSON.stringify(event.payload),
+      JSON.stringify(event),
       Date.now()
     );
+  }
+
+  private prepareInsert(): any {
+    return this.db.prepare(`
+      INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, event_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+  }
+
+  private rowToEvent(r: any): CanonicalEvent {
+    if (typeof r.event_json === 'string' && r.event_json.length > 0) {
+      try {
+        return JSON.parse(r.event_json) as CanonicalEvent;
+      } catch {
+        // Fall back to the column mapping below
+      }
+    }
+
+    // Rows written before event_json existed: rebuild the event from the indexed columns.
+    return {
+      schemaVersion: '1.0' as const,
+      id: r.id,
+      type: r.type,
+      timestamp: Number(r.timestamp),
+      runtimeId: r.runtime_id ?? undefined,
+      sessionId: r.session_id ?? undefined,
+      source: r.agent_id ? `agent:${r.agent_id}` : (r.runtime_id ? `runtime:${r.runtime_id}` : 'external'),
+      agentId: r.agent_id ?? undefined,
+      taskId: r.task_id ?? undefined,
+      severity: r.severity,
+      summary: r.summary,
+      payload: JSON.parse(r.payload || '{}'),
+    };
+  }
+
+  async append(event: CanonicalEvent): Promise<{ accepted: boolean; duplicate: boolean }> {
+    const checkStmt = this.db.prepare('SELECT id FROM events WHERE id = ?');
+    const existing = checkStmt.get(event.id);
+    if (existing) {
+      return { accepted: true, duplicate: true };
+    }
+
+    this.insertEvent(this.prepareInsert(), event);
 
     await this.memoryFallback.append(event);
     return { accepted: true, duplicate: false };
@@ -571,29 +611,14 @@ export class SQLiteEventStore implements EventStore {
     const acceptedEvents: CanonicalEvent[] = [];
 
     const checkStmt = this.db.prepare('SELECT id FROM events WHERE id = ?');
-    const insertStmt = this.db.prepare(`
-      INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    const insertStmt = this.prepareInsert();
 
     for (const event of events) {
       const existing = checkStmt.get(event.id);
       if (existing) {
         duplicates++;
       } else {
-        insertStmt.run(
-          event.id,
-          event.type,
-          event.timestamp,
-          event.runtimeId ?? null,
-          event.sessionId ?? null,
-          event.agentId ?? null,
-          event.taskId ?? null,
-          event.severity,
-          event.summary,
-          JSON.stringify(event.payload),
-          Date.now()
-        );
+        this.insertEvent(insertStmt, event);
         accepted++;
         acceptedEvents.push(event);
       }
@@ -632,29 +657,27 @@ export class SQLiteEventStore implements EventStore {
       conditions.push('timestamp >= ?');
       params.push(options.since);
     }
+    if (options.afterId) {
+      // Same semantics as the memory store: only events stored after the cursor event.
+      // An unknown cursor applies no filter. rowid grows with insertion order.
+      const cursor = this.db.prepare('SELECT rowid AS seq FROM events WHERE id = ?').get(options.afterId) as
+        | { seq: number }
+        | undefined;
+      if (cursor) {
+        conditions.push('rowid > ?');
+        params.push(cursor.seq);
+      }
+    }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = options.limit && options.limit > 0 ? options.limit : 100;
     params.push(limit);
 
-    const sql = `SELECT * FROM events ${whereClause} ORDER BY timestamp DESC, created_at DESC LIMIT ?`;
+    const sql = `SELECT * FROM events ${whereClause} ORDER BY timestamp DESC, created_at DESC, rowid DESC LIMIT ?`;
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as any[];
 
-    return rows.map((r) => ({
-      schemaVersion: '1.0' as const,
-      id: r.id,
-      type: r.type,
-      timestamp: Number(r.timestamp),
-      runtimeId: r.runtime_id ?? undefined,
-      sessionId: r.session_id ?? undefined,
-      source: r.agent_id ? `agent:${r.agent_id}` : (r.runtime_id ? `runtime:${r.runtime_id}` : 'external'),
-      agentId: r.agent_id ?? undefined,
-      taskId: r.task_id ?? undefined,
-      severity: r.severity,
-      summary: r.summary,
-      payload: JSON.parse(r.payload || '{}'),
-    }));
+    return rows.map((r) => this.rowToEvent(r));
   }
 
   async snapshot(): Promise<ViewerSnapshot> {

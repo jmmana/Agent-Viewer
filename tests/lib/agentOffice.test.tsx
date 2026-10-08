@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import {
   AgentOffice,
   ReplayControls,
@@ -374,5 +374,35 @@ describe('AgentOffice: theme tokens', () => {
     expect(root?.classList.contains('av-theme-light')).toBe(true);
     expect(canvasRoot).not.toBeNull();
     expect(canvasRoot?.className).not.toMatch(/av-theme-/);
+  });
+});
+
+describe('AgentOffice: keyboard selection', () => {
+  const events: OfficeEventInput[] = [
+    registered('ana', 'Ana Rivas', { roleTitle: 'Planner', workspace: 'leads_area' }, { at: T0 }),
+    registered('bruno', 'Bruno Díaz', { roleTitle: 'Engineer', workspace: 'development' }, { at: T0 + 10 }),
+  ];
+
+  it('offers one focusable button per agent with a Spanish name', () => {
+    render(<AgentOffice events={events} locale="es" />);
+    const buttons = screen.getAllByRole('button', { name: /Ana Rivas|Bruno Díaz/ });
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('selects an agent and reports it, and a second press clears the selection', () => {
+    const selections: Array<string | null> = [];
+    render(<AgentOffice events={events} onSelectAgent={(id) => selections.push(id)} />);
+    fireEvent.click(screen.getByRole('button', { name: /Ana Rivas/ }));
+    expect(selections).toEqual(['ana']);
+    expect(screen.getByRole('button', { name: /Ana Rivas/ }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: /Ana Rivas/ }));
+    expect(selections).toEqual(['ana', null]);
+  });
+
+  it('follows a controlled selection', () => {
+    render(<AgentOffice events={events} selectedAgentId="bruno" />);
+    expect(screen.getByRole('button', { name: /Bruno Díaz/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /Ana Rivas/ }).getAttribute('aria-pressed')).toBe('false');
   });
 });

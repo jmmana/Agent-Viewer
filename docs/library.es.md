@@ -543,10 +543,10 @@ Notas:
 
 - La oficina es un `<section>` con el nombre de `ariaLabel` (por defecto, el texto de `office.label`).
 - El canvas tiene `role="img"` y un `aria-label` (`canvas.aria`) que remite a la lista en texto.
-- Una lista oculta a la vista y anunciada con cortesía (`aria-live="polite"`) nombra a cada agente con su rol y su estado, por ejemplo "Atlas, Desarrollador: Programando". Con `showUsage`, cada línea incluye además las cifras de ese agente en `usage.byAgent`.
+- Una lista oculta a la vista y anunciada con cortesía (`aria-live="polite"`) nombra a cada agente con su rol y su estado, por ejemplo "Atlas, Desarrollador: Programando". Con `showUsage`, cada línea incluye además las cifras de ese agente en `usage.byAgent`. La lista queda oculta a la vista hasta que recibe el foco del teclado (Tab); entonces se abre como un panel de botones.
 - La barra (`role="toolbar"`) y los controles de repetición son botones reales con nombre accesible y anillo de foco visible. La barra de posición anuncia el avance y los botones de velocidad usan `aria-pressed`.
 - Con `prefers-reduced-motion: reduce` nada se anima: los agentes llegan a su destino sin caminar, los detalles animados se quedan quietos y las transiciones de los botones se desactivan.
-- La oficina no registra atajos de teclado. Seleccionar un agente en el canvas requiere puntero; si tus usuarios necesitan seleccionar con el teclado, muestra tu propia lista y pasa `selectedAgentId`.
+- Selección con teclado: cada agente de esa lista es un botón (`aria-pressed` marca el seleccionado). Al pulsarlo se selecciona el agente y la cámara va hacia él, igual que con un clic en el canvas; al pulsarlo otra vez se quita la selección. La oficina no registra atajos de teclado globales.
 
 ## Cifras de consumo
 

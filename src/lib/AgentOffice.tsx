@@ -135,8 +135,12 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
         )}
       </div>
 
-      <div className="av-sr-only">
-        <p id={listId}>{translate('office.agentsHeading')}</p>
+      {/*
+        Text alternative of the canvas and keyboard access: hidden until it receives focus (Tab), then shown
+        as a panel. Choosing an agent selects it and moves the camera to it, like a click on the canvas.
+      */}
+      <div className="av-agent-list">
+        <p id={listId} className="av-agent-list-title">{translate('office.agentsHeading')}</p>
         <ul aria-labelledby={listId} aria-live="polite">
           {snapshot.agents.map((agent) => {
             const role = agentRoleLabel(agent, translate);
@@ -148,9 +152,17 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
             const usageText = agentUsage
               ? formatUsage(agentUsage, locale, translate).map((item) => `${item.label}: ${item.value}`).join(', ')
               : '';
+            const selected = selectedId === agent.id;
             return (
               <li key={agent.id} data-agent-id={agent.id}>
-                {usageText ? `${line}. ${usageText}` : line}
+                <button
+                  type="button"
+                  className="av-agent-list-item"
+                  aria-pressed={selected}
+                  onClick={() => handleSelect(selected ? null : agent.id)}
+                >
+                  {usageText ? `${line}. ${usageText}` : line}
+                </button>
               </li>
             );
           })}

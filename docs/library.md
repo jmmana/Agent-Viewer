@@ -543,10 +543,10 @@ Notes:
 
 - The office is a `<section>` named by `ariaLabel` (default: the `office.label` text).
 - The canvas has `role="img"` and an `aria-label` (`canvas.aria`) that points to the text list.
-- A visually hidden list, announced politely (`aria-live="polite"`), names every agent with its role and status, for example "Atlas, Builder: Coding". With `showUsage`, each line also carries that agent's figures from `usage.byAgent`.
+- An agent list, announced politely (`aria-live="polite"`), names every agent with its role and status, for example "Atlas, Builder: Coding". With `showUsage`, each line also carries that agent's figures from `usage.byAgent`. The list stays visually hidden until it receives keyboard focus (Tab); then it opens as a panel of buttons.
 - The toolbar (`role="toolbar"`) and the replay controls are real buttons with accessible names and a visible focus ring. The replay slider announces its progress, and the speed buttons use `aria-pressed`.
 - With `prefers-reduced-motion: reduce`, nothing animates: agents move to their destination without walking, animated details stay still and button transitions are off.
-- The office registers no keyboard shortcuts. Selecting an agent on the canvas needs a pointer; if your users need keyboard selection, render your own list and pass `selectedAgentId`.
+- Keyboard selection: each agent in that list is a button (`aria-pressed` shows the selected one). Pressing it selects the agent and moves the camera to it, like a click on the canvas; pressing it again clears the selection. The office registers no global keyboard shortcuts.
 
 ## Usage figures
 

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - unreleased
+## [0.2.0] - 2026-10-08
 
 First release of the embeddable library as the package `@warlockcode/agent-viewer`. Until it is published on npm (coming soon), it is installed from the GitHub release asset. While the package is at 0.x, its API may still change between minor versions. The guide is in [docs/library.md](docs/library.md) ([español](docs/library.es.md)).
 
@@ -18,7 +18,7 @@ First release of the embeddable library as the package `@warlockcode/agent-viewe
 - Injectable texts: `locale`, `messages` and `t` props, built-in English and Spanish catalogs (`OFFICE_MESSAGES`), and `createOfficeTranslator`, `formatMessage`, `builtInMessages` and `isOfficeMessageKey`. A host `t` wins when it returns a value, then `messages`, then the built-in catalog of the locale, then English.
 - Usage display rules: `showUsage` shows only the figures the host passes in `usage` (`total` and `byAgent`), and a missing value is shown as "unknown", never as zero. Helpers `formatUsage`, `formatTokens` and `formatCost`, plus the opt-in `summarizeUsage`, which only adds up reported figures and never prices tokens.
 - Isolated CSS in `@warlockcode/agent-viewer/style.css`, imported by the host: every class starts with `av-`, there is no reset and no global selector, the theme lives in `--av-*` custom properties with zero specificity, and no external fonts are loaded.
-- Accessibility: a visually hidden live list of agents and their statuses, a labeled canvas, toolbar and replay controls, visible focus, and no animation under `prefers-reduced-motion`.
+- Accessibility: a live list of agents and their statuses that opens on keyboard focus and selects agents with the keyboard, a labeled canvas, toolbar and replay controls, visible focus, and no animation under `prefers-reduced-motion`.
 - Message kinds in the event contract (`MESSAGE_KINDS`, `isMessageKind`): `statement`, `proposal`, `question`, `answer`, `objection`, `critique`, `agreement`, `summary` and `decision`. `meeting.message` `type` uses them, `agent.message.sent` accepts an optional `kind`, and speech bubbles show the kind in their header.
 - Optional `currency` (ISO 4217 code) in the `llm.usage` payload.
 - `CanonicalEventInput` and `LegacyEventType` types, and `EVENT_TYPE_ALIASES` in the public exports.

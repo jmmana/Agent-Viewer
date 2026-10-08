@@ -1,6 +1,7 @@
 import { Agent, Artifact, Meeting, SocialActivity, Task, ViewerEvent } from '../types/agent';
 import { INITIAL_AGENTS } from './officeModel';
-import type { RoomReservation } from './livingOfficeEngine';
+import type { SimulationState } from './officeState';
+export { createLiveSimulationState, type SimulationState } from './officeState';
 import {
   playAlert,
   playMeetingGong,
@@ -15,24 +16,6 @@ export interface DemoStep {
   title: string;
   description: string;
   execute: (state: SimulationState) => void;
-}
-
-export interface SimulationState {
-  agents: Agent[];
-  tasks: Task[];
-  meetings: Meeting[];
-  events: ViewerEvent[];
-  activeMeetingId: string | null;
-  roomReservations: RoomReservation[];
-  socialActivities: SocialActivity[];
-  coffeeSeatAssignments: Array<{ seatId: string; agentId: string }>;
-  totalTokens: {
-    input: number;
-    output: number;
-    cached: number;
-    reasoning: number;
-  };
-  totalCost: number;
 }
 
 export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS): SimulationState {
@@ -62,30 +45,6 @@ export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS): 
       reasoning: 16800,
     },
     totalCost: 0.881,
-  };
-}
-
-/**
- * Creates a clean, empty state for real live multi-agent streaming mode.
- * Contains 0 seeded agents, 0 synthetic tokens, 0 synthetic cost.
- */
-export function createLiveSimulationState(): SimulationState {
-  return {
-    agents: [],
-    tasks: [],
-    meetings: [],
-    events: [],
-    activeMeetingId: null,
-    roomReservations: [],
-    socialActivities: [],
-    coffeeSeatAssignments: [],
-    totalTokens: {
-      input: 0,
-      output: 0,
-      cached: 0,
-      reasoning: 0,
-    },
-    totalCost: 0,
   };
 }
 

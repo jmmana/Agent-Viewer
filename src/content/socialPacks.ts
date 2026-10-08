@@ -1,5 +1,6 @@
 import type { AgentMood, SocialTopic } from '../types/agent';
-import type { Locale } from '../i18n';
+/** Languages with built-in simulated social lines. */
+export type SocialLocale = 'en' | 'es';
 
 export interface SocialLine {
   text: string;
@@ -129,6 +130,6 @@ const es: SocialExchange[] = [
   },
 ];
 
-export function socialPack(locale: Locale): SocialExchange[] {
+export function socialPack(locale: SocialLocale): SocialExchange[] {
   return locale === 'es' ? es : en;
 }

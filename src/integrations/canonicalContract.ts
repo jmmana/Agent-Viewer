@@ -1,60 +1,16 @@
 import { z } from 'zod';
 
-export const SCHEMA_VERSION = '1.0' as const;
-
-export const CANONICAL_EVENT_TYPES = [
-  'agent.registered',
-  'agent.updated',
-  'agent.status.changed',
-  'agent.message.sent',
-  'task.created',
-  'task.assigned',
-  'task.progress',
-  'task.completed',
-  'task.failed',
-  'task.blocked',
-  'tool.started',
-  'tool.completed',
-  'tool.failed',
-  'meeting.requested',
-  'meeting.started',
-  'meeting.message',
-  'meeting.ended',
-  'meeting.cancelled',
-  'llm.usage',
-  'runtime.connected',
-  'runtime.disconnected',
-  'runtime.heartbeat',
-] as const;
-
-export type CanonicalEventType = (typeof CANONICAL_EVENT_TYPES)[number];
-
-// Supported legacy/alternative aliases mapped to canonical V1 types
-export const EVENT_TYPE_ALIASES: Record<string, CanonicalEventType> = {
-  'message.sent': 'agent.message.sent',
-  'agent.phone_call.started': 'meeting.started',
-  'agent.phone_call.ended': 'meeting.ended',
-  'meeting.room.reserved': 'meeting.started',
-  'meeting.decision': 'meeting.message',
-  'task.started': 'task.progress',
-  'approval.requested': 'task.blocked',
-  'approval.approved': 'task.progress',
-  'artifact.created': 'task.progress',
-};
-
-export type EventSeverity = 'low' | 'normal' | 'high' | 'critical';
-
-export interface ValidationIssue {
-  path: string;
-  message: string;
-}
-
-export interface ValidationResult<T> {
-  success: boolean;
-  data?: T;
-  issues?: ValidationIssue[];
-  error?: string;
-}
+export * from './canonicalTypes';
+import {
+  CANONICAL_EVENT_TYPES,
+  EVENT_TYPE_ALIASES,
+  MESSAGE_KINDS,
+  type CanonicalEvent,
+  type CanonicalEventType,
+  type EventSeverity,
+  type ValidationIssue,
+  type ValidationResult,
+} from './canonicalTypes';
 
 // -------------------------------------------------------------
 // Payload Schemas
@@ -71,6 +27,7 @@ export const LlmUsagePayloadSchema = z.object({
   requestId: z.string().nullish(),
   cost: z.number().nonnegative('Cost cannot be negative').nullish().default(null),
   costSource: z.enum(['provider-reported', 'estimated', 'unknown']).nullish().default('unknown'),
+  currency: z.string().regex(/^[A-Z]{3}$/, 'Expected an ISO 4217 currency code').nullish(),
 });
 
 export type LlmUsagePayload = z.infer<typeof LlmUsagePayloadSchema>;
@@ -110,6 +67,7 @@ export const AgentMessageSentPayloadSchema = z.object({
   text: z.string().min(1, 'Message text is required'),
   targetAgentName: z.string().nullish(),
   targetAgentId: z.string().nullish(),
+  kind: z.enum(MESSAGE_KINDS).nullish(),
 });
 
 export const TaskCreatedPayloadSchema = z.object({
@@ -190,7 +148,9 @@ export const MeetingStartedPayloadSchema = z.object({
 export const MeetingMessagePayloadSchema = z.object({
   meetingId: z.string().optional(),
   text: z.string().min(1, 'Message text is required'),
-  type: z.enum(['statement', 'proposal', 'decision', 'question']).optional().default('statement'),
+  type: z.enum(MESSAGE_KINDS).optional().default('statement'),
+  targetAgentId: z.string().nullish(),
+  targetAgentName: z.string().nullish(),
 });
 
 export const MeetingEndedPayloadSchema = z.object({
@@ -268,21 +228,6 @@ export const CanonicalEventEnvelopeSchema = z.object({
   summary: z.string().min(1, 'Summary is required'),
   payload: z.record(z.string(), z.any()).default({}),
 });
-
-export interface CanonicalEvent<T = Record<string, any>> {
-  schemaVersion: '1.0';
-  id: string;
-  type: CanonicalEventType;
-  timestamp: number;
-  runtimeId?: string;
-  sessionId?: string;
-  source: string;
-  agentId?: string;
-  taskId?: string;
-  severity: EventSeverity;
-  summary: string;
-  payload: T;
-}
 
 /**
  * Validates an event against the canonical envelope and typed payload.
@@ -386,65 +331,5 @@ export function validateCanonicalEvent(input: unknown): ValidationResult<Canonic
   return {
     success: true,
     data: canonicalEvent,
-  };
-}
-
-/**
- * Normalizes any loose input into a valid CanonicalEvent V1, generating missing IDs or timestamps if needed.
- */
-export function normalizeCanonicalEvent(input: any): CanonicalEvent {
-  const now = Date.now();
-  const id = input?.id && typeof input.id === 'string' && input.id.length > 0
-    ? input.id
-    : `evt_${now}_${Math.random().toString(36).slice(2, 9)}`;
-
-  const rawType = typeof input?.type === 'string' ? input.type : 'agent.status.changed';
-  const type: CanonicalEventType = EVENT_TYPE_ALIASES[rawType] ?? (
-    CANONICAL_EVENT_TYPES.includes(rawType as CanonicalEventType) ? rawType : 'agent.status.changed'
-  );
-
-  const timestamp = typeof input?.timestamp === 'number' && input.timestamp > 0
-    ? Math.floor(input.timestamp)
-    : (typeof input?.timestamp === 'string' && !isNaN(Date.parse(input.timestamp))
-      ? Date.parse(input.timestamp)
-      : now);
-
-  const source = typeof input?.source === 'string' && input.source.length > 0
-    ? input.source
-    : (input?.agentId ? `agent:${input.agentId}` : 'external-runtime');
-
-  let agentId = typeof input?.agentId === 'string'
-    ? input.agentId
-    : (typeof input?.payload?.agentId === 'string'
-      ? input.payload.agentId
-      : (source.startsWith('agent:') ? source.replace(/^agent:/, '') : undefined));
-
-  const summary = typeof input?.summary === 'string' && input.summary.length > 0
-    ? input.summary
-    : `${type} event received`;
-
-  const payload = input?.payload && typeof input.payload === 'object' ? { ...input.payload } : {};
-
-  // Normalize usage payload if type is llm.usage
-  if (type === 'llm.usage') {
-    if (payload.cost === undefined) payload.cost = null;
-    if (!payload.costSource) payload.costSource = 'unknown';
-    if (typeof payload.inputTokens !== 'number') payload.inputTokens = 0;
-    if (typeof payload.outputTokens !== 'number') payload.outputTokens = 0;
-  }
-
-  return {
-    schemaVersion: '1.0',
-    id,
-    type,
-    timestamp,
-    runtimeId: typeof input?.runtimeId === 'string' ? input.runtimeId : undefined,
-    sessionId: typeof input?.sessionId === 'string' ? input.sessionId : undefined,
-    source,
-    agentId,
-    taskId: typeof input?.taskId === 'string' ? input.taskId : (typeof payload.taskId === 'string' ? payload.taskId : undefined),
-    severity: (['low', 'normal', 'high', 'critical'].includes(input?.severity) ? input.severity : 'normal') as EventSeverity,
-    summary,
-    payload,
   };
 }

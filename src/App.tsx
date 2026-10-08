@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Agent, AgentStatus, PricingConfig, ViewerEvent } from './types/agent';
 import { DEFAULT_PRICING, INITIAL_AGENTS } from './engine/officeModel';
 import {
@@ -23,6 +23,7 @@ import { AgentDetailModal } from './components/AgentDetailModal';
 import { SimulatedTokenBurst } from './engine/modelOps';
 import { DoorOpen } from 'lucide-react';
 import { t } from './i18n';
+import { createOfficeTranslator } from './content/officeMessages';
 import { detectLocale, Locale, persistLocale } from './i18n';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
@@ -81,6 +82,7 @@ export default function App() {
   const [pricing, setPricing] = useState<PricingConfig[]>(DEFAULT_PRICING);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [locale, setLocale] = useState<Locale>(() => detectLocale());
+  const officeTranslate = useMemo(() => createOfficeTranslator({ locale }), [locale]);
   const [ambientSocialEnabled, setAmbientSocialEnabled] = useState(true);
   const [politicsChatterEnabled, setPoliticsChatterEnabled] = useState(false);
   const [currentFloor, setCurrentFloor] = useState<1 | 2>(1);
@@ -615,7 +617,8 @@ export default function App() {
                     onOpenModelOps={handleOpenModelOps}
                     activeMeetingId={simState.activeMeetingId}
                     theme={theme}
-                    locale={locale}
+                    translate={officeTranslate}
+                    usageTelemetry
                     isInspectorOpen={isSidebarOpen}
                     isSidebarOpen={isSidebarOpen}
                     onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}

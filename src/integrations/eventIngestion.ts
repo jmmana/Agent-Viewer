@@ -1,12 +1,13 @@
-import type { Agent, AgentStatus, ViewerEvent, WorkspaceZone, Task } from '../types/agent';
-import type { SimulationState } from '../engine/simulationEngine';
-import { endMeeting, requestMeeting, routeAgent } from '../engine/livingOfficeEngine';
+import type { Agent, AgentRole, AgentStatus, MeetingMessage, ViewerEvent, WorkspaceZone, Task } from '../types/agent';
+import type { SimulationState } from '../engine/officeState';
+import { endMeeting, requestMeeting, routeAgent, WORKSPACE_ANCHORS } from '../engine/livingOfficeEngine';
 import {
   type CanonicalEvent,
-  validateCanonicalEvent,
+  type MessageKind,
   normalizeCanonicalEvent,
   EVENT_TYPE_ALIASES,
-} from './canonicalContract';
+  isMessageKind,
+} from './canonicalTypes';
 
 const STATUS_VALUES = new Set<AgentStatus>([
   'OFFLINE', 'IDLE', 'AVAILABLE', 'THINKING', 'READING', 'RESEARCHING', 'CODING', 'WRITING', 'TESTING',
@@ -14,33 +15,45 @@ const STATUS_VALUES = new Set<AgentStatus>([
   'IN_MEETING', 'COFFEE_BREAK', 'CHATTING', 'REVIEWING', 'DELIVERING', 'DONE', 'ERROR',
 ]);
 
+const ROLE_VALUES = new Set<AgentRole>([
+  'boss', 'tech_lead', 'research_lead', 'backend_engineer', 'frontend_engineer', 'qa_engineer', 'security_analyst', 'custom',
+]);
+
+const TEAM_VALUES = new Set<Agent['team']>(['leadership', 'engineering', 'research', 'quality', 'operations', 'other']);
+
+/** Default time a speech bubble stays on screen. */
+export const DEFAULT_BUBBLE_MS = 6500;
+
 export interface ExternalEventEnvelope extends ViewerEvent {
   schemaVersion?: string;
   agentId?: string;
 }
 
-export function validateExternalEvent(value: unknown): value is ExternalEventEnvelope {
-  const result = validateCanonicalEvent(value);
-  if (result.success) return true;
-  // Fallback check for minimal raw event
-  if (!value || typeof value !== 'object') return false;
-  const event = value as Record<string, unknown>;
-  return (
-    typeof event.id === 'string' &&
-    event.id.length > 0 &&
-    typeof event.type === 'string' &&
-    typeof event.timestamp === 'number' &&
-    typeof event.source === 'string' &&
-    typeof event.summary === 'string' &&
-    !!event.payload &&
-    typeof event.payload === 'object'
-  );
+export interface ApplyEventOptions {
+  /** Clock for bubbles and walking. Defaults to `Date.now()`; tests and replays pass their own. */
+  now?: number;
+  /** How long a speech bubble stays visible, in milliseconds. */
+  bubbleMs?: number;
+  /** Let the office add its own short lines when a meeting is requested (demo app only). */
+  narrate?: boolean;
+  /** Allow the hidden overflow floor when every visible meeting room is busy. */
+  overflowFloor?: boolean;
+  /** Accumulate tokens and reported costs from `llm.usage` into the state. */
+  trackUsage?: boolean;
+}
+
+function isWorkspace(value: unknown): value is WorkspaceZone {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(WORKSPACE_ANCHORS, value);
+}
+
+function isAvatarColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{3,8}$/i.test(value);
 }
 
 /**
  * Creates default agent profile for an unregistered agent.
  */
-function createDefaultAgent(id: string, name?: string, roleTitle?: string): Agent {
+function createDefaultAgent(id: string, now: number, name?: string, roleTitle?: string): Agent {
   const hash = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const colors = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa'];
   const avatarColor = colors[hash % colors.length];
@@ -49,13 +62,13 @@ function createDefaultAgent(id: string, name?: string, roleTitle?: string): Agen
     id,
     name: name || id,
     role: 'custom',
-    roleTitle: roleTitle || 'AI Agent',
+    roleTitle: roleTitle ?? '',
     team: 'other',
     managerId: null,
     provider: 'External',
     model: 'external-model',
     status: 'IDLE',
-    statusText: 'Active',
+    statusText: '',
     currentTaskId: null,
     currentTool: null,
     workspace: 'development',
@@ -74,15 +87,70 @@ function createDefaultAgent(id: string, name?: string, roleTitle?: string): Agen
     cachedTokens: 0,
     reasoningTokens: 0,
     cost: 0,
-    startedAt: Date.now(),
+    startedAt: now,
     speechBubble: null,
     mood: 'neutral',
     socialActivityId: null,
   };
 }
 
-export function applyExternalEvent(state: SimulationState, rawIncoming: ExternalEventEnvelope | CanonicalEvent): void {
+/** Applies the identity fields a runtime sends with `agent.registered` or `agent.updated`. */
+function applyProfile(agent: Agent, payload: Record<string, any>, now: number, spawn: boolean): void {
+  if (typeof payload.name === 'string' && payload.name) agent.name = payload.name;
+  if (typeof payload.roleTitle === 'string') agent.roleTitle = payload.roleTitle;
+  if (typeof payload.provider === 'string') agent.provider = payload.provider;
+  if (typeof payload.model === 'string') agent.model = payload.model;
+  if (typeof payload.statusText === 'string') agent.statusText = payload.statusText;
+  if (ROLE_VALUES.has(payload.role)) agent.role = payload.role;
+  if (TEAM_VALUES.has(payload.team)) agent.team = payload.team;
+  if (isAvatarColor(payload.avatarColor)) agent.avatarColor = payload.avatarColor;
+  if (typeof payload.managerId === 'string' || payload.managerId === null) agent.managerId = payload.managerId;
+  const status = typeof payload.status === 'string' ? payload.status.toUpperCase() : '';
+  if (STATUS_VALUES.has(status as AgentStatus)) agent.status = status as AgentStatus;
+
+  if (isWorkspace(payload.workspace)) {
+    agent.homeWorkspace = payload.workspace;
+    if (spawn) {
+      // A new agent appears at its own desk instead of walking in from a default spot.
+      const anchor = WORKSPACE_ANCHORS[payload.workspace];
+      agent.workspace = payload.workspace;
+      agent.x = agent.targetX = anchor.x;
+      agent.y = agent.targetY = anchor.y;
+      agent.isWalking = false;
+    } else {
+      routeAgent(agent, payload.workspace, now);
+    }
+  }
+}
+
+function speak(
+  state: SimulationState,
+  agent: Agent,
+  payload: Record<string, any>,
+  now: number,
+  bubbleMs: number,
+  kind?: MessageKind,
+): void {
+  const targetById = typeof payload.targetAgentId === 'string'
+    ? state.agents.find((item) => item.id === payload.targetAgentId)?.name
+    : undefined;
+  agent.speechBubble = {
+    text: payload.text,
+    targetAgentName: typeof payload.targetAgentName === 'string' ? payload.targetAgentName : targetById,
+    expiresAt: now + bubbleMs,
+    kind,
+  };
+}
+
+export function applyExternalEvent(
+  state: SimulationState,
+  rawIncoming: ExternalEventEnvelope | CanonicalEvent,
+  options: ApplyEventOptions = {},
+): void {
   const incoming = normalizeCanonicalEvent(rawIncoming);
+  const now = options.now ?? Date.now();
+  const bubbleMs = options.bubbleMs ?? DEFAULT_BUBBLE_MS;
+  const meetingOptions = { now, narrate: options.narrate ?? true, overflowFloor: options.overflowFloor ?? true };
 
   // Check idempotency against existing events in state
   if (state.events.some((event) => event.id === incoming.id)) return;
@@ -90,17 +158,20 @@ export function applyExternalEvent(state: SimulationState, rawIncoming: External
   const agentId = incoming.agentId ?? incoming.source.replace(/^agent:/, '');
   let agent = state.agents.find((item) => item.id === agentId);
   const payload = incoming.payload ?? {};
+  let created = false;
 
   // Requirement 12: Auto-registration.
   // If an event mentions an agent that does not yet exist, auto-register it!
   if (!agent && agentId && agentId !== 'external-runtime' && agentId !== 'system' && !incoming.source.startsWith('runtime:')) {
     const newAgent = createDefaultAgent(
       agentId,
+      now,
       typeof payload.name === 'string' ? payload.name : agentId,
       typeof payload.roleTitle === 'string' ? payload.roleTitle : undefined
     );
     state.agents.push(newAgent);
     agent = newAgent;
+    created = true;
   }
 
   const resolvedType: string = (EVENT_TYPE_ALIASES[incoming.type] ?? incoming.type);
@@ -108,31 +179,18 @@ export function applyExternalEvent(state: SimulationState, rawIncoming: External
   switch (resolvedType) {
     case 'agent.registered': {
       const id = incoming.agentId ?? incoming.source.replace(/^agent:/, '');
-      const existing = state.agents.find((item) => item.id === id);
-      if (!existing) {
-        state.agents.push(createDefaultAgent(
-          id,
-          typeof payload.name === 'string' ? payload.name : id,
-          typeof payload.roleTitle === 'string' ? payload.roleTitle : 'External Agent'
-        ));
-      } else {
-        if (typeof payload.name === 'string') existing.name = payload.name;
-        if (typeof payload.roleTitle === 'string') existing.roleTitle = payload.roleTitle;
-        if (typeof payload.provider === 'string') existing.provider = payload.provider;
-        if (typeof payload.model === 'string') existing.model = payload.model;
+      let registered = state.agents.find((item) => item.id === id);
+      if (!registered) {
+        registered = createDefaultAgent(id, now, typeof payload.name === 'string' ? payload.name : id);
+        state.agents.push(registered);
+        created = true;
       }
+      applyProfile(registered, payload, now, created);
       break;
     }
 
     case 'agent.updated': {
-      if (agent) {
-        if (typeof payload.name === 'string') agent.name = payload.name;
-        if (typeof payload.roleTitle === 'string') agent.roleTitle = payload.roleTitle;
-        if (typeof payload.provider === 'string') agent.provider = payload.provider;
-        if (typeof payload.model === 'string') agent.model = payload.model;
-        if (typeof payload.statusText === 'string') agent.statusText = payload.statusText;
-        if (typeof payload.workspace === 'string') routeAgent(agent, payload.workspace as WorkspaceZone);
-      }
+      if (agent) applyProfile(agent, payload, now, created);
       break;
     }
 
@@ -141,8 +199,8 @@ export function applyExternalEvent(state: SimulationState, rawIncoming: External
       if (agent && STATUS_VALUES.has(rawStatus as AgentStatus)) {
         agent.status = rawStatus as AgentStatus;
         agent.statusText = typeof payload.statusText === 'string' ? payload.statusText : incoming.summary;
-        if (typeof payload.workspace === 'string') {
-          routeAgent(agent, payload.workspace as WorkspaceZone);
+        if (isWorkspace(payload.workspace)) {
+          routeAgent(agent, payload.workspace, now);
         }
       }
       break;
@@ -151,11 +209,7 @@ export function applyExternalEvent(state: SimulationState, rawIncoming: External
     case 'agent.message.sent':
     case 'message.sent': {
       if (agent && typeof payload.text === 'string') {
-        agent.speechBubble = {
-          text: payload.text,
-          targetAgentName: typeof payload.targetAgentName === 'string' ? payload.targetAgentName : undefined,
-          expiresAt: Date.now() + 6500,
-        };
+        speak(state, agent, payload, now, bubbleMs, isMessageKind(payload.kind) ? payload.kind : undefined);
       }
       break;
     }
@@ -290,14 +344,15 @@ export function applyExternalEvent(state: SimulationState, rawIncoming: External
 
     case 'llm.usage': {
       if (agent) {
+        if (typeof payload.provider === 'string') agent.provider = payload.provider;
+        if (typeof payload.model === 'string') agent.model = payload.model;
+        if (options.trackUsage === false) break;
+
         const input = Number(payload.inputTokens ?? 0);
         const output = Number(payload.outputTokens ?? 0);
         const cached = Number(payload.cachedTokens ?? 0);
         const reasoning = Number(payload.reasoningTokens ?? 0);
         const cost = typeof payload.cost === 'number' && Number.isFinite(payload.cost) ? payload.cost : 0;
-
-        if (typeof payload.provider === 'string') agent.provider = payload.provider;
-        if (typeof payload.model === 'string') agent.model = payload.model;
 
         agent.tokensInput += Number.isFinite(input) ? input : 0;
         agent.tokensOutput += Number.isFinite(output) ? output : 0;
@@ -325,22 +380,76 @@ export function applyExternalEvent(state: SimulationState, rawIncoming: External
       const participants = Array.isArray(payload.participantIds)
         ? payload.participantIds.filter((id): id is string => typeof id === 'string')
         : [];
-      if (participants.length > 0) {
+      const meetingId = typeof payload.meetingId === 'string' ? payload.meetingId : `meeting-${incoming.id}`;
+      if (participants.length > 0 && !state.meetings.some((item) => item.id === meetingId)) {
         requestMeeting(state, {
-          id: typeof payload.meetingId === 'string' ? payload.meetingId : `meeting-${incoming.id}`,
-          title: typeof payload.title === 'string' ? payload.title : 'Agent collaboration',
+          id: meetingId,
+          title: typeof payload.title === 'string' ? payload.title : incoming.summary,
           topic: typeof payload.topic === 'string' ? payload.topic : incoming.summary,
           initiatorId: incoming.source.replace(/^agent:/, ''),
           participantIds: participants,
           taskId: incoming.taskId,
-        });
+        }, meetingOptions);
+      }
+      break;
+    }
+
+    case 'meeting.started': {
+      const meetingId = typeof payload.meetingId === 'string' ? payload.meetingId : undefined;
+      const participants = Array.isArray(payload.participantIds)
+        ? payload.participantIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      let meeting = meetingId ? state.meetings.find((item) => item.id === meetingId) : undefined;
+      if (!meeting && meetingId && participants.length > 0) {
+        meeting = requestMeeting(state, {
+          id: meetingId,
+          title: typeof payload.title === 'string' ? payload.title : incoming.summary,
+          topic: incoming.summary,
+          initiatorId: incoming.source.replace(/^agent:/, ''),
+          participantIds: participants,
+          taskId: incoming.taskId,
+        }, meetingOptions);
+      }
+      if (meeting && meeting.status === 'SCHEDULED') {
+        // The runtime says the meeting started: it does not wait for everyone to finish walking.
+        const startedId = meeting.id;
+        meeting.status = 'ACTIVE';
+        meeting.startedAt = now;
+        const reservation = state.roomReservations.find((item) => item.meetingId === startedId);
+        if (reservation) reservation.status = 'ACTIVE';
+        state.activeMeetingId = meeting.id;
+        for (const id of meeting.participants) {
+          const participant = state.agents.find((item) => item.id === id);
+          if (participant) participant.status = 'IN_MEETING';
+        }
+      }
+      break;
+    }
+
+    case 'meeting.message': {
+      if (agent && typeof payload.text === 'string') {
+        const kind: MessageKind = isMessageKind(payload.type) ? payload.type : 'statement';
+        speak(state, agent, payload, now, bubbleMs, kind);
+        const meetingId = typeof payload.meetingId === 'string' ? payload.meetingId : state.activeMeetingId;
+        const meeting = state.meetings.find((item) => item.id === meetingId);
+        if (meeting) {
+          const message: MeetingMessage = {
+            id: incoming.id,
+            senderId: agent.id,
+            text: payload.text,
+            timestamp: incoming.timestamp,
+            type: kind,
+          };
+          meeting.messages.push(message);
+          if (kind === 'decision') meeting.decisions.push(payload.text);
+        }
       }
       break;
     }
 
     case 'meeting.ended':
     case 'meeting.cancelled': {
-      if (typeof payload.meetingId === 'string') endMeeting(state, payload.meetingId);
+      if (typeof payload.meetingId === 'string') endMeeting(state, payload.meetingId, now);
       break;
     }
   }

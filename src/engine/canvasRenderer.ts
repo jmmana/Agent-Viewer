@@ -1,6 +1,6 @@
 import { cameraCenter, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
 import type { Agent } from '../types/agent';
-import { Locale, t } from '../i18n';
+import { isOfficeMessageKey, type OfficeTranslate } from '../content/officeMessages';
 import { aggregateModelUsage, compactTokens } from './modelOps';
 import {
   FurnitureItem,
@@ -31,9 +31,30 @@ export interface RenderContext {
   activeMeetingId: string | null;
   timeMs: number;
   theme: 'dark' | 'light';
-  locale: Locale;
+  /** Every visible text on the canvas goes through this function. */
+  translate: OfficeTranslate;
+  /**
+   * Draw token and cost telemetry aggregated from the agents (demo app). Embedded views leave it off:
+   * the canvas then never adds up tokens or costs and the Model Ops room is only decoration.
+   */
+  usageTelemetry?: boolean;
   nowMs: number;
   reducedMotion?: boolean;
+}
+
+/** Text settings shared by every drawing helper. */
+interface SceneText {
+  translate: OfficeTranslate;
+  usageTelemetry: boolean;
+}
+
+/** Label of a furniture item from the catalog. Items without a catalog entry draw no text. */
+function furnitureLabel(item: FurnitureItem, scene: SceneText): string | undefined {
+  if (!item.label) return undefined;
+  // Model Ops furniture only names itself when usage telemetry is on: embedded views never mention tokens.
+  if (item.id.startsWith('f_server_') && !scene.usageTelemetry) return undefined;
+  const key = `furniture.${item.id}`;
+  return isOfficeMessageKey(key) ? scene.translate(key) : undefined;
 }
 
 /**
@@ -41,8 +62,9 @@ export interface RenderContext {
  * Screen-aligned, rectangular layout (NO diamond / rhombus!) that fills the viewport cleanly.
  */
 export function renderOfficeScene(rc: RenderContext) {
-  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, locale, nowMs } = rc;
+  const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs } = rc;
   const rot = ((camera.rotation % 4) + 4) % 4;
+  const scene: SceneText = { translate: rc.translate, usageTelemetry: rc.usageTelemetry ?? false };
 
   ctx.clearRect(0, 0, width, height);
 
@@ -65,17 +87,17 @@ export function renderOfficeScene(rc: RenderContext) {
   // 2. Floor tiles for rooms and designated interconnecting hallways
   drawFloorRooms(ctx, rot, theme, activeMeetingId, timeMs);
 
-  drawRoomAtmosphere(ctx, rot, theme, locale);
-  drawModelOpsTelemetry(ctx, rot, theme, agents, timeMs);
+  drawRoomAtmosphere(ctx, rot, theme);
+  drawModelOpsTelemetry(ctx, rot, theme, agents, timeMs, scene);
   drawMessageConnections(ctx, rot, agents, timeMs, nowMs);
 
   // 3. Architectural interior walls, glass partitions & doorways
   drawArchitecturalWalls(ctx, rot, theme);
 
   // 4. Depth-sorted Entities (Furniture and Agents rendered in 2.5D perspective)
-  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs);
+  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs, scene);
   // Room plaques are intentionally rendered after furniture/agents so static decoration can never cover them.
-  drawRoomPlaques(ctx, rot, theme, locale);
+  drawRoomPlaques(ctx, rot, theme, scene.translate);
 
   ctx.restore();
   // Typography lives in screen space: readable at every camera zoom.
@@ -215,15 +237,11 @@ function drawModelOpsTelemetry(
   rot: number,
   theme: 'dark' | 'light',
   agents: Agent[],
-  timeMs: number
+  timeMs: number,
+  scene: SceneText
 ) {
   const room = OFFICE_ROOMS.find((item) => item.id === 'server_room');
   if (!room) return;
-
-  const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
-  const providers = aggregateModelUsage(agents);
-  const totalTokens = providers.reduce((sum, provider) => sum + provider.totalTokens, 0);
-  const totalCost = providers.reduce((sum, provider) => sum + provider.cost, 0);
 
   ctx.save();
 
@@ -263,6 +281,15 @@ function drawModelOpsTelemetry(
     ctx.fill();
   }
 
+  if (!scene.usageTelemetry) {
+    ctx.restore();
+    return;
+  }
+
+  const providers = aggregateModelUsage(agents);
+  const totalTokens = providers.reduce((sum, provider) => sum + provider.totalTokens, 0);
+  const totalCost = providers.reduce((sum, provider) => sum + provider.cost, 0);
+
   // 2. High-Tech Floor Telemetry Runner Plaque at entrance threshold (gy: 5)
   const threshPos = gridToScreen(18, 5, rot);
   const hudW = 200;
@@ -290,7 +317,7 @@ function drawModelOpsTelemetry(
   ctx.font = '700 8px "JetBrains Mono", monospace';
   ctx.fillStyle = theme === 'dark' ? '#38bdf8' : '#0284c7';
   ctx.textAlign = 'left';
-  ctx.fillText('MODEL OPS · LIVE TELEMETRY', hudX + 22, hudY + 11);
+  ctx.fillText(scene.translate('screen.telemetry'), hudX + 22, hudY + 11);
 
   ctx.font = '700 7.5px "JetBrains Mono", monospace';
   ctx.fillStyle = '#22c55e';
@@ -308,7 +335,7 @@ function drawModelOpsTelemetry(
   ctx.font = '700 6.5px "Plus Jakarta Sans", sans-serif';
   ctx.fillStyle = theme === 'dark' ? '#67e8f9' : '#0e7490';
   ctx.textAlign = 'center';
-  ctx.fillText('⚡ ABRIR', hudX + hudW - 32, hudY + 15.5);
+  ctx.fillText(scene.translate('screen.open'), hudX + hudW - 32, hudY + 15.5);
 
   ctx.restore();
 }
@@ -460,7 +487,8 @@ function drawDepthSortedEntities(
   activeMeetingId: string | null,
   timeMs: number,
   theme: 'dark' | 'light',
-  nowMs: number
+  nowMs: number,
+  scene: SceneText
 ) {
   type DepthEntity =
     | { kind: 'furniture'; item: FurnitureItem; depth: number }
@@ -485,7 +513,7 @@ function drawDepthSortedEntities(
 
   for (const ent of entities) {
     if (ent.kind === 'furniture') {
-      renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId, agents);
+      renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId, scene, agents);
     } else {
       const offset = visualOffsets.get(ent.agent.id) ?? { ox: 0, oy: 0 };
       renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme, nowMs, offset);
@@ -500,6 +528,7 @@ function renderFurnitureItem(
   timeMs: number,
   theme: 'dark' | 'light',
   activeMeetingId: string | null,
+  scene: SceneText,
   agents: Agent[] = []
 ) {
   const { x, y } = gridToScreen(item.gridX, item.gridY, rot);
@@ -517,21 +546,21 @@ function renderFurnitureItem(
   ctx.fill();
 
   if (item.type === 'desk') {
-    renderDesk(ctx, x, y, item, timeMs, theme);
+    renderDesk(ctx, x, y, item, timeMs, theme, scene);
   } else if (item.type === 'chair') {
     renderChair(ctx, x, y, item, theme);
   } else if (item.type === 'meeting_table') {
     if (item.subType === 'cafe_round') {
-      renderCafeRoundTable(ctx, x, y, theme, item.label);
+      renderCafeRoundTable(ctx, x, y, theme, furnitureLabel(item, scene));
     } else {
       renderMeetingTable(ctx, x, y, theme);
     }
   } else if (item.type === 'screen') {
-    renderWallScreen(ctx, x, y, item, activeMeetingId, timeMs, agents);
+    renderWallScreen(ctx, x, y, item, activeMeetingId, timeMs, scene, agents);
   } else if (item.type === 'whiteboard') {
     renderWhiteboard(ctx, x, y, item);
   } else if (item.type === 'server_rack') {
-    renderServerRack(ctx, x, y, item, timeMs, agents);
+    renderServerRack(ctx, x, y, item, timeMs, scene, agents);
   } else if (item.type === 'bookshelf') {
     renderBookshelf(ctx, x, y);
   } else if (item.type === 'credenza') {
@@ -571,7 +600,8 @@ function renderDesk(
   y: number,
   item: FurnitureItem,
   timeMs: number,
-  theme: 'dark' | 'light'
+  theme: 'dark' | 'light',
+  scene: SceneText
 ) {
   const deskW = 44;
   const deskH = 26;
@@ -850,11 +880,12 @@ function renderDesk(
   }
 
   // Label under desk
-  if (item.label && !item.assignedAgentId) {
+  const deskLabel = item.assignedAgentId ? undefined : furnitureLabel(item, scene);
+  if (deskLabel) {
     ctx.font = '600 8.5px "JetBrains Mono", monospace';
     ctx.fillStyle = theme === 'dark' ? '#94a3b8' : '#64748b';
     ctx.textAlign = 'left';
-    ctx.fillText(item.label, posX - 2, posY + deskH + 9);
+    ctx.fillText(deskLabel, posX - 2, posY + deskH + 9);
   }
 }
 
@@ -1044,6 +1075,7 @@ function renderWallScreen(
   item: FurnitureItem,
   activeMeetingId: string | null,
   timeMs: number,
+  scene: SceneText,
   agents: Agent[] = []
 ) {
   const sw = 76;
@@ -1069,7 +1101,7 @@ function renderWallScreen(
 
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 8.5px "Plus Jakarta Sans", sans-serif';
-      ctx.fillText('TEAM COORDINATION', px + 7, py + 14);
+      ctx.fillText(scene.translate('screen.meetingActive'), px + 7, py + 14);
 
       ctx.fillStyle = '#38bdf8';
       ctx.fillRect(px + 7, py + 18, 24, 5);
@@ -1081,7 +1113,7 @@ function renderWallScreen(
 
       ctx.fillStyle = '#38bdf8';
       ctx.font = 'bold 8px "JetBrains Mono", monospace';
-      ctx.fillText('CONFERENCE READY', px + 6, py + 16);
+      ctx.fillText(scene.translate('screen.meetingIdle'), px + 6, py + 16);
     }
   } else if (item.id === 'f_qa_screen') {
     // QA Automated CI/CD Screen
@@ -1090,7 +1122,7 @@ function renderWallScreen(
 
     ctx.fillStyle = '#4ade80';
     ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-    ctx.fillText('TEST AUTOMATION', px + 6, py + 13);
+    ctx.fillText(scene.translate('screen.qa'), px + 6, py + 13);
     ctx.fillStyle = '#22c55e';
     ctx.fillRect(px + 6, py + 18, 48, 4);
   } else if (item.id === 'f_server_noc') {
@@ -1103,7 +1135,7 @@ function renderWallScreen(
     ctx.fillRect(px + 4, py + 4, sw - 8, 9);
     ctx.fillStyle = '#38bdf8';
     ctx.font = 'bold 6px "JetBrains Mono", monospace';
-    ctx.fillText('MODEL OPS · LIVE TOKEN FLOW', px + 6, py + 11);
+    ctx.fillText(scene.translate(scene.usageTelemetry ? 'screen.tokenFlow' : 'screen.status'), px + 6, py + 11);
 
     // Live Animated Oscilloscope / Spectrogram of Token Traffic
     const waveColors = ['#10b981', '#38bdf8', '#f59e0b', '#a855f7'];
@@ -1120,6 +1152,8 @@ function renderWallScreen(
       }
       ctx.stroke();
     }
+
+    if (!scene.usageTelemetry) return;
 
     // Mini provider indicators & real-time token throughput
     const totalTok = agents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
@@ -1144,7 +1178,7 @@ function renderWallScreen(
     ctx.fillRect(px + 4, py + 4, sw - 8, sh - 8);
     ctx.fillStyle = '#f59e0b';
     ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-    ctx.fillText(item.label || 'SYSTEM STATUS', px + 6, py + 16);
+    ctx.fillText(furnitureLabel(item, scene) ?? scene.translate('screen.status'), px + 6, py + 16);
   }
 }
 
@@ -1304,6 +1338,7 @@ function renderServerRack(
   y: number,
   item: FurnitureItem,
   timeMs: number,
+  scene: SceneText,
   agents: Agent[] = []
 ) {
   const rx = x + 4;
@@ -1316,7 +1351,6 @@ function renderServerRack(
   let providerTag = 'SERVER';
   let modelTag = 'gpt-4o';
   let tokenCount = 0;
-  let rackCost = 0;
 
   if (item.id === 'f_server_rack_1') {
     providerColor = '#10a37f'; // OpenAI
@@ -1324,28 +1358,24 @@ function renderServerRack(
     modelTag = 'gpt-4o / o1';
     const pAgents = agents.filter(a => a.provider === 'OpenAI');
     tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
-    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
   } else if (item.id === 'f_server_rack_2') {
     providerColor = '#d97706'; // Anthropic
     providerTag = 'Anthropic';
     modelTag = 'claude-3.5';
     const pAgents = agents.filter(a => a.provider === 'Anthropic');
     tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
-    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
   } else if (item.id === 'f_server_rack_3') {
     providerColor = '#2563eb'; // Google Gemini
     providerTag = 'Gemini';
     modelTag = 'gemini-2.5';
     const pAgents = agents.filter(a => a.provider === 'Google Gemini');
     tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
-    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
   } else if (item.id === 'f_server_rack_4') {
     providerColor = '#a855f7'; // Local / Ollama
     providerTag = 'Local';
     modelTag = 'llama-3.3';
     const pAgents = agents.filter(a => a.provider.toLowerCase().includes('local'));
     tokenCount = pAgents.reduce((s, a) => s + a.tokensInput + a.tokensOutput, 0);
-    rackCost = pAgents.reduce((s, a) => s + a.cost, 0);
   }
 
   // Dark metallic server rack chassis with provider accent glow
@@ -1361,11 +1391,13 @@ function renderServerRack(
   ctx.fillStyle = providerColor;
   ctx.fillRect(rx + 1, ry + 1, rw - 2, 5);
 
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 5px "JetBrains Mono", monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(modelTag, rx + rw / 2, ry + 4.8);
-  ctx.textAlign = 'left';
+  if (scene.usageTelemetry) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 5px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(modelTag, rx + rw / 2, ry + 4.8);
+    ctx.textAlign = 'left';
+  }
 
   // 6 Server Blades per rack
   for (let s = 0; s < 6; s++) {
@@ -1394,6 +1426,8 @@ function renderServerRack(
     ctx.fillStyle = led1 ? providerColor : '#334155';
     ctx.fillRect(rx + rw - 20, sy + 1.6, vuWidth, 1.5);
   }
+
+  if (!scene.usageTelemetry) return;
 
   // Mini token badge under rack
   ctx.fillStyle = '#020617';
@@ -1642,7 +1676,7 @@ function renderAgentItem(
   const bob = walking ? Math.sin(cycle * 2) * 1.5 : Math.sin(timeMs / 950 + phase) * 0.45;
   const torsoY = ground - (seated ? 23 : 28) + bob;
   const skin = ['#e8b89a', '#c58e6f', '#f2cfb1', '#ad7656'][phase % 4];
-  const palette = statusAppearance(agent.status);
+  const palette = { color: statusColor(agent.status) };
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.32)';
   ctx.beginPath(); ctx.ellipse(cx, ground + 1, 13, 5, 0, 0, Math.PI * 2); ctx.fill();
@@ -1731,7 +1765,7 @@ function renderAgentItem(
   ctx.restore();
 }
 
-function statusAppearance(status: Agent['status']) {
+function statusColor(status: Agent['status']): string {
   const colors: Partial<Record<Agent['status'], string>> = {
     CODING: '#34d399', WRITING: '#34d399', DONE: '#4ade80',
     TESTING: '#38bdf8', USING_TOOL: '#38bdf8', RESEARCHING: '#38bdf8', READING: '#38bdf8',
@@ -1740,16 +1774,25 @@ function statusAppearance(status: Agent['status']) {
     DELEGATING: '#fbbf24', DELIVERING: '#fbbf24', THINKING: '#facc15',
     PHONE_CALL: '#a78bfa', WALKING: '#94a3b8', COFFEE_BREAK: '#f59e0b', CHATTING: '#fb7185', AVAILABLE: '#86efac',
   };
-  return { color: colors[status] ?? '#94a3b8', label: status.replaceAll('_', ' ') };
+  return colors[status] ?? '#94a3b8';
 }
 
-function shortRole(agent: Agent) {
-  const roles: Record<Agent['role'], string> = { boss: 'Director', tech_lead: 'Tech lead', research_lead: 'Research', backend_engineer: 'Backend', frontend_engineer: 'Frontend', qa_engineer: 'QA', security_analyst: 'Security', custom: 'External' };
-  return roles[agent.role];
+function statusAppearance(status: Agent['status'], translate: OfficeTranslate) {
+  return { color: statusColor(status), label: translate(`status.${status}`) };
+}
+
+/** Agents from events carry their own role title; the demo team uses the built-in role names. */
+export function agentRoleLabel(agent: Agent, translate: OfficeTranslate): string {
+  if (agent.role === 'custom') return agent.roleTitle.trim();
+  return translate(`role.${agent.role}`);
+}
+
+function agentDisplayName(agent: Agent, translate: OfficeTranslate): string {
+  return agent.role === 'boss' ? translate('role.boss') : agent.name;
 }
 
 function drawAgentOverlays(rc: RenderContext) {
-  const { ctx, agents, camera, width, height, nowMs, timeMs, theme } = rc;
+  const { ctx, agents, camera, width, height, nowMs, timeMs, theme, translate } = rc;
   const center = cameraCenter(width, height);
   const visualOffsets = getAgentVisualOffsets(agents);
   const anchors = agents.filter(agent => camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble ?? agent.ambientBubble, nowMs)).map(agent => {
@@ -1758,17 +1801,19 @@ function drawAgentOverlays(rc: RenderContext) {
     return { agent, x: center.x + (world.x + TILE_SIZE / 2 + offset.ox + camera.x) * camera.zoom,
       y: center.y + (world.y - 13 + offset.oy + camera.y) * camera.zoom };
   }).filter(anchor => anchor.x > -20 && anchor.x < width + 20 && anchor.y > -20 && anchor.y < height + 20);
-  // Reserve heads before laying out cards, so labels cannot hide another character.
+  // Reserve heads and room plaques before laying out cards, so labels cannot hide a character or a room name.
   const occupied: OverlayRect[] = anchors.map(a => ({ x: a.x - 15, y: a.y - 5, width: 30, height: 46 }));
+  occupied.push(...roomPlaqueScreenRects(ctx, rc));
   const labels = new Map<string, OverlayRect>();
   const foreground = theme === 'dark' ? '#f1f5f9' : '#0f172a';
   const background = theme === 'dark' ? 'rgba(13,21,36,0.96)' : 'rgba(255,255,255,0.97)';
   ctx.save();
   for (const a of [...anchors].sort((a, b) => a.y - b.y)) {
-    const { color, label } = statusAppearance(a.agent.status);
-    const name = a.agent.role === 'boss' ? 'Director' : a.agent.name;
+    const { color, label } = statusAppearance(a.agent.status, translate);
+    const name = agentDisplayName(a.agent, translate);
     ctx.font = '600 10px "Plus Jakarta Sans", sans-serif';
-    const subtitle = shortRole(a.agent) + ' · ' + label;
+    const role = agentRoleLabel(a.agent, translate);
+    const subtitle = role ? role + ' · ' + label : label;
     const subtitleWidth = ctx.measureText(subtitle).width + 26;
     ctx.font = '700 11px "Plus Jakarta Sans", sans-serif';
     const cardWidth = Math.max(112, Math.min(190, Math.max(subtitleWidth, ctx.measureText(name).width + 34)));
@@ -1797,19 +1842,21 @@ function drawAgentOverlays(rc: RenderContext) {
     occupied.push(card);
     const remaining = speech!.expiresAt - nowMs;
     ctx.globalAlpha = Math.min(1, remaining / 250);
-    const { color } = statusAppearance(a.agent.status);
+    const { color } = statusAppearance(a.agent.status, translate);
     ctx.strokeStyle = color; ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.moveTo(card.x + card.width / 2, card.y + card.height); ctx.lineTo(a.x, a.y - 4); ctx.stroke();
     ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
     ctx.fillStyle = background; ctx.beginPath(); ctx.roundRect(card.x, card.y, card.width, card.height, 11); ctx.fill();
     ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.stroke();
     ctx.font = '700 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = color;
-    const speaker = a.agent.role === 'boss' ? 'Director' : a.agent.name.split(' ')[0];
+    const speaker = a.agent.role === 'boss' ? translate('role.boss') : a.agent.name.split(' ')[0];
+    const kind = a.agent.speechBubble && speech === a.agent.speechBubble ? a.agent.speechBubble.kind : undefined;
     const activityLabel =
-      a.agent.status === 'IN_MEETING' ? 'MEETING'
-      : a.agent.status === 'PHONE_CALL' ? 'PHONE'
-      : a.agent.status === 'CHATTING' || a.agent.status === 'COFFEE_BREAK' || a.agent.presentationActivity === 'chatting' || a.agent.presentationActivity === 'coffee_break' ? 'SOCIAL · SIMULATED'
-      : 'ACTIVITY';
+      kind ? translate(`kind.${kind}`)
+      : a.agent.status === 'IN_MEETING' ? translate('bubble.meeting')
+      : a.agent.status === 'PHONE_CALL' ? translate('bubble.phone')
+      : a.agent.status === 'CHATTING' || a.agent.status === 'COFFEE_BREAK' || a.agent.presentationActivity === 'chatting' || a.agent.presentationActivity === 'coffee_break' ? translate('bubble.social')
+      : translate('bubble.activity');
     const header = speech!.targetAgentName ? speaker + ' → ' + speech!.targetAgentName + ' · ' + activityLabel : speaker + ' · ' + activityLabel;
     ctx.fillText(wrapText(header, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 12, card.y + 16);
     ctx.font = '500 12px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = foreground;
@@ -1851,7 +1898,7 @@ function renderFloorLamp(ctx: CanvasRenderingContext2D, x: number, y: number, th
   ctx.fillStyle = '#f0d5a3'; ctx.beginPath(); ctx.moveTo(cx - 7, cy - 26); ctx.lineTo(cx + 7, cy - 26); ctx.lineTo(cx + 11, cy - 16); ctx.lineTo(cx - 11, cy - 16); ctx.closePath(); ctx.fill();
 }
 
-function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light', _locale: Locale) {
+function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: 'dark' | 'light') {
   ctx.save();
   for (const room of OFFICE_ROOMS) {
     const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
@@ -1887,11 +1934,46 @@ function drawRoomAtmosphere(ctx: CanvasRenderingContext2D, rot: number, theme: '
   ctx.restore();
 }
 
+/** Room plaque geometry in world space; shared by the plaque drawing and the overlay layout. */
+function roomPlaqueRect(ctx: CanvasRenderingContext2D, room: (typeof OFFICE_ROOMS)[number], rot: number, label: string) {
+  const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
+  ctx.font = '700 10px "Plus Jakarta Sans", sans-serif';
+  return {
+    x: rect.x + 9,
+    y: rect.y + 7,
+    width: Math.min(rect.width - 18, ctx.measureText(label).width + 29),
+    height: 22,
+  };
+}
+
+function roomPlaqueScreenRects(ctx: CanvasRenderingContext2D, rc: RenderContext): OverlayRect[] {
+  const { camera, width, height, translate } = rc;
+  const rot = ((camera.rotation % 4) + 4) % 4;
+  const center = cameraCenter(width, height);
+  const rects: OverlayRect[] = [];
+  ctx.save();
+  for (const room of OFFICE_ROOMS) {
+    const roomKey = `rooms.${room.id}`;
+    if (!isOfficeMessageKey(roomKey)) continue;
+    const label = translate(roomKey);
+    if (!label) continue;
+    const plaque = roomPlaqueRect(ctx, room, rot, label);
+    rects.push({
+      x: center.x + (plaque.x + camera.x) * camera.zoom,
+      y: center.y + (plaque.y + camera.y) * camera.zoom,
+      width: plaque.width * camera.zoom,
+      height: plaque.height * camera.zoom,
+    });
+  }
+  ctx.restore();
+  return rects;
+}
+
 function drawRoomPlaques(
   ctx: CanvasRenderingContext2D,
   rot: number,
   theme: 'dark' | 'light',
-  locale: Locale,
+  translate: OfficeTranslate,
 ) {
   const accents: Record<string, string> = {
     boss_office: '#b8a3e6',
@@ -1908,14 +1990,15 @@ function drawRoomPlaques(
 
   ctx.save();
   for (const room of OFFICE_ROOMS) {
-    const rect = getRoomScreenRect(room.gridX, room.gridY, room.width, room.height, rot);
-    const label = t(locale, `rooms.${room.id}` as Parameters<typeof t>[1]);
+    const roomKey = `rooms.${room.id}`;
+    const label = isOfficeMessageKey(roomKey) ? translate(roomKey) : '';
+    if (!label) continue;
     const accent = accents[room.id] ?? '#94a3b8';
 
-    ctx.font = '700 10px "Plus Jakarta Sans", sans-serif';
-    const plaqueWidth = Math.min(rect.width - 18, ctx.measureText(label).width + 29);
-    const plaqueX = rect.x + 9;
-    const plaqueY = rect.y + 7;
+    const plaque = roomPlaqueRect(ctx, room, rot, label);
+    const plaqueWidth = plaque.width;
+    const plaqueX = plaque.x;
+    const plaqueY = plaque.y;
 
     ctx.fillStyle = theme === 'dark' ? 'rgba(7,12,22,0.96)' : 'rgba(255,255,255,0.98)';
     ctx.strokeStyle = theme === 'dark' ? 'rgba(148,163,184,0.35)' : 'rgba(71,85,105,0.22)';

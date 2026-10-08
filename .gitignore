@@ -11,3 +11,7 @@ __pycache__/
 data/
 *.db*
 .venv/
+
+# Library build output
+dist-lib/
+*.tgz

@@ -1,5 +1,5 @@
 import type { ExternalEventEnvelope } from './eventIngestion';
-import { validateExternalEvent } from './eventIngestion';
+import { validateExternalEvent } from './eventValidation';
 import { CANONICAL_EVENT_TYPES } from './canonicalContract';
 
 export type RealtimeStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error' | 'closed';

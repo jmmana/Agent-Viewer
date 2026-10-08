@@ -41,6 +41,12 @@ jobs:
       - name: Python SDK Tests
         run: python3 tests/test_python_sdk.py
 
+      - name: Python SDK wheel (build, install, import)
+        run: |
+          python -m pip wheel ./sdk/python -w /tmp/wheels
+          pip install /tmp/wheels/*.whl
+          cd /tmp && python -c "import agent_viewer; print(agent_viewer.__file__)"
+
       - name: Build frontend
         run: npm run build
 
@@ -52,3 +58,6 @@ jobs:
 
       - name: Docker Build
         run: docker build -f docker/Dockerfile .
+
+      - name: Docker Build (viewer image)
+        run: docker build -f docker/Dockerfile --target viewer --build-arg VITE_AGENT_VIEWER_API_URL=http://localhost:8787 .

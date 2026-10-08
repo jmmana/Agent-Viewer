@@ -29,7 +29,7 @@ class AutoGenViewerAdapter:
     ) -> None:
         self.viewer = AgentViewer(
             url=url or os.getenv("AGENT_VIEWER_URL", "http://localhost:8787"),
-            api_key=api_key or os.getenv("AGENT_VIEWER_API_KEY"),
+            api_key=api_key or os.getenv("AGENT_VIEWER_API_TOKEN") or os.getenv("AGENT_VIEWER_API_KEY"),
             runtime_id=chat_name,
             source=f"runtime:{chat_name}",
         )

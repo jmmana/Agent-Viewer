@@ -19,7 +19,7 @@ export class OpenAIAgentsViewerAdapter {
   } = {}) {
     this.viewer = new AgentViewer({
       url: options.url ?? process.env.AGENT_VIEWER_URL ?? 'http://localhost:8787',
-      apiKey: options.apiKey ?? process.env.AGENT_VIEWER_API_KEY,
+      apiKey: options.apiKey ?? process.env.AGENT_VIEWER_API_TOKEN ?? process.env.AGENT_VIEWER_API_KEY,
       runtimeId: options.runtimeId ?? 'openai-agents-runtime',
       source: 'runtime:openai-agents',
     });

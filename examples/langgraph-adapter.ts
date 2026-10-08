@@ -9,7 +9,7 @@ import { AgentViewer } from '../sdk/typescript/index';
 
 const viewer = new AgentViewer({
   url: process.env.AGENT_VIEWER_URL ?? 'http://localhost:8787',
-  apiKey: process.env.AGENT_VIEWER_API_KEY ?? process.env.AGENT_VIEWER_API_TOKEN,
+  apiKey: process.env.AGENT_VIEWER_API_TOKEN ?? process.env.AGENT_VIEWER_API_KEY,
   runtimeId: 'langgraph-runtime',
   source: 'runtime:langgraph',
 });

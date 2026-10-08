@@ -529,8 +529,10 @@ Para sobrescribirlas, agrega una clase con `className` y define las variables en
 ```
 
 ```tsx
-<AgentOffice className="oficina-equipo" events={events} />
-<ReplayControls className="repeticion-equipo" replay={replay} />
+<>
+  <AgentOffice className="oficina-equipo" events={events} />
+  <ReplayControls className="repeticion-equipo" replay={replay} />
+</>
 ```
 
 Notas:

@@ -17,7 +17,7 @@ import { AgentViewer } from './sdk/typescript/index';
 
 const viewer = new AgentViewer({
   url: 'http://localhost:8787',
-  apiKey: process.env.AGENT_VIEWER_API_KEY,
+  apiKey: process.env.AGENT_VIEWER_API_TOKEN,
   runtimeId: 'my-production-system',
   sessionId: 'run-001',
 });
@@ -56,14 +56,20 @@ await agent.done('Research completed successfully');
 
 ### Option B: Python
 
-Using `sdk/python/agent_viewer.py`:
+Install the SDK from a clone of this repository (it has no third-party dependencies):
+
+```bash
+pip install ./sdk/python
+```
 
 ```python
-from sdk.python.agent_viewer import AgentViewer
+import os
+
+from agent_viewer import AgentViewer
 
 viewer = AgentViewer(
     url="http://localhost:8787",
-    api_key=os.getenv("AGENT_VIEWER_API_KEY"),
+    api_key=os.getenv("AGENT_VIEWER_API_TOKEN"),
     runtime_id="crewai-production",
     session_id="session-2026",
 )
@@ -367,7 +373,7 @@ Events are tagged with `runtimeId` and `sessionId`, and queryable via:
 Agent Viewer supports two persistence backends:
 
 1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events).
-2. **`sqlite`**: Persistent storage using Node 22 native `node:sqlite`. Stores events, runtimes, sessions, and agent aggregates in `./data/agent-viewer.db`.
+2. **`sqlite`**: Persistent storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Stores events, runtimes, sessions, and agent aggregates in `./data/agent-viewer.db`.
 
 To enable SQLite persistence:
 ```env

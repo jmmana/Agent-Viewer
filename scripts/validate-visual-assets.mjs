@@ -7,7 +7,7 @@
  * approved or that walking/meeting clips have been implemented.
  */
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { resolve, relative, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -79,9 +79,40 @@ for (const [index, asset] of (catalog.assets ?? []).entries()) {
     if (asset.frameFiles) {
       check(Array.isArray(asset.frameFiles) && asset.frameFiles.length === asset.frames, `${where} frameFiles count does not match frames`);
       check(asset.frameFiles[0] === asset.file, `${where} first frame must match file`);
-      for (const frame of asset.frameFiles) {
-        const framePath = typeof frame === 'string' ? resolve(root, frame) : '';
-        check(framePath && relative(root, framePath).startsWith('assets/') && existsSync(framePath), `${where} missing/unsafe frame path: ${frame}`);
+      const frameBytes = [];
+      for (const [frameIndex, frame] of asset.frameFiles.entries()) {
+        const isValidPath = typeof frame === 'string'
+          && /^(?:assets\/characters|assets\/animations)\/[a-z0-9_-]+\/.+\.(?:png|webp)$/.test(frame)
+          && !/\/(?:source|vector-study)\//.test(frame);
+        const framePath = isValidPath ? resolve(root, frame) : null;
+        if (!framePath || !relative(root, framePath).startsWith('assets/')
+            || !existsSync(framePath) || !statSync(framePath).isFile()) {
+          errors.push(`${where}.frameFiles[${frameIndex}] missing/unsafe runtime frame: ${frame}`);
+          continue;
+        }
+        const buffer = readFileSync(framePath);
+        const frameExt = extname(frame).toLowerCase();
+        if (frameExt === '.png') {
+          const isPNG = buffer.length >= 26
+            && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+          check(isPNG, `${where}.frameFiles[${frameIndex}] invalid PNG header`);
+          if (isPNG) {
+            check(buffer.readUInt32BE(16) === 256 && buffer.readUInt32BE(20) === 352,
+              `${where}.frameFiles[${frameIndex}] must be 256x352 pixels`);
+            check(buffer[25] === 6,
+              `${where}.frameFiles[${frameIndex}] requires RGBA alpha`);
+          }
+        } else {
+          check(buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF'
+            && buffer.toString('ascii', 8, 12) === 'WEBP',
+            `${where}.frameFiles[${frameIndex}] invalid WebP header`);
+        }
+        frameBytes.push(buffer);
+      }
+      // All-identical frames are a static pose repeated, not an animated production clip.
+      if (asset.frames > 1 && frameBytes.length === asset.frames) {
+        check(frameBytes.some(buffer => !buffer.equals(frameBytes[0])),
+          `${where} animation has identical frame images; no visible frame-by-frame motion`);
       }
     }
     if (ext === '.png') {
@@ -91,19 +122,37 @@ for (const [index, asset] of (catalog.assets ?? []).entries()) {
   }
 }
 
-for (const roomId of ['director-suite', 'meeting-room', 'coffee-area']) {
-  const file = resolve(root, `assets/rooms/${roomId}.json`);
-  if (!existsSync(file)) continue;
+// Layouts live in assets/rooms/<id>/layout.json. Validate every current/future
+// room, not the unused legacy assets/rooms/<id>.json path.
+const roomsDir = resolve(root, 'assets/rooms');
+for (const roomId of existsSync(roomsDir)
+  ? readdirSync(roomsDir, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name)
+  : []) {
+  const file = resolve(roomsDir, roomId, 'layout.json');
+  if (!existsSync(file)) { errors.push(`${roomId}: missing layout.json`); continue; }
   try {
     const layout = JSON.parse(readFileSync(file, 'utf8'));
+    check(layout.id === roomId, `${roomId}: layout id must match its directory`);
+    check(layout.size?.width > 0 && layout.size?.height > 0, `${roomId}: invalid room dimensions`);
+    check(Array.isArray(layout.placements), `${roomId}: placements must be an array`);
     const placements = new Set();
-    for (const placement of layout.placements) {
+    for (const placement of layout.placements ?? []) {
       check(ids.has(placement.assetId), `${roomId}: unknown asset ${placement.assetId}`);
       check(!placements.has(placement.id), `${roomId}: duplicate placement ${placement.id}`);
       placements.add(placement.id);
       check(Number.isFinite(placement.x) && Number.isFinite(placement.y), `${roomId}: invalid placement coordinates`);
+      check(placement.x >= 0 && placement.y >= 0
+        && placement.x <= layout.size?.width && placement.y <= layout.size?.height,
+        `${roomId}: placement outside room bounds: ${placement.id}`);
     }
-    for (const placement of layout.placements) if (placement.supportPlacementId) check(placements.has(placement.supportPlacementId), `${roomId}: missing support placement`);
+    for (const placement of layout.placements ?? []) {
+      if (placement.supportPlacementId) {
+        check(placements.has(placement.supportPlacementId),
+          `${roomId}: missing support placement: ${placement.supportPlacementId}`);
+        check(placement.supportPlacementId !== placement.id,
+          `${roomId}: placement cannot support itself: ${placement.id}`);
+      }
+    }
   } catch (error) { errors.push(`${roomId}: invalid layout: ${error.message}`); }
 }
 

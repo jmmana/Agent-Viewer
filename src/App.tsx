@@ -679,7 +679,7 @@ export default function App() {
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
             <div className="flex-1 h-full relative overflow-hidden">
               {visualMode === 'crew' ? (
-                <CrewStage locale={locale} agents={canvasAgents}
+                <CrewStage locale={locale} agents={canvasAgents} meetings={simState.meetings}
                   selectedRoomId={crewNavigation.selectedRoomId} onRoomChange={setCrewRoom}
                   missingRoom={crewMissingRoom} />
               ) : currentFloor === 1 ? (

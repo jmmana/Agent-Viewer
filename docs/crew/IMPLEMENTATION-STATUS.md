@@ -125,6 +125,10 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 `src/crew/crewClips.ts`: mapa exhaustivo de los 23 estados a una intención de clip (`idle`, `work`, `phone`, `walk`, `meeting`, `coffee`, `talk`, `alert`, `offline`) y `resolveCrewClip`, que indica la pose estática del banco (idle/work/phone) o el sustituto `idle` con `fallback: true`. `animated` es siempre false: no existen cuadros animados. Módulo puro, no conectado aún al renderer (solo hay poses work/phone en vista frontal). Pendiente: transiciones, frames reales, conexión al renderer. #128 sigue abierto.
 
+## Continuación #155: tareas y reuniones (solo lectura)
+
+`crewRoomActivity(agents, meetings, roomId)` resume agentes presentes, agentes con tarea y reuniones ACTIVAS con participantes en la sala; sin datos devuelve ceros. `CrewStage` acepta `meetings` (conectado en `AgentOffice` y en la app) y muestra la línea `crew-room-activity`. No escribe en el dominio. Pendiente: coreografía de reunión, detalle de tareas por actor, replay. #155 sigue abierto.
+
 ## Riesgos y decisiones
 
 - Este PR está apilado sobre #177 y #175; integrar en orden y reconciliar con main antes de release.

@@ -2,23 +2,24 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
-import { crewAgentsInRoom } from './crewEvents';
+import { crewAgentsInRoom, crewRoomActivity } from './crewEvents';
 import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
 import { CrewGestures } from './crewGestures';
-import type { Agent } from '../types/agent';
+import type { Agent, Meeting } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /**
  * Escena Crew independiente con arte incremental y geometría provisional.
  * Consume presencia del dominio sin importar el renderer ni la cuadrícula Caricatura.
  */
-export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange, missingRoom = false,
+export function CrewStage({ locale = 'es', agents = [], meetings = [], selectedRoomId, onRoomChange, missingRoom = false,
   cameraState, onCameraStateChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
   locale?: string;
   agents?: readonly Agent[];
+  meetings?: readonly Meeting[];
   selectedRoomId?: string;
   missingRoom?: boolean;
   cameraState?: CrewCameraByRoom;
@@ -104,6 +105,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const isEs = locale.startsWith('es');
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
   const visibleAgents = crewAgentsInRoom(agents, roomId);
+  const activity = useMemo(() => crewRoomActivity(agents, meetings, roomId), [agents, meetings, roomId]);
   const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
 
   const spriteViews = presence.markers.flatMap(marker => crewSpriteView(marker, view) ?? []);
@@ -233,6 +235,10 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     <p aria-live="polite" data-testid="crew-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
       {isEs ? `Ilustraciones estáticas: ${drawnIllustrations}.` : `Static illustrations: ${drawnIllustrations}.`}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
+    </p>
+    <p data-testid="crew-room-activity" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
+      {isEs ? `Datos de la sala: ${activity.agents} agentes, ${activity.withTask} con tarea, ${activity.activeMeetings} reuniones activas.`
+        : `Room data: ${activity.agents} agents, ${activity.withTask} with a task, ${activity.activeMeetings} active meetings.`}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>
       {isEs ? 'PROTOTIPO 2.5D: poses estáticas del CEO y marcadores de presencia; animaciones pendientes.' : '2.5D PROTOTYPE: static CEO poses and presence markers; animations pending.'}

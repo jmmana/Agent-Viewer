@@ -129,6 +129,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
         {visualMode === 'crew' ? <CrewStage
           locale={locale}
           agents={snapshot.agents}
+          meetings={snapshot.meetings}
           selectedRoomId={crewRoomId ?? internalCrewRoom}
           onRoomChange={roomId => {
             if (crewRoomId === undefined) setInternalCrewRoom(roomId);

@@ -199,6 +199,8 @@ All events follow the single official V1 envelope:
 | | `runtime.disconnected` | External runtime disconnects. |
 | | `runtime.heartbeat` | Periodic runtime health heartbeat. |
 
+`llm.usage` and `llm.failed` do not only come from `POST /api/v1/events`: a Claude Code session with `--telemetry` on sends its own OpenTelemetry logs to `POST /v1/logs`, which the server maps into the same two canonical types, with `runtimeId: "claude-code"` and `source`/`agentId` set to the session's main agent. See [docs/otlp.md](otlp.md) for that receiver's reference.
+
 ---
 
 ## 🛡️ 2. Validation & Error Handling

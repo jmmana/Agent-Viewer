@@ -445,6 +445,7 @@ Honest maturity, so you know what you are getting:
 |---|---|---|
 | **REST API, batch, SSE** | [`server/`](server/index.ts) | ✅ **Stable.** Covered by integration, SSE and webhook security tests in CI. |
 | **Claude Code** | [`agent-viewer install claude-code`](docs/claude-code.md) | ✅ **Stable.** Official Claude Code hooks: sessions, subagents as their own agents, tools, waiting for you. Fixture tests for every hook type prove no arguments or content leave the machine. |
+| **Claude Code tokens (OTLP logs)** | [`agent-viewer install claude-code --telemetry`](docs/claude-code.md#tokens-and-cost) | ✅ **Stable.** `POST /v1/logs` receives Claude Code's native OpenTelemetry export and turns `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed` on the main agent. Opt-in, off by default. Reference: [docs/otlp.md](docs/otlp.md). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. Not on PyPI yet. |

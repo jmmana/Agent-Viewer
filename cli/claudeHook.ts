@@ -1,11 +1,12 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { CanonicalEvent, CanonicalEventType } from '../src/integrations/canonicalTypes.ts';
 import type { AgentStatus, WorkspaceZone } from '../src/types/agent.ts';
+import { shortHash, sessionIdentity } from '../src/integrations/claudeCodeIdentity.ts';
 import type { ClaudeHookCommand } from './args.ts';
 import { postEvents, resolveConnection } from './connection.ts';
 import { armHookGuard, HOOK_BUDGET_MS } from './hookBudget.ts';
 
-export { HOOK_BUDGET_MS };
+export { HOOK_BUDGET_MS, sessionIdentity };
 
 /**
  * Claude Code hooks adapter.
@@ -77,10 +78,6 @@ const STOP_FAILURE_TYPES = new Set([
   'invalid_request', 'model_not_found', 'server_error', 'max_output_tokens', 'cloud_credential_error', 'unknown',
 ]);
 
-function shortHash(value: string, length: number): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, length);
-}
-
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
@@ -103,18 +100,6 @@ function subagentWorkspace(agentType: string): { workspace: WorkspaceZone; team:
   if (/(review|test|qa|security|audit|verif)/.test(type)) return { workspace: 'qa_lab', team: 'quality' };
   if (/(plan|architect|lead)/.test(type)) return { workspace: 'leads_area', team: 'leadership' };
   return { workspace: 'development', team: 'engineering' };
-}
-
-/** Identity of the agents of one Claude Code session, derived from hashes so raw session ids never travel. */
-export function sessionIdentity(sessionId: string) {
-  const hash = shortHash(sessionId, 12);
-  return {
-    sessionId: `claude-code-${hash}`,
-    mainAgentId: `claude-${hash}`,
-    mainAgentName: `Claude Code ${hash.slice(0, 4)}`,
-    subagentId: (agentId: string) => `claude-${hash}-${shortHash(agentId, 8)}`,
-    subagentName: (agentType: string, agentId: string) => `${agentType.slice(0, 60)} ${shortHash(agentId, 4)}`,
-  };
 }
 
 /** Translates one Claude Code hook input into canonical V1 events. Returns `[]` for events it does not show. */

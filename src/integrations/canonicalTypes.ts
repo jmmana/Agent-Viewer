@@ -94,6 +94,10 @@ export const LLM_ERROR_KINDS = [
   'auth',
   'server_error',
   'cancelled',
+  /** A call that never got an HTTP response at all (connection failure). Added by issue #59 (OTLP receiver):
+   * Claude Code's `api_error` event reports no `status_code` for this case, and `timeout` already means
+   * something more specific (a request that did get a response, just too slowly, or was cancelled locally). */
+  'network',
   'unknown',
 ] as const;
 

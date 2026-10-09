@@ -1,4 +1,5 @@
 # Run from the repository root: docker compose -f docker/compose.yml up --build
+# Choose a token with: AGENT_VIEWER_API_TOKEN=$(openssl rand -base64 32) docker compose -f docker/compose.yml up --build
 # Office: http://localhost:3000  Ingestion API: http://localhost:8787
 # The API never runs without a token. Set AGENT_VIEWER_API_TOKEN before `up` to choose it; otherwise the api
 # service generates one on first start, keeps it in its volume and prints it (docker compose logs api). Open
@@ -13,7 +14,10 @@ services:
       target: api
     init: true
     ports:
-      - "8787:8787"
+      # Only this machine. To reach it from your network, change to "8787:8787" (the API still needs the
+      # token, but the office page and /health become public), update AGENT_VIEWER_CORS_ORIGIN and
+      # VITE_AGENT_VIEWER_API_URL to the address people will use, and put it behind TLS.
+      - "127.0.0.1:8787:8787"
     environment:
       - PORT=8787
       - AGENT_VIEWER_API_TOKEN=${AGENT_VIEWER_API_TOKEN:-}
@@ -40,7 +44,7 @@ services:
         VITE_AGENT_VIEWER_MODE: live
     init: true
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - api
     restart: unless-stopped

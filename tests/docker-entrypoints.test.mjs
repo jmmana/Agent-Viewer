@@ -116,8 +116,9 @@ test('API image: the entry point starts the server with a printed token, and /ap
   delete env.AGENT_VIEWER_API_KEY;
   const child = spawn(process.execPath, [path.join(repoRoot, 'docker', 'api-entrypoint.mjs')], { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
+  let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
-  child.stderr.on('data', () => {});
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
     const base = `http://127.0.0.1:${port}`;
     let healthy = false;
@@ -129,9 +130,12 @@ test('API image: the entry point starts the server with a printed token, and /ap
       }
     }
     assert.equal(healthy, true, stdout);
+    const health = await (await fetch(`${base}/health`)).json();
+    assert.equal(health.auth, 'token');
     const token = /API token: (\S+)/.exec(stdout)?.[1];
     assert.ok(token, stdout);
     assert.equal(readFileSync(path.join(dir, 'api-token'), 'utf8').trim(), token);
+    assert.doesNotMatch(stderr, /WARNING: AGENT_VIEWER_API_TOKEN is not set/);
     assert.equal((await fetch(`${base}/api/v1/snapshot`)).status, 401);
     assert.equal((await fetch(`${base}/api/v1/snapshot`, { headers: { Authorization: `Bearer ${token}` } })).status, 200);
   } finally {

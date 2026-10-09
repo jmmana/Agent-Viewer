@@ -235,8 +235,36 @@ Validation rules enforced:
 Base URL: `http://localhost:8787`
 
 ### Health & Readiness
-- `GET /health`: Health status, server version, connected SSE client count.
+- `GET /health`: Health status, server version, connected SSE client count, and current `auth` / `webhookAuth` modes. An open server still returns HTTP 200 with `ok: true`.
 - `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`).
+
+The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or `open`. These fields never include the token:
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "open",
+  "webhookAuth": "open"
+}
+```
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "token",
+  "webhookAuth": "signature"
+}
+```
 
 ### Events
 - `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header. Answers `202` (accepted), `200` (duplicate: same id, same content) or `409 conflicting_duplicate` (same id, different content, not applied), each with the event `fingerprint`. A header that differs from a non-empty body `id` is a `400 idempotency_key_mismatch`.

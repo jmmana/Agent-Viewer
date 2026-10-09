@@ -103,7 +103,16 @@ Starts the ingestion server and the office together on `http://127.0.0.1:8787`, 
 npx @warlockcode/agent-viewer send --agent demo --status working --message "Hello"
 ```
 
-Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). The same with Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (flags after the image name are added to its defaults; image tags and tokens in the [CLI guide](docs/cli.md#docker)). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
+Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). To run the Docker image on this machine:
+
+```bash
+docker run --rm -p 127.0.0.1:8787:8787 \
+  -e AGENT_VIEWER_API_TOKEN="$(openssl rand -base64 32)" \
+  -v agent-viewer-data:/app/data \
+  ghcr.io/jmmana/agent-viewer
+```
+
+Drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. Flags after the image name are added to its defaults; image tags and tokens are in the [CLI guide](docs/cli.md#docker). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
 
 ### Watch Claude Code work
 
@@ -177,7 +186,7 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
+This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. Compose publishes both ports on `127.0.0.1` only. To reach the office from other machines, restore the port mappings to `"8787:8787"` and `"3000:3000"`, update `AGENT_VIEWER_CORS_ORIGIN` and `VITE_AGENT_VIEWER_API_URL`, and put the services behind TLS. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
 
 > **Maintainers:** GitHub Container Registry creates the `ghcr.io/jmmana/agent-viewer` package as private, and the release workflow cannot change that. After the first release that publishes it, make it public once in the package page: **Package settings > Danger Zone > Change visibility > Public**. The release run summary shows the current visibility.
 
@@ -585,7 +594,7 @@ flowchart LR
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/health` | Status, version, schema version and connected SSE clients. |
+| `GET` | `/health` | Status, version, schema version, connected SSE clients, and current `auth` / `webhookAuth` mode. |
 | `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
@@ -722,7 +731,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Server port. |
-| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development with `npm run server`; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
+| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open: the server warns at startup, `/health` reports `auth: "open"` and the live portal shows a banner; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
@@ -763,10 +772,10 @@ The defaults favor local development. Before you expose the server:
 
 | Area | Default | Production |
 |---|---|---|
-| API token | unset, `/api/v1/*` open | Set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. |
+| API token | unset, `/api/v1/*` open | Check with `curl -s localhost:8787/health \| jq .auth`; set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. |
 | Webhooks | unsigned when no secret | Set `AGENT_VIEWER_WEBHOOK_SECRET` to require HMAC signatures. |
 | CORS | `*` | Set `AGENT_VIEWER_CORS_ORIGIN` to your exact frontend origin. |
-| Network | binds `0.0.0.0` | Put it behind a reverse proxy with TLS. |
+| Network | server binds `0.0.0.0`; Docker Compose ports bind `127.0.0.1` | To expose Compose remotely, restore `"8787:8787"` / `"3000:3000"` and put it behind a reverse proxy with TLS. |
 | Storage | in memory | `AGENT_VIEWER_STORAGE=sqlite` on a protected volume. |
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).

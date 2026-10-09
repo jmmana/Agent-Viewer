@@ -4,7 +4,13 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { app } from '../server/index.ts';
+import {
+  app,
+  currentAuthMode,
+  currentWebhookAuthMode,
+  openApiWarning,
+  startServer,
+} from '../server/index.ts';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -47,6 +53,126 @@ const NO_AUTH_ENV = {
   AGENT_VIEWER_API_KEY: undefined,
   AGENT_VIEWER_WEBHOOK_SECRET: undefined,
 };
+
+test('Auth state helpers report token, open, and signature modes without exposing credentials', async () => {
+  const warn = mock.method(console, 'warn', () => {});
+  try {
+    await withEnv({ ...NO_AUTH_ENV }, async () => {
+      assert.equal(currentAuthMode(), 'open');
+      assert.equal(currentWebhookAuthMode(), 'open');
+    });
+    await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_API_TOKEN: 'secret-token' }, async () => {
+      assert.equal(currentAuthMode(), 'token');
+      assert.equal(currentWebhookAuthMode(), 'token');
+      assert.equal(openApiWarning({ port: 8787, tokenSet: true, webhookSecret: false }).length, 0);
+    });
+    await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_API_KEY: 'legacy-token' }, async () => {
+      assert.equal(currentAuthMode(), 'token');
+      assert.equal(currentWebhookAuthMode(), 'token');
+    });
+    await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_WEBHOOK_SECRET: 'signature-secret' }, async () => {
+      assert.equal(currentAuthMode(), 'open');
+      assert.equal(currentWebhookAuthMode(), 'signature');
+    });
+    await withEnv(
+      { ...NO_AUTH_ENV, AGENT_VIEWER_API_TOKEN: 'secret-token', AGENT_VIEWER_WEBHOOK_SECRET: 'signature-secret' },
+      async () => {
+        assert.equal(currentAuthMode(), 'token');
+        assert.equal(currentWebhookAuthMode(), 'signature');
+      },
+    );
+    await withEnv(
+      { ...NO_AUTH_ENV, AGENT_VIEWER_API_KEY: 'legacy-token', AGENT_VIEWER_WEBHOOK_SECRET: 'signature-secret' },
+      async () => {
+        assert.equal(currentAuthMode(), 'token');
+        assert.equal(currentWebhookAuthMode(), 'signature');
+      },
+    );
+    await withEnv(
+      { ...NO_AUTH_ENV, AGENT_VIEWER_API_TOKEN: 'secret-token', AGENT_VIEWER_API_KEY: 'legacy-token' },
+      async () => {
+        assert.equal(currentAuthMode(), 'token');
+        assert.equal(currentWebhookAuthMode(), 'token');
+      },
+    );
+    await withEnv(
+      {
+        ...NO_AUTH_ENV,
+        AGENT_VIEWER_API_TOKEN: 'secret-token',
+        AGENT_VIEWER_API_KEY: 'legacy-token',
+        AGENT_VIEWER_WEBHOOK_SECRET: 'signature-secret',
+      },
+      async () => {
+        assert.equal(currentAuthMode(), 'token');
+        assert.equal(currentWebhookAuthMode(), 'signature');
+      },
+    );
+  } finally {
+    warn.mock.restore();
+  }
+});
+
+test('openApiWarning describes the bind and webhook state without including token material', () => {
+  const open = openApiWarning({ port: 8787, tokenSet: false, webhookSecret: false }).join('\n');
+  assert.match(open, /Listening on every interface, port 8787/);
+  assert.match(open, /Webhooks are open too/);
+  assert.doesNotMatch(open, /secret-token|legacy-token/);
+
+  for (const host of ['127.0.0.1', 'localhost', '::1']) {
+    const warning = openApiWarning({ port: 8787, host, tokenSet: false, webhookSecret: true }).join('\n');
+    assert.match(warning, new RegExp(`Listening on ${host.replaceAll(':', '\\:')} only, port 8787`));
+    assert.doesNotMatch(warning, /Webhooks are open/);
+    assert.doesNotMatch(warning, /AGENT_VIEWER_WEBHOOK_SECRET/);
+  }
+});
+
+test('/health reports live auth state and never returns the token', async () => {
+  await withEnv({ ...NO_AUTH_ENV }, async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const open = await (await fetch(`${baseUrl}/health`)).json();
+      assert.equal(open.ok, true);
+      assert.equal(open.auth, 'open');
+      assert.equal(open.webhookAuth, 'open');
+
+      process.env.AGENT_VIEWER_API_TOKEN = 'never-return-this-token';
+      const token = await (await fetch(`${baseUrl}/health`)).json();
+      assert.equal(token.auth, 'token');
+      assert.equal(token.webhookAuth, 'token');
+      assert.doesNotMatch(JSON.stringify(token), /never-return-this-token/);
+
+      process.env.AGENT_VIEWER_WEBHOOK_SECRET = 'webhook-secret';
+      const signed = await (await fetch(`${baseUrl}/health`)).json();
+      assert.equal(signed.auth, 'token');
+      assert.equal(signed.webhookAuth, 'signature');
+
+      delete process.env.AGENT_VIEWER_API_TOKEN;
+      const openSigned = await (await fetch(`${baseUrl}/health`)).json();
+      assert.equal(openSigned.auth, 'open');
+      assert.equal(openSigned.webhookAuth, 'signature');
+    } finally {
+      server.close();
+    }
+  });
+});
+
+test('startServer prints the loopback warning once after listening', async () => {
+  await withEnv({ ...NO_AUTH_ENV }, async () => {
+    const warning = mock.method(console, 'warn', () => {});
+    const server = startServer(0, '127.0.0.1');
+    try {
+      await new Promise((resolve) => server.once('listening', resolve));
+      const port = server.address().port;
+      assert.equal(warning.mock.callCount(), 6);
+      assert.match(warning.mock.calls[1].arguments[0], new RegExp(`Listening on 127\\.0\\.0\\.1 only, port ${port}`));
+      assert.match(warning.mock.calls[2].arguments[0], /Webhooks are open too/);
+      assert.doesNotMatch(warning.mock.calls[1].arguments[0], /port 0/);
+    } finally {
+      warning.mock.restore();
+      server.close();
+    }
+  });
+});
 
 test('Auth: API tokens are compared with crypto.timingSafeEqual and wrong lengths are rejected with 401', async () => {
   await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_API_TOKEN: 'timing-safe-token-123' }, async () => {

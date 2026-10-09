@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The plain server warns at startup when `/api/v1` is open (no `AGENT_VIEWER_API_TOKEN`), naming the port, the bind address and whether webhooks are open too. `/health` reports the current `auth` (`token` or `open`) and `webhookAuth` (`signature`, `token` or `open`) modes, computed per request and never including the token. The live portal shows a persistent, localized banner and an `OPEN API` indicator next to the `LIVE` badge when the connected server is open; it never shows in demo mode or when the state cannot be read.
+
+### Changed
+- Docker Compose now publishes the API and viewer ports on `127.0.0.1` only. To restore network-wide publishing, change the mappings back to `"8787:8787"` and `"3000:3000"`, update `AGENT_VIEWER_CORS_ORIGIN` and `VITE_AGENT_VIEWER_API_URL`, and put the services behind TLS. The plain server's listening log now accurately says it listens on every interface instead of suggesting `localhost`.
+
 ### Fixed
 - Model Ops no longer shows simulated calls as if they were real usage. The hard-coded "Live inference feed" seed rows (`Elena Rostova`, `Kenji Sato`, `Dr. Maya Chen`) are gone, and every simulator trigger (header quick-burst, per-provider quick request, per-model simulate, the Simulator tab's fire button, feed "Send request") now only records a `SimulatedCall`, tagged with a visible `SIMULATED` / `SIMULADO` chip; it never touches an agent's token or cost counters, the office totals, or `state.events` (no more fake `llm.usage` events). In live mode, the four buttons that used to inject fake usage into a real agent are not rendered; the Simulator tab stays available as a labelled what-if calculator with a persistent banner, and the Agents tab's model reassignment is disabled (the portal cannot change a remote agent's model).
 - A model the demo catalog does not know is no longer priced and labelled as GPT-4o. `calculateModelCost` and the new `getModelSpec` have no fallback: an uncatalogued model (for example a live agent's real `claude-sonnet-4-5`) shows its own id, "Not in the demo catalog", and "Unknown" instead of GPT-4o's name, context window and per-1M rates. The Simulator tab shows "Rate: unknown" and "Estimated cost: Unknown" for it.

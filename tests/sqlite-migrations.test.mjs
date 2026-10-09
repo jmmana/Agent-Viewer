@@ -179,7 +179,10 @@ test('unknown schema versions and inconsistent or foreign schemas are rejected w
   `);
   tooNewDb.close();
   const tooNewHash = hashFile(tooNew.file);
-  assert.throws(() => new SQLiteEventStore(tooNew.file, { backup: 'off', appVersion: '0.3.0' }), SchemaTooNewError);
+  assert.throws(
+    () => new SQLiteEventStore(tooNew.file, { backup: 'off', appVersion: '0.3.0' }),
+    (error) => error instanceof SchemaTooNewError && error.code === 'schema_too_new'
+  );
   assert.equal(hashFile(tooNew.file), tooNewHash);
 
   for (const name of ['gap', 'renamed']) {
@@ -194,7 +197,10 @@ test('unknown schema versions and inconsistent or foreign schemas are rejected w
     const migrations = name === 'gap'
       ? [...MIGRATIONS, { version: 2, name: 'usage-request-id-index', up() {} }]
       : MIGRATIONS;
-    assert.throws(() => new SQLiteEventStore(file, { backup: 'off', migrations }), SchemaHistoryMismatchError);
+    assert.throws(
+      () => new SQLiteEventStore(file, { backup: 'off', migrations }),
+      (error) => error instanceof SchemaHistoryMismatchError && error.code === 'schema_history_mismatch'
+    );
     assert.equal(hashFile(file), before);
     fs.rmSync(path.dirname(file), { recursive: true, force: true });
   }
@@ -204,7 +210,10 @@ test('unknown schema versions and inconsistent or foreign schemas are rejected w
   foreignDb.exec('CREATE TABLE events (id TEXT PRIMARY KEY, strange TEXT)');
   foreignDb.close();
   const foreignHash = hashFile(foreign.file);
-  assert.throws(() => new SQLiteEventStore(foreign.file, { backup: 'off' }), SchemaShapeError);
+  assert.throws(
+    () => new SQLiteEventStore(foreign.file, { backup: 'off' }),
+    (error) => error instanceof SchemaShapeError && error.code === 'schema_shape'
+  );
   assert.equal(hashFile(foreign.file), foreignHash);
   fs.rmSync(tooNew.dir, { recursive: true, force: true });
   fs.rmSync(foreign.dir, { recursive: true, force: true });
@@ -225,7 +234,11 @@ test('a failed migration rolls back its DDL and closes the database', () => {
   ];
   assert.throws(
     () => new SQLiteEventStore(file, { backup: 'off', migrations }),
-    (error) => error instanceof MigrationFailedError && error.version === 2 && error.cause.message === 'expected failure'
+    (error) =>
+      error instanceof MigrationFailedError &&
+      error.code === 'migration_failed' &&
+      error.version === 2 &&
+      error.cause.message === 'expected failure'
   );
   const db = new DatabaseSync(file);
   assert.deepEqual(db.prepare('SELECT version FROM schema_migrations').all().map(({ version }) => version), [1]);
@@ -276,7 +289,7 @@ test('a failed backup aborts migration without changing the database', () => {
   try {
     assert.throws(
       () => new SQLiteEventStore(file),
-      (error) => error instanceof SchemaBackupError && error.backupPath === backupPath
+      (error) => error instanceof SchemaBackupError && error.code === 'schema_backup_failed' && error.backupPath === backupPath
     );
     assert.equal(hashFile(file), before);
     const db = new DatabaseSync(file);
@@ -359,7 +372,7 @@ test('direct server startup reports a too-new database in one line and exits wit
 test('migration registry is contiguous and only adds entries to its snapshot', () => {
   const snapshot = JSON.parse(fs.readFileSync(path.join(fixtures, 'migrations.snapshot.json'), 'utf8'));
   const current = MIGRATIONS.map(({ version, name }) => [version, name]);
-  assert.deepEqual(current.slice(0, snapshot.length), snapshot);
+  assert.deepEqual(current, snapshot);
   assert.deepEqual(current.map(([version]) => version), current.map((_, index) => index + 1));
 });
 

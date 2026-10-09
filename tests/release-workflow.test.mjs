@@ -91,6 +91,16 @@ test('the npm publish step fails a real tag instead of silently exiting 0 when t
   );
 });
 
+test('a missing npm or PyPI credential never blocks the GitHub release or the Docker images', () => {
+  const releaseBlock = getJobBlock(workflow, 'release');
+  const npmStep = getStepBlock(releaseBlock, 'Publish to npm');
+  assert.match(npmStep, /^\s*continue-on-error: true/m, 'npm publish must not fail the release job (it would skip the pypi/docker jobs that need it)');
+
+  const pypiBlock = getJobBlock(workflow, 'pypi');
+  const pypiPublishStep = getStepBlock(pypiBlock, 'Publish to PyPI');
+  assert.match(pypiPublishStep, /^\s*continue-on-error: true/m, 'PyPI publish must not fail the pypi job (it would skip the docker job that needs it)');
+});
+
 test('a PyPI publish job exists, builds from sdk/python/, and is gated by the prerelease output', () => {
   const pypiBlock = getJobBlock(workflow, 'pypi');
   assert.match(pypiBlock, /python -m build sdk\/python/, 'the sdist/wheel must be built from sdk/python/');

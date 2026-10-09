@@ -4,7 +4,16 @@
  */
 
 let audioCtx: AudioContext | null = null;
-let soundEnabled = true;
+export const SOUND_PREFERENCE_STORAGE_KEY = 'agent-viewer-sound-preference-v1';
+export function readSoundPreference(): boolean {
+  try {
+    const serialized = window.localStorage.getItem(SOUND_PREFERENCE_STORAGE_KEY);
+    if (!serialized || serialized.length > 4096) return true;
+    const value = JSON.parse(serialized);
+    return value?.version === 1 && typeof value.enabled === 'boolean' ? value.enabled : true;
+  } catch { return true; }
+}
+let soundEnabled = readSoundPreference();
 
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -22,6 +31,8 @@ function getAudioContext(): AudioContext | null {
 
 export function setSoundEnabled(enabled: boolean) {
   soundEnabled = enabled;
+  try { window.localStorage.setItem(SOUND_PREFERENCE_STORAGE_KEY, JSON.stringify({ version: 1, enabled })); }
+  catch { /* El audio mantiene su preferencia en memoria si no hay almacenamiento. */ }
 }
 
 export function isSoundEnabled(): boolean {

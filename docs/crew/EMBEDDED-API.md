@@ -50,3 +50,19 @@ Restablecer Crew solicita Dirección y un mapa de cámaras vacío. Mantiene el r
 Las cuatro vistas son presets discretos 2.5D. El catálogo y el mobiliario siguen siendo prototipos; faltan actores con arte final; los marcadores provisionales de presencia permiten foco desde el panel Crew. El texto alternativo de agentes continúa disponible, pero seleccionar un agente no garantiza aún foco visual en Crew. Los controles Crew incorporan ES/EN; las personalizaciones `messages`/`t` del host siguen aplicando a los textos existentes de AgentOffice, no aún al catálogo de controles Crew.
 
 Para comparar dos instancias durante desarrollo, abrir `/tests/e2e/fixtures/crew-embedded.html` con Vite. Es una fixture de QA sin eventos; no forma parte del build de la aplicación. La prueba Playwright verifica sala/cámara controladas, independencia, alternancia de modos y vista móvil. Pruebas Vitest cubren callbacks en StrictMode, props rechazadas por el host, datos corruptos y ausencia de acceso a almacenamiento global.
+
+## Preferencias de movimiento, #171
+
+`crewPreferences?: { version: 1; reducedMotion: boolean }` y
+`onCrewPreferencesChange?: (preferences: CrewPreferences) => void` siguen el
+mismo contrato controlado que las cámaras. El host decide aceptar el cambio;
+la biblioteca nunca muta el objeto recibido. Sin prop, cada instancia conserva
+su preferencia durante cambios Caricatura/Crew, sin almacenamiento global.
+Restablecer Crew solicita `{ version: 1, reducedMotion: false }` junto con sala
+Dirección y cámaras vacías. El sistema `prefers-reduced-motion: reduce` siempre
+mantiene los clips desactivados, incluso si la preferencia propia es false.
+
+Anterior/siguiente recorre el orden del catálogo y se desactiva en los extremos.
+Solicita `onCrewRoomChange`, sin modificar eventos, reunión o replay. La
+biblioteca no produce audio: el sonido de la aplicación sigue usando los
+controles existentes y su propia preferencia global versionada.

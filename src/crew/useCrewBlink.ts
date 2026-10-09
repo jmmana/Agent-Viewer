@@ -3,7 +3,7 @@ import { CREW_CEO_BLINK, crewClipSample } from './crewAnimation';
 import { loadCrewImage } from './crewSprites';
 
 /** Parpadeo cosmético. Se detiene al salir, ocultar la pestaña o reducir movimiento. */
-export function useCrewBlink(enabled: boolean, roomId: string) {
+export function useCrewBlink(enabled: boolean, roomId: string, reducedMotion = false) {
   const [reduced,setReduced] = useState(() => typeof window !== 'undefined'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [visible,setVisible] = useState(() => typeof document === 'undefined' || !document.hidden);
@@ -20,7 +20,7 @@ export function useCrewBlink(enabled: boolean, roomId: string) {
       document.removeEventListener('visibilitychange',visibility);
     };
   }, []);
-  const active=enabled && !reduced;
+  const active=enabled && !reduced && !reducedMotion;
   useEffect(() => {
     setImage(undefined);
     if (!active) return;

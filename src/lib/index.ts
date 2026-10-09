@@ -1,6 +1,7 @@
 // Embeddable office
 export { AgentOffice } from './AgentOffice';
 export type { AgentOfficeProps } from './AgentOffice';
+export type { CharacterStyle } from '../engine/officeCrewAssets';
 
 // Event-driven office model, usable without React (server, tests, exports)
 export { OfficeStore, buildOfficeSnapshot } from './officeStore';

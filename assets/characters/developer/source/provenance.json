@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "role": "developer",
+  "clip": "idle",
+  "facing": "front",
+  "status": "prototype",
+  "license": "MIT",
+  "provenance": "original-agent-viewer-imagegen-reference-derived",
+  "generator": "built-in-imagegen",
+  "styleReference": "assets/references/ceo-approved-concept.png",
+  "styleLock": {
+    "family": "office-beans-approved-reference",
+    "hair": "swept-layered-chestnut",
+    "eyes": "large-dark-expressive",
+    "glasses": "black-office-frames",
+    "silhouette": "large-head-short-visible-legs",
+    "background": "transparent",
+    "prohibited": [
+      "visor",
+      "backpack",
+      "pixel-art"
+    ]
+  },
+  "prompt": "Use case: stylized-concept. Asset type: transparent PNG sprite for Agent Viewer.\nUse attached CEO Office Bean Character Asset Sheet strictly as ART STYLE and body proportions reference. Create ONE standalone full-body DEVELOPER Office Crew character in neutral FRONT-facing idle pose. Preserve the premium chibi illustration: very large head with beautifully swept layered chestnut brown hair, large expressive dark eyes, peach cheeks, tiny friendly smiling mouth, broad smooth head shape, short visible legs and dark office shoes. Role differences: blue #2563EB modern business-casual jacket with cyan #22D3EE details, clean white shirt, charcoal trousers, modern rectangular black glasses, tiny ID badge. Hold exactly one CLOSED slim grey laptop down beside hip with relaxed hand; laptop cannot obscure face or torso. Rounded small hands, corporate friendliness, same lighting/shading and fidelity as reference CEO. No visor, no backpack, no pixel art.\nComposition: single centered FULL BODY character only, front direct gaze, both feet level, isolated genuinely transparent background, no floor, no cast shadow, all silhouette within frame and clear padding. NO labels, typography, sheet, extra views, panels or separately floating props. Tall composition suitable for a usable sprite.",
+  "sourceFile": "assets/characters/developer/source/idle-front.generated.png",
+  "runtimeFile": "assets/characters/developer/idle-front.png",
+  "normalization": {
+    "frame": {
+      "width": 256,
+      "height": 352
+    },
+    "contentMax": {
+      "width": 216,
+      "height": 312
+    },
+    "feetY": 330,
+    "alphaTrimThreshold": 16,
+    "logicalSize": {
+      "width": 64,
+      "height": 88
+    },
+    "anchor": {
+      "x": 0.5,
+      "y": 0.94
+    }
+  }
+}

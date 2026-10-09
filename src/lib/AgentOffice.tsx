@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { OfficeCanvas } from '../components/OfficeCanvas';
 import { agentRoleLabel } from '../engine/canvasRenderer';
+import type { CharacterStyle } from '../engine/officeCrewAssets';
 import {
   createOfficeTranslator,
   type HostTranslate,
@@ -36,6 +37,8 @@ export interface AgentOfficeProps {
   /** Host translate function (i18next and similar). Wins over `messages` when it returns a value. */
   t?: HostTranslate;
   theme?: 'dark' | 'light';
+  /** Optional bundled character artwork. Defaults to the procedural renderer. */
+  characterStyle?: CharacterStyle;
   /** Show the usage figures passed in `usage`. Off by default. */
   showUsage?: boolean;
   /** Usage figures computed by the host. The office never computes them. */
@@ -59,6 +62,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   messages,
   t,
   theme = 'dark',
+  characterStyle = 'procedural',
   showUsage = false,
   usage,
   selectedAgentId,
@@ -113,6 +117,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           onSelectAgent={handleSelect}
           activeMeetingId={snapshot.activeMeetingId}
           theme={theme}
+          characterStyle={characterStyle}
           translate={translate}
           themeScope={false}
         />

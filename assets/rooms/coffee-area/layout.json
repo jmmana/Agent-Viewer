@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "prototype",
+  "coordinateSystem": "rectangular-ground-pixels",
+  "tileSize": 48,
+  "placementAnchor": "asset.anchor",
+  "collisionRule": "Use asset footprint offset from placement x/y; surface-mounted children and decorative props do not block navigation.",
+  "depthRule": "Sort root placements by ground y; draw each supportPlacementId child immediately after its supporting object, keeping its own x/y placement.",
+  "provenance": "original-agent-viewer-layout-prototype",
+  "license": "MIT",
+  "id": "coffee-area",
+  "size": {
+    "width": 576,
+    "height": 384
+  },
+  "placements": [
+    {
+      "id": "coffee-area.1",
+      "assetId": "furniture.coffee-bar",
+      "x": 148,
+      "y": 147
+    },
+    {
+      "id": "coffee-area.2",
+      "assetId": "electronics.coffee-machine",
+      "x": 112,
+      "y": 68,
+      "supportAssetId": "furniture.coffee-bar",
+      "supportPlacementId": "coffee-area.1"
+    },
+    {
+      "id": "coffee-area.3",
+      "assetId": "electronics.router",
+      "x": 183,
+      "y": 67,
+      "supportAssetId": "furniture.coffee-bar",
+      "supportPlacementId": "coffee-area.1"
+    },
+    {
+      "id": "coffee-area.4",
+      "assetId": "electronics.water-dispenser",
+      "x": 55,
+      "y": 246
+    },
+    {
+      "id": "coffee-area.5",
+      "assetId": "furniture.sofa-lounge",
+      "x": 350,
+      "y": 259
+    },
+    {
+      "id": "coffee-area.6",
+      "assetId": "furniture.coffee-table",
+      "x": 350,
+      "y": 313
+    },
+    {
+      "id": "coffee-area.7",
+      "assetId": "furniture.coffee-cup",
+      "x": 329,
+      "y": 268,
+      "supportAssetId": "furniture.coffee-table",
+      "supportPlacementId": "coffee-area.6"
+    },
+    {
+      "id": "coffee-area.8",
+      "assetId": "electronics.tv-display",
+      "x": 402,
+      "y": 109
+    },
+    {
+      "id": "coffee-area.9",
+      "assetId": "furniture.plant-floor",
+      "x": 496,
+      "y": 293
+    }
+  ],
+  "spawnPoints": [
+    {
+      "x": 240,
+      "y": 336
+    }
+  ],
+  "doorways": [
+    {
+      "x": 204,
+      "y": 384,
+      "width": 72
+    }
+  ],
+  "interactionZones": [
+    {
+      "x": 148,
+      "y": 185,
+      "action": "coffee"
+    },
+    {
+      "x": 55,
+      "y": 274,
+      "action": "water"
+    },
+    {
+      "x": 350,
+      "y": 292,
+      "action": "rest"
+    }
+  ]
+}

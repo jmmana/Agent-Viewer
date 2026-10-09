@@ -636,6 +636,7 @@ export default function App() {
               {currentFloor === 1 ? (
                 <>
                   <OfficeCanvas
+                    characterStyle="office-crew"
                     agents={canvasAgents}
                     selectedAgentId={selectedAgentId}
                     onSelectAgent={(id) => {

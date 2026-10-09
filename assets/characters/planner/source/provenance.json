@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "role": "planner",
+  "clip": "idle",
+  "facing": "front",
+  "status": "prototype",
+  "license": "MIT",
+  "provenance": "original-agent-viewer-imagegen-reference-derived",
+  "generator": "built-in-imagegen",
+  "styleReference": "assets/references/ceo-approved-concept.png",
+  "styleLock": {
+    "family": "office-beans-approved-reference",
+    "hair": "swept-layered-chestnut",
+    "eyes": "large-dark-expressive",
+    "glasses": "black-office-frames",
+    "silhouette": "large-head-short-visible-legs",
+    "background": "transparent",
+    "prohibited": [
+      "visor",
+      "backpack",
+      "pixel-art"
+    ]
+  },
+  "prompt": "Use case: stylized-concept. Asset type: transparent PNG sprite for Agent Viewer.\nUse the attached CEO Office Bean Character Asset Sheet strictly as ART STYLE and body proportions reference. Create ONE standalone full-body PLANNER Office Crew character in neutral FRONT-facing idle pose. Preserve the exact premium chibi illustration look: very large head with beautifully swept layered chestnut brown hair, large expressive dark eyes, peach cheeks and tiny smiling mouth, broad smooth head shape, tiny visible short legs and dark leather office shoes. Change role costume: purple (#7C3AED) smart blazer with subtle blue accent, professional white shirt and trousers, gold ID badge, ROUND black glasses, and one small planning clipboard held beside body. Rounded small hands, corporate friendliness, same lighting/shading and fidelity as reference CEO. No visor, no backpack, no pixel art.\nComposition: one character only, centered full body, front direct gaze, both feet level, isolated genuine transparent background, no floor or cast shadow, entire silhouette inside frame with clear padding, no labels, typography, contact sheets, extra views, panels or props floating separately. Tall sprite composition. This is a usable sprite, not a reference board.",
+  "sourceFile": "assets/characters/planner/source/idle-front.generated.png",
+  "runtimeFile": "assets/characters/planner/idle-front.png",
+  "normalization": {
+    "frame": {
+      "width": 256,
+      "height": 352
+    },
+    "contentMax": {
+      "width": 216,
+      "height": 312
+    },
+    "feetY": 330,
+    "alphaTrimThreshold": 16,
+    "logicalSize": {
+      "width": 64,
+      "height": 88
+    },
+    "anchor": {
+      "x": 0.5,
+      "y": 0.94
+    }
+  }
+}

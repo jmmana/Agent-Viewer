@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "role": "analyst",
+  "clip": "idle",
+  "facing": "front",
+  "status": "prototype",
+  "license": "MIT",
+  "provenance": "original-agent-viewer-imagegen-reference-derived",
+  "generator": "built-in-imagegen",
+  "styleReference": "assets/references/ceo-approved-concept.png",
+  "styleLock": {
+    "family": "office-beans-approved-reference",
+    "hair": "swept-layered-chestnut",
+    "eyes": "large-dark-expressive",
+    "glasses": "black-office-frames",
+    "silhouette": "large-head-short-visible-legs",
+    "background": "transparent",
+    "prohibited": [
+      "visor",
+      "backpack",
+      "pixel-art"
+    ]
+  },
+  "prompt": "Use case: stylized-concept. Asset type: transparent PNG sprite for Agent Viewer.\nUse the attached CEO Office Bean Character Asset Sheet as strict ART STYLE and body proportions reference. Create ONE standalone full-body ANALYST Office Crew character in neutral FRONT-facing idle pose. Same premium chibi illustration: very large head with swept layered chestnut brown hair, large expressive dark eyes, peach cheek face and tiny friendly mouth, broad smooth head shape, very short visible legs, dark leather office shoes. Role differences: teal #0D9488 smart jacket and subtle green #16A34A details, white professional shirt and charcoal trousers, LARGE rounded rectangular BLACK GLASSES, small gold ID badge. Hold exactly one analytics tablet beside hip, with tiny clean nontext chart bars on its screen. Rounded small hands, observant friendly expression. Preserve lighting, smooth shading and fidelity of CEO style. No visor, backpack, or pixel art.\nComposition: one centered FULL BODY character only, frontal direct gaze, both feet level, all silhouette inside tall frame with clear padding, isolated genuine transparent background without floor or cast shadow. NO typography, labels, sheets, extra views or panels. A usable character sprite, not a reference board.",
+  "sourceFile": "assets/characters/analyst/source/idle-front.generated.png",
+  "runtimeFile": "assets/characters/analyst/idle-front.png",
+  "normalization": {
+    "frame": {
+      "width": 256,
+      "height": 352
+    },
+    "contentMax": {
+      "width": 216,
+      "height": 312
+    },
+    "feetY": 330,
+    "alphaTrimThreshold": 16,
+    "logicalSize": {
+      "width": 64,
+      "height": 88
+    },
+    "anchor": {
+      "x": 0.5,
+      "y": 0.94
+    }
+  }
+}

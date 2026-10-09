@@ -55,7 +55,8 @@
     "check:package": "publint --strict && attw --pack . --profile esm-only --exclude-entrypoints ./style.css",
     "prepack": "npm run build:lib",
     "server": "tsx server/index.ts",
-    "dev:full": "node scripts/dev-full.mjs"
+    "dev:full": "node scripts/dev-full.mjs",
+    "validate:assets": "node scripts/validate-visual-assets.mjs"
   },
   "peerDependencies": {
     "react": "^19.0.0",
@@ -96,6 +97,7 @@
   },
   "author": "Juan Manuel Castillo (https://github.com/jmmana)",
   "contributors": [
-    "María Alejandra (https://github.com/Alejagop12)"
+    "María Alejandra (https://github.com/Alejagop12)",
+    "ChatGPT (OpenAI Codex) — Office Crew visual assets, animation infrastructure and Canvas2D integration"
   ]
 }

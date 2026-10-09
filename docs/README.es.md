@@ -735,6 +735,7 @@ Tres reglas mantienen honesto el producto: nunca pedir ni exponer el razonamient
 - **Idea:** María Alejandra ([@Alejagop12](https://github.com/Alejagop12)). Agent Viewer nació de su idea: ver a los agentes de IA trabajar en equipo dentro de una oficina real.
 - **Desarrollo:** Juan Manuel Castillo ([@jmmana](https://github.com/jmmana)), [WarlockCode](https://github.com/jmmana).
 - **Con colaboradores de IA:** Gemini, ChatGPT, Qwen Code (Alibaba), Kiro y Claude Code ayudaron a diseñar, escribir, revisar y probar este proyecto.
+- **Contribuidor de Office Crew:** [ChatGPT (OpenAI Codex)](https://chatgpt.com/) — personajes basados en la referencia, recursos originales de oficina, herramientas de animación e integración con Canvas2D. [Estudio visual y estado de recursos](visual-system/README.md).
 
 ## 📄 Licencia
 

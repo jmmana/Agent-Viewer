@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="176" viewBox="0 0 128 176" role="img" aria-label="Agent Viewer Office Crew CEO, front idle prototype">
+  <title>Agent Viewer — CEO (front idle prototype)</title>
+  <defs>
+    <linearGradient id="blazer" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#24478b"/><stop offset=".55" stop-color="#182d59"/><stop offset="1" stop-color="#101d38"/>
+    </linearGradient>
+    <linearGradient id="face" x1=".22" y1="0" x2=".77" y2="1">
+      <stop offset="0" stop-color="#ffe5c9"/><stop offset="1" stop-color="#f1b88d"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2=".7" y2="1">
+      <stop offset="0" stop-color="#4d302b"/><stop offset="1" stop-color="#241c22"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c6d0df"/><stop offset="1" stop-color="#66768e"/>
+    </linearGradient>
+  </defs>
+  <!-- Front-facing corporate cartoon prototype, designed at 2× a 64 × 88 logical frame. -->
+  <ellipse cx="62" cy="165" rx="33" ry="5" fill="#0f172a" opacity=".13"/>
+  <path d="M39 134 L56 134 L54 155 L40 157 Z" fill="#222b40"/>
+  <path d="M67 134 L83 133 L84 156 L70 156 Z" fill="#222b40"/>
+  <path d="M40 154 Q39 159 31 160 Q28 164 33 166 L56 166 Q59 163 56 159 L54 154 Z" fill="#25202a"/>
+  <path d="M70 154 Q66 161 69 165 L90 165 Q96 164 91 160 L83 155 Z" fill="#25202a"/>
+  <path d="M37 101 Q28 104 25 116 L21 136 Q21 142 26 145 L33 144 L41 125 Z" fill="url(#blazer)" stroke="#142541" stroke-width="2"/>
+  <path d="M86 101 Q97 104 101 118 L103 140 L96 144 L87 141 L82 119 Z" fill="url(#blazer)" stroke="#142541" stroke-width="2"/>
+  <path d="M22 135 Q16 138 20 146 Q25 150 31 144 L31 136 Z" fill="url(#face)" stroke="#cc8c64" stroke-width="1.3"/>
+  <path d="M95 136 Q94 145 101 146 Q108 145 106 138 L102 134 Z" fill="url(#face)" stroke="#cc8c64" stroke-width="1.3"/>
+  <path d="M35 100 Q45 96 60 97 Q81 96 89 103 L88 145 Q64 151 37 145 Z" fill="url(#blazer)" stroke="#142541" stroke-width="2.2"/>
+  <path d="M47 99 L60 114 L51 127 L40 101 Z" fill="#d9e5f3" stroke="#afc0d5" stroke-width="1"/>
+  <path d="M77 98 L62 114 L72 127 L86 101 Z" fill="#d9e5f3" stroke="#afc0d5" stroke-width="1"/>
+  <path d="M59 109 L65 109 L69 118 L64 137 L58 124 L60 117 Z" fill="#2460aa"/>
+  <path d="M57 103 L67 103 L65 112 L59 112 Z" fill="#fff8ef"/>
+  <path d="M46 98 L63 114 L56 124 L41 105 Z" fill="#273d70" stroke="#182950" stroke-width="1.2"/>
+  <path d="M78 98 L63 114 L72 124 L85 105 Z" fill="#273d70" stroke="#182950" stroke-width="1.2"/>
+  <path d="M61 132 L64 132" stroke="#e2bc63" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="78" y="120" width="11" height="18" rx="2" fill="#e0c17c" stroke="#a47a34" stroke-width="1.1"/>
+  <rect x="80" y="123" width="7" height="10" rx="1.5" fill="#eff5ff"/>
+  <circle cx="83.5" cy="126" r="1.8" fill="#4074ab"/>
+  <path d="M83.5 128.5 L83.5 131" stroke="#4074ab" stroke-width="1.5"/>
+  <path d="M84 138 L88 138" stroke="#b88b3b" stroke-width="1.2"/>
+  <path d="M43 81 L42 105 Q64 116 84 104 L81 82 Z" fill="#e5b188"/>
+  <ellipse cx="28" cy="67" rx="10" ry="13" fill="url(#face)" stroke="#c88c68" stroke-width="1.6"/>
+  <ellipse cx="98" cy="67" rx="10" ry="13" fill="url(#face)" stroke="#c88c68" stroke-width="1.6"/>
+  <path d="M28 50 Q29 24 56 21 Q93 17 98 53 L96 78 Q91 96 75 100 Q59 107 44 98 Q30 90 28 74 Z" fill="url(#face)" stroke="#ce9574" stroke-width="2"/>
+  <path d="M27 57 Q20 40 29 31 Q37 20 52 24 Q60 11 74 21 Q83 9 93 23 Q110 26 101 48 Q94 46 88 36 Q83 42 69 39 Q55 51 34 44 Q34 53 27 57 Z" fill="url(#hair)" stroke="#241d25" stroke-width="2"/>
+  <path d="M38 32 Q44 23 56 28 M60 24 Q71 17 79 27 M83 23 Q92 24 95 32" fill="none" stroke="#735044" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+  <path d="M36 57 Q48 53 56 58 M70 58 Q82 53 91 57" stroke="#2f2527" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <circle cx="47" cy="71" r="4.2" fill="#202d3c"/><circle cx="79" cy="71" r="4.2" fill="#202d3c"/>
+  <circle cx="48" cy="69.5" r="1.6" fill="#fff"/><circle cx="80" cy="69.5" r="1.6" fill="#fff"/>
+  <rect x="34" y="60" width="26" height="25" rx="10" fill="#d7e8ff" fill-opacity=".15" stroke="#17253b" stroke-width="4.4"/>
+  <rect x="65" y="60" width="26" height="25" rx="10" fill="#d7e8ff" fill-opacity=".15" stroke="#17253b" stroke-width="4.4"/>
+  <path d="M59 65 Q63 62 66 65 M29 65 L35 64 M91 64 L97 65" stroke="#17253b" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M64 70 Q59 78 65 79" stroke="#cd8d6d" stroke-width="1.8" fill="none"/>
+  <path d="M55 88 Q63 94 71 88" stroke="#9e5855" stroke-width="2.3" stroke-linecap="round" fill="none"/>
+  <!-- Shiny executive tablet, a detachable prop in the production rig. -->
+  <g transform="translate(90 111) rotate(7)">
+    <rect x="0" y="0" width="19" height="32" rx="3" fill="#333e53" stroke="#182439" stroke-width="1.5"/>
+    <rect x="2.5" y="3.5" width="14" height="24" rx="1.5" fill="url(#screen)"/>
+    <circle cx="9.5" cy="29.4" r="1.1" fill="#b3c1d0"/>
+  </g>
+</svg>

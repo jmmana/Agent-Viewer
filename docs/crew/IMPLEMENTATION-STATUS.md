@@ -1,12 +1,13 @@
 # Estado de implementación de Crew
 
-Actualizado: 2026-10-09 (America/Bogota). Main observado: `2d3c43e`.
-Último issue completado: #168, catálogo y selector de oficinas Crew. Epic: #114.
+Actualizado: 2026-10-09 (America/Bogota). Main observado: `a042a9b`.
+Último issue completado: #166, contrato de arquitectura de dos modos. Epic: #114.
 
 ## Avances y cierres verificados
 
 | Issue | Resultado | PR integrado y verificación |
 | --- | --- | --- |
+| [#166](https://github.com/jmmana/Agent-Viewer/issues/166) | Cerrado. El switch `cartoon`/`crew`, el renderer `CrewStage` aislado y la API embebida ya estaban en main (PR #175, #177, #189, #190, #191, consolidados por #194 y posteriores). Esta entrega agrega el contrato formal ([ADR-002](../adr/ADR-002-crew-two-mode-architecture.md)) que faltaba y dos pruebas nuevas que antes no existían: límites de import verificados por escaneo de código (`tests/crew-mode-boundary-166.test.mjs`) y veinte alternancias de modo sin fuga de temporizadores, eventos ni preferencias de Crew (`tests/lib/crewModeContract166.test.tsx`). | Rama `feat/crew-166-mode-contract`. Contrato y matriz de aceptación: [ISSUE-166-ACCEPTANCE.md](ISSUE-166-ACCEPTANCE.md). Ver el PR del issue para la salida completa de CI. |
 | [#168](https://github.com/jmmana/Agent-Viewer/issues/168) | Cerrado. Catálogo de once salas, puertas y llegadas locales, selector con búsqueda bilingüe, teclado, estados de ocupación y aislamiento de eventos. La escena seleccionada es la única visible en Crew; Caricatura conserva su renderer y store. | [PR #222](https://github.com/jmmana/Agent-Viewer/pull/222), merge `2d3c43e`. 19 E2E Chrome y 607 Vitest; lint, builds app/lib/CLI, check de paquete y pruebas Python reportados en el PR. Los checks previos al merge `verify`, `cli-node-22` y `crew-browser` pasaron en ambos runs. Contrato, aceptación y capturas: [ISSUE-168-ACCEPTANCE.md](ISSUE-168-ACCEPTANCE.md). |
 | [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Cerrado. Preferencias, enlaces, restablecimiento, navegación y controles de Crew quedan integrados con estado por instancia y almacenamiento validado. | [PR #221](https://github.com/jmmana/Agent-Viewer/pull/221), merge `119002d`. Checks previos al merge `verify`, `cli-node-22` y `crew-browser` pasaron en ambos runs. Criterios y límites: [ISSUE-171-ACCEPTANCE.md](ISSUE-171-ACCEPTANCE.md). |
 | [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Cerrado. La auditoría documenta procedencia y destino de 53 assets más la referencia, preservación de originales, renderer independiente y los 1.584 SVG como estudios, no animación final. #43 continúa abierto como draft y no se ha fusionado como reemplazo de Caricatura. | [PR #218](https://github.com/jmmana/Agent-Viewer/pull/218), merge `920dce7`. Comparación fuente/banco 54/54 y 11 pruebas de integridad; checks previos al merge `verify`, `cli-node-22` y `crew-browser` pasaron en ambos runs. Auditoría: [ISSUE-172-ACCEPTANCE.md](ISSUE-172-ACCEPTANCE.md). |

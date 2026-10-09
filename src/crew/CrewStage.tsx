@@ -4,6 +4,7 @@ import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprite } from './useCrewSprite';
+import { crewSpriteView } from './crewSprites';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
 import { CrewGestures } from './crewGestures';
@@ -106,7 +107,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
 
   const illustratedAgents = presence.markers.filter(marker => marker.role === 'boss').length;
-  const sprite = useCrewSprite(illustratedAgents ? view : null);
+  const spriteView = presence.markers.map(marker => crewSpriteView(marker, view)).find(Boolean) ?? null;
+  const sprite = useCrewSprite(spriteView);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -119,8 +121,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprite: sprite.image, locale });
-  }, [room, camera, locale, presence, sprite.image]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprite: sprite.image, spriteView: spriteView ?? undefined, locale });
+  }, [room, camera, locale, presence, sprite.image, spriteView]);
 
   useEffect(() => {
     const el = canvasRef.current;

@@ -1,4 +1,4 @@
-import type { CrewView } from './crewModel';
+import { CREW_VIEWS, type CrewView } from './crewModel';
 import type { CrewPresenceMarker } from './crewPresence';
 
 // Piloto CEO: una pose estática por vista. Otros roles conservan su marcador.
@@ -10,8 +10,16 @@ const sources = {
 };
 export const CREW_CEO_SPRITE = { width: 256, height: 352, anchor: { x: .5, y: .9375 }, displayHeight: 76 } as const;
 
-export function crewSpriteView(marker: Pick<CrewPresenceMarker, 'role'>, view: CrewView): CrewView | null {
-  return marker.role === 'boss' ? view : null;
+/**
+ * Contrato de orientación: `facing` es la vista de cámara desde la que se ve el frente del actor
+ * (por defecto `front`). Es un dato local de la sala, no de dominio; la cámara solo lo reorienta.
+ */
+export function crewRelativeView(facing: CrewView, view: CrewView): CrewView {
+  return CREW_VIEWS[(CREW_VIEWS.indexOf(view) - CREW_VIEWS.indexOf(facing) + CREW_VIEWS.length) % CREW_VIEWS.length]!;
+}
+
+export function crewSpriteView(marker: Pick<CrewPresenceMarker, 'role'> & { facing?: CrewView }, view: CrewView): CrewView | null {
+  return marker.role === 'boss' ? crewRelativeView(marker.facing ?? 'front', view) : null;
 }
 
 /** Carga solo la vista solicitada; la cancelación impide callbacks después de salir. */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { crewSpriteView, loadCrewSprite } from '../../src/crew/crewSprites';
+import { crewRelativeView, crewSpriteView, loadCrewSprite } from '../../src/crew/crewSprites';
 
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 const fakeImage = () => ({ naturalWidth:256, naturalHeight:352, src:'', onload:null, onerror:null,
@@ -10,6 +10,15 @@ describe('Carga del piloto ilustrado Crew', () => {
     expect(crewSpriteView({role:'boss'},'back')).toBe('back');
     expect(crewSpriteView({role:'custom'},'front')).toBeNull();
     expect(crewSpriteView({},'front')).toBeNull();
+  });
+  it('reorienta la pose según la orientación local del actor y la cámara', () => {
+    expect(crewRelativeView('front','left')).toBe('left');
+    expect(crewRelativeView('right','right')).toBe('front');
+    expect(crewRelativeView('right','front')).toBe('left');
+    expect(crewRelativeView('back','front')).toBe('back');
+    expect(crewRelativeView('left','back')).toBe('left');
+    expect(crewSpriteView({role:'boss',facing:'back'},'back')).toBe('front');
+    expect(crewSpriteView({role:'custom',facing:'back'},'back')).toBeNull();
   });
   it('carga solo la vista solicitada y libera sus callbacks', async () => {
     const image=fakeImage(), ready=vi.fn(), failed=vi.fn(), url=vi.fn(async()=>'/fixture.png');

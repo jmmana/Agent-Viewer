@@ -1,5 +1,5 @@
 import type { Agent } from '../types/agent';
-import type { CrewRoomDefinition } from './crewModel';
+import type { CrewRoomDefinition, CrewView } from './crewModel';
 import { crewAgentsInRoom } from './crewEvents';
 import { crewPresenceSlots, type CrewLocalPoint } from './crewSpatial';
 
@@ -10,6 +10,8 @@ export interface CrewPresenceMarker extends CrewLocalPoint {
   status: Agent['status'];
   number: number;
   role?: Agent['role'];
+  /** Orientación local opcional; ausente equivale a `front`. */
+  facing?: CrewView;
 }
 
 /** Proyección determinista de un snapshot. No genera eventos ni simula desplazamientos. */

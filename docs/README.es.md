@@ -849,6 +849,7 @@ Las contribuciones son bienvenidas: adaptadores para tu framework, traducciones,
 ```bash
 npm run lint                    # verificación de tipos
 npm test                        # suites de node:test + Vitest
+npm run test:golden             # suite de reconciliación de referencia (también parte de npm test)
 python3 tests/test_python_sdk.py
 npm run build                   # app de demostración
 npm run build:lib               # librería

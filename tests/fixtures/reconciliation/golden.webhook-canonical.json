@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "id": "evt_g_w01",
+  "type": "llm.usage",
+  "timestamp": 1768485612000,
+  "source": "agent:dana",
+  "agentId": "dana",
+  "severity": "normal",
+  "summary": "dana used model-gamma (via webhook)",
+  "payload": {
+    "provider": "synthetic",
+    "model": "model-gamma",
+    "inputTokens": 400,
+    "outputTokens": 80,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 0,
+    "reasoningTokens": 0,
+    "cost": 0.004,
+    "costSource": "provider-reported",
+    "currency": "USD",
+    "requestId": "req_d1"
+  }
+}

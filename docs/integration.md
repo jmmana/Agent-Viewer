@@ -825,6 +825,10 @@ The snapshot keeps `totalTokens`, `totalCost` and the `AgentRecord` usage fields
 
 Every figure traces back to its calls: `GET /api/v1/events?type=llm.usage&agentId=<id>` lists the successful calls of an agent and `GET /api/v1/events?type=llm.failed&agentId=<id>` the failed ones. In memory mode that list only covers the events still in the ring.
 
+#### Reconciliation guarantee
+
+A token or cost figure means the same thing wherever it is read: the memory store, the SQLite store across a restart, the portal and the embeddable library's `summarizeUsage` are all checked against one hand-worked fixture in CI (`npm run test:golden`, issue #62). See [`tests/fixtures/reconciliation/README.md`](../tests/fixtures/reconciliation/README.md) for the fixture itself, including the cases it covers (mixed currencies, a missing cost, a missing currency, missing cache tokens, a duplicate id, a conflicting duplicate, a repeated `requestId`, and a failed call) and what is deferred to a follow-up (the HTTP routes, webhook HMAC signing, the `PATCH` rejection path and memory eviction).
+
 ---
 
 ## 🔄 8. Multi-Runtime & Session Tracking

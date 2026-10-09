@@ -8,6 +8,11 @@ import { MemoryEventStore, SQLiteEventStore, parseMaxEvents, createEventStore } 
 import { eventFingerprint } from '../server/eventFingerprint.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
 
+function tempDbPath(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-store-'));
+  return { dir, file: path.join(dir, `${name}.db`) };
+}
+
 test('MemoryEventStore: appends events, detects duplicates, and maintains snapshot', async () => {
   const store = new MemoryEventStore(50);
 
@@ -46,10 +51,9 @@ test('MemoryEventStore: appends events, detects duplicates, and maintains snapsh
 });
 
 test('SQLiteEventStore: stores events persistently and queries by runtime/session', async () => {
-  const testDbPath = './data/test-store.db';
-  if (fs.existsSync(testDbPath)) {
-    fs.unlinkSync(testDbPath);
-  }
+  // Issue #62: every test store must live in a temp dir, never in the repo's own ./data, so parallel test
+  // runs (and a developer's local server) never share a database file.
+  const { dir, file: testDbPath } = tempDbPath('persist');
 
   const store = new SQLiteEventStore(testDbPath);
 
@@ -88,15 +92,8 @@ test('SQLiteEventStore: stores events persistently and queries by runtime/sessio
   assert.equal(dupRes.duplicate, true);
 
   await store.close();
-  if (fs.existsSync(testDbPath)) {
-    fs.unlinkSync(testDbPath);
-  }
+  fs.rmSync(dir, { recursive: true, force: true });
 });
-
-function tempDbPath(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-store-'));
-  return { dir, file: path.join(dir, `${name}.db`) };
-}
 
 function storeEvent(id, timestamp, extra = {}) {
   return {

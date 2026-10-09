@@ -849,6 +849,7 @@ Contributions are welcome: adapters for your framework, translations, bug report
 ```bash
 npm run lint                    # typecheck
 npm test                        # node:test suites + Vitest
+npm run test:golden             # golden reconciliation suite (also part of npm test)
 python3 tests/test_python_sdk.py
 npm run build                   # demo app
 npm run build:lib               # library

@@ -29,6 +29,7 @@ CI (`.github/workflows/ci.yml`) runs these checks on every push and pull request
 npm audit --omit=dev            # security audit of runtime dependencies
 npm run lint                    # typecheck (tsc --noEmit)
 npm test                        # node:test suites and Vitest
+npm run test:golden             # golden reconciliation suite (issue #62; also part of npm test)
 python3 tests/test_python_sdk.py   # Python SDK tests
 python3 -m pip wheel ./sdk/python -w /tmp/wheels   # Python SDK wheel builds...
 python3 -m pip install /tmp/wheels/*.whl          # ...installs...
@@ -41,6 +42,8 @@ docker build -f docker/Dockerfile --target viewer .    # office image
 ```
 
 All of them should pass. Install the wheel in a virtual environment so it does not touch your system Python. If you do not have Docker locally, CI still runs the image builds; mention it in the pull request.
+
+Any change to usage or cost math, in any layer (the memory store, the SQLite store, the portal reducer, the embeddable library), must keep `npm run test:golden` green (`tests/fixtures/reconciliation/`, issue #62). Adding a new usage case (a new currency shape, a new way a figure can be missing, a new kind of duplicate) starts with a new line in `tests/fixtures/reconciliation/golden.events.jsonl` and the matching hand-worked numbers in `golden.expected.json`, explained in the pull request.
 
 ## Pull requests
 

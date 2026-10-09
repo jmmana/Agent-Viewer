@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync, type WriteStream } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, openSync, type WriteStream } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type { StartCommand } from './args.ts';
@@ -104,6 +104,22 @@ export function openBrowser(url: string): void {
   }
 }
 
+/**
+ * Opens the `--record` file before the server listens, so a path that cannot be written stops the CLI with a
+ * clear message instead of failing later. A new file is readable only by its owner: events can carry summaries.
+ */
+export function openRecording(file: string): WriteStream {
+  let fd: number;
+  try {
+    mkdirSync(path.dirname(file), { recursive: true });
+    fd = openSync(file, 'a', 0o600);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? String(error);
+    throw new Error(`Cannot write the --record file ${file} (${code}).`);
+  }
+  return createWriteStream(file, { fd, flags: 'a' });
+}
+
 export interface RunningViewer {
   url: string;
   token: string;
@@ -164,8 +180,14 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
   let recorder: WriteStream | undefined;
   let stopRecording: (() => void) | undefined;
   if (command.record) {
-    mkdirSync(path.dirname(command.record), { recursive: true });
-    recorder = createWriteStream(command.record, { flags: 'a' });
+    recorder = openRecording(command.record);
+    // A write error mid-run (full disk, removed volume) stops the recording, never the server.
+    recorder.once('error', (error: NodeJS.ErrnoException) => {
+      stopRecording?.();
+      stopRecording = undefined;
+      recorder = undefined;
+      console.warn(`agent-viewer: --record stopped: ${error.code ?? error.message}`);
+    });
     stopRecording = onEventAccepted((event) => {
       recorder?.write(`${JSON.stringify(event)}\n`);
     });

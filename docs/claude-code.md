@@ -50,6 +50,12 @@ Never sent: tool arguments and results (commands, file contents, search patterns
 
 **Opt-in summaries.** Install with `--include-summaries` to also send a trimmed, single-line copy (140 characters at most) of Claude's final message on `Stop` and `SubagentStop`, and of the notification text. They can contain anything Claude wrote, so turn them on only when that is fine for you. Tool arguments and prompts are never sent, with or without this option.
 
+## Tokens and cost
+
+The hooks carry no token or cost figures, and the hook never reads the transcript (a test checks that it does not even open it). Claude Code token figures will arrive through its native OpenTelemetry logs ([#59](https://github.com/jmmana/Agent-Viewer/issues/59) and [#60](https://github.com/jmmana/Agent-Viewer/issues/60)).
+
+Until the totals work of 0.3.0 lands ([#55](https://github.com/jmmana/Agent-Viewer/issues/55)), the top bar of the office served by the CLI shows `0.0K` and `$0.000` for a session that only uses hooks. Read it as "not reported", not as "nothing consumed".
+
 ## It never slows Claude Code down
 
 The hook writes nothing to stdout and always exits with code `0`. It gives itself 400 ms from process start: if the office is not running or does not answer, it stops quietly within that time. When the office is up, a hook takes well under 100 ms on a typical laptop. Each handler also sets Claude Code's own `timeout` to 1 second (Claude Code reads it in seconds) only as a safety net. It stays below the short budget Claude Code gives `SessionEnd` hooks when it exits, so installing Agent Viewer never makes Claude Code slower to quit.
@@ -67,7 +73,9 @@ Only `<project>/.claude/settings.local.json`, the per-project file Claude Code k
 }
 ```
 
-Installing again replaces the handlers instead of adding a second copy; when they are already up to date it says so and writes nothing. The change is written only if the file did not change while you were reading the prompt (otherwise nothing is written and you run the command again), and it goes through a temporary file and a rename, so the file is never left half written. Options: `--include-summaries`, and `--url` / `--token` to point the hook at a fixed server (the token is then stored in that file). Without them the hook finds the running `agent-viewer` on its own.
+Installing again replaces the handlers instead of adding a second copy; when they are already up to date it says so and writes nothing. The change is written only if the file did not change while you were reading the prompt (otherwise nothing is written and you run the command again), and it goes through a temporary file and a rename, so the file is never left half written. Options: `--include-summaries`, and `--url` / `--token` to point the hook at a fixed server. Without them the hook finds the running `agent-viewer` on its own.
+
+**If you pass `--token`, it is stored in plain text in `<project>/.claude/settings.local.json`.** Claude Code keeps that file out of git by default, but check your own ignore rules (`git check-ignore .claude/settings.local.json`) and never commit or share that file.
 
 The handler uses the path of the CLI you ran. If you clean the npx cache, run `install claude-code` again; or install the package globally (`npm install -g @warlockcode/agent-viewer`) for a stable path.
 

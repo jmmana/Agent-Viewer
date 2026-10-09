@@ -192,7 +192,7 @@ Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compi
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> en modo profesional: una reunión donde los agentes proponen, objetan, acuerdan y deciden. Solo se dibujan los eventos que recibe el componente.</sub>
 </p>
 
-Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.2.1**. Solo módulos ES, React y React DOM 19 como dependencias peer, `lucide-react` y `zod` como únicas dependencias de ejecución, y declaraciones de TypeScript incluidas.
+Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.2.1**. Solo módulos ES, React y React DOM 19 como dependencias peer, `express`, `lucide-react` y `zod` como dependencias de ejecución (con `express` corre el servidor del comando `agent-viewer`; los módulos de la librería nunca lo importan), y declaraciones de TypeScript incluidas.
 
 La publicación en npm llegará muy pronto. Mientras tanto, instálala desde el archivo de la release de GitHub (el nombre del paquete y tus imports no cambian cuando pases a npm):
 

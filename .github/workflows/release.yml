@@ -86,7 +86,7 @@ jobs:
       IMAGE: ghcr.io/jmmana/agent-viewer
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up QEMU (arm64 images)
         uses: docker/setup-qemu-action@v4

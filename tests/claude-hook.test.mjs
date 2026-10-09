@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { translateClaudeHook, sessionIdentity, trimSummary } from '../cli/claudeHook.ts';
@@ -232,4 +233,44 @@ test('Claude hook: the entry point arms the hard stop before it evaluates any ot
   const guard = source.indexOf("if (process.argv[2] === 'claude-hook') armHookGuard();");
   assert.ok(guard > 0);
   assert.ok(guard < source.indexOf('await import('), 'the guard is armed before the parser loads');
+});
+
+test('Claude hook: the translator imports no file system or process module', () => {
+  const source = readFileSync(path.join(repoRoot, 'cli', 'claudeHook.ts'), 'utf8');
+  assert.doesNotMatch(source, /from ['"]node:(fs|fs\/promises|child_process)['"]/);
+  assert.doesNotMatch(source, /import\(['"]node:(fs|fs\/promises|child_process)['"]\)/);
+});
+
+test('Claude hook process: never opens transcript_path', {
+  skip: process.platform === 'win32' ? 'mkfifo is POSIX only' : false,
+}, async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'av-fifo-'));
+  // Opening a FIFO that has no writer blocks, so a hook that read the transcript would never finish.
+  const fifo = path.join(dir, 'transcript.jsonl');
+  assert.equal(spawnSync('mkfifo', [fifo]).status, 0, 'mkfifo works');
+  const received = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      received.push(body);
+      res.writeHead(202, { 'Content-Type': 'application/json' }).end('{"ok":true}');
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const { port } = server.address();
+    for (const name of ['stop', 'session-start', 'pre-tool-use']) {
+      const input = { ...fixture(name), transcript_path: fifo };
+      const result = await runHook(['--url', `http://127.0.0.1:${port}`, '--token', 'fifo-token'], input);
+      assert.equal(result.code, 0, name);
+      assert.equal(result.stdout, '', name);
+      assert.ok(result.ms < 500, `${name} took ${Math.round(result.ms)} ms`);
+    }
+    assert.ok(received.length >= 3, 'every hook posted its events');
+    assert.ok(received.every((body) => !body.includes(fifo)), 'the transcript path never leaves the machine');
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

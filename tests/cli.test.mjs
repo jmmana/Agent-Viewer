@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -245,9 +245,32 @@ test('CLI end to end: start, send an event, read it back from the API and the li
     assert.deepEqual(types, ['agent.message.sent', 'agent.status.changed']);
     assert.equal(listed.events.find((event) => event.type === 'agent.status.changed').payload.status, 'THINKING');
 
+    // A repeated event is acknowledged but never recorded twice.
+    const repeated = listed.events.find((event) => event.type === 'agent.status.changed');
+    const duplicate = await fetch(`${base}/api/v1/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(repeated),
+    });
+    assert.equal(duplicate.status, 200);
+
     const lines = readFileSync(record, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     assert.deepEqual(lines.map((event) => event.type), ['agent.status.changed', 'agent.message.sent']);
     for (const event of lines) assert.equal(validateCanonicalEvent(event).success, true);
+    if (process.platform !== 'win32') assert.equal(statSync(record).mode & 0o777, 0o600, 'only the owner can read the recording');
+
+    // Express 5: an empty launch body is a refused code, not a server error.
+    const empty = await fetch(`${base}/api/cli/launch`, { method: 'POST' });
+    assert.equal(empty.status, 404);
+    assert.equal((await empty.json()).error, 'launch_code_invalid');
+    // The single page fallback never hides the API's own answers.
+    const page = await fetch(`${base}/some/route`);
+    assert.ok([200, 503].includes(page.status), `office page status ${page.status}`);
+    assert.doesNotMatch(page.headers.get('content-type') ?? '', /json/);
+    const unknownApi = await fetch(`${base}/api/v1/unknown`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(unknownApi.status, 404, 'the API answers, not the office page');
+    assert.doesNotMatch(await unknownApi.text(), /office is not built|id="root"/);
+    assert.equal((await (await fetch(`${base}/health`)).json()).ok, true);
   } finally {
     server.kill('SIGINT');
     await exited;
@@ -274,6 +297,75 @@ test('CLI end to end: a busy port is reported clearly', { timeout: 60_000 }, asy
     assert.match(stderr, new RegExp(`Port ${port} is already in use`));
   } finally {
     blocker.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('CLI end to end: a --record path that cannot be written stops the CLI before it listens', { timeout: 60_000 }, async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'av-record-'));
+  try {
+    const blocker = path.join(home, 'not-a-folder');
+    writeFileSync(blocker, '');
+    const port = await freePort();
+    const child = spawn(process.execPath, ['--import', 'tsx', cliEntry, '--no-open', '--port', String(port), '--record', path.join(blocker, 'run.jsonl')], {
+      cwd: repoRoot,
+      env: { ...process.env, AGENT_VIEWER_HOME: home },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const code = await new Promise((resolve) => child.on('close', resolve));
+    assert.equal(code, 1);
+    assert.match(stderr, /Cannot write the --record file/);
+    assert.doesNotMatch(stdout, /Press Ctrl\+C/, 'it never started');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('CLI end to end: a write error while recording warns once and the server keeps accepting events', {
+  timeout: 60_000,
+  skip: existsSync('/dev/full') ? false : 'needs /dev/full (Linux)',
+}, async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'av-full-'));
+  const port = await freePort();
+  const token = 'record-full-token';
+  const child = spawn(process.execPath, ['--import', 'tsx', cliEntry, '--no-open', '--port', String(port), '--token', token, '--record', '/dev/full'], {
+    cwd: repoRoot,
+    env: { ...process.env, AGENT_VIEWER_HOME: home },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  const exited = new Promise((resolve) => child.on('close', resolve));
+  try {
+    const deadline = Date.now() + 30_000;
+    while (!/Press Ctrl\+C/.test(output)) {
+      if (Date.now() > deadline) throw new Error(`CLI did not start:\n${output}`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const base = `http://127.0.0.1:${port}`;
+    const send = (id) => fetch(`${base}/api/v1/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ schemaVersion: '1.0', id, type: 'agent.status.changed', timestamp: Date.now(), source: 'agent:full', agentId: 'full', summary: 'x', payload: { status: 'THINKING' } }),
+    });
+    assert.equal((await send('evt_full_1')).status, 202);
+    const warned = Date.now() + 10_000;
+    while (!/--record stopped/.test(output)) {
+      if (Date.now() > warned) throw new Error(`no warning:\n${output}`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal((await send('evt_full_2')).status, 202, 'the server keeps accepting events');
+    assert.equal((await send('evt_full_3')).status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(output.match(/--record stopped/g).length, 1, 'one warning only');
+  } finally {
+    child.kill('SIGINT');
+    await exited;
     rmSync(home, { recursive: true, force: true });
   }
 });

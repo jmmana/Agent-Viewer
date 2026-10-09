@@ -38,7 +38,7 @@ Requires Node.js 22.13 or later (the package declares it in `engines`, so npm wa
 | `--token <token>` | `AGENT_VIEWER_API_TOKEN`, else the deprecated `AGENT_VIEWER_API_KEY`, else a new random token | Token for `/api/v1`. Clients send `Authorization: Bearer <token>`. An empty or blank variable counts as unset, so the CLI never runs without a token. |
 | `--demo` | off | Opens the office with the simulated demo team. Your events still arrive on top of it. |
 | `--no-open` | opens | Do not open the browser. |
-| `--record <file>` | off | Appends every accepted event to a [canonical JSONL V1](event-log.md) file, ready to replay or export to video. |
+| `--record <file>` | off | Appends every event the server accepts while the CLI runs to a [canonical JSONL V1](event-log.md) file, one JSON line per event and no duplicates, ready to replay or export to video. A new file is created readable only by you (mode 0600), because events can carry summaries. Best effort: nothing from before the CLI started, no fsync, and a write error mid-run (full disk) stops the recording with one warning while the server keeps running. A path that cannot be written stops the CLI before it starts. |
 
 ### Where the token travels
 

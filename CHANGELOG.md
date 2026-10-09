@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `express` is now a runtime dependency (the CLI runs the server from the installed package). `dotenv` stays a development dependency: the server loads `.env` only when run directly.
-- `startServer(port, host?)` accepts the interface to bind, and `onEventAccepted(listener)` reports every accepted event.
+- `startServer(port, host?)` accepts the interface to bind, and `onEventAccepted(listener)` reports every accepted event of the six ingestion paths (never a duplicate). A listener that throws or returns a rejected promise never breaks ingestion.
+- `--record` creates its file readable only by the owner (mode 0600), stops the CLI before it listens when the path cannot be written, and on a write error mid-run (full disk) stops recording with one warning while the server keeps running.
 - `connectEventStream` (library export) sends `token` in an `Authorization: Bearer` header over a streamed `fetch`, with the `token` query parameter only as a fallback, and accepts a `fetch` option.
 - The package declares `engines.node >=22.13`.
 - CI builds the CLI, runs it from the packed tarball and builds both Docker targets.

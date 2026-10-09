@@ -229,21 +229,28 @@ app.get('/ready', async (_req, res) => {
 });
 
 /** Listeners told about every event the server accepts, in the order they are broadcast (used by `--record`). */
-const acceptedEventListeners = new Set<(event: CanonicalEvent) => void>();
+type AcceptedEventListener = (event: CanonicalEvent) => void | Promise<void>;
+const acceptedEventListeners = new Set<AcceptedEventListener>();
 
 /** Calls `listener` with each accepted event. Returns a function that removes the listener. */
-export function onEventAccepted(listener: (event: CanonicalEvent) => void): () => void {
+export function onEventAccepted(listener: AcceptedEventListener): () => void {
   acceptedEventListeners.add(listener);
-  return () => acceptedEventListeners.delete(listener);
+  return () => {
+    acceptedEventListeners.delete(listener);
+  };
 }
 
 // Helper to broadcast event to SSE subscribers (without named event so EventSource.onmessage receives all)
 function broadcastEvent(event: CanonicalEvent) {
   for (const listener of acceptedEventListeners) {
+    // A failing listener must never break ingestion, whether it throws or returns a rejected promise.
     try {
-      listener(event);
+      const result = listener(event);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch(() => {});
+      }
     } catch {
-      // A failing listener must never break ingestion.
+      // Ignored on purpose, see above.
     }
   }
   const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;

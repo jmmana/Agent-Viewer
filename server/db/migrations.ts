@@ -176,14 +176,21 @@ function backupDatabase(
   fromVersion: number,
   toVersion: number
 ): string {
-  const backupPath = `${filePath}.pre-v${fromVersion}-to-v${toVersion}.${Date.now()}.bak`;
-  const escapedPath = backupPath.replaceAll("'", "''");
-  try {
-    withBusyRetry(() => db.exec(`VACUUM INTO '${escapedPath}'`));
-  } catch (error) {
-    throw new SchemaBackupError(backupPath, error);
+  let timestamp = Date.now();
+  while (true) {
+    const backupPath = `${filePath}.pre-v${fromVersion}-to-v${toVersion}.${timestamp}.bak`;
+    const escapedPath = backupPath.replaceAll("'", "''");
+    try {
+      withBusyRetry(() => db.exec(`VACUUM INTO '${escapedPath}'`));
+      return backupPath;
+    } catch (error) {
+      if (fs.existsSync(backupPath) && fs.statSync(backupPath).isFile()) {
+        timestamp++;
+        continue;
+      }
+      throw new SchemaBackupError(backupPath, error);
+    }
   }
-  return backupPath;
 }
 
 export function runMigrations(db: DatabaseSync, options: MigrationOptions): MigrationResult {
@@ -197,30 +204,26 @@ export function runMigrations(db: DatabaseSync, options: MigrationOptions): Migr
   db.exec('PRAGMA busy_timeout = 5000');
   const initial = withBusyRetry(() => {
     const hasHistory = tableExists(db, 'schema_migrations');
+    const hasEvents = tableExists(db, 'events');
     if (!hasHistory) {
-      if (tableExists(db, 'events')) {
+      if (hasEvents) {
         const columns = eventColumns(db);
         const missingColumns = LEGACY_EVENT_COLUMNS.filter((column) => !columns.has(column));
         if (missingColumns.length > 0) throw new SchemaShapeError(missingColumns);
       }
-      return { hasHistory, rows: [] as MigrationRow[] };
+      return { hasEvents, rows: [] as MigrationRow[] };
     }
     const rows = readHistory(db);
     validateHistory(rows, migrations, options);
-    return { hasHistory, rows };
+    return { hasEvents, rows };
   });
   const fromVersion = validateHistory(initial.rows, migrations, options);
-
-  withBusyRetry(() => {
-    db.exec('PRAGMA journal_mode = WAL');
-    db.exec('PRAGMA synchronous = NORMAL');
-  });
 
   const pending = migrations.filter(({ version }) => version > fromVersion);
   let backupPath: string | null = null;
   if (
     pending.length > 0 &&
-    tableExists(db, 'events') &&
+    initial.hasEvents &&
     options.filePath !== ':memory:' &&
     options.filePath !== '' &&
     fs.existsSync(options.filePath) &&
@@ -228,6 +231,11 @@ export function runMigrations(db: DatabaseSync, options: MigrationOptions): Migr
   ) {
     backupPath = backupDatabase(db, options.filePath, fromVersion, migrations.at(-1)?.version ?? fromVersion);
   }
+
+  withBusyRetry(() => {
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec('PRAGMA synchronous = NORMAL');
+  });
 
   const applied: Array<{ version: number; name: string }> = [];
   for (const migration of pending) {

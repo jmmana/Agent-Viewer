@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   MIGRATIONS,
@@ -263,17 +264,41 @@ test('backups are made only for existing legacy databases when enabled', async (
   fs.rmSync(fresh.dir, { recursive: true, force: true });
 });
 
+test('a failed backup aborts migration without changing the database', () => {
+  const { dir, file } = tempDbPath('backup-failure');
+  fs.copyFileSync(path.join(fixtures, 'agent-viewer-0.2.1.db'), file);
+  const stamp = 1791500000000;
+  const backupPath = `${file}.pre-v0-to-v1.${stamp}.bak`;
+  fs.mkdirSync(backupPath);
+  const before = hashFile(file);
+  const originalNow = Date.now;
+  Date.now = () => stamp;
+  try {
+    assert.throws(
+      () => new SQLiteEventStore(file),
+      (error) => error instanceof SchemaBackupError && error.backupPath === backupPath
+    );
+    assert.equal(hashFile(file), before);
+    const db = new DatabaseSync(file);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'").get(), undefined);
+    db.close();
+  } finally {
+    Date.now = originalNow;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('four concurrent processes can migrate a fresh file', async () => {
   const { dir, file } = tempDbPath('concurrent');
   const code = `
     const { SQLiteEventStore } = await import('./server/store.ts');
-    const store = new SQLiteEventStore(process.env.AGENT_VIEWER_SQLITE_PATH, { backup: 'off' });
+    const store = new SQLiteEventStore(process.env.AGENT_VIEWER_SQLITE_PATH);
     await store.close();
   `;
   const children = Array.from({ length: 4 }, () => {
     const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
       cwd: process.cwd(),
-      env: { ...process.env, AGENT_VIEWER_SQLITE_PATH: file },
+      env: { ...process.env, AGENT_VIEWER_SQLITE_PATH: file, AGENT_VIEWER_SQLITE_BACKUP: 'auto' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -291,6 +316,43 @@ test('four concurrent processes can migrate a fresh file', async () => {
     [[1, 'baseline']]
   );
   db.close();
+  assert.equal(fs.readdirSync(dir).some((name) => name.endsWith('.bak')), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('invalid backup modes are rejected with a clear configuration error', () => {
+  const { dir, file } = tempDbPath('invalid-backup-mode');
+  assert.throws(() => new SQLiteEventStore(file, { backup: 'sometimes' }), /AGENT_VIEWER_SQLITE_BACKUP.*auto.*off/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('direct server startup reports a too-new database in one line and exits with status 1', () => {
+  const { dir, file } = tempDbPath('startup-too-new');
+  const db = new DatabaseSync(file);
+  db.exec(`
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, app_version TEXT NOT NULL);
+    INSERT INTO schema_migrations VALUES (3, 'future', 1, '9.0.0');
+  `);
+  db.close();
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      AGENT_VIEWER_STORAGE: 'sqlite',
+      AGENT_VIEWER_SQLITE_PATH: file,
+      AGENT_VIEWER_SQLITE_BACKUP: 'off',
+      NODE_ENV: '',
+      DEBUG: '',
+    },
+  });
+  assert.equal(result.status, 1);
+  const relevantLines = result.stderr
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
+  assert.deepEqual(relevantLines, [
+    `The database ${file} has schema version 3, but this server (0.2.1) only knows up to version 1. Upgrade agent-viewer, or set AGENT_VIEWER_SQLITE_PATH to another file. The file was not modified.`,
+  ]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -299,4 +361,15 @@ test('migration registry is contiguous and only adds entries to its snapshot', (
   const current = MIGRATIONS.map(({ version, name }) => [version, name]);
   assert.deepEqual(current.slice(0, snapshot.length), snapshot);
   assert.deepEqual(current.map(([version]) => version), current.map((_, index) => index + 1));
+});
+
+test('committed SQLite fixtures match their manifest hashes and row counts', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(fixtures, 'manifest.json'), 'utf8'));
+  for (const entry of manifest.fixtures) {
+    const file = path.join(fixtures, entry.file);
+    assert.equal(hashFile(file), entry.sha256);
+    const db = new DatabaseSync(file);
+    assert.equal(db.prepare('SELECT count(*) AS count FROM events').get().count, entry.rowCount);
+    db.close();
+  }
 });

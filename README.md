@@ -585,7 +585,7 @@ flowchart LR
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/health` | Status, version, schema version and connected SSE clients. |
-| `GET` | `/ready` | Storage readiness. |
+| `GET` | `/ready` | Storage readiness. SQLite also returns the database schema version and latest migration time. |
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Duplicates are skipped, not errors. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
@@ -653,7 +653,9 @@ The signature is compared in constant time. Expired timestamps and bad signature
 
 </details>
 
-**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer. `sqlite` uses Node's built-in `node:sqlite` and persists events, runtimes, sessions and agents to `./data/agent-viewer.db`.
+**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer. `sqlite` uses Node's built-in `node:sqlite` and persists events to `./data/agent-viewer.db`; runtime, session and agent state remains in memory.
+
+SQLite schema migrations run automatically at startup. Before upgrading an existing database, the default `AGENT_VIEWER_SQLITE_BACKUP=auto` writes a `.bak` file beside it. Backups contain the same event data, are never pruned automatically, and can make the first startup take longer for large files. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if you manage backups yourself. A server refuses a database with a newer schema; to roll back, stop the server and restore the `.bak` file before starting an older version. `/ready` reports `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt` in SQLite mode. These are database migration details; `/health`'s `schemaVersion` is the event contract version (`1.0`).
 
 ---
 
@@ -668,6 +670,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
+| `AGENT_VIEWER_SQLITE_BACKUP` | `auto` | Back up an existing SQLite database before migration, or set to `off` when backups are managed separately. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Maximum events per batch request. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |

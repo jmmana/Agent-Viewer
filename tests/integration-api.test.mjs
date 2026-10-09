@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { app } from '../server/index.ts';
 
 function startTestServer() {
@@ -28,9 +32,43 @@ test('REST API: /health and /ready endpoints', async () => {
     const readyRes = await fetch(`${baseUrl}/ready`);
     assert.equal(readyRes.status, 200);
     const readyJson = await readyRes.json();
-    assert.equal(readyJson.ready, true);
+    assert.deepEqual(readyJson, { ok: true, ready: true, storage: 'memory' });
   } finally {
     server.close();
+  }
+});
+
+test('REST API: /ready includes schema info only when SQLite is the active store', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-ready-'));
+  const file = path.join(dir, 'ready.db');
+  const code = `
+    import http from 'node:http';
+    import { app } from './server/index.ts';
+    const server = http.createServer(app);
+    server.listen(0, '127.0.0.1', async () => {
+      const response = await fetch('http://127.0.0.1:' + server.address().port + '/ready');
+      console.log(JSON.stringify(await response.json()));
+      server.close();
+    });
+  `;
+  try {
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: { ...process.env, AGENT_VIEWER_STORAGE: 'sqlite', AGENT_VIEWER_SQLITE_PATH: file, AGENT_VIEWER_SQLITE_BACKUP: 'off' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const ready = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1));
+    assert.equal(ready.ok, true);
+    assert.equal(ready.storage, 'sqlite');
+    assert.deepEqual(ready.database, {
+      schemaVersion: 1,
+      latestKnownSchemaVersion: 1,
+      appliedAt: ready.database.appliedAt,
+    });
+    assert.equal(typeof ready.database.appliedAt, 'number');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

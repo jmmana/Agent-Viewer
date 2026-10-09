@@ -16,6 +16,7 @@ const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-sqlite
 const worktree = path.join(temporaryRoot, 'source');
 const output = path.resolve(root, outputPath);
 fs.mkdirSync(path.dirname(output), { recursive: true });
+for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${output}${suffix}`, { force: true });
 
 try {
   execFileSync('git', ['worktree', 'add', '--detach', worktree, ref], { cwd: root, stdio: 'inherit' });

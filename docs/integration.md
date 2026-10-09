@@ -203,7 +203,7 @@ Base URL: `http://localhost:8787`
 
 ### Health & Readiness
 - `GET /health`: Health status, server version, connected SSE client count.
-- `GET /ready`: Verification that storage engine is ready.
+- `GET /ready`: Verification that storage engine is ready. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`).
 
 ### Events
 - `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header.
@@ -373,13 +373,16 @@ Events are tagged with `runtimeId` and `sessionId`, and queryable via:
 Agent Viewer supports two persistence backends:
 
 1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events).
-2. **`sqlite`**: Persistent storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Stores events, runtimes, sessions, and agent aggregates in `./data/agent-viewer.db`.
+2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Runtime, session, and agent state remains in memory.
 
 To enable SQLite persistence:
 ```env
 AGENT_VIEWER_STORAGE=sqlite
 AGENT_VIEWER_SQLITE_PATH=./data/agent-viewer.db
+AGENT_VIEWER_SQLITE_BACKUP=auto
 ```
+
+SQLite schema migrations run automatically at startup. Existing databases are backed up next to the file before migration by default. Backups contain the same events, are never pruned automatically, and can delay startup for large databases. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if backups are managed separately. A server refuses a database with a newer schema. For rollback, stop the server and restore the `.bak` file before starting an older version.
 
 ---
 

@@ -7,16 +7,27 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildHookHandler,
+  buildOtelHeadersHelperCommand,
+  buildTelemetryEnv,
+  buildTelemetryWritePlan,
+  checkTelemetryConflicts,
   isAgentViewerHandler,
   lineDiff,
+  maskToken,
   planInstall,
   planUninstall,
+  probeTelemetryReceiver,
+  quoteShellArg,
   readInstallRecord,
+  resolveTelemetryEndpoint,
   runInstall,
   writeFileAtomic,
   InstallError,
+  TELEMETRY_CONTENT_FLAGS,
+  TELEMETRY_HEADERS_KEY,
 } from '../cli/claudeInstall.ts';
 import { CLAUDE_HOOK_EVENTS } from '../cli/claudeHook.ts';
+import http from 'node:http';
 
 // Every test works in a temporary folder. The real ~/.claude and the repository's own .claude are never used.
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -363,3 +374,273 @@ test('Claude install CLI: uninstall keeps a settings file and a .claude folder t
     rmSync(emptyFile, { recursive: true, force: true });
   }
 });
+
+// --- Telemetry (issue #60): `install claude-code --telemetry`, writing Claude Code's own OpenTelemetry env ---
+
+const ENDPOINT = 'http://127.0.0.1:8787/v1/logs';
+
+test('Claude install telemetry: the env block pins every content flag to "0" and writes nothing else OpenTelemetry reads', () => {
+  for (const token of [undefined, 'a-token']) {
+    const env = buildTelemetryEnv({ endpoint: ENDPOINT, token });
+    for (const flag of TELEMETRY_CONTENT_FLAGS) assert.equal(env[flag], '0', flag);
+    assert.equal(env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
+    assert.equal(env.OTEL_LOGS_EXPORTER, 'otlp');
+    assert.equal(env.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL, 'http/json');
+    assert.equal(env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, ENDPOINT);
+    for (const forbidden of ['OTEL_METRICS_EXPORTER', 'OTEL_TRACES_EXPORTER', 'OTEL_EXPORTER_OTLP_PROTOCOL', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_HEADERS']) {
+      assert.equal(env[forbidden], undefined, forbidden);
+    }
+  }
+});
+
+test('Claude install telemetry: helper mode writes otelHeadersHelper and no header; static mode the reverse', () => {
+  const helper = buildTelemetryWritePlan({ endpoint: ENDPOINT, nodePath: '/usr/local/bin/node', scriptPath: '/opt/av/cli.js' });
+  assert.equal(helper.env[TELEMETRY_HEADERS_KEY], undefined);
+  assert.match(helper.helperCommand, /otel-headers/);
+  assert.match(helper.helperCommand, /--url/);
+
+  const token = 'distinctive-long-random-token-0123456789';
+  const staticPlan = buildTelemetryWritePlan({ endpoint: ENDPOINT, token });
+  assert.equal(staticPlan.env[TELEMETRY_HEADERS_KEY], `Authorization=Bearer ${token}`);
+  assert.equal(staticPlan.helperCommand, undefined);
+});
+
+test('Claude install telemetry: shell quoting handles spaces, $ and a single quote on POSIX and Windows', () => {
+  const tricky = "/opt/agent viewer/$weird'path/cli.js";
+  const posix = quoteShellArg(tricky, 'posix');
+  assert.equal(posix, "'/opt/agent viewer/$weird'\\''path/cli.js'");
+  assert.doesNotMatch(posix.slice(1, -1).replace(/'\\''/g, ''), /(?<!\\)\$\(|`/);
+  const win = quoteShellArg('C:\\Program Files\\weird"path\\cli.js', 'win32');
+  assert.equal(win, '"C:\\Program Files\\weird\\"path\\cli.js"');
+
+  const command = buildOtelHeadersHelperCommand({ nodePath: '/usr/local/bin/node', scriptPath: '/opt/av/cli.js', url: 'http://127.0.0.1:8787', platform: 'posix' });
+  assert.equal(command, "'/usr/local/bin/node' '/opt/av/cli.js' 'otel-headers' '--url' 'http://127.0.0.1:8787'");
+});
+
+test('Claude install telemetry: install writes the hooks plus the env block and otelHeadersHelper, in helper mode', () => {
+  const write = { kind: 'write', ...buildTelemetryWritePlan({ endpoint: ENDPOINT, nodePath: '/n', scriptPath: '/c.js' }) };
+  const plan = planInstall(null, handler, 'f', write);
+  assert.equal(plan.changed, true);
+  const after = JSON.parse(plan.after);
+  for (const event of CLAUDE_HOOK_EVENTS) assert.ok(after.hooks[event].some((g) => g.hooks.some(isAgentViewerHandler)), event);
+  assert.equal(after.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, ENDPOINT);
+  assert.match(after.otelHeadersHelper, /otel-headers/);
+  assert.equal(after.env[TELEMETRY_HEADERS_KEY], undefined);
+});
+
+test('Claude install telemetry: static mode writes the header and no otelHeadersHelper', () => {
+  const token = 'distinctive-long-random-token-9876543210';
+  const write = { kind: 'write', ...buildTelemetryWritePlan({ endpoint: ENDPOINT, token }) };
+  const after = JSON.parse(planInstall(null, handler, 'f', write).after);
+  assert.equal(after.env[TELEMETRY_HEADERS_KEY], `Authorization=Bearer ${token}`);
+  assert.equal(after.otelHeadersHelper, undefined);
+});
+
+test('Claude install telemetry: merges into an existing env object, byte for byte, and a second install is a no-op', () => {
+  const original = `${JSON.stringify({ env: { FOO: 'bar' }, model: 'opus' }, null, 2)}\n`;
+  const write = { kind: 'write', ...buildTelemetryWritePlan({ endpoint: ENDPOINT, nodePath: '/n', scriptPath: '/c.js' }) };
+  const once = planInstall(original, handler, 'f', write);
+  assert.equal(once.changed, true);
+  const afterOnce = JSON.parse(once.after);
+  assert.equal(afterOnce.env.FOO, 'bar');
+  assert.equal(afterOnce.model, 'opus');
+  assert.equal(afterOnce.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
+  assert.match(once.summary, /Telemetry: on\.$/m);
+
+  const twice = planInstall(once.after, handler, 'f', write);
+  assert.equal(twice.changed, false);
+  assert.equal(twice.after, once.after);
+  assert.match(twice.summary, /Telemetry: on \(unchanged\)\.$/m);
+});
+
+test('Claude install telemetry: CRLF and tab-indented files keep their own formatting', () => {
+  const write = { kind: 'write', ...buildTelemetryWritePlan({ endpoint: ENDPOINT, nodePath: '/n', scriptPath: '/c.js' }) };
+  const crlf = '{\r\n  "env": {\r\n    "FOO": "bar"\r\n  }\r\n}\r\n';
+  const afterCrlf = planInstall(crlf, handler, 'f', write).after;
+  assert.equal(afterCrlf.includes('\r\n'), true);
+  assert.equal(afterCrlf.replace(/\r\n/g, '').includes('\n'), false, 'no bare \\n sneaks into a CRLF file');
+  assert.deepEqual(JSON.parse(afterCrlf).env.FOO, 'bar');
+
+  const tabbed = JSON.stringify({ env: { FOO: 'bar' } }, null, '\t');
+  const afterTabbed = planInstall(tabbed, handler, 'f', write).after;
+  assert.match(afterTabbed, /\n\t"env": \{\n\t\t"FOO": "bar",/);
+});
+
+test('Claude install telemetry: --no-telemetry removes only the telemetry block, keeping the hooks and the user\'s own env', () => {
+  const write = { kind: 'write', ...buildTelemetryWritePlan({ endpoint: ENDPOINT, nodePath: '/n', scriptPath: '/c.js' }) };
+  const installed = planInstall('{"env": {"FOO": "bar"}}\n', handler, 'f', write);
+  const removal = { kind: 'remove', envKeys: Object.keys(write.env), dropHelper: true, dropEnvIfEmpty: false };
+  const removed = planInstall(installed.after, handler, 'f', removal);
+  assert.equal(removed.changed, true);
+  const after = JSON.parse(removed.after);
+  assert.deepEqual(after.env, { FOO: 'bar' });
+  assert.equal(after.otelHeadersHelper, undefined);
+  for (const event of CLAUDE_HOOK_EVENTS) assert.ok(after.hooks[event].some((g) => g.hooks.some(isAgentViewerHandler)), event);
+  assert.match(removed.summary, /Telemetry: off\.$/m);
+
+  // Nothing to remove a second time.
+  const again = planInstall(removed.after, handler, 'f', removal);
+  assert.equal(again.changed, false);
+});
+
+test('Claude install telemetry: install then remove restores the file byte for byte, env created or not, CRLF or tabs', () => {
+  const write = { kind: 'write', ...buildTelemetryWritePlan({ endpoint: ENDPOINT, nodePath: '/n', scriptPath: '/c.js' }) };
+  const cases = [
+    { original: existingSettings, dropEnvIfEmpty: false },
+    { original: '{\n  "model": "sonnet"\n}\n', dropEnvIfEmpty: true },
+    { original: `${JSON.stringify({ model: 'opus' }, null, '\t')}\n`, dropEnvIfEmpty: true },
+    { original: '{\r\n  "model": "sonnet"\r\n}\r\n', dropEnvIfEmpty: true },
+  ];
+  for (const { original, dropEnvIfEmpty } of cases) {
+    const installed = planInstall(original, handler, 'f', write).after;
+    const removal = { kind: 'remove', envKeys: Object.keys(write.env), dropHelper: true, dropEnvIfEmpty };
+    const removed = planUninstall(installed, 'f', undefined, removal);
+    assert.equal(removed.after, original, JSON.stringify(original));
+  }
+});
+
+test('Claude install telemetry conflicts: refuses a managed key already set to something else in this file', () => {
+  const before = JSON.stringify({ env: { OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: 'http://elsewhere/v1/logs' } });
+  const { refusals } = checkTelemetryConflicts({ before, file: 'f', project: '/p', mode: 'helper', endpoint: ENDPOINT, env: {} });
+  assert.ok(refusals.some((m) => m.includes('OTEL_EXPORTER_OTLP_LOGS_ENDPOINT')));
+});
+
+test('Claude install telemetry conflicts: refuses when content logging is already on in this file', () => {
+  const before = JSON.stringify({ env: { OTEL_LOG_USER_PROMPTS: '1' } });
+  const { refusals } = checkTelemetryConflicts({ before, file: 'f', project: '/p', mode: 'helper', endpoint: ENDPOINT, env: {} });
+  assert.ok(refusals.some((m) => m.includes('OTEL_LOG_USER_PROMPTS')));
+});
+
+test('Claude install telemetry conflicts: refuses a foreign otelHeadersHelper and another OTLP exporter, in helper mode only', () => {
+  const foreignHelper = checkTelemetryConflicts({ before: JSON.stringify({ otelHeadersHelper: 'my own script' }), file: 'f', project: '/p', mode: 'helper', endpoint: ENDPOINT, env: {} });
+  assert.ok(foreignHelper.refusals.some((m) => m.includes('otelHeadersHelper')));
+
+  const otherExporter = checkTelemetryConflicts({ before: JSON.stringify({ env: { OTEL_METRICS_EXPORTER: 'otlp' } }), file: 'f', project: '/p', mode: 'helper', endpoint: ENDPOINT, env: {} });
+  assert.ok(otherExporter.refusals.some((m) => m.includes('OTLP exporter')));
+
+  // Static mode is suggested by both messages and is itself unaffected by the metrics/traces exporter check.
+  const staticOk = checkTelemetryConflicts({ before: JSON.stringify({ env: { OTEL_METRICS_EXPORTER: 'otlp' } }), file: 'f', project: '/p', mode: 'static', endpoint: ENDPOINT, env: {} });
+  assert.equal(staticOk.refusals.length, 0);
+});
+
+test('Claude install telemetry conflicts: warns (does not refuse) about settings this install does not manage', () => {
+  const dir = tempProject();
+  try {
+    mkdirSync(path.join(dir, '.claude'));
+    writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ env: { OTEL_LOGS_EXPORTER: 'otlp', OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: 'http://other/v1/logs' } }));
+    const { refusals, warnings } = checkTelemetryConflicts({ before: null, file: path.join(dir, '.claude', 'settings.local.json'), project: dir, mode: 'helper', endpoint: ENDPOINT, env: {} });
+    assert.equal(refusals.length, 0);
+    assert.ok(warnings.some((m) => m.includes('http://other/v1/logs')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Claude install telemetry conflicts: warns about a plain http endpoint to a non-loopback host in static mode', () => {
+  const { refusals, warnings } = checkTelemetryConflicts({
+    before: null, file: 'f', project: '/p', mode: 'static', endpoint: 'http://10.0.0.5:8787/v1/logs', env: {},
+  });
+  assert.equal(refusals.length, 0);
+  assert.ok(warnings.some((m) => /clear text/.test(m)));
+});
+
+test('Claude install telemetry: resolveTelemetryEndpoint follows --url, then AGENT_VIEWER_URL, then the default', () => {
+  // AGENT_VIEWER_HOME must point somewhere empty: without it, an unrelated `agent-viewer` actually running on
+  // this machine would leave a real ~/.agent-viewer/session.json for resolveConnection to pick up instead.
+  const home = tempProject();
+  try {
+    const env = { AGENT_VIEWER_HOME: home };
+    assert.equal(resolveTelemetryEndpoint('http://host:1/', env), 'http://host:1/v1/logs');
+    assert.equal(resolveTelemetryEndpoint(undefined, { ...env, AGENT_VIEWER_URL: 'http://host:2' }), 'http://host:2/v1/logs');
+    assert.equal(resolveTelemetryEndpoint(undefined, env), 'http://127.0.0.1:8787/v1/logs');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('Claude install telemetry: maskToken hides the token in printed text, never in what is returned for the file', () => {
+  const token = 'super-secret-token';
+  const text = `Authorization=Bearer ${token}\n--token ${token}`;
+  const masked = maskToken(text, token);
+  assert.equal(masked.includes(token), false);
+  assert.match(masked, /<token hidden>/);
+  assert.equal(maskToken(text, undefined), text);
+});
+
+test('Claude install telemetry: the receiver probe reports OK, 401, 404 and not running', async () => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/ok') { res.writeHead(200); res.end('{}'); return; }
+    if (req.url === '/unauthorized') { res.writeHead(401); res.end(); return; }
+    if (req.url === '/missing') { res.writeHead(404); res.end(); return; }
+    res.writeHead(500); res.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    assert.equal(await probeTelemetryReceiver(`http://127.0.0.1:${port}/ok`, {}), 'Telemetry receiver OK');
+    assert.match(await probeTelemetryReceiver(`http://127.0.0.1:${port}/unauthorized`, {}), /401/);
+    assert.match(await probeTelemetryReceiver(`http://127.0.0.1:${port}/missing`, {}), /no OTLP receiver/);
+    assert.match(await probeTelemetryReceiver(`http://127.0.0.1:${port}/boom`, {}), /answered 500/);
+  } finally {
+    server.close();
+  }
+  // Nothing listening at all: a clear "not running" message, not a thrown error.
+  assert.match(await probeTelemetryReceiver('http://127.0.0.1:1/v1/logs', {}), /office not running/);
+});
+
+test('Claude install telemetry CLI: --telemetry round trip on a fresh project, helper mode', { timeout: 30_000 }, async () => {
+  const project = tempProject();
+  try {
+    const installed = await run(['install', 'claude-code', '--project', project, '--yes', '--telemetry']);
+    assert.equal(installed.code, 0, installed.stderr);
+    const settings = JSON.parse(readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8'));
+    assert.equal(settings.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
+    for (const flag of TELEMETRY_CONTENT_FLAGS) assert.equal(settings.env[flag], '0');
+    assert.match(settings.otelHeadersHelper, /otel-headers/);
+    assert.equal(settings.env[TELEMETRY_HEADERS_KEY], undefined);
+    assert.deepEqual(readdirSync(path.join(project, '.claude')), ['settings.local.json']);
+
+    // A plain re-install (no telemetry flag) leaves the block untouched.
+    const plain = await run(['install', 'claude-code', '--project', project, '--yes']);
+    assert.equal(plain.code, 0, plain.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8')), settings);
+
+    // --no-telemetry removes only the telemetry block.
+    const off = await run(['install', 'claude-code', '--project', project, '--yes', '--no-telemetry']);
+    assert.equal(off.code, 0, off.stderr);
+    const afterOff = JSON.parse(readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8'));
+    assert.equal(afterOff.env, undefined);
+    assert.equal(afterOff.otelHeadersHelper, undefined);
+    assert.ok(afterOff.hooks, 'the hooks stay');
+
+    const removed = await run(['uninstall', 'claude-code', '--project', project, '--yes']);
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.deepEqual(readdirSync(project), [], 'the project is exactly as before');
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test('Claude install telemetry CLI: --telemetry --token never prints the token, in the diff or anywhere else', { timeout: 30_000 }, async () => {
+  const project = tempProject();
+  const token = `av_${'x'.repeat(48)}_distinctive`;
+  try {
+    const installed = await run(['install', 'claude-code', '--project', project, '--yes', '--telemetry', '--token', token]);
+    assert.equal(installed.code, 0, installed.stderr);
+    assert.equal(installed.stdout.includes(token), false, 'stdout never shows the token');
+    assert.equal(installed.stderr.includes(token), false, 'stderr never shows the token');
+    assert.match(installed.stdout, /<token hidden>/);
+
+    const settings = JSON.parse(readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8'));
+    assert.equal(settings.env[TELEMETRY_HEADERS_KEY], `Authorization=Bearer ${token}`);
+    assert.equal(settings.otelHeadersHelper, undefined);
+    const hookArgs = settings.hooks.Stop[0].hooks[0].args;
+    assert.ok(hookArgs.includes(token), 'the token is still written in full to the file');
+
+    const removedNoTelemetry = await run(['uninstall', 'claude-code', '--project', project, '--yes']);
+    assert.equal(removedNoTelemetry.code, 0, removedNoTelemetry.stderr);
+    assert.equal(removedNoTelemetry.stdout.includes(token), false);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}, 30_000);

@@ -77,10 +77,19 @@ npx @warlockcode/agent-viewer send --agent demo --status coding --message "Writi
 
 ```bash
 npx @warlockcode/agent-viewer install claude-code     # adds the hooks to this project, after asking
-npx @warlockcode/agent-viewer uninstall claude-code   # removes them
+npx @warlockcode/agent-viewer install claude-code --telemetry     # hooks plus token and cost figures
+npx @warlockcode/agent-viewer uninstall claude-code   # removes everything install added
 ```
 
-See [Claude Code in the office](claude-code.md).
+| Option | What it does |
+|---|---|
+| `--telemetry` | Also points this project's Claude Code at the office's OpenTelemetry logs receiver, so token and cost per model call show up (opt-in; off by default). Needs a new Claude Code session to take effect. |
+| `--no-telemetry` | Removes only the telemetry block; the hooks stay. |
+| `--token <token>` | With `--telemetry`, a fixed token for an office on another machine or in Docker ("static mode"), instead of looking the running office's token up on every export ("helper mode", the default without `--token`). The token is masked in every diff the installer prints. |
+
+`agent-viewer otel-headers --url <office-url>` is a small helper command Claude Code itself runs (through the `otelHeadersHelper` setting `--telemetry` writes in helper mode); it is not meant to be run by people. It never contacts the network: it prints the office's bearer token as JSON only when a running `agent-viewer` has that exact origin, `{}` otherwise, and always exits `0`.
+
+See [Claude Code in the office](claude-code.md) for what each hook shows, what telemetry adds, and the privacy details.
 
 ## Docker
 

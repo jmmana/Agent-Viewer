@@ -1,12 +1,13 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #156, cámara Crew por oficina. Epic: #114.
+Último issue trabajado: #171, persistencia de navegación Crew. Epic: #114.
 
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama: `feat/crew-camera-gestures-156`, basada en `3e18d2a` de #177.
+- Rama actual: `feat/crew-navigation-persistence-171`, basada en `0b513ea` de #182.
+- Rama anterior: `feat/crew-camera-gestures-156`, basada en `3e18d2a` de #177.
 - PR #175 y #177: abiertos, borrador, checks anteriores verdes. No fusionados.
 - #174 y #176: fusionados en main. #162, #163 y #164: fusionados solamente en la rama de #43.
 - #43 sigue abierto en borrador. Manifest contrastado: 53 recursos `prototype`, 11 personajes, 20 muebles, 13 electrónicos, 9 efectos.
@@ -28,7 +29,7 @@ Gestos por pointerId con pinch anclado al centro de los dedos, paneo simultáneo
 - Capturas: [CEO](evidence/camera-156/ceo-front.png), [Desarrollo](evidence/camera-156/development-right.png), [pinch móvil](evidence/camera-156/mobile-pinch.png), [regreso Caricatura](evidence/camera-156/cartoon-return.png). Las ocho vistas se regeneran en test-results.
 - QA restante: dispositivos físicos/iOS, continuidad completa LIVE/REPLAY/telemetría, animaciones, proporciones de arte final, rendimiento y vídeo del hito G1. Pruebas de navegación no equivalen a paridad total.
 - Docker local: daemon no respondió a la consulta; builds pendientes de CI.
-- Implementación: commit `75f2da7`, [PR #182](https://github.com/jmmana/Agent-Viewer/pull/182), abierto sobre #177. [CI](https://github.com/jmmana/Agent-Viewer/actions/runs/37868817792) en curso al registrar el PR.
+- Implementación: commit `75f2da7`, [PR #182](https://github.com/jmmana/Agent-Viewer/pull/182), abierto sobre #177. [CI del último commit](https://github.com/jmmana/Agent-Viewer/actions/runs/37868883704) aprobado, incluyendo Docker y navegador.
 
 ## Estado real de los 55 issues
 
@@ -88,14 +89,14 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#168](https://github.com/jmmana/Agent-Viewer/issues/168) | Registro y selector de 11 salas prototipo en #177. |
 | [#169](https://github.com/jmmana/Agent-Viewer/issues/169) | Aislamiento y fit prototipo en #177; QA completa pendiente. |
 | [#170](https://github.com/jmmana/Agent-Viewer/issues/170) | 11 layouts locales prototipo en #177; faltan colisiones y arte final. |
-| [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Cámara por sala en #175; modo y sala seleccionada aún no persisten. |
+| [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Modo y sala persisten con versión 1 en esta rama; cámaras anteriores conservadas. Deep links, reset general y API embebida pendientes. |
 | [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Inventario fusionado (#176); recursos sin migrar al runtime. |
 | [#173](https://github.com/jmmana/Agent-Viewer/issues/173) | ADR fusionado (#174); validación gráfica final pendiente. |
 
 ## Próximos tres pasos
 
-1. #171: persistencia versionada de modo y sala seleccionada, restauración y datos corruptos.
-2. #156: foco de escritorio/agente y pan acotado al viewport; arte multivista sigue pendiente.
+1. #156: foco de escritorio/agente y pan acotado al viewport; arte multivista sigue pendiente.
+2. #171: reset general y navegación accesible; deep links y API embebida.
 3. #159: ampliar LIVE/DEMO/REPLAY, limpieza de lifecycle y matriz responsive antes del gate G1.
 
 ## Riesgos y decisiones
@@ -104,3 +105,9 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 - G1 no está aprobado. No iniciar despliegue masivo de arte ni cerrar oficinas por geometría provisional.
 - Mantener cuatro vistas discretas Canvas2D; no son órbita 3D.
 - Personajes y muebles finales no están dibujados en estas escenas. No alterar ni fusionar automáticamente #43.
+
+## Continuación #171
+
+Modo y oficina elegidos sobreviven a recarga y a la salida/regreso desde Caricatura. La clave `agent-viewer-crew-navigation-v1` contiene solamente versión, modo y sala. La clave de cámaras existente se conserva sin migración destructiva. JSON corrupto, versiones futuras y salas eliminadas usan valores seguros. Fallos de almacenamiento no bloquean las funciones de preferencias.
+
+Validación: typecheck; 61 pruebas node y 446 Vitest; 4 E2E Chrome aprobados, incluyendo recarga en Development/back/120%, regreso desde Caricatura y sala eliminada. Builds app/lib y validación de paquete ejecutados. La recuperación de almacenamiento bloqueado está probada a nivel del módulo, no de toda la aplicación. No se cerró #171: quedan reset general, deep links y API embebida. PR/SHA de esta continuación pendientes de publicación.

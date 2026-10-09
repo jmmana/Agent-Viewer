@@ -11,11 +11,19 @@ import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, zoomC
  * placeholders explicitly indicate missing approved multi-view artwork.
  * Neither the legacy renderer nor its office coordinates are imported.
  */
-export function CrewStage({ locale = 'es', agents = [] }: { locale?: string; agents?: readonly Agent[] }) {
+export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange }: {
+  locale?: string;
+  agents?: readonly Agent[];
+  selectedRoomId?: string;
+  onRoomChange?: (roomId: string) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gestures = useRef(new CrewGestures());
   const frameRef = useRef<number>(0);
-  const [roomId, setRoomId] = useState(CREW_ROOMS[0].id);
+  const [localRoomId, setLocalRoomId] = useState(CREW_ROOMS[0].id);
+  const requestedRoom = selectedRoomId ?? localRoomId;
+  const roomId = CREW_ROOMS.some(room => room.id === requestedRoom) ? requestedRoom : CREW_ROOMS[0].id;
+  const setRoomId = (id: string) => { setLocalRoomId(id); onRoomChange?.(id); };
   // Persist ONLY presentation state, not domain events; each room remembers its own camera.
   const [cameraByRoom, setCameraByRoom] = useState<CrewCameraByRoom>(() => {
     if (typeof window === 'undefined') return {};

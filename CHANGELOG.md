@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Crew (beta, prototype art): actor orientation contract (`facing`, provisional facing toward the nearest desk or screen), simultaneous loading of the CEO pose per orientation, a status-to-clip mapping module (no animation yet) and a read-only per-room summary of agents, tasks and active meetings. Refs #118, #128, #155. Cartoon mode is untouched.
+
 ### Fixed
 - Webhook usage retries no longer double-count. The generic webhook now uses deterministic event IDs derived from idempotency keys, so identical retries are deduplicated inside the store. Same delivery with same `Idempotency-Key` header, body `idempotencyKey` field, or signature gets a `200` duplicate response instead of `202` new events. A sender that re-signs a retry needs to include `idempotencyKey` in the body for the same effect.
 - Webhook usage no longer drops `currency`, `costSource`, `requestId` and the cache fields. Validation now uses the same `LlmUsagePayloadSchema` as the events API, and these fields are kept exactly as sent.

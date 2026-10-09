@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
 import { crewAgentsInRoom } from './crewEvents';
@@ -6,18 +6,24 @@ import { constrainCrewPan, focusCrewFurniture } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
 import { CrewGestures } from './crewGestures';
 import type { Agent } from '../types/agent';
-import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
+import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /**
  * Minimal independent Crew engine proof of concept. NOT a finished scene:
  * placeholders explicitly indicate missing approved multi-view artwork.
  * Neither the legacy renderer nor its office coordinates are imported.
  */
-export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange, missingRoom = false }: {
+export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange, missingRoom = false,
+  cameraState, onCameraStateChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
   locale?: string;
   agents?: readonly Agent[];
   selectedRoomId?: string;
   missingRoom?: boolean;
+  cameraState?: CrewCameraByRoom;
+  onCameraStateChange?: (cameras: CrewCameraByRoom) => void;
+  persistCamera?: boolean;
+  showRoomLink?: boolean;
+  idPrefix?: string;
   onRoomChange?: (roomId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -28,11 +34,25 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const roomId = CREW_ROOMS.some(room => room.id === requestedRoom) ? requestedRoom : CREW_ROOMS[0].id;
   const setRoomId = (id: string) => { setLocalRoomId(id); onRoomChange?.(id); };
   // Persist ONLY presentation state, not domain events; each room remembers its own camera.
-  const [cameraByRoom, setCameraByRoom] = useState<CrewCameraByRoom>(() => {
-    if (typeof window === 'undefined') return {};
+  const [internalCameras, setInternalCameras] = useState<CrewCameraByRoom>(() => {
+    if (!persistCamera || cameraState !== undefined || typeof window === 'undefined') return {};
     try { return parseCrewCameraStore(window.localStorage.getItem(CREW_CAMERA_STORAGE_KEY)); }
     catch { return {}; }
   });
+  const cameraByRoom = useMemo(() => cameraState === undefined ? internalCameras
+    : validateCrewCameraStore(cameraState), [cameraState, internalCameras]);
+  const cameraControl = useRef({ value: cameraByRoom, controlled: cameraState !== undefined, onChange: onCameraStateChange });
+  cameraControl.current = { value: cameraByRoom, controlled: cameraState !== undefined, onChange: onCameraStateChange };
+  const setCameraByRoom = useCallback((action: React.SetStateAction<CrewCameraByRoom>) => {
+    const control = cameraControl.current;
+    const next = typeof action === 'function' ? action(control.value) : action;
+    if (next === control.value) return;
+    if (!control.controlled) {
+      control.value = next;
+      setInternalCameras(next);
+    }
+    control.onChange?.(next);
+  }, []);
   const camera = cameraByRoom[roomId] ?? defaultCrewCamera();
   const { view, zoom } = camera;
   const updateCamera = useCallback((update: (camera: CrewCamera) => CrewCamera) => {
@@ -43,7 +63,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       const constrained = viewport ? constrainCrewPan(next, viewport) : next;
       return constrained === current ? prev : { ...prev, [roomId]: constrained };
     });
-  }, [roomId]);
+  }, [roomId, setCameraByRoom]);
   const patchCamera = (update: Partial<CrewCamera>) => updateCamera(current => ({ ...current, ...update }));
   const setView = (value: CrewView) => patchCamera({ view: value });
   const setZoom = (fn: (prev: number) => number) => updateCamera(current => zoomCrewCameraAt(current, fn(current.zoom), { x: 0, y: 0 }));
@@ -75,10 +95,10 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (!persistCamera || typeof window === 'undefined') return;
     try { window.localStorage.setItem(CREW_CAMERA_STORAGE_KEY, JSON.stringify(cameraByRoom)); }
     catch { /* Read-only or disabled storage must not break rendering. */ }
-  }, [cameraByRoom]);
+  }, [cameraByRoom, persistCamera]);
   const isEs = locale.startsWith('es');
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
   const visibleAgents = crewAgentsInRoom(agents, roomId);
@@ -110,19 +130,19 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   }, [render, updateCamera]);
 
   return <section aria-label={isEs ? 'Modo Crew: oficina independiente' : 'Crew mode: independent office'}
-    style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#101a2b', color: '#f1f5f9' }}>
+    style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0, overflowY: 'auto', background: '#101a2b', color: '#f1f5f9' }}>
     {missingRoom && <p role="status" style={{ margin: 0, padding: '8px 12px' }}>
       {isEs ? 'La oficina del enlace no está disponible. Mostramos Dirección; puedes elegir otra oficina o volver a Caricatura.'
         : 'The linked office is unavailable. Showing CEO Office; choose another office or return to Cartoon.'}
     </p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', padding: 10, gap: 8, alignItems: 'center' }}>
-      <label htmlFor="crew-room">{isEs ? 'Oficina' : 'Office'}</label>
-      <select id="crew-room" value={roomId} onChange={e => setRoomId(e.target.value)}
+      <label htmlFor={`${idPrefix}-room`}>{isEs ? 'Oficina' : 'Office'}</label>
+      <select id={`${idPrefix}-room`} value={roomId} onChange={e => setRoomId(e.target.value)}
         style={{ color: '#111827', background: '#fff', padding: 6 }}>
         {CREW_ROOMS.map(r => <option key={r.id} value={r.id}>{isEs ? r.label.es : r.label.en}</option>)}
       </select>
-      <label htmlFor="crew-view">{isEs ? 'Cámara' : 'Camera'}</label>
-      <select id="crew-view" value={view} onChange={e => setView(e.target.value as CrewView)}
+      <label htmlFor={`${idPrefix}-view`}>{isEs ? 'Cámara' : 'Camera'}</label>
+      <select id={`${idPrefix}-view`} value={view} onChange={e => setView(e.target.value as CrewView)}
         style={{ color: '#111827', background: '#fff', padding: 6 }}>
         {CREW_VIEWS.map(v => <option key={v} value={v}>{(isEs ? { front: 'Frente', right: 'Derecha', back: 'Atrás', left: 'Izquierda' } : { front: 'Front', right: 'Right', back: 'Back', left: 'Left' })[v]}</option>)}
       </select>
@@ -132,8 +152,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       <button type="button" onClick={() => patchCamera(defaultCrewCamera())}>
         {isEs ? 'Ajustar' : 'Fit room'}
       </button>
-      <label htmlFor="crew-focus">{isEs ? 'Enfocar' : 'Focus'}</label>
-      <select id="crew-focus" value="" onChange={event => {
+      <label htmlFor={`${idPrefix}-focus`}>{isEs ? 'Enfocar' : 'Focus'}</label>
+      <select id={`${idPrefix}-focus`} value="" onChange={event => {
         const viewport = canvasRef.current?.getBoundingClientRect();
         const id = event.target.value;
         if (viewport) updateCamera(current => focusCrewFurniture(current, room, id, viewport));
@@ -149,7 +169,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
         setCameraByRoom({});
         setRoomId(CREW_ROOMS[0].id);
       }}>{isEs ? 'Restablecer Crew' : 'Reset Crew preferences'}</button>
-      {typeof window !== 'undefined' && <a href={crewRoomLink(window.location.href, roomId)}>
+      {showRoomLink && typeof window !== 'undefined' && <a href={crewRoomLink(window.location.href, roomId)}>
         {isEs ? 'Enlace a esta oficina' : 'Link to this office'}
       </a>}
     </div>

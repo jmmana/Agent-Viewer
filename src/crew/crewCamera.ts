@@ -27,17 +27,22 @@ export function parseCrewCameraStore(serialized: string | null): CrewCameraByRoo
   if (!serialized || serialized.length > 10_000) return {};
   try {
     const value: unknown = JSON.parse(serialized);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-    const state = value as Record<string, unknown>;
-    const out: CrewCameraByRoom = {};
-    for (const room of CREW_ROOMS) {
-      const checked = validateCrewCamera(state[room.id]);
-      if (checked) out[room.id] = checked;
-    }
-    return out;
+    return validateCrewCameraStore(value);
   } catch {
     return {};
   }
+}
+
+/** Filtra el estado recibido de un host sin mutarlo ni confiar en sus claves. */
+export function validateCrewCameraStore(value: unknown): CrewCameraByRoom {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const state = value as Record<string, unknown>;
+  const out: CrewCameraByRoom = {};
+  for (const room of CREW_ROOMS) {
+    const checked = validateCrewCamera(state[room.id]);
+    if (checked) out[room.id] = checked;
+  }
+  return out;
 }
 
 /**

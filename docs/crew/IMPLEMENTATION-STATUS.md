@@ -1,7 +1,7 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #171, enlaces directos y restablecimiento de Crew. Epic: #114.
+Último issue trabajado: #171/#166, API embebida de Crew. Epic: #114.
 
 ## Resumen de la ejecución
 
@@ -19,7 +19,8 @@ Validación acumulada: 61 node, 449 Vitest, 9 E2E y 3 SDK Python; typecheck, app
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-navigation-links-reset-171`, basada en `dfdb060` de #186.
+- Rama actual: `feat/crew-embedded-api-171`, basada en `b607d83` de #187.
+- Enlaces/reset: `feat/crew-navigation-links-reset-171`, basada en `dfdb060` de #186.
 - QA anterior: `test/crew-domain-continuity-159`, basada en `0832cfa` de #185.
 - Foco: `feat/crew-camera-focus-156`, basada en `1e1e591` de #183.
 - Persistencia: `feat/crew-navigation-persistence-171`, basada en `0b513ea` de #182.
@@ -105,13 +106,13 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#168](https://github.com/jmmana/Agent-Viewer/issues/168) | Registro y selector de 11 salas prototipo en #177. |
 | [#169](https://github.com/jmmana/Agent-Viewer/issues/169) | Aislamiento y fit prototipo en #177; QA completa pendiente. |
 | [#170](https://github.com/jmmana/Agent-Viewer/issues/170) | 11 layouts locales prototipo en #177; faltan colisiones y arte final. |
-| [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Persistencia en #183, enlaces directos y reset Crew en esta rama. API embebida pendiente. |
+| [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Persistencia en #183, enlaces/reset en #187, API embebida controlada en esta rama. Validación final y preferencias de accesibilidad pendientes. |
 | [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Inventario fusionado (#176); recursos sin migrar al runtime. |
 | [#173](https://github.com/jmmana/Agent-Viewer/issues/173) | ADR fusionado (#174); validación gráfica final pendiente. |
 
 ## Próximos tres pasos
 
-1. #171/#166: API embebida de modos, navegación y cámara; aislamiento entre instancias.
+1. #155/#156: presencia visual y foco de agentes con coordenadas locales de Crew.
 2. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
 3. #159: servidor SSE real, reproducción temporal, rendimiento y dispositivos físicos antes de aprobar G1.
 
@@ -157,4 +158,12 @@ Enlaces `?visualMode=crew&crewRoom=development` prevalecen sobre la selección g
 
 Restablecer Crew vuelve a Dirección, limpia todas sus cámaras y mantiene Crew abierto; no reinicia agentes, coste ni tokens. La recarga conserva el reset, incluso al haber entrado por un enlace a otra oficina.
 
-Validación: typecheck, 61 node, 452 Vitest, diez E2E Chrome, builds app/lib y validación de paquete aprobados. Captura móvil con nuevos controles revisada a 320 px. Base #186 en `dfdb060` tiene CI aprobado (run 37869826733). Falta API embebida; #171 no se cierra. Implementación `9b93f94`, [PR #187](https://github.com/jmmana/Agent-Viewer/pull/187), abierto sobre #186. CI en curso al publicar.
+Validación: typecheck, 61 node, 452 Vitest, diez E2E Chrome, builds app/lib y validación de paquete aprobados. Captura móvil con nuevos controles revisada a 320 px. Base #186 en `dfdb060` tiene CI aprobado (run 37869826733). Falta API embebida; #171 no se cierra. Implementación `9b93f94`, [PR #187](https://github.com/jmmana/Agent-Viewer/pull/187), abierto sobre #186. CI aprobado para `b607d83` (run 37870217242).
+
+## Continuación #171/#166: API embebida
+
+AgentOffice permite `visualMode`, `crewRoomId`/`onCrewRoomChange` y `crewCameras`/`onCrewCamerasChange`. Caricatura sigue por defecto; no se crea un segundo store al alternar renderers. Preferencias sin controlar viven por instancia y sobreviven al cambio de modo mientras AgentOffice permanezca montado. Las propiedades controladas solicitan cambios al host; los mapas recibidos se validan sin mutarlos.
+
+La biblioteca no accede a localStorage para Crew ni altera la URL del host. Controles con IDs únicos y enlaces de la app ocultos. [Contrato y ejemplo](EMBEDDED-API.md). Los mensajes personalizados del host aún no sustituyen los controles Crew ES/EN; foco de agentes sigue pendiente y no se afirma paridad visual final.
+
+Validación: typecheck, 61 node, 456 Vitest, once E2E Chrome, builds app/lib y validación del paquete aprobados. Cuatro tests de API cubren StrictMode, rechazo de cambios por el host, estado inválido y dos instancias sin almacenamiento global. E2E adicional verifica ambas oficinas, modo y móvil. Capturas revisadas: [dos instancias](evidence/camera-156/embedded-two-offices.png), [móvil](evidence/camera-156/embedded-mobile.png). PR/SHA de esta continuación pendientes de publicación.

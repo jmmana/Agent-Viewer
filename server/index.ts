@@ -23,7 +23,7 @@ import {
   type TelemetryAppendOutcome,
 } from './store';
 import { readPackageVersion } from './version';
-import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from './otlp/logs';
+import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from '../src/integrations/otlp/claudeCodeLogs';
 import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
 import { createStreamTicketStore } from './stream-tickets';
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
@@ -544,7 +544,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
 
   // A conflict (same content-derived id already stored with different content) can only happen when two
   // otherwise-identical records resolved to different timestamps because neither had `event.timestamp` nor a
-  // `timeUnixNano`/`observedTimeUnixNano` (see the id formula in `server/otlp/logs.ts`): a vanishingly rare
+  // `timeUnixNano`/`observedTimeUnixNano` (see the id formula in `src/integrations/otlp/claudeCodeLogs.ts`): a vanishingly rare
   // case, folded into `invalid` here so the published counter invariant still holds.
   const acceptedByType: Record<'llm.usage' | 'llm.failed', number> = { 'llm.usage': 0, 'llm.failed': 0 };
   for (const event of appendResult.acceptedEvents) {

@@ -1,18 +1,23 @@
 /**
  * Shared Claude Code identity: turns a raw Claude Code session id into the same hashed ids everywhere.
  *
- * Used by `cli/claudeHook.ts` (issue #44, the hooks adapter) and by the OTLP logs receiver (issue #59,
- * `server/otlp/logs.ts`), so a hook event and a telemetry record from the same session land on the same
+ * Used by `cli/claudeHook.ts` (issue #44, the hooks adapter) and by the OTLP logs mapper (issue #59,
+ * `src/integrations/otlp/claudeCodeLogs.ts`), so a hook event and a telemetry record from the same session land on the same
  * agent. The raw session id never travels past this function: everything downstream only sees the hash.
  *
  * Moving this out of `cli/claudeHook.ts` does not change its output: `shortHash` and `sessionIdentity` are
  * byte-identical to the versions that used to live there, so existing hook ids (`claude-code-<hash12>`,
  * `claude-<hash12>`) are unchanged.
+ *
+ * Browser-safe (issue #74): `sha256Hex` (`./sha256.ts`) is a pure-JS SHA-256, not `node:crypto`, because the
+ * OTLP logs mapper that calls `sessionIdentity` now has to be importable from `src/lib` for a file dropped in
+ * the browser, not only from the server. It produces the exact same digest as `node:crypto`'s SHA-256 (see
+ * that file's own doc comment), so every id this module returns is unchanged.
  */
-import { createHash } from 'node:crypto';
+import { sha256Hex } from './sha256.ts';
 
 export function shortHash(value: string, length: number): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, length);
+  return sha256Hex(value).slice(0, length);
 }
 
 /** Identity of the agents of one Claude Code session, derived from hashes so raw session ids never travel. */

@@ -693,7 +693,7 @@ Seeking backwards rebuilds the office from the start of the run up to the new po
 
 ## Loading a log file
 
-`parseEventLog(input)` reads a canonical JSONL V1 log (a `string`, `File` or `Blob`, up to `MAX_EVENT_LOG_SIZE_BYTES`, 25 MB) and validates every line. See [event-log.md](event-log.md) for the format.
+`parseEventLog(input)` reads a canonical JSONL V1 log, or an OTLP/JSON file (a `string`, `File` or `Blob`, up to `MAX_EVENT_LOG_SIZE_BYTES`, 25 MB) and validates every line. See [event-log.md](event-log.md) for the format, including the OTLP logs/metrics/traces files section.
 
 ```tsx
 async function loadRun(file: File) {
@@ -703,7 +703,7 @@ async function loadRun(file: File) {
 }
 ```
 
-The result is `{ events, issues, totalLines, format }`. Invalid lines are reported in `issues` (`line`, `error`, `raw`) without stopping the parse. OTLP traces are not supported: they return no events and one issue saying that OTLP traces are not supported yet. The component has no built-in file drop; wire your own file input to `parseEventLog`.
+The result is `{ events, issues, totalLines, format, otlp? }`. Invalid lines are reported in `issues` (`line`, `error`, `raw?`, `code?`, `path?`) without stopping the parse. OTLP logs convert to `llm.usage`/`llm.failed` events; OTLP metrics return no events and one issue explaining they are pre-aggregated counters; OTLP traces are not supported yet and also return no events plus one issue. `otlp` (present whenever `format === "otlp"`) reports which signals were found and the per-record `logRecords`/`converted`/`skipped`/`rejected` counters. The component has no built-in file drop; wire your own file input to `parseEventLog`.
 
 ## Video export
 
@@ -826,7 +826,7 @@ Everything is exported from `@warlockcode/agent-viewer`. The stylesheet is `@war
 | Core types | none | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
 | Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
 | Live stream | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions`, `RealtimeResync`, `RealtimeReplayed` |
-| Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
+| Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue`, `EventLogIssueCode`, `EventLogOtlpSummary` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |
 
 `connectEventStream(baseUrl, onEvent, onStatus?, options?)` opens the stream at `${baseUrl}/api/v1/events/stream`, calls `onEvent` for every valid event and reconnects with backoff, resuming from the last event id. The token never travels in a URL, on any transport (issue #71). Options: `token` (sent in an `Authorization: Bearer` header over a streamed `fetch`, when the browser can stream a `fetch` body; where it cannot, the client instead calls `POST /api/v1/stream-tickets` with the token, before every connect and reconnect, and opens `EventSource` with the single-use ticket it gets back; with a token and no `fetch` at all, the connection stops with status `error` and never makes a network call), `fetch` (the `fetch` used for that stream and for minting tickets, the global one by default), `maxReconnectAttempts` (default unlimited), `initialBackoffMs` (1000), `maxBackoffMs` (15000), `heartbeatTimeoutMs` (35000), `lastEventId` (starts the stream from this cursor, typically `snapshot.lastEventId`) and `onResync` / `onReplayed` (below). `onStatus` receives `connecting`, `connected`, `reconnecting`, `disconnected`, `error`, `closed` or `resyncing`. The returned connection has `close()`, `status()`, `getLastEventId()` and `resyncCount()`.

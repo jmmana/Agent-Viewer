@@ -1,7 +1,7 @@
 // Issue #73: unit tests for the zero-dependency protobuf wire decoder/encoder (`server/otlp/protobufWire.ts`)
 // and the OpenTelemetry-proto message shapes built on it (`server/otlp/otlpProtobuf.ts`), plus an end-to-end
 // check that the JSON and protobuf fixtures under `tests/fixtures/otlp/` normalize to the same thing once they
-// reach the pure mappers (`server/otlp/metrics.ts`, `server/otlp/logs.ts`).
+// reach the pure mappers (`server/otlp/metrics.ts`, `src/integrations/otlp/claudeCodeLogs.ts`).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -31,7 +31,7 @@ import {
   encodeStatus,
 } from '../server/otlp/otlpProtobuf.ts';
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest } from '../server/otlp/metrics.ts';
-import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest } from '../server/otlp/logs.ts';
+import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest } from '../src/integrations/otlp/claudeCodeLogs.ts';
 
 const fixturesDir = path.join(import.meta.dirname, 'fixtures/otlp');
 const SECRET = Buffer.alloc(32, 7);

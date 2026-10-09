@@ -6,8 +6,9 @@
  * and any field not listed is simply left in the wire reader's map, which is the same as being skipped.
  *
  * Decoding yields the OTLP/JSON shape (lowerCamelCase keys, `int64`/`fixed64` as decimal strings, enums as
- * plain integers) so `server/otlp/logs.ts` and `server/otlp/metrics.ts` never see the wire format: both read
- * one JSON-shaped object regardless of which content type the exporter used (issue #73, "one code path").
+ * plain integers) so `src/integrations/otlp/claudeCodeLogs.ts` and `server/otlp/metrics.ts` never see the wire
+ * format: both read one JSON-shaped object regardless of which content type the exporter used (issue #73,
+ * "one code path").
  */
 import {
   type FieldMap,
@@ -127,7 +128,7 @@ function decodeResourceLogs(bytes: Uint8Array, depth: number): JsonResourceLogs 
   };
 }
 
-/** Decodes a binary `ExportLogsServiceRequest` into the same shape `server/otlp/logs.ts` already reads from JSON. */
+/** Decodes a binary `ExportLogsServiceRequest` into the same shape `src/integrations/otlp/claudeCodeLogs.ts` already reads from JSON. */
 export function decodeExportLogsServiceRequest(buf: Uint8Array): JsonExportLogsServiceRequest {
   const fields = decodeMessage(buf, 0);
   return { resourceLogs: allBytes(fields, 1).map((b) => decodeResourceLogs(b, 1)) };

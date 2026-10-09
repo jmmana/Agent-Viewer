@@ -6,8 +6,8 @@ This is a documentation deliverable only. It formalizes rules that already exist
 
 ## 1. Scope and authority
 
-- Governs the **Crew** mode only: an original, illustrated "Office Beans" chibi style. It is not pixel art and it is not a reskin of the Among Us silhouette look. `Caricatura` (`src/engine/canvasRenderer.ts`, `src/components/OfficeCanvas.tsx`) is untouched and keeps its own, unrelated visuals.
-- Order of authority when documents disagree: **code and the asset manifest** (`assets/crew/asset-manifest.json`, `src/crew/*.ts`) are the ground truth; [ADR-001](../adr/ADR-001-crew-camera.md) is the architecture decision for camera/projection; [FACING.md](FACING.md) is the canonical orientation math; this document is the style layer on top and must be corrected in the same PR if it ever drifts from what is actually implemented.
+- Governs the **Crew** mode only: an original, illustrated "Office Beans" chibi style. It is not pixel art and it is not a reskin of the Among Us silhouette look. `Caricatura` (`src/engine/canvasRenderer.ts`, `src/components/OfficeCanvas.tsx`) is untouched and keeps its own, unrelated visuals; [ADR-002](../adr/ADR-002-crew-two-mode-architecture.md) is the formal contract for that independence (Cartoon/Crew never import each other, a mode switch never recreates the domain store).
+- Order of authority when documents disagree: **code and the asset manifest** (`assets/crew/asset-manifest.json`, `src/crew/*.ts`) are the ground truth; [ADR-001](../adr/ADR-001-crew-camera.md) is the architecture decision for camera/projection; [ADR-002](../adr/ADR-002-crew-two-mode-architecture.md) is the two-mode independence contract; [FACING.md](FACING.md) is the canonical orientation math; this document is the style layer on top and must be corrected in the same PR if it ever drifts from what is actually implemented.
 - Everything here assumes the independence rule from ADR-001: Crew never imports the legacy renderer, never reuses `renderFurnitureItem`, `GRID_ROWS`/`GRID_COLS` or `getOfficeRenderedBounds`, and a room shows only itself, never the full floor.
 
 ## 2. Reference material

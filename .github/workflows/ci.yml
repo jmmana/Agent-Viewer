@@ -33,6 +33,9 @@ jobs:
       - name: Security audit
         run: npm audit --omit=dev
 
+      - name: Crew asset bank integrity
+        run: npm run crew:assets:check
+
       - name: Typecheck
         run: npm run lint
 
@@ -150,3 +153,20 @@ jobs:
           curl -fsS -H "Authorization: Bearer ci-token" "http://127.0.0.1:4871/api/v1/events?agentId=ci" | grep -q '"agentId":"ci"'
           kill "$CLI_PID"
           cat cli.log
+
+  crew-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crew-browser-evidence
+          path: test-results/

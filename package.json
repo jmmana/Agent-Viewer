@@ -63,6 +63,10 @@
     "prepack": "npm run build:lib && npm run build:cli",
     "server": "tsx server/index.ts",
     "dev:full": "node scripts/dev-full.mjs",
+    "test:e2e": "playwright test",
+    "crew:capture": "node scripts/capture-crew-runtime.mjs",
+    "crew:assets:check": "node scripts/crew-assets.mjs check",
+    "crew:assets:import": "node scripts/crew-assets.mjs import",
     "cli": "tsx cli/index.ts"
   },
   "peerDependencies": {
@@ -76,6 +80,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",

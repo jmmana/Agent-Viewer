@@ -1,0 +1,1699 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "jmmana/Agent-Viewer",
+    "pullRequest": 43,
+    "commit": "355e9194bd83d8b741bc65d5b58a897d320ee584"
+  },
+  "usage": "bank-only",
+  "reference": {
+    "id": "reference.ceo",
+    "status": "reference",
+    "license": "MIT",
+    "file": "assets/crew/references/ceo-approved-concept.png",
+    "sourceFile": "assets/references/ceo-approved-concept.png",
+    "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+    "sha256": "5e89ad410b2c8e70fc862d1fda70416366cd34c624e146eee291aae3688463d8",
+    "mimeType": "image/png",
+    "width": 1536,
+    "height": 1024
+  },
+  "assets": [
+    {
+      "id": "character.ceo.idle.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/ceo/idle-front.png",
+      "sourceFile": "assets/characters/ceo/idle-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "da43d9be4ad24b999bf942d772c807900c01327ce8acb193a9eb23c64e07e139",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "ceo",
+      "clip": "idle",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.ceo.idle.back",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/ceo/idle-back.png",
+      "sourceFile": "assets/characters/ceo/idle-back.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "c33fc659f9ef8961d6eac196c949551c49118fe82fe56a607a8a043291c7a7b6",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "ceo",
+      "clip": "idle",
+      "facing": "back",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "missing",
+        "right": "missing",
+        "back": "prototype",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.ceo.idle.left",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/ceo/idle-left.png",
+      "sourceFile": "assets/characters/ceo/idle-left.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "5b552f2d0fb92fa0c386b040901d8f23461389a0d44581ab7579026d8221b4ec",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "ceo",
+      "clip": "idle",
+      "facing": "left",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "missing",
+        "right": "missing",
+        "back": "missing",
+        "left": "prototype"
+      }
+    },
+    {
+      "id": "character.ceo.idle.right",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/ceo/idle-right.png",
+      "sourceFile": "assets/characters/ceo/idle-right.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "e43858c4992cb167a844f5336db9a4114c7ce67c25bd155fd7c3bb9118a09054",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "ceo",
+      "clip": "idle",
+      "facing": "right",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "missing",
+        "right": "prototype",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.ceo.work.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/ceo/work-front.png",
+      "sourceFile": "assets/characters/ceo/work-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "3ce5de424b393f569cc94b8046febfeb80b72173eeb27894700b058a5cd7694d",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "ceo",
+      "clip": "work",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.ceo.phone.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/ceo/phone-front.png",
+      "sourceFile": "assets/characters/ceo/phone-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "09af46c54b9db445df3c5a10ceac4e95ccb2e55a84e1365bf80d721b53956961",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "ceo",
+      "clip": "phone",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.planner.idle.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/planner/idle-front.png",
+      "sourceFile": "assets/characters/planner/idle-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "78c2c7b1e5b6c382af09a0d8137f11f047bfae4d4698409a598f2d595274d731",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "planner",
+      "clip": "idle",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.developer.idle.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/developer/idle-front.png",
+      "sourceFile": "assets/characters/developer/idle-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "a9e64c3f218b4bee5969b63e498cab09e94251e7e52ad3e510b4455197e16c9f",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "developer",
+      "clip": "idle",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.analyst.idle.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/analyst/idle-front.png",
+      "sourceFile": "assets/characters/analyst/idle-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "8fecbf071444c24e901f85300e7d289d7055490d1782667c48d227e50b629194",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "analyst",
+      "clip": "idle",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.reviewer.idle.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/reviewer/idle-front.png",
+      "sourceFile": "assets/characters/reviewer/idle-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "63bce0ab3b57a1c05ee1ac07769e6c24d93b0076c6f2689ea9b0710fbd0237dc",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "reviewer",
+      "clip": "idle",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "character.finance.idle.front",
+      "kind": "character",
+      "status": "prototype",
+      "file": "assets/crew/bank/characters/finance/idle-front.png",
+      "sourceFile": "assets/characters/finance/idle-front.png",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "2e0128c29d2eba5040d21437cf9442064d034602c41b393abc7ad94edb16c4d6",
+      "mimeType": "image/png",
+      "width": 256,
+      "height": 352,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-imagegen-reference-derived",
+      "role": "finance",
+      "clip": "idle",
+      "facing": "front",
+      "logicalSize": {
+        "width": 64,
+        "height": 88
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "prototype",
+        "right": "missing",
+        "back": "missing",
+        "left": "missing"
+      }
+    },
+    {
+      "id": "furniture.desk-workstation",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/desk-workstation.svg",
+      "sourceFile": "assets/furniture/desk-workstation.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "f23dfa7b790f2932aa3491fc3996f1ba7d0965d74d2d44e87b88b26922689476",
+      "mimeType": "image/svg+xml",
+      "width": 144,
+      "height": 100,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 144,
+        "height": 100
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.desk-executive",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/desk-executive.svg",
+      "sourceFile": "assets/furniture/desk-executive.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "34f6860f1652c548042ce1cd2c9e6481d8b402784f6f6db9f1d4a50a53d7bcd4",
+      "mimeType": "image/svg+xml",
+      "width": 168,
+      "height": 100,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 168,
+        "height": 100
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.chair-ergonomic",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/chair-ergonomic.svg",
+      "sourceFile": "assets/furniture/chair-ergonomic.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "9250cd80ff65ee3f42a55d1978bd5f3d20c2a33fafb45155e31bacab12ccdba2",
+      "mimeType": "image/svg+xml",
+      "width": 64,
+      "height": 94,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 64,
+        "height": 94
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.chair-executive",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/chair-executive.svg",
+      "sourceFile": "assets/furniture/chair-executive.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "c74901e21486be467ad954fd275507242afcbcfa6d4f0297fe028d590b7e2d98",
+      "mimeType": "image/svg+xml",
+      "width": 64,
+      "height": 94,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 64,
+        "height": 94
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.meeting-table",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/meeting-table.svg",
+      "sourceFile": "assets/furniture/meeting-table.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "7b15d7342fac8002d4da38fffa21fcf7885b39fe9d12d55d3532e5de19304c93",
+      "mimeType": "image/svg+xml",
+      "width": 224,
+      "height": 130,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 224,
+        "height": 130
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.sofa-lounge",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/sofa-lounge.svg",
+      "sourceFile": "assets/furniture/sofa-lounge.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "d39ee1e4a064e03af549a3531b2bd727ec1f31411343cf9106aeade2ad8f727c",
+      "mimeType": "image/svg+xml",
+      "width": 156,
+      "height": 98,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 156,
+        "height": 98
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.coffee-table",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/coffee-table.svg",
+      "sourceFile": "assets/furniture/coffee-table.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "466103226aaea42095f1f74765e04829575cdfcaf3b6b6c9aa40183ea1b0a718",
+      "mimeType": "image/svg+xml",
+      "width": 98,
+      "height": 64,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 98,
+        "height": 64
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.plant-floor",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/plant-floor.svg",
+      "sourceFile": "assets/furniture/plant-floor.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "c7423e2e2286ee639debf9ed294f0828568d075ad19d3f5bc542c83141a5be7b",
+      "mimeType": "image/svg+xml",
+      "width": 72,
+      "height": 102,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 72,
+        "height": 102
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.plant-desk",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/plant-desk.svg",
+      "sourceFile": "assets/furniture/plant-desk.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "fde8555d1bdb6da12e80e63af90575538b2034f52464e8b43e5eb9c7cacca764",
+      "mimeType": "image/svg+xml",
+      "width": 42,
+      "height": 58,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 42,
+        "height": 58
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.bookshelf",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/bookshelf.svg",
+      "sourceFile": "assets/furniture/bookshelf.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "3f24136b7cebe72a42f96062648bf6627f297acc3335f690bfbbf9fa6cea353d",
+      "mimeType": "image/svg+xml",
+      "width": 98,
+      "height": 138,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 98,
+        "height": 138
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.filing-cabinet",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/filing-cabinet.svg",
+      "sourceFile": "assets/furniture/filing-cabinet.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "948e47e2f40cdf96d3481cf82461553673aa4f47d789005ec225535296e2af3e",
+      "mimeType": "image/svg+xml",
+      "width": 66,
+      "height": 96,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 66,
+        "height": 96
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.desk-lamp",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/desk-lamp.svg",
+      "sourceFile": "assets/furniture/desk-lamp.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "74a9a636e02a6901530aee2e0617d34fdfd4204814ed28693ea2d008d9313681",
+      "mimeType": "image/svg+xml",
+      "width": 58,
+      "height": 70,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 58,
+        "height": 70
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.whiteboard",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/whiteboard.svg",
+      "sourceFile": "assets/furniture/whiteboard.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "70b36ff89a1ca21684d076d7d9263712b8036769bf5650c3f0b9a78e9b66ba3e",
+      "mimeType": "image/svg+xml",
+      "width": 150,
+      "height": 130,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 150,
+        "height": 130
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.kanban-board",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/kanban-board.svg",
+      "sourceFile": "assets/furniture/kanban-board.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "ea93748b3dc8f5ddca6746c86ca6fd90069221d6933e6869e8804749f453e6bb",
+      "mimeType": "image/svg+xml",
+      "width": 150,
+      "height": 116,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 150,
+        "height": 116
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.coffee-bar",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/coffee-bar.svg",
+      "sourceFile": "assets/furniture/coffee-bar.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "8633b24ec41503d610bd8f870adb7502805b5b37470507c86a1ae6a634db9e22",
+      "mimeType": "image/svg+xml",
+      "width": 154,
+      "height": 104,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 154,
+        "height": 104
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.stool",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/stool.svg",
+      "sourceFile": "assets/furniture/stool.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "ac7c32b5c8a22418a880add466640aa2c51718c0e5a4de9afba7ca3d9056b3c0",
+      "mimeType": "image/svg+xml",
+      "width": 44,
+      "height": 70,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 44,
+        "height": 70
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.coffee-cup",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/coffee-cup.svg",
+      "sourceFile": "assets/furniture/coffee-cup.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "ebd0a36a7d34498a443c587ef509a3d807f12fdeccf60b497f3ea18c1b2c98f6",
+      "mimeType": "image/svg+xml",
+      "width": 34,
+      "height": 36,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 34,
+        "height": 36
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.84
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.clipboard",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/clipboard.svg",
+      "sourceFile": "assets/furniture/clipboard.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "fff977c87841eac902e022a7da3c3311f6d49c0d234b3d5cbd7a6036c7358367",
+      "mimeType": "image/svg+xml",
+      "width": 36,
+      "height": 46,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 36,
+        "height": 46
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.headphones",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/headphones.svg",
+      "sourceFile": "assets/furniture/headphones.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "fd0c6ecfded6252aec276752f1c06cd601ad74cdf75467af3b9b8e2e13863dee",
+      "mimeType": "image/svg+xml",
+      "width": 44,
+      "height": 42,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 44,
+        "height": 42
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "furniture.document-folder",
+      "kind": "furniture",
+      "status": "prototype",
+      "file": "assets/crew/bank/furniture/document-folder.svg",
+      "sourceFile": "assets/furniture/document-folder.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "17ba8e4b1d05154438b50c9b5d5ef51926700a2b82173310282254686c03fe5f",
+      "mimeType": "image/svg+xml",
+      "width": 46,
+      "height": 38,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 46,
+        "height": 38
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.monitor",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/monitor.svg",
+      "sourceFile": "assets/electronics/monitor.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "bd9f8a74b81a3270f36cfc62b5b22547060e792d2629c52b62d51d943c066ec7",
+      "mimeType": "image/svg+xml",
+      "width": 78,
+      "height": 74,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 78,
+        "height": 74
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.dual-monitor",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/dual-monitor.svg",
+      "sourceFile": "assets/electronics/dual-monitor.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "1e17c2e8cef99641808cf5f58e8033f530def0560f47ae14be5ef8079d7a3991",
+      "mimeType": "image/svg+xml",
+      "width": 136,
+      "height": 76,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 136,
+        "height": 76
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.laptop",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/laptop.svg",
+      "sourceFile": "assets/electronics/laptop.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "542c858578ce928e5f5373846b62b99731771f2a2e29e7142f8f70561f2e78fa",
+      "mimeType": "image/svg+xml",
+      "width": 78,
+      "height": 64,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 78,
+        "height": 64
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.tv-display",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/tv-display.svg",
+      "sourceFile": "assets/electronics/tv-display.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "3f26d1b50f3d5f4da4213c4da5127febfea4a14217bae836bb204608cd87e114",
+      "mimeType": "image/svg+xml",
+      "width": 164,
+      "height": 102,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 164,
+        "height": 102
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.office-phone",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/office-phone.svg",
+      "sourceFile": "assets/electronics/office-phone.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "e1149045da9159af450e58cc8966512ff5511fcc334816434241947533ae3ad5",
+      "mimeType": "image/svg+xml",
+      "width": 64,
+      "height": 50,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 64,
+        "height": 50
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.conference-camera",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/conference-camera.svg",
+      "sourceFile": "assets/electronics/conference-camera.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "3769d5e74c7c3660b041a08df47b8444ff6fa317c04f0556bd62a2ae7b081a07",
+      "mimeType": "image/svg+xml",
+      "width": 60,
+      "height": 34,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 60,
+        "height": 34
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.speakerphone",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/speakerphone.svg",
+      "sourceFile": "assets/electronics/speakerphone.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "e6ce76c5e62921d6eec7b3daab4878b5b54ea48749616d30355d532b1b1801c5",
+      "mimeType": "image/svg+xml",
+      "width": 58,
+      "height": 37,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 58,
+        "height": 37
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.coffee-machine",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/coffee-machine.svg",
+      "sourceFile": "assets/electronics/coffee-machine.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "2794a53ca3957ee653b1854873a3cd03df9d95cf10893f1bfd501dc9190e16c2",
+      "mimeType": "image/svg+xml",
+      "width": 64,
+      "height": 82,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 64,
+        "height": 82
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.water-dispenser",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/water-dispenser.svg",
+      "sourceFile": "assets/electronics/water-dispenser.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "88e9f37a4a1310bb32cdbb9763ccae66819cb3682d0850e50d796ea7e6775491",
+      "mimeType": "image/svg+xml",
+      "width": 56,
+      "height": 108,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 56,
+        "height": 108
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.router",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/router.svg",
+      "sourceFile": "assets/electronics/router.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "0d616c39b71a42ec997b99f8c3aeb3d620e465251537ce87eb8da7cbb61ec76f",
+      "mimeType": "image/svg+xml",
+      "width": 64,
+      "height": 50,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 64,
+        "height": 50
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.tablet",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/tablet.svg",
+      "sourceFile": "assets/electronics/tablet.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "22bb5b4923af18f2679ed9d8f209aeb00672b72002fadd1509a80e4f63a10632",
+      "mimeType": "image/svg+xml",
+      "width": 42,
+      "height": 56,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 42,
+        "height": 56
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.89
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.smartphone",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/smartphone.svg",
+      "sourceFile": "assets/electronics/smartphone.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "23a8845f44d940bd23e007b1851d45a13301cf6e2c4394795c39cb4e7f696df0",
+      "mimeType": "image/svg+xml",
+      "width": 28,
+      "height": 46,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 28,
+        "height": 46
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "electronics.calculator",
+      "kind": "electronics",
+      "status": "prototype",
+      "file": "assets/crew/bank/electronics/calculator.svg",
+      "sourceFile": "assets/electronics/calculator.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "c2a6731a497b6997adce322a6849dfb4f873c9fe05062905bc508e91de175f6f",
+      "mimeType": "image/svg+xml",
+      "width": 34,
+      "height": 46,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 34,
+        "height": 46
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.wifi",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/wifi.svg",
+      "sourceFile": "assets/effects/wifi.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "262ade3f17b1c0d42fdaa713ddad442a0a2f38864e0e6bb821fc9c34a8dcebb5",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.call",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/call.svg",
+      "sourceFile": "assets/effects/call.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "d02347fc4cd9b67763ac6bd2a76106018bd6a6f6d47622305dd1e6b977cf793f",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.check",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/check.svg",
+      "sourceFile": "assets/effects/check.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "c87f8ac8b9088c5a536c7ae9e09c792756334dd8f711b710131fc119c62b6d05",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.blocked",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/blocked.svg",
+      "sourceFile": "assets/effects/blocked.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "8c34bd70bc0dbd24b606473155b5bb4410e5400ee8ce8abc622ea6095bf5dac2",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.tool",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/tool.svg",
+      "sourceFile": "assets/effects/tool.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "330c8f1c66f0d409581b82a2948e57673c9daa3ea1aef76d680be4cb17621b92",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.thought",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/thought.svg",
+      "sourceFile": "assets/effects/thought.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "9853137f000a0ad8c0d1aad83e5af5b749983540b94038be0dc9268872bced99",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.alert",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/alert.svg",
+      "sourceFile": "assets/effects/alert.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "6568cd6f114d6ea75f36f82eb24f275dc6a94e0dd2943d5f87f009f6ed08264f",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.sync",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/sync.svg",
+      "sourceFile": "assets/effects/sync.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "ba04353c8279401e13420bab90951fe7816667a26e901b8dfe8318f4216af0f7",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    },
+    {
+      "id": "effect.terminal",
+      "kind": "effect",
+      "status": "prototype",
+      "file": "assets/crew/bank/effects/terminal.svg",
+      "sourceFile": "assets/effects/terminal.svg",
+      "sourceCommit": "355e9194bd83d8b741bc65d5b58a897d320ee584",
+      "sha256": "61b70386a24ac6c415d7d2f2ad8ee19f1d4abb68df1ba742fef3eb71e90b2346",
+      "mimeType": "image/svg+xml",
+      "width": 40,
+      "height": 40,
+      "license": "MIT",
+      "provenance": "original-agent-viewer-vector-prototype",
+      "logicalSize": {
+        "width": 40,
+        "height": 40
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "frames": 1,
+      "fps": 0,
+      "loop": false,
+      "viewAvailability": {
+        "front": "unverified",
+        "right": "unverified",
+        "back": "unverified",
+        "left": "unverified"
+      }
+    }
+  ]
+}

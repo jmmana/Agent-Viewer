@@ -1,6 +1,9 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { CrewStage } from '../crew/CrewStage';
+import { CREW_ROOMS, type VisualMode } from '../crew/crewModel';
+import type { CrewCameraByRoom } from '../crew/crewCamera';
 import { OfficeCanvas } from '../components/OfficeCanvas';
-import { agentRoleLabel } from '../engine/canvasRenderer';
+import { type CameraState, agentRoleLabel } from '../engine/canvasRenderer';
 import {
   createOfficeTranslator,
   type HostTranslate,
@@ -29,6 +32,14 @@ export interface AgentOfficeProps {
   agents?: readonly AgentProfile[];
   /** `professional` (default) shows only what the events say. `showcase` adds simulated office life. */
   mode?: OfficeMode;
+  /** Renderer visual independiente; Caricatura sigue siendo el valor predeterminado. */
+  visualMode?: VisualMode;
+  /** Sala Crew controlada por el host; sin prop, se conserva por instancia. */
+  crewRoomId?: string;
+  onCrewRoomChange?: (roomId: string) => void;
+  /** Cámaras controladas por el host; la biblioteca no escribe localStorage. */
+  crewCameras?: CrewCameraByRoom;
+  onCrewCamerasChange?: (cameras: CrewCameraByRoom) => void;
   /** BCP 47 locale for the built-in texts and number formats, for example `es-CO`. Defaults to `en`. */
   locale?: string;
   /** Overrides for single texts. Missing keys fall back to the built-in catalog, then to English. */
@@ -55,6 +66,11 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   events = NO_EVENTS,
   agents: profiles,
   mode = 'professional',
+  visualMode = 'cartoon',
+  crewRoomId,
+  onCrewRoomChange,
+  crewCameras,
+  onCrewCamerasChange,
   locale = 'en',
   messages,
   t,
@@ -76,6 +92,9 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   const [version, setVersion] = useState(0);
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const listId = useId();
+  const cartoonCameraMemory = useRef<CameraState | null>(null);
+  const [internalCrewRoom, setInternalCrewRoom] = useState(CREW_ROOMS[0].id);
+  const [internalCrewCameras, setInternalCrewCameras] = useState<CrewCameraByRoom>({});
 
   const translate = useMemo(() => createOfficeTranslator({ locale, messages, t }), [locale, messages, t]);
 
@@ -105,9 +124,26 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   const rootClass = ['av-office', `av-theme-${theme}`, className].filter(Boolean).join(' ');
 
   return (
-    <section className={rootClass} style={style} lang={locale} aria-label={ariaLabel ?? translate('office.label')} data-mode={mode}>
+    <section className={rootClass} style={style} lang={locale} aria-label={ariaLabel ?? translate('office.label')} data-mode={mode} data-visual-mode={visualMode}>
       <div className="av-office-stage">
-        <OfficeCanvas
+        {visualMode === 'crew' ? <CrewStage
+          locale={locale}
+          agents={snapshot.agents}
+          selectedRoomId={crewRoomId ?? internalCrewRoom}
+          onRoomChange={roomId => {
+            if (crewRoomId === undefined) setInternalCrewRoom(roomId);
+            onCrewRoomChange?.(roomId);
+          }}
+          cameraState={crewCameras ?? internalCrewCameras}
+          onCameraStateChange={cameras => {
+            if (crewCameras === undefined) setInternalCrewCameras(cameras);
+            onCrewCamerasChange?.(cameras);
+          }}
+          persistCamera={false}
+          showRoomLink={false}
+          idPrefix={`${listId}-crew`}
+        /> : <OfficeCanvas
+          cameraMemory={cartoonCameraMemory}
           agents={snapshot.agents}
           selectedAgentId={selectedId}
           onSelectAgent={handleSelect}
@@ -115,9 +151,9 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           theme={theme}
           translate={translate}
           themeScope={false}
-        />
+        />}
 
-        {snapshot.agents.length === 0 && (
+        {visualMode === 'cartoon' && snapshot.agents.length === 0 && (
           <div className="av-office-empty">
             <span>{translate('office.empty')}</span>
           </div>

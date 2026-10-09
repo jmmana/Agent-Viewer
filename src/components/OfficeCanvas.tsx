@@ -36,6 +36,8 @@ interface OfficeCanvasProps {
   isInspectorOpen?: boolean;
   onToggleSidebar?: () => void;
   isSidebarOpen?: boolean;
+  /** Memoria del contenedor para conservar la cámara al desmontar el viewport. */
+  cameraMemory?: React.MutableRefObject<CameraState | null>;
 }
 
 interface ServerHitInfo {
@@ -97,6 +99,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   isInspectorOpen = false,
   onToggleSidebar,
   isSidebarOpen = false,
+  cameraMemory,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -116,12 +119,16 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   }, []);
 
   // Camera State with 4-way rotation
-  const [camera, setCamera] = useState<CameraState>({
+  const restoreOnMount = useRef(cameraMemory?.current != null);
+  const previousViewport = useRef<{width:number;height:number} | null>(null);
+  const [camera, setCamera] = useState<CameraState>(() => cameraMemory?.current ?? ({
     x: 0,
     y: 0,
     zoom: 1.1,
     rotation: 0, // 0: SE, 1: SW, 2: NW, 3: NE
-  });
+  }));
+  const previousFocus = useRef(restoreOnMount.current ? {id:selectedAgentId, rotation:camera.rotation} : null);
+  useEffect(() => { if (cameraMemory) cameraMemory.current = camera; }, [camera,cameraMemory]);
 
   const isDraggingRef = useRef(false);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
@@ -181,18 +188,30 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     [camera.rotation]
   );
 
+  // Al restaurar, el primer layout no debe borrar el encuadre guardado.
+  const fitWhenLayoutChanges = useCallback(() => {
+    if (!cameraMemory) { fitOfficeToViewport(); return; }
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width || !rect.height) return;
+    const previous = previousViewport.current;
+    if (previous?.width === rect.width && previous.height === rect.height) return;
+    previousViewport.current = {width:rect.width,height:rect.height};
+    if (!previous && restoreOnMount.current) return;
+    fitOfficeToViewport();
+  }, [cameraMemory,fitOfficeToViewport]);
+
   // Re-fit automatically when container resizes or sidebar/inspector toggles
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     // Initial fit on mount
-    fitOfficeToViewport();
+    fitWhenLayoutChanges();
     if (typeof ResizeObserver === 'undefined') return;
 
     // ResizeObserver watches window resize AND flex layout changes when sidebar toggles
     const resizeObserver = new ResizeObserver(() => {
-      fitOfficeToViewport();
+      fitWhenLayoutChanges();
     });
 
     resizeObserver.observe(container);
@@ -200,15 +219,15 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     return () => {
       resizeObserver.disconnect();
     };
-  }, [fitOfficeToViewport, isInspectorOpen, isSidebarOpen]);
+  }, [fitWhenLayoutChanges, isInspectorOpen, isSidebarOpen]);
 
   // Smooth re-fit after sidebar expand/collapse transition finishes
   useEffect(() => {
     const timer = setTimeout(() => {
-      fitOfficeToViewport();
+      fitWhenLayoutChanges();
     }, 120);
     return () => clearTimeout(timer);
-  }, [isSidebarOpen, fitOfficeToViewport]);
+  }, [isSidebarOpen, fitWhenLayoutChanges]);
 
   // Center on a specific agent or coordinate
   const focusOnCoordinates = (gx: number, gy: number, zoomLevel = 1.35) => {
@@ -223,6 +242,8 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
 
   // If selectedAgentId changes externally, focus on that agent
   useEffect(() => {
+    if (cameraMemory && previousFocus.current?.id === selectedAgentId && previousFocus.current.rotation === camera.rotation) return;
+    previousFocus.current = {id:selectedAgentId,rotation:camera.rotation};
     if (selectedAgentId) {
       const agent = visibleAgentsRef.current.find((a) => a.id === selectedAgentId);
       if (agent) {

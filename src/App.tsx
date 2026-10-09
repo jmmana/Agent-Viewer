@@ -10,7 +10,11 @@ import {
 } from './engine/simulationEngine';
 import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
+import type { CameraState } from './engine/canvasRenderer';
 import { OfficeCanvas } from './components/OfficeCanvas';
+import { CrewStage } from './crew/CrewStage';
+import type { VisualMode } from './crew/crewModel';
+import { readCrewEntry, saveCrewNavigation, replaceCrewLink } from './crew/crewNavigation';
 import { AgentInspector } from './components/AgentInspector';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { TaskBoard } from './components/TaskBoard';
@@ -58,6 +62,18 @@ export default function App() {
 
   // Active navigation tab
   const [currentTab, setCurrentTab] = useState<'office' | 'tasks' | 'meetings' | 'timeline'>('office');
+  // UI-only mode: does not alter event telemetry, simulation, replay or the legacy renderer.
+  const cartoonCameraMemory = useRef<CameraState | null>(null);
+  const [crewEntry] = useState(readCrewEntry);
+  const [crewNavigation, setCrewNavigation] = useState(crewEntry.navigation);
+  const [crewMissingRoom, setCrewMissingRoom] = useState(crewEntry.missingRoom);
+  const visualMode = crewNavigation.selectedMode;
+  const setVisualMode = (selectedMode: VisualMode) => setCrewNavigation(previous => ({ ...previous, selectedMode }));
+  const setCrewRoom = (selectedRoomId: string) => {
+    setCrewMissingRoom(false);
+    setCrewNavigation(previous => ({ ...previous, selectedRoomId }));
+  };
+  useEffect(() => { saveCrewNavigation(crewNavigation); replaceCrewLink(crewNavigation); }, [crewNavigation]);
 
   // Collapsible vertical live timeline sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
@@ -641,15 +657,30 @@ export default function App() {
         isLiveConnected={isLiveConnected}
       />
 
+      {currentTab === 'office' && <div role="group" aria-label={locale.startsWith('es') ? 'Modo visual' : 'Visual mode'}
+        className="flex gap-2 items-center justify-center p-2 bg-slate-900 text-white">
+        <button type="button" aria-pressed={visualMode === 'cartoon'}
+          className={visualMode === 'cartoon' ? 'rounded bg-violet-700 px-3 py-1' : 'rounded bg-slate-700 px-3 py-1'}
+          onClick={() => setVisualMode('cartoon')}>{locale.startsWith('es') ? 'Caricatura' : 'Cartoon'}</button>
+        <button type="button" aria-pressed={visualMode === 'crew'}
+          className={visualMode === 'crew' ? 'rounded bg-violet-700 px-3 py-1' : 'rounded bg-slate-700 px-3 py-1'}
+          onClick={() => setVisualMode('crew')}>Crew · Beta</button>
+      </div>}
+
       {/* Main View Area */}
       <main className="flex-1 flex overflow-hidden relative">
         {/* Office View with Collapsible Vertical Live Timeline Sidebar */}
         {currentTab === 'office' && (
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
             <div className="flex-1 h-full relative overflow-hidden">
-              {currentFloor === 1 ? (
+              {visualMode === 'crew' ? (
+                <CrewStage locale={locale} agents={canvasAgents}
+                  selectedRoomId={crewNavigation.selectedRoomId} onRoomChange={setCrewRoom}
+                  missingRoom={crewMissingRoom} />
+              ) : currentFloor === 1 ? (
                 <>
                   <OfficeCanvas
+                    cameraMemory={cartoonCameraMemory}
                     agents={canvasAgents}
                     selectedAgentId={selectedAgentId}
                     onSelectAgent={(id) => {
@@ -694,22 +725,24 @@ export default function App() {
             </div>
 
             {/* Collapsible Vertical Activity Timeline & Inspector Sidebar */}
-            <LiveTimelineSidebar
-              isOpen={isSidebarOpen}
-              onToggleOpen={() => setIsSidebarOpen((prev) => !prev)}
-              events={simState.events}
-              agents={simState.agents}
-              tasks={simState.tasks}
-              activeMeetingId={simState.activeMeetingId}
-              selectedAgent={selectedAgent}
-              onSelectAgent={(id) => setSelectedAgentId(id)}
-              onFocusAgent={handleFocusAgent}
-              onSendMessage={handleSendMessageToAgent}
-              onUpdateStatus={handleUpdateAgentStatus}
-              onOpenAgentDetailModal={(id) => setDetailModalAgentId(id)}
-              theme={theme}
-              locale={locale}
-            />
+            <div className={visualMode === 'crew' ? 'hidden lg:contents' : 'contents'}>
+              <LiveTimelineSidebar
+                isOpen={isSidebarOpen}
+                onToggleOpen={() => setIsSidebarOpen((prev) => !prev)}
+                events={simState.events}
+                agents={simState.agents}
+                tasks={simState.tasks}
+                activeMeetingId={simState.activeMeetingId}
+                selectedAgent={selectedAgent}
+                onSelectAgent={(id) => setSelectedAgentId(id)}
+                onFocusAgent={handleFocusAgent}
+                onSendMessage={handleSendMessageToAgent}
+                onUpdateStatus={handleUpdateAgentStatus}
+                onOpenAgentDetailModal={(id) => setDetailModalAgentId(id)}
+                theme={theme}
+                locale={locale}
+              />
+            </div>
           </div>
         )}
 

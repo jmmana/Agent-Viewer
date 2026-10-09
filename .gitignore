@@ -19,5 +19,9 @@ data/
 dist-lib/
 *.tgz
 
+# Evidencias locales de navegador
+/test-results/
+/playwright-report/
+
 # CLI build output (npm run build:cli)
 dist-cli/

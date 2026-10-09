@@ -515,7 +515,7 @@ The server rejects requests if `|now - timestamp| > 300_000` (5 minutes) or if s
 
 ## 💰 7. Canonical LLM Usage Normalization
 
-Every token count and cost enters Agent Viewer through `llm.usage` (a successful call) or `llm.failed` (a failed attempt). The server stores, replays and adds up exactly what the validator accepts, so the contract never invents a figure.
+Every token count and cost enters Agent Viewer through `llm.usage` (a successful call) or `llm.failed` (a failed attempt). The server stores, replays and adds up exactly what the validator accepts, so the contract never invents a figure. This section covers the contract fields; for the binding rules behind them (unknown versus zero, currencies, `costSource`, cache read versus write, and how to reconcile against an invoice), see [docs/usage-semantics.md](usage-semantics.md).
 
 **Missing means unknown, never 0.** A field that the runtime did not report is left out of the stored event (or kept as `null` when sent as `null`). The validator never turns it into `0`. A `0` in a stored event is always a zero that the sender reported.
 
@@ -645,7 +645,9 @@ Adapters for providers that report cache counters separately must add them into 
 | Anthropic (Messages) | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | `output_tokens` (already includes thinking) | Not reported separately, leave it out |
 | Google (Gemini) | `promptTokenCount` (already includes cached content) | `cachedContentTokenCount` | Not reported per call, leave it out | `candidatesTokenCount` + `thoughtsTokenCount` | `thoughtsTokenCount` |
 
-The Claude Code mapping from OpenTelemetry is specified separately, with the Claude Code receiver.
+Field names checked against the providers' own API reference on 2026-10-09: [OpenAI Chat Completions usage object](https://platform.openai.com/docs/api-reference/chat/object), [OpenAI Responses usage object](https://platform.openai.com/docs/api-reference/responses/object), [Anthropic Messages usage object and prompt caching](https://docs.claude.com/en/docs/build-with-claude/prompt-caching), [Gemini `UsageMetadata`](https://ai.google.dev/api/generate-content#UsageMetadata). A provider that renames or removes one of these fields needs an update here, not a guess downstream.
+
+The Claude Code mapping from OpenTelemetry is specified separately, with the Claude Code receiver (see [docs/otlp.md](otlp.md) and [docs/claude-code.md#tokens-and-cost](claude-code.md#tokens-and-cost); checked against the [Claude Code OpenTelemetry monitoring guide](https://code.claude.com/docs/en/monitoring-usage) on 2026-10-09).
 
 ### `llm.failed`: failed model calls
 

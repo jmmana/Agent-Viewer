@@ -33,7 +33,7 @@ Each non-empty line is a single UTF-8 encoded canonical event matching schema ve
 1. **Empty Lines:** Blank lines or whitespace-only lines are ignored.
 2. **Error Isolation:** If a line contains malformed JSON or fails the contract (envelope or payload), the parser records an issue with the line number and proceeds with subsequent lines.
 3. **Chronological Ordering:** Valid events are returned sorted ascending by `timestamp` in milliseconds.
-4. **Token & Cost Reporting:** Missing cost fields remain `null` with `costSource: "unknown"`. Costs are never assumed to be zero. Missing token counters (`cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`) stay absent, never `0`. `llm.failed` lines record failed model calls and carry tokens and cost only when the provider billed the attempt. An optional `currency` (ISO 4217 code such as `USD`) can accompany a reported cost.
+4. **Token & Cost Reporting:** Missing cost fields remain `null` with `costSource: "unknown"`. Costs are never assumed to be zero. Missing token counters (`cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`) stay absent, never `0`. `llm.failed` lines record failed model calls and carry tokens and cost only when the provider billed the attempt. An optional `currency` (ISO 4217 code such as `USD`) can accompany a reported cost. Full field-by-field meaning: [docs/usage-semantics.md](usage-semantics.md).
 5. **Size:** Input larger than 25 MB is rejected with an error.
 
 ## OTLP Traces

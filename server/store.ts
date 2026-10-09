@@ -209,7 +209,7 @@ export interface EventStore {
   /** Stores a new event, or classifies a repeated id as a duplicate (same content) or a conflict (different content). */
   append(event: CanonicalEvent): Promise<AppendResult>;
   /** Same rules as `append`, item by item in input order, also against earlier items of the same batch. */
-  appendBatch(events: CanonicalEvent[]): Promise<AppendBatchResult>;
+  appendBatch(events: CanonicalEvent[], options?: { atomic?: boolean; ignoreTimestamp?: boolean }): Promise<AppendBatchResult>;
   /** Conflicts rejected and legacy rows matched by id only, since process start. */
   ingestionCounters(): IngestionCounters;
   exists(eventId: string): Promise<boolean>;
@@ -299,10 +299,58 @@ export class MemoryEventStore implements EventStore {
     return result;
   }
 
-  async appendBatch(events: CanonicalEvent[]): Promise<AppendBatchResult> {
-    const results = events.map((event) => this.appendOne(event));
-    this.evictOverflow();
-    return summarizeBatch(results, events);
+  async appendBatch(events: CanonicalEvent[], options?: { atomic?: boolean; ignoreTimestamp?: boolean }): Promise<AppendBatchResult> {
+    const atomic = options?.atomic ?? false;
+    const ignoreTimestamp = options?.ignoreTimestamp ?? false;
+
+    if (atomic) {
+      // Check all conflicts before inserting any
+      for (const event of events) {
+        const fingerprint = eventFingerprint(event, ignoreTimestamp);
+        const storedFingerprint = this.eventHashes.get(event.id);
+        if (storedFingerprint !== undefined && storedFingerprint !== fingerprint) {
+          // Conflict found: reject the entire batch
+          const results = events.map((e) => {
+            const fp = eventFingerprint(e, ignoreTimestamp);
+            const stored = this.eventHashes.get(e.id);
+            if (stored === undefined) {
+              return appendResult('accepted', e.id, fp);
+            }
+            if (stored === fp) {
+              return appendResult('duplicate', e.id, fp);
+            }
+            this.counters.conflicts++;
+            return appendResult('conflict', e.id, fp, stored);
+          });
+          return summarizeBatch(results, events);
+        }
+      }
+      // All checks passed, now insert
+      const results = events.map((event) => this.appendOneWithFingerprint(event, ignoreTimestamp));
+      this.evictOverflow();
+      return summarizeBatch(results, events);
+    } else {
+      const results = events.map((event) => this.appendOneWithFingerprint(event, ignoreTimestamp));
+      this.evictOverflow();
+      return summarizeBatch(results, events);
+    }
+  }
+
+  private appendOneWithFingerprint(event: CanonicalEvent, ignoreTimestamp = false): AppendResult {
+    const fingerprint = eventFingerprint(event, ignoreTimestamp);
+    const storedFingerprint = this.eventHashes.get(event.id);
+    if (storedFingerprint === undefined) {
+      this.eventHashes.set(event.id, fingerprint);
+      this.events.unshift(event);
+      this.processEventSideEffects(event);
+      return appendResult('accepted', event.id, fingerprint);
+    }
+    if (storedFingerprint === fingerprint) {
+      return appendResult('duplicate', event.id, fingerprint);
+    }
+    this.counters.conflicts++;
+    warnConflict(event, fingerprint, storedFingerprint);
+    return appendResult('conflict', event.id, fingerprint, storedFingerprint);
   }
 
   ingestionCounters(): IngestionCounters {
@@ -705,8 +753,8 @@ export class SQLiteEventStore implements EventStore {
    * Looks up the id and inserts the event when it is new, with no await in between. The PRIMARY KEY stays the
    * backstop: if the insert still hits a UNIQUE violation, the row is read again and classified.
    */
-  private classifyAndInsert(lookupStmt: any, insertStmt: any, event: CanonicalEvent): PendingOutcome {
-    const fingerprint = eventFingerprint(event);
+  private classifyAndInsert(lookupStmt: any, insertStmt: any, event: CanonicalEvent, ignoreTimestamp = false): PendingOutcome {
+    const fingerprint = eventFingerprint(event, ignoreTimestamp);
     const existing = lookupStmt.get(event.id) as { content_hash: string | null } | undefined;
     if (existing) return this.classifyStored(event, fingerprint, existing);
     try {
@@ -777,16 +825,46 @@ export class SQLiteEventStore implements EventStore {
    * All or nothing at the storage level: the batch runs inside BEGIN IMMEDIATE ... COMMIT and rolls back on any
    * error. Rows inserted earlier in the batch are visible to later items, so repeats inside one batch are classified
    * like repeats across requests. Memory side effects run after the commit, with the accepted events only.
+   * When atomic is true and a conflict is found, the entire batch is rejected without inserting any events.
    */
-  async appendBatch(events: CanonicalEvent[]): Promise<AppendBatchResult> {
+  async appendBatch(events: CanonicalEvent[], options?: { atomic?: boolean; ignoreTimestamp?: boolean }): Promise<AppendBatchResult> {
+    const atomic = options?.atomic ?? false;
+    const ignoreTimestamp = options?.ignoreTimestamp ?? false;
+
     const lookupStmt = this.prepareLookup();
     const insertStmt = this.prepareInsert();
     const pending: PendingOutcome[] = [];
 
+    // If atomic, check for conflicts first without inserting
+    if (atomic) {
+      for (const event of events) {
+        const row = lookupStmt.get(event.id) as { fingerprint: string } | undefined;
+        const fingerprint = eventFingerprint(event, ignoreTimestamp);
+
+        if (row && row.fingerprint !== fingerprint) {
+          // Conflict found: return the batch without inserting anything
+          const results = events.map(e => {
+            const fp = eventFingerprint(e, ignoreTimestamp);
+            const r = lookupStmt.get(e.id) as { fingerprint: string } | undefined;
+            if (!r) {
+              return appendResult('accepted', e.id, fp);
+            }
+            if (r.fingerprint === fp) {
+              return appendResult('duplicate', e.id, fp);
+            }
+            this.counters.conflicts++;
+            return appendResult('conflict', e.id, fp, r.fingerprint);
+          });
+          return summarizeBatch(results, events);
+        }
+      }
+    }
+
+    // No conflicts (or not atomic), proceed with insertion
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const event of events) {
-        pending.push(this.classifyAndInsert(lookupStmt, insertStmt, event));
+        pending.push(this.classifyAndInsert(lookupStmt, insertStmt, event, ignoreTimestamp));
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -800,7 +878,7 @@ export class SQLiteEventStore implements EventStore {
 
     for (const entry of pending) this.recordOutcome(entry);
     const summary = summarizeBatch(pending.map(({ result }) => result), events);
-    await this.memoryFallback.appendBatch(summary.acceptedEvents);
+    await this.memoryFallback.appendBatch(summary.acceptedEvents, options);
     return summary;
   }
 

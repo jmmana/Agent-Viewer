@@ -198,7 +198,7 @@ test('PATCH /api/v1/agents/:id: rejects unknown statuses with 400 and normalizes
   });
 });
 
-test('Webhook: the same signed request is rejected when replayed inside the timestamp window', async () => {
+test('Webhook: the same signed request is a duplicate when replayed inside the timestamp window', async () => {
   const secret = 'replay-cache-secret';
   await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_WEBHOOK_SECRET: secret }, async () => {
     const { server, baseUrl } = await startTestServer();
@@ -218,10 +218,15 @@ test('Webhook: the same signed request is rejected when replayed inside the time
 
       const first = await send();
       assert.equal(first.status, 202);
+      const firstJson = await first.json();
+      assert.equal(firstJson.duplicate, false);
 
       const replay = await send();
-      assert.equal(replay.status, 409);
-      assert.equal((await replay.json()).error, 'webhook_replay_detected');
+      assert.equal(replay.status, 200);
+      const replayJson = await replay.json();
+      assert.equal(replayJson.duplicate, true);
+      assert.equal(replayJson.idempotency.source, 'signature');
+      assert.deepEqual(replayJson.eventIds, firstJson.eventIds);
 
       // A fresh signature for the same body (new timestamp) is a new request and is accepted.
       const resigned = signWebhook(secret, rawBody, (Number(timestamp) + 1).toString());
@@ -235,6 +240,8 @@ test('Webhook: the same signed request is rejected when replayed inside the time
         body: rawBody,
       });
       assert.equal(fresh.status, 202);
+      const freshJson = await fresh.json();
+      assert.equal(freshJson.duplicate, false);
     } finally {
       server.close();
     }
@@ -311,7 +318,8 @@ test('Webhook: payloads that do not map to a known event shape are rejected with
   await withEnv(NO_AUTH_ENV, async () => {
     const { server, baseUrl } = await startTestServer();
     try {
-      for (const body of [{}, { foo: 'bar' }, { agent: 'lonely-agent' }, { agent: 'x', usage: {} }, { status: '' }]) {
+      // These should return unrecognized_webhook_payload: no status, message, text, tool, or usage
+      for (const body of [{}, { foo: 'bar' }, { agent: 'lonely-agent' }, { status: '' }]) {
         const res = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -323,15 +331,36 @@ test('Webhook: payloads that do not map to a known event shape are rejected with
         assert.match(json.message, /status/);
       }
 
+      // Empty usage object should return validation_failed because provider and model are required
+      const emptyUsage = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: 'x', usage: {} }),
+      });
+      assert.equal(emptyUsage.status, 400);
+      const usageJson = await emptyUsage.json();
+      assert.equal(usageJson.error, 'validation_failed');
+
       const snapshot = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
       assert.equal(snapshot.agents.some((a) => a.id === 'generic-agent' || a.id === 'lonely-agent'), false);
 
-      const usageOnly = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      // Usage-only payload missing outputTokens should fail validation
+      const missingOutput = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent: 'usage-bot', usage: { provider: 'Google', model: 'gemini', inputTokens: 1 } }),
       });
-      assert.equal(usageOnly.status, 202);
+      assert.equal(missingOutput.status, 400);
+      const missingJson = await missingOutput.json();
+      assert.equal(missingJson.error, 'validation_failed');
+
+      // Complete usage should work
+      const completeUsage = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: 'usage-bot', usage: { provider: 'Google', model: 'gemini', inputTokens: 1, outputTokens: 0 } }),
+      });
+      assert.equal(completeUsage.status, 202);
     } finally {
       server.close();
     }

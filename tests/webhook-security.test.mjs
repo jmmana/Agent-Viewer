@@ -137,7 +137,7 @@ test('Webhook stability: invalid payload {"message": 123} returns 400, /health s
   }
 });
 
-test('Webhook: generated ids are random UUIDs and the response counts duplicates and conflicts', async () => {
+test('Webhook: without a key, generated ids are random and each delivery gets new ids', async () => {
   const { server, baseUrl } = await startTestServer();
   try {
     const send = () =>
@@ -156,10 +156,11 @@ test('Webhook: generated ids are random UUIDs and the response counts duplicates
     assert.equal(first.status, 202);
     const json = await first.json();
     assert.equal(json.accepted, true);
+    assert.equal(json.duplicate, false);
     assert.equal(json.eventsGenerated, 4);
     assert.equal(json.acceptedCount, 4);
-    assert.equal(json.duplicateCount, 0);
-    assert.equal(json.conflictCount, 0);
+    assert.equal(json.duplicates, 0);
+    assert.equal(json.idempotency.source, 'none');
     const prefixes = json.eventIds.map((id) => id.replace(/_[0-9a-f-]{36}$/, ''));
     assert.deepEqual(prefixes, ['evt_wh_status', 'evt_wh_msg', 'evt_wh_tool', 'evt_wh_usage']);
     for (const id of json.eventIds) {
@@ -169,8 +170,8 @@ test('Webhook: generated ids are random UUIDs and the response counts duplicates
     // The same delivery again generates new ids, so nothing collides.
     const second = await (await send()).json();
     assert.equal(second.acceptedCount, 4);
-    assert.equal(second.duplicateCount, 0);
-    assert.equal(second.conflictCount, 0);
+    assert.equal(second.duplicates, 0);
+    assert.equal(second.idempotency.source, 'none');
     assert.equal(new Set([...json.eventIds, ...second.eventIds]).size, 8);
   } finally {
     server.close();

@@ -567,7 +567,7 @@ test('REST API: totalCost and the agent cost are null after a usage event withou
   }
 });
 
-test('REST API: generic webhook usage without provider or model lands in the null model bucket', async () => {
+test('REST API: generic webhook usage without provider or model is rejected with validation_failed', async () => {
   const { server, baseUrl } = await startTestServer();
 
   try {
@@ -576,15 +576,29 @@ test('REST API: generic webhook usage without provider or model lands in the nul
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent: 'webhook-usage-agent', usage: { inputTokens: 42, outputTokens: 7 } }),
     });
-    assert.equal(res.status, 202);
+    assert.equal(res.status, 400);
+    const json = await res.json();
+    assert.equal(json.error, 'validation_failed');
+    assert.ok(json.issues.some((i) => i.path === 'usage.provider'));
+    assert.ok(json.issues.some((i) => i.path === 'usage.model'));
+
+    // With provider and model, it should work
+    const complete = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'webhook-usage-agent',
+        usage: { provider: 'openai', model: 'gpt-4', inputTokens: 42, outputTokens: 7 },
+      }),
+    });
+    assert.equal(complete.status, 202);
 
     const usage = await getJson(baseUrl, '/api/v1/usage');
     const agent = usage.byAgent.find((entry) => entry.agentId === 'webhook-usage-agent');
     assert.ok(agent, 'Expected the webhook agent bucket');
-    assert.deepEqual(agent.byModel.map((entry) => [entry.provider, entry.model, entry.calls]), [[null, null, 1]]);
+    assert.deepEqual(agent.byModel.map((entry) => [entry.provider, entry.model, entry.calls]), [['openai', 'gpt-4', 1]]);
     assert.equal(agent.tokens.input.sum, 42);
     assert.equal(agent.costMissingCount, 1);
-    assert.ok(usage.byModel.some((entry) => entry.provider === null && entry.model === null && entry.calls >= 1));
   } finally {
     server.close();
   }
@@ -988,8 +1002,7 @@ test('REST API: a server-generated id that is not accepted returns 500 internal_
   }
 });
 
-test('REST API: a webhook whose generated ids are not accepted reports duplicateCount and conflictCount and logs at error', async (t) => {
-  const errors = t.mock.method(console, 'error', () => {});
+test('REST API: a webhook whose generated ids conflict returns 409 and does not broadcast', async (t) => {
   const { server, baseUrl } = await startTestServer();
   const realAppendBatch = store.appendBatch.bind(store);
   try {
@@ -998,8 +1011,7 @@ test('REST API: a webhook whose generated ids are not accepted reports duplicate
         outcome: index === 0 ? 'accepted' : index === 1 ? 'duplicate' : 'conflict',
         id: event.id,
         fingerprint: 'sha256:test',
-        duplicate: index === 1,
-        accepted: index < 2,
+        storedFingerprint: 'sha256:different',
       }));
       return { accepted: 1, duplicates: 1, conflicts: events.length - 2, results, acceptedEvents: [events[0]] };
     };
@@ -1008,14 +1020,11 @@ test('REST API: a webhook whose generated ids are not accepted reports duplicate
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ agent: 'hook-collider', status: 'coding', message: 'hi', tool: 'grep' }),
     });
-    assert.equal(res.status, 202);
+    // With conflicts, webhook returns 409 instead of 202
+    assert.equal(res.status, 409);
     const json = await res.json();
-    assert.equal(json.eventsGenerated, 3);
-    assert.equal(json.acceptedCount, 1);
-    assert.equal(json.duplicateCount, 1);
-    assert.equal(json.conflictCount, 1);
-    assert.equal(errors.mock.callCount(), 1);
-    assert.match(String(errors.mock.calls[0].arguments[0]), /Webhook event ids collided/);
+    assert.equal(json.error, 'event_id_conflict');
+    assert.equal(json.conflictingIds.length, 1);
   } finally {
     store.appendBatch = realAppendBatch;
     server.close();

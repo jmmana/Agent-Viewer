@@ -68,6 +68,9 @@ export function canonicalJson(value: unknown): string {
 }
 
 /** "sha256:<64 lowercase hex>" over canonicalJson(event), where event is the CanonicalEvent exactly as the store persists it. */
-export function eventFingerprint(event: CanonicalEvent): string {
-  return `${FINGERPRINT_PREFIX}${crypto.createHash('sha256').update(canonicalJson(event), 'utf8').digest('hex')}`;
+export function eventFingerprint(event: CanonicalEvent, ignoreTimestamp = false): string {
+  const eventForHash = ignoreTimestamp
+    ? { ...event, timestamp: undefined }
+    : event;
+  return `${FINGERPRINT_PREFIX}${crypto.createHash('sha256').update(canonicalJson(eventForHash), 'utf8').digest('hex')}`;
 }

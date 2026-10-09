@@ -7,9 +7,11 @@ import {
   validateCanonicalEvent,
   normalizeCanonicalEvent,
   ValidationIssue,
+  LlmUsagePayloadSchema,
 } from '../src/integrations/canonicalContract';
 import type { AgentStatus } from '../src/types/agent';
 import { serverEventId } from './ids';
+import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
 import { createEventStore, type AppendResult, type EventStore } from './store';
 import { readPackageVersion } from './version';
 
@@ -765,31 +767,27 @@ const GenericWebhookPayloadSchema = z.object({
   message: z.string().max(5000).optional(),
   text: z.string().max(5000).optional(),
   tool: z.string().max(200).optional(),
-  usage: z
-    .object({
-      provider: z.string().max(100).optional(),
-      model: z.string().max(100).optional(),
-      inputTokens: z.number().int().nonnegative().optional(),
-      outputTokens: z.number().int().nonnegative().optional(),
-      cachedTokens: z.number().int().nonnegative().optional(),
-      reasoningTokens: z.number().int().nonnegative().optional(),
-      cost: z.number().nonnegative().optional(),
-      latencyMs: z.number().int().nonnegative().optional(),
-    })
-    .optional(),
+  timestamp: z.number().int().positive().optional(),
+  idempotencyKey: z.string().min(1).max(255).optional(),
+  usage: LlmUsagePayloadSchema.optional(),
 });
 
 /** Signatures already accepted, mapped to the time after which their timestamp is outside the window anyway. */
-const seenWebhookSignatures = new Map<string, number>();
+const seenWebhookSignatures = new Map<string, { expiresAt: number; eventIds: string[] }>();
 
-/** Records a verified signature. Returns false when the same signature was already accepted inside the window. */
-function rememberWebhookSignature(signature: string, expiresAt: number, now: number): boolean {
-  const seenUntil = seenWebhookSignatures.get(signature);
-  if (seenUntil !== undefined && seenUntil > now) return false;
+/**
+ * Records a verified signature after successful store acceptance.
+ * Returns the stored event IDs if the same signature was already accepted, or null if this is new.
+ */
+function rememberWebhookSignature(signature: string, expiresAt: number, now: number, eventIds: string[]): string[] | null {
+  const seen = seenWebhookSignatures.get(signature);
+  if (seen !== undefined && seen.expiresAt > now) {
+    return seen.eventIds; // Duplicate: return the cached ids
+  }
 
   if (seenWebhookSignatures.size >= webhookReplayCacheMax) {
-    for (const [key, until] of seenWebhookSignatures) {
-      if (until <= now) seenWebhookSignatures.delete(key);
+    for (const [key, value] of seenWebhookSignatures) {
+      if (value.expiresAt <= now) seenWebhookSignatures.delete(key);
     }
     // Still full: evict the oldest entries. Only verified signatures get here, so filling it needs the secret.
     for (const key of seenWebhookSignatures.keys()) {
@@ -798,13 +796,18 @@ function rememberWebhookSignature(signature: string, expiresAt: number, now: num
     }
   }
 
-  seenWebhookSignatures.set(signature, expiresAt);
-  return true;
+  seenWebhookSignatures.set(signature, { expiresAt, eventIds });
+  return null; // New: not a duplicate
 }
 
 app.post('/api/v1/webhooks/generic', async (req, res) => {
   const secret = process.env.AGENT_VIEWER_WEBHOOK_SECRET;
+  const now = Date.now();
+  let verifiedSignature: string | null = null;
+  let idempotencySource: 'body' | 'header' | 'signature' | 'requestId' | 'none' | null = null;
+  let idempotencyKey = '';
 
+  // Step 1: Verify HMAC signature if a secret is configured
   if (secret) {
     const signature = req.header('x-agent-viewer-signature');
     const timestampStr = req.header('x-agent-viewer-timestamp');
@@ -818,7 +821,6 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     }
 
     const timestamp = Number(timestampStr);
-    const now = Date.now();
     // Replay protection, part 1: the timestamp must be within 5 minutes
     if (isNaN(timestamp) || Math.abs(now - timestamp) > webhookToleranceMs) {
       res.status(401).json({
@@ -839,16 +841,10 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
       return;
     }
 
-    // Replay protection, part 2: each signed request is accepted once inside the window
-    if (!rememberWebhookSignature(expected, timestamp + webhookToleranceMs, now)) {
-      res.status(409).json({
-        error: 'webhook_replay_detected',
-        message: 'This signed webhook was already accepted. Sign each delivery with a new timestamp',
-      });
-      return;
-    }
+    verifiedSignature = expected;
   }
 
+  // Step 2: Parse and validate the webhook payload
   const parseResult = GenericWebhookPayloadSchema.safeParse(req.body ?? {});
   if (!parseResult.success) {
     res.status(400).json({
@@ -863,96 +859,266 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   }
 
   const payload = parseResult.data;
-  const hasUsage = payload.usage !== undefined && Object.keys(payload.usage).length > 0;
-  if (!payload.status && !payload.message && !payload.text && !payload.tool && !hasUsage) {
+  if (!payload.status && !payload.message && !payload.text && !payload.tool && !payload.usage) {
     res.status(400).json({
       error: 'unrecognized_webhook_payload',
       message:
-        'Webhook payload does not describe any agent activity. Include at least one of "status", "message", "text", "tool" or a non-empty "usage" object',
+        'Webhook payload does not describe any agent activity. Include at least one of "status", "message", "text", "tool" or "usage"',
     });
     return;
   }
 
+  // Step 3: Determine the idempotency key from multiple sources
+  const headerKey = req.header('idempotency-key')?.trim();
+  const bodyKey = payload.idempotencyKey?.trim();
+
+  if (bodyKey && !bodyKey.match(/^[\x20-\x7E]+$/)) {
+    res.status(400).json({
+      error: 'invalid_idempotency_key',
+      message: 'idempotencyKey must be 1-255 printable ASCII characters',
+    });
+    return;
+  }
+
+  if (headerKey && !headerKey.match(/^[\x20-\x7E]+$/)) {
+    res.status(400).json({
+      error: 'invalid_idempotency_key',
+      message: 'Idempotency-Key header must be 1-255 printable ASCII characters',
+    });
+    return;
+  }
+
+  // Determine delivery key in priority order
+  if (bodyKey) {
+    idempotencyKey = bodyKey;
+    idempotencySource = 'body';
+  } else if (headerKey && !secret) {
+    // Header is ignored when a secret is set
+    idempotencyKey = headerKey;
+    idempotencySource = 'header';
+  } else if (verifiedSignature) {
+    idempotencyKey = verifiedSignature;
+    idempotencySource = 'signature';
+  } else if (payload.usage?.requestId) {
+    idempotencyKey = payload.usage.requestId;
+    idempotencySource = 'requestId';
+  } else {
+    idempotencySource = 'none';
+  }
+
+  if (headerKey && bodyKey && headerKey !== bodyKey && !secret) {
+    res.status(400).json({
+      error: 'idempotency_key_mismatch',
+      message: 'Idempotency-Key header and idempotencyKey body field differ',
+    });
+    return;
+  }
+
+  // Step 4: Build canonical events
   const agentName = payload.agent || payload.agentId || 'generic-agent';
   const status = payload.status || (payload.message || payload.text ? 'THINKING' : 'IDLE');
   const message = payload.message || payload.text;
   const tool = payload.tool;
   const usage = payload.usage;
+  const eventTimestamp = payload.timestamp || now;
 
   const generatedEvents: CanonicalEvent[] = [];
 
   // Generate status changed event
-  generatedEvents.push(
-    normalizeCanonicalEvent({
-      id: serverEventId('wh_status'),
+  if (true) {
+    const eventId = idempotencySource === 'none'
+      ? serverEventId('wh_status')
+      : webhookEventId('status', idempotencySource, idempotencyKey);
+
+    const validatedEvent = validateCanonicalEvent({
+      id: eventId,
       type: 'agent.status.changed',
+      timestamp: eventTimestamp,
       agentId: agentName,
       source: `agent:${agentName}`,
       summary: `${agentName} → ${status}`,
       payload: { status, statusText: payload.statusText || status },
-    })
-  );
+    });
+
+    if (!validatedEvent.success) {
+      res.status(400).json({
+        error: 'validation_failed',
+        message: 'Generated status event failed validation',
+        issues: validatedEvent.issues,
+      });
+      return;
+    }
+
+    generatedEvents.push(validatedEvent.data!);
+  }
 
   // Generate message sent event if present
   if (message) {
-    generatedEvents.push(
-      normalizeCanonicalEvent({
-        id: serverEventId('wh_msg'),
-        type: 'agent.message.sent',
-        agentId: agentName,
-        source: `agent:${agentName}`,
-        summary: `${agentName}: ${message.slice(0, 60)}`,
-        payload: { text: message },
-      })
-    );
+    const eventId = idempotencySource === 'none'
+      ? serverEventId('wh_msg')
+      : webhookEventId('msg', idempotencySource, idempotencyKey);
+
+    const validatedEvent = validateCanonicalEvent({
+      id: eventId,
+      type: 'agent.message.sent',
+      timestamp: eventTimestamp,
+      agentId: agentName,
+      source: `agent:${agentName}`,
+      summary: `${agentName}: ${message.slice(0, 60)}`,
+      payload: { text: message },
+    });
+
+    if (!validatedEvent.success) {
+      res.status(400).json({
+        error: 'validation_failed',
+        message: 'Generated message event failed validation',
+        issues: validatedEvent.issues,
+      });
+      return;
+    }
+
+    generatedEvents.push(validatedEvent.data!);
   }
 
   // Generate tool started event if present
   if (tool) {
-    generatedEvents.push(
-      normalizeCanonicalEvent({
-        id: serverEventId('wh_tool'),
-        type: 'tool.started',
-        agentId: agentName,
-        source: `agent:${agentName}`,
-        summary: `${agentName} using ${tool}`,
-        payload: { tool },
-      })
-    );
+    const eventId = idempotencySource === 'none'
+      ? serverEventId('wh_tool')
+      : webhookEventId('tool', idempotencySource, idempotencyKey);
+
+    const validatedEvent = validateCanonicalEvent({
+      id: eventId,
+      type: 'tool.started',
+      timestamp: eventTimestamp,
+      agentId: agentName,
+      source: `agent:${agentName}`,
+      summary: `${agentName} using ${tool}`,
+      payload: { tool },
+    });
+
+    if (!validatedEvent.success) {
+      res.status(400).json({
+        error: 'validation_failed',
+        message: 'Generated tool event failed validation',
+        issues: validatedEvent.issues,
+      });
+      return;
+    }
+
+    generatedEvents.push(validatedEvent.data!);
   }
 
   // Generate usage event if present
-  if (usage && typeof usage === 'object') {
-    generatedEvents.push(
-      normalizeCanonicalEvent({
-        id: serverEventId('wh_usage'),
-        type: 'llm.usage',
-        agentId: agentName,
-        source: `agent:${agentName}`,
-        summary: `${agentName} LLM usage reported`,
-        payload: usage,
-      })
-    );
+  if (usage) {
+    let usageEventId: string;
+    if (usage.requestId) {
+      // Usage events with requestId get a stable ID based on provider and requestId
+      usageEventId = webhookUsageRequestEventId(usage.provider, usage.requestId);
+    } else if (idempotencySource === 'none') {
+      usageEventId = serverEventId('wh_usage');
+    } else {
+      usageEventId = webhookEventId('usage', idempotencySource, idempotencyKey);
+    }
+
+    const validatedEvent = validateCanonicalEvent({
+      id: usageEventId,
+      type: 'llm.usage',
+      timestamp: eventTimestamp,
+      agentId: agentName,
+      source: `agent:${agentName}`,
+      summary: `${agentName} LLM usage reported`,
+      payload: usage,
+    });
+
+    if (!validatedEvent.success) {
+      res.status(400).json({
+        error: 'validation_failed',
+        message: 'Generated usage event failed validation',
+        issues: validatedEvent.issues,
+      });
+      return;
+    }
+
+    generatedEvents.push(validatedEvent.data!);
   }
 
-  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(generatedEvents);
+  // Step 5: Check for signature replay before appending to store
+  let cacheResult: string[] | null = null;
+  if (verifiedSignature) {
+    cacheResult = rememberWebhookSignature(verifiedSignature, now + webhookToleranceMs, now, generatedEvents.map(e => e.id));
+    if (cacheResult) {
+      // This is a duplicate of a previously accepted signed delivery
+      const isDuplicate = true;
+      const results = generatedEvents.map((e, i) => ({
+        id: e.id,
+        type: e.type,
+        duplicate: true,
+      }));
+
+      res.status(200).json({
+        accepted: true,
+        duplicate: isDuplicate,
+        eventsGenerated: generatedEvents.length,
+        acceptedCount: 0,
+        duplicates: generatedEvents.length,
+        idempotency: { source: idempotencySource },
+        eventIds: generatedEvents.map((e) => e.id),
+        results,
+      });
+      return;
+    }
+  }
+
+  // Step 6: Append events to store
+  const appendOptions: { atomic?: boolean; ignoreTimestamp?: boolean } = {};
+  if (idempotencySource !== 'none') {
+    appendOptions.atomic = true;
+    appendOptions.ignoreTimestamp = payload.timestamp === undefined;
+  }
+
+  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(generatedEvents, appendOptions as any);
+
+  // Step 7: Record signature only after successful append
+  if (verifiedSignature && accepted > 0) {
+    seenWebhookSignatures.set(verifiedSignature, {
+      expiresAt: now + webhookToleranceMs,
+      eventIds: generatedEvents.map(e => e.id)
+    });
+  }
+
+  // Step 8: Broadcast only newly accepted events
   for (const evt of acceptedEvents) {
     broadcastEvent(evt);
   }
-  if (duplicates > 0 || conflicts > 0) {
-    // Webhook ids are random UUIDs, so a repeat is a server bug, never a client retry.
-    const collided = results.filter((result) => result.outcome !== 'accepted').map(({ id, outcome }) => ({ id, outcome }));
-    console.error(`[agent-viewer] Webhook event ids collided: ${JSON.stringify(collided)}`);
-  }
 
-  res.status(202).json({
-    accepted: true,
-    eventsGenerated: generatedEvents.length,
-    acceptedCount: accepted,
-    duplicateCount: duplicates,
-    conflictCount: conflicts,
-    eventIds: generatedEvents.map((e) => e.id),
-  });
+  const isDuplicate = accepted === 0 && duplicates > 0 && conflicts === 0;
+  const statusCode = conflicts > 0 ? 409 : accepted > 0 ? 202 : 200;
+
+  const formattedResults = results.map((r) => ({
+    id: r.id,
+    type: generatedEvents.find(e => e.id === r.id)?.type || 'unknown',
+    duplicate: r.outcome === 'duplicate',
+  }));
+
+  if (statusCode === 409) {
+    res.status(409).json({
+      error: 'event_id_conflict',
+      message: 'A webhook event with the same id was already stored with different content',
+      idempotency: { source: idempotencySource },
+      conflictingIds: results.filter(r => r.outcome === 'conflict').map(r => r.id),
+    });
+  } else {
+    res.status(statusCode).json({
+      accepted: true,
+      duplicate: isDuplicate,
+      eventsGenerated: generatedEvents.length,
+      acceptedCount: accepted,
+      duplicates,
+      idempotency: { source: idempotencySource },
+      eventIds: generatedEvents.map((e) => e.id),
+      results: formattedResults,
+    });
+  }
 });
 
 // Safe global error handler returning JSON without stack traces or absolute paths.

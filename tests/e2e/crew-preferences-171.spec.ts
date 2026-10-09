@@ -1,0 +1,33 @@
+import { expect, test } from '@playwright/test';
+
+test('preferencias persistentes, anterior/siguiente y reset independiente del dominio #171', async ({page}, testInfo) => {
+  await page.goto('/?mode=live&visualMode=crew&crewRoom=development');
+  const agents = await page.getByText('Agents in this room:',{exact:false}).innerText();
+  await page.getByRole('checkbox',{name:'Reduce motion'}).check();
+  await page.locator('#crew-view').selectOption('back');
+  await page.getByRole('button',{name:'Zoom in',exact:true}).click();
+  await page.getByRole('button',{name:'Previous office',exact:true}).click();
+  await expect(page.locator('#crew-room')).not.toHaveValue('development');
+  await page.getByRole('button',{name:'Next office',exact:true}).click();
+  await expect(page.locator('#crew-room')).toHaveValue('development');
+  await expect(page.locator('#crew-view')).toHaveValue('back');
+  await expect(page.getByText('120%',{exact:true})).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('checkbox',{name:'Reduce motion'})).toBeChecked();
+  await expect(page.locator('#crew-room')).toHaveValue('development');
+  await page.getByRole('button',{name:'Sound effects on',exact:true}).click();
+  await page.reload();
+  await expect(page.getByRole('button',{name:'Sound effects muted',exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath('crew-preferences.png')});
+  await page.getByRole('button',{name:'Reset Crew preferences',exact:true}).click();
+  await expect(page.getByRole('checkbox',{name:'Reduce motion'})).not.toBeChecked();
+  await expect(page.locator('#crew-room')).toHaveValue('ceo');
+  await expect(page.getByRole('button',{name:'Previous office',exact:true})).toBeDisabled();
+  await page.locator('#crew-room').selectOption('reception');
+  await expect(page.getByRole('button',{name:'Next office',exact:true})).toBeDisabled();
+  await page.locator('#crew-room').selectOption('development');
+  expect(await page.getByText('Agents in this room:',{exact:false}).innerText()).toBe(agents);
+  await page.getByRole('button',{name:'Cartoon',exact:true}).click();
+  await expect(page.locator('#crew-room')).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'Sound effects muted',exact:true})).toBeVisible();
+});

@@ -4,6 +4,8 @@ export type { AgentOfficeProps } from './AgentOffice';
 export type { VisualMode, CrewView, CrewRoomDefinition } from '../crew/crewModel';
 export type { CrewCamera, CrewCameraByRoom } from '../crew/crewCamera';
 
+export type { CrewPreferences } from '../crew/crewPreferences';
+
 // Event-driven office model, usable without React (server, tests, exports)
 export { OfficeStore, buildOfficeSnapshot } from './officeStore';
 export type { AgentProfile, OfficeEventInput, OfficeMode, OfficeSnapshot, OfficeStoreOptions } from './officeStore';

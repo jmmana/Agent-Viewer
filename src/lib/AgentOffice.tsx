@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { defaultCrewPreferences, type CrewPreferences } from '../crew/crewPreferences';
 import { CrewStage } from '../crew/CrewStage';
 import { CREW_ROOMS, type VisualMode } from '../crew/crewModel';
 import type { CrewCameraByRoom } from '../crew/crewCamera';
@@ -40,6 +41,9 @@ export interface AgentOfficeProps {
   /** Cámaras controladas por el host; la biblioteca no escribe localStorage. */
   crewCameras?: CrewCameraByRoom;
   onCrewCamerasChange?: (cameras: CrewCameraByRoom) => void;
+  /** Preferencias visuales por instancia, sin almacenamiento ni cambios al dominio. */
+  crewPreferences?: CrewPreferences;
+  onCrewPreferencesChange?: (preferences: CrewPreferences) => void;
   /** BCP 47 locale for the built-in texts and number formats, for example `es-CO`. Defaults to `en`. */
   locale?: string;
   /** Overrides for single texts. Missing keys fall back to the built-in catalog, then to English. */
@@ -71,6 +75,8 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   onCrewRoomChange,
   crewCameras,
   onCrewCamerasChange,
+  crewPreferences,
+  onCrewPreferencesChange,
   locale = 'en',
   messages,
   t,
@@ -93,6 +99,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const listId = useId();
   const cartoonCameraMemory = useRef<CameraState | null>(null);
+  const [internalCrewPreferences, setInternalCrewPreferences] = useState(defaultCrewPreferences);
   const [internalCrewRoom, setInternalCrewRoom] = useState(CREW_ROOMS[0].id);
   const [internalCrewCameras, setInternalCrewCameras] = useState<CrewCameraByRoom>({});
 
@@ -138,6 +145,11 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           onCameraStateChange={cameras => {
             if (crewCameras === undefined) setInternalCrewCameras(cameras);
             onCrewCamerasChange?.(cameras);
+          }}
+          preferences={crewPreferences ?? internalCrewPreferences}
+          onPreferencesChange={preferences => {
+            if (crewPreferences === undefined) setInternalCrewPreferences(preferences);
+            onCrewPreferencesChange?.(preferences);
           }}
           persistCamera={false}
           showRoomLink={false}

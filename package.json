@@ -59,6 +59,7 @@
     "test": "npm run test:node && npm run test:unit",
     "test:node": "tsx --test tests/*.test.mjs",
     "test:unit": "vitest run",
+    "test:golden": "tsx --test tests/reconciliation.test.mjs",
     "check:package": "publint --strict && attw --pack . --profile esm-only --exclude-entrypoints ./style.css",
     "prepack": "npm run build:lib && npm run build:cli",
     "server": "tsx server/index.ts",

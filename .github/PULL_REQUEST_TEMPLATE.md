@@ -18,3 +18,4 @@ npm run build
 - [ ] No secrets or real user credentials included.
 - [ ] Tests added or updated for all changes.
 - [ ] Verified on local environment.
+- [ ] Golden reconciliation suite passes (`npm run test:golden`); any change to `tests/fixtures/reconciliation/golden.expected.json` is justified above.

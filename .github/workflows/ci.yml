@@ -39,6 +39,9 @@ jobs:
       - name: Typecheck
         run: npm run lint
 
+      - name: Golden reconciliation suite
+        run: npm run test:golden
+
       - name: TypeScript Tests (node + Vitest)
         run: npm test
 

@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The package declares `engines.node >=22.13`.
 - CI builds the CLI, runs it from the packed tarball and builds both Docker targets.
 
+### Breaking changes
+- `PATCH /api/v1/agents/:agentId` now accepts only descriptive profile fields (`name`, `roleTitle`, `provider`, `model`, `status`, `statusText`, `workspace`). Usage and cost fields are rejected; report each model call with an `llm.usage` event through `POST /api/v1/events`, or use the TypeScript `usage()` or Python `agent.usage(...)` helper. Arbitrary profile keys, empty values, and non-string values are also rejected.
+
 ## [0.2.1] - 2026-10-08
 
 ### Changed

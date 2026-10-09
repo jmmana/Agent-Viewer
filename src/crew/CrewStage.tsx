@@ -4,6 +4,7 @@ import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprite } from './useCrewSprite';
+import { useCrewBlink } from './useCrewBlink';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
 import { CrewGestures } from './crewGestures';
@@ -108,6 +109,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const illustratedAgents = presence.markers.filter(marker => marker.role === 'boss').length;
   const sprite = useCrewSprite(illustratedAgents ? view : null);
 
+  const blink = useCrewBlink(illustratedAgents > 0 && view === 'front' && !!sprite.image, roomId);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -119,8 +122,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprite: sprite.image, locale });
-  }, [room, camera, locale, presence, sprite.image]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprite: sprite.image, blink, locale });
+  }, [room, camera, locale, presence, sprite.image, blink]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -229,11 +232,11 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       onLostPointerCapture={event => gestures.current.end(event.pointerId)}
     />
     <p aria-live="polite" data-testid="crew-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
-      {isEs ? `Ilustraciones estáticas: ${sprite.image ? illustratedAgents : 0}.` : `Static illustrations: ${sprite.image ? illustratedAgents : 0}.`}
+      {isEs ? `Ilustraciones: ${sprite.image ? illustratedAgents : 0}.` : `Illustrations: ${sprite.image ? illustratedAgents : 0}.`}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>
-      {isEs ? 'PROTOTIPO 2.5D: poses estáticas del CEO y marcadores de presencia; animaciones pendientes.' : '2.5D PROTOTYPE: static CEO poses and presence markers; animations pending.'}
+      {isEs ? 'PROTOTIPO 2.5D: CEO con parpadeo frontal y poses estáticas en otras vistas; animación laboral pendiente.' : '2.5D PROTOTYPE: CEO with front-view blinking and static poses in other views; work animation pending.'}
     </p>
   </section>;
 }

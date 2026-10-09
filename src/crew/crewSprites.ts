@@ -18,14 +18,19 @@ export function crewSpriteView(marker: Pick<CrewPresenceMarker, 'role'>, view: C
 export function loadCrewSprite(view: CrewView, ready: (image: HTMLImageElement) => void,
   failed: () => void, loadUrl = async (direction: CrewView) => (await sources[direction]()).default,
   createImage = () => new Image()): () => void {
+  return loadCrewImage(() => loadUrl(view), CREW_CEO_SPRITE, ready, failed, createImage);
+}
+
+export function loadCrewImage(loadUrl: () => Promise<string>, size: {width:number;height:number},
+  ready: (image: HTMLImageElement) => void, failed: () => void, createImage = () => new Image()): () => void {
   let disposed = false;
   let image: HTMLImageElement | undefined;
-  void loadUrl(view).then(url => {
+  void loadUrl().then(url => {
     if (disposed) return;
     image = createImage();
     image.onload = () => {
       if (disposed) return;
-      if (image!.naturalWidth === CREW_CEO_SPRITE.width && image!.naturalHeight === CREW_CEO_SPRITE.height) ready(image!);
+      if (image!.naturalWidth === size.width && image!.naturalHeight === size.height) ready(image!);
       else failed();
     };
     image.onerror = () => { if (!disposed) failed(); };

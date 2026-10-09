@@ -19,12 +19,12 @@ test('CEO estático en cuatro vistas, carga aislada por sala y regreso a Caricat
   await page.route('**/api/v1/events/stream*',route=>route.fulfill({contentType:'text/event-stream',
     body:`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`}));
   await page.goto('/?mode=live&visualMode=crew&crewRoom=development');
-  await expect(page.getByTestId('crew-art-status')).toHaveText('Static illustrations: 0.');
+  await expect(page.getByTestId('crew-art-status')).toHaveText('Illustrations: 0.');
   expect(images).toEqual([]);
   await page.locator('#crew-room').selectOption('ceo');
   for(const view of ['front','right','back','left']) {
     await page.locator('#crew-view').selectOption(view);
-    await expect(page.getByTestId('crew-art-status')).toHaveText('Static illustrations: 1.');
+    await expect(page.getByTestId('crew-art-status')).toHaveText('Illustrations: 1.');
     await expect.poll(()=>page.evaluate(v=>(window as any).__crewDrawn.some((url:string)=>url.includes(`idle-${v}.png`)),view)).toBe(true);
     await page.screenshot({path:info.outputPath(`ceo-${view}.png`)});
   }
@@ -32,7 +32,7 @@ test('CEO estático en cuatro vistas, carga aislada por sala y regreso a Caricat
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:info.outputPath('ceo-mobile.png')});
   await page.locator('#crew-room').selectOption('development');
-  await expect(page.getByTestId('crew-art-status')).toHaveText('Static illustrations: 0.');
+  await expect(page.getByTestId('crew-art-status')).toHaveText('Illustrations: 0.');
   await page.getByRole('button',{name:'Cartoon',exact:true}).click();
   await expect(page.getByTestId('crew-art-status')).toHaveCount(0);
   await expect(page.locator('canvas')).toHaveCount(1);

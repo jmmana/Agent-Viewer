@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, crewProject, type CrewView } from './crewModel';
+import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /**
  * Minimal independent Crew engine proof of concept. NOT a finished scene:
@@ -10,9 +11,25 @@ export function CrewStage({ locale = 'es' }: { locale?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number>(0);
   const [roomId, setRoomId] = useState(CREW_ROOMS[0].id);
-  const [view, setView] = useState<CrewView>('front');
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  // Persist ONLY presentation state, not domain events; each room remembers its own camera.
+  const [cameraByRoom, setCameraByRoom] = useState<CrewCameraByRoom>(() => {
+    if (typeof window === 'undefined') return {};
+    try { return parseCrewCameraStore(window.localStorage.getItem(CREW_CAMERA_STORAGE_KEY)); }
+    catch { return {}; }
+  });
+  const camera = cameraByRoom[roomId] ?? defaultCrewCamera();
+  const { view, zoom, pan } = camera;
+  const patchCamera = (update: Partial<CrewCamera>) => setCameraByRoom(prev => ({
+    ...prev, [roomId]: { ...(prev[roomId] ?? defaultCrewCamera()), ...update },
+  }));
+  const setView = (value: CrewView) => patchCamera({ view: value });
+  const setZoom = (fn: (prev: number) => number) => patchCamera({ zoom: fn(zoom) });
+  const setPan = (fn: (prev: { x: number; y: number }) => { x: number; y: number }) => patchCamera({ pan: fn(pan) });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.setItem(CREW_CAMERA_STORAGE_KEY, JSON.stringify(cameraByRoom)); }
+    catch { /* Read-only or disabled storage must not break rendering. */ }
+  }, [cameraByRoom]);
   const isEs = locale.startsWith('es');
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
 
@@ -84,7 +101,7 @@ export function CrewStage({ locale = 'es' }: { locale?: string }) {
     style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#101a2b', color: '#f1f5f9' }}>
     <div style={{ display: 'flex', flexWrap: 'wrap', padding: 10, gap: 8, alignItems: 'center' }}>
       <label htmlFor="crew-room">{isEs ? 'Oficina' : 'Office'}</label>
-      <select id="crew-room" value={roomId} onChange={e => { setRoomId(e.target.value); setZoom(1); setPan({ x: 0, y: 0 }); }}
+      <select id="crew-room" value={roomId} onChange={e => setRoomId(e.target.value)}
         style={{ color: '#111827', background: '#fff', padding: 6 }}>
         {CREW_ROOMS.map(r => <option key={r.id} value={r.id}>{isEs ? r.label.es : r.label.en}</option>)}
       </select>
@@ -96,7 +113,7 @@ export function CrewStage({ locale = 'es' }: { locale?: string }) {
       <button type="button" onClick={() => setZoom(z => Math.max(.5, z / 1.2))} aria-label="Zoom out">−</button>
       <span>{Math.round(zoom * 100)}%</span>
       <button type="button" onClick={() => setZoom(z => Math.min(3, z * 1.2))} aria-label="Zoom in">+</button>
-      <button type="button" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>
+      <button type="button" onClick={() => patchCamera(defaultCrewCamera())}>
         {isEs ? 'Ajustar' : 'Fit room'}
       </button>
     </div>

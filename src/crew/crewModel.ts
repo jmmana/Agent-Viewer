@@ -28,6 +28,69 @@ export const CREW_ROOMS: readonly CrewRoomDefinition[] = [
       { id: 'dev-display', type: 'screen', x: 12, y: 2 },
       { id: 'dev-plant', type: 'plant', x: 13, y: 8 },
     ] },
+  // Distinct Crew-local prototype environments. These are NOT the final artwork.
+  { id: 'planning', label: { en: 'Planning', es: 'Planificación' }, width: 13, depth: 9,
+    furniture: [
+      { id: 'plan-desk', type: 'desk', x: 4, y: 4 },
+      { id: 'plan-chair', type: 'chair', x: 4, y: 6 },
+      { id: 'plan-board', type: 'screen', x: 9, y: 2 },
+      { id: 'plan-plant', type: 'plant', x: 11, y: 7 },
+    ] },
+  { id: 'research', label: { en: 'Research', es: 'Investigación' }, width: 12, depth: 9,
+    furniture: [
+      { id: 'research-desk', type: 'desk', x: 3, y: 4 },
+      { id: 'research-chair', type: 'chair', x: 3, y: 6 },
+      { id: 'research-display', type: 'screen', x: 8, y: 3 },
+      { id: 'research-plant', type: 'plant', x: 10, y: 6 },
+    ] },
+  { id: 'qa', label: { en: 'QA & Review', es: 'Calidad y revisión' }, width: 13, depth: 9,
+    furniture: [
+      { id: 'qa-desk-a', type: 'desk', x: 3, y: 4 },
+      { id: 'qa-chair-a', type: 'chair', x: 3, y: 6 },
+      { id: 'qa-desk-b', type: 'desk', x: 8, y: 4 },
+      { id: 'qa-monitor', type: 'screen', x: 10, y: 2 },
+    ] },
+  { id: 'finance', label: { en: 'Finance', es: 'Finanzas' }, width: 11, depth: 8,
+    furniture: [
+      { id: 'finance-desk', type: 'desk', x: 5, y: 3 },
+      { id: 'finance-chair', type: 'chair', x: 5, y: 5 },
+      { id: 'finance-screen', type: 'screen', x: 8, y: 2 },
+      { id: 'finance-plant', type: 'plant', x: 2, y: 6 },
+    ] },
+  { id: 'meeting', label: { en: 'Meeting Room', es: 'Sala de reuniones' }, width: 14, depth: 10,
+    furniture: [
+      { id: 'meeting-table', type: 'desk', x: 7, y: 5 },
+      { id: 'meeting-seat-a', type: 'chair', x: 5, y: 7 },
+      { id: 'meeting-seat-b', type: 'chair', x: 9, y: 7 },
+      { id: 'meeting-tv', type: 'screen', x: 7, y: 1 },
+    ] },
+  { id: 'infrastructure', label: { en: 'Infrastructure', es: 'Infraestructura' }, width: 13, depth: 10,
+    furniture: [
+      { id: 'infra-console-a', type: 'desk', x: 4, y: 5 },
+      { id: 'infra-console-b', type: 'desk', x: 9, y: 5 },
+      { id: 'infra-display-a', type: 'screen', x: 3, y: 2 },
+      { id: 'infra-display-b', type: 'screen', x: 10, y: 2 },
+    ] },
+  { id: 'coffee', label: { en: 'Coffee Area', es: 'Cafetería' }, width: 11, depth: 8,
+    furniture: [
+      { id: 'coffee-counter', type: 'desk', x: 5, y: 2 },
+      { id: 'coffee-stool', type: 'chair', x: 5, y: 4 },
+      { id: 'coffee-plant', type: 'plant', x: 2, y: 6 },
+    ] },
+  { id: 'lounge', label: { en: 'Lounge', es: 'Sala de descanso' }, width: 13, depth: 9,
+    furniture: [
+      { id: 'lounge-sofa-a', type: 'chair', x: 4, y: 5 },
+      { id: 'lounge-sofa-b', type: 'chair', x: 8, y: 5 },
+      { id: 'lounge-tv', type: 'screen', x: 6, y: 2 },
+      { id: 'lounge-plant', type: 'plant', x: 11, y: 7 },
+    ] },
+  { id: 'reception', label: { en: 'Reception', es: 'Recepción' }, width: 12, depth: 9,
+    furniture: [
+      { id: 'reception-counter', type: 'desk', x: 6, y: 3 },
+      { id: 'reception-seat-a', type: 'chair', x: 4, y: 6 },
+      { id: 'reception-seat-b', type: 'chair', x: 8, y: 6 },
+      { id: 'reception-plant', type: 'plant', x: 10, y: 2 },
+    ] },
 ] as const;
 
 export const CREW_VIEWS: readonly CrewView[] = ['front', 'right', 'back', 'left'];

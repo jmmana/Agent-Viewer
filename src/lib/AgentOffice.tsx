@@ -3,7 +3,7 @@ import { CrewStage } from '../crew/CrewStage';
 import { CREW_ROOMS, type VisualMode } from '../crew/crewModel';
 import type { CrewCameraByRoom } from '../crew/crewCamera';
 import { OfficeCanvas } from '../components/OfficeCanvas';
-import { agentRoleLabel } from '../engine/canvasRenderer';
+import { type CameraState, agentRoleLabel } from '../engine/canvasRenderer';
 import {
   createOfficeTranslator,
   type HostTranslate,
@@ -92,6 +92,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   const [version, setVersion] = useState(0);
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const listId = useId();
+  const cartoonCameraMemory = useRef<CameraState | null>(null);
   const [internalCrewRoom, setInternalCrewRoom] = useState(CREW_ROOMS[0].id);
   const [internalCrewCameras, setInternalCrewCameras] = useState<CrewCameraByRoom>({});
 
@@ -142,6 +143,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           showRoomLink={false}
           idPrefix={`${listId}-crew`}
         /> : <OfficeCanvas
+          cameraMemory={cartoonCameraMemory}
           agents={snapshot.agents}
           selectedAgentId={selectedId}
           onSelectAgent={handleSelect}

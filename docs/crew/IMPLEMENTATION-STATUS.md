@@ -1,7 +1,7 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #155/#156, marcadores de presencia y foco de agentes. Epic: #114.
+Último issue trabajado: #166/#171, conservación de la cámara Caricatura. Epic: #114.
 
 ## Resumen de la ejecución
 
@@ -19,7 +19,8 @@ Validación acumulada: 61 node, 449 Vitest, 9 E2E y 3 SDK Python; typecheck, app
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-presence-focus-155`, basada en `2c7461d` de #189.
+- Rama actual: `fix/crew-cartoon-camera-166`, basada en `cccc4bd` de #190.
+- Presencia: `feat/crew-presence-focus-155`, basada en `2c7461d` de #189.
 - API embebida: `feat/crew-embedded-api-171`, basada en `b607d83` de #187.
 - Enlaces/reset: `feat/crew-navigation-links-reset-171`, basada en `dfdb060` de #186.
 - QA anterior: `test/crew-domain-continuity-159`, basada en `0832cfa` de #185.
@@ -113,7 +114,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 ## Próximos tres pasos
 
-1. #166/#171: corregir la pérdida de cámara Caricatura al desmontar/reabrir el modo, detectada en revisión de lifecycle.
+1. #172/#115: migración selectiva de recursos originales de #43, con trazabilidad y sin código legacy.
 2. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
 3. #159: servidor SSE real, reproducción temporal, rendimiento y dispositivos físicos antes de aprobar G1.
 
@@ -176,3 +177,11 @@ Marcadores numerados representan exclusivamente agentes del snapshot asignados a
 Validación: 61 node, 461 Vitest, once E2E, typecheck, builds app/lib y validación de paquete aprobados. Tests incluyen 0/50 agentes, orden de replay determinista, colisiones de huellas, exceso de capacidad, aislamiento de sala y foco desde SSE/log sin alterar consumo. [Captura de presencia](evidence/camera-156/development-presence.png).
 
 Hallazgo independiente: el scaffold desmonta OfficeCanvas al cambiar de modo y su cámara es estado interno; por tanto se pierde al regresar. Las pruebas anteriores de regreso verificaban datos y canvas, no esa cámara. Se debe corregir esta regresión antes de aprobar G1; no está solucionada en este PR de presencia. Implementación `be7c4f3`, [PR #190](https://github.com/jmmana/Agent-Viewer/pull/190), abierto sobre #189. CI en curso al publicar.
+
+## Corrección #166/#171: cámara Caricatura
+
+El contenedor conserva una memoria de cámara Caricatura por instancia y la restaura al volver desde Crew. Adaptación opcional en OfficeCanvas para recibir esa memoria; no modifica canvasRenderer, escenas, personajes, estilos ni controles. Evita que el primer resize/fit borre la cámara restaurada; los cambios reales de viewport siguen ajustando el encuadre. Al salir el viewport se desmonta y conserva su limpieza de RAF/listeners, sin dibujarlo oculto.
+
+Cambio compartido necesario: App y AgentOffice proveen la memoria; OfficeCanvas conserva el comportamiento anterior cuando no se le proporciona. Pruebas StrictMode verifican pan/zoom/orientación y memorias distintas. E2E nuevo compara el PNG del canvas antes/después de rotar, acercar, arrastrar, entrar a Crew y regresar; son idénticos bajo reduced-motion y LIVE vacío.
+
+Validación: typecheck, 61 node, 463 Vitest, doce E2E, builds app/lib y paquete aprobados. Corrige el hallazgo documentado en #190. La prueba de igualdad de píxeles cubre ese escenario determinista, no toda la paridad visual con agentes activos. PR/SHA pendientes de publicación.

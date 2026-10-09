@@ -10,6 +10,7 @@ import {
 } from './engine/simulationEngine';
 import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
+import type { CameraState } from './engine/canvasRenderer';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { CrewStage } from './crew/CrewStage';
 import type { VisualMode } from './crew/crewModel';
@@ -61,6 +62,7 @@ export default function App() {
   // Active navigation tab
   const [currentTab, setCurrentTab] = useState<'office' | 'tasks' | 'meetings' | 'timeline'>('office');
   // UI-only mode: does not alter event telemetry, simulation, replay or the legacy renderer.
+  const cartoonCameraMemory = useRef<CameraState | null>(null);
   const [crewEntry] = useState(readCrewEntry);
   const [crewNavigation, setCrewNavigation] = useState(crewEntry.navigation);
   const [crewMissingRoom, setCrewMissingRoom] = useState(crewEntry.missingRoom);
@@ -664,6 +666,7 @@ export default function App() {
               ) : currentFloor === 1 ? (
                 <>
                   <OfficeCanvas
+                    cameraMemory={cartoonCameraMemory}
                     agents={canvasAgents}
                     selectedAgentId={selectedAgentId}
                     onSelectAgent={(id) => {

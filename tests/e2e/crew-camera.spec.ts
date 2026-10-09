@@ -92,3 +92,28 @@ test('enfoca escritorios y limita paneo incluso tras reducir el viewport', async
   await page.locator('#crew-focus').selectOption('dev-display');
   await expect(page.getByText('150%',{exact:true})).toBeVisible();
 });
+
+test('Caricatura recupera exactamente su cámara después de usar Crew', async ({page},testInfo) => {
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.route('**/api/v1/events/stream*', route=>route.abort());
+  await page.goto('/?mode=live');
+  await page.getByRole('button',{name:'Rotate office right',exact:true}).click();
+  await page.getByRole('button',{name:'Zoom in',exact:true}).click();
+  await page.getByRole('button',{name:'Zoom in',exact:true}).click();
+  const canvas=page.locator('canvas');
+  const box=(await canvas.boundingBox())!;
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
+  await page.mouse.down();
+  await page.mouse.move(box.x+box.width/2+70,box.y+box.height/2+45,{steps:4});
+  await page.mouse.up();
+  await page.mouse.move(0,0);
+  const zoom=await page.locator('.av-zoom-level').innerText();
+  const before=await canvas.screenshot({path:testInfo.outputPath('cartoon-camera-before.png')});
+  await page.getByRole('button',{name:'Crew · Beta',exact:true}).click();
+  await page.locator('#crew-view').selectOption('left');
+  await page.getByRole('button',{name:'Zoom in',exact:true}).click();
+  await page.getByRole('button',{name:'Cartoon',exact:true}).click();
+  await expect(page.locator('.av-zoom-level')).toHaveText(zoom);
+  const after=await canvas.screenshot({path:testInfo.outputPath('cartoon-camera-after.png')});
+  expect(Buffer.compare(before,after)).toBe(0);
+});

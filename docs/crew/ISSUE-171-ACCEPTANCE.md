@@ -64,7 +64,7 @@ se registra desde la nueva prueba Playwright, sin importar lógica de #43.
 
 - `npm run lint`, compilaciones app/lib/CLI y `npm run check:package`: aprobados.
 - Primer `npm test`: 472 Node aprobados, uno omitido; 601 Vitest aprobados.
-- Pruebas adicionales de prioridad del sistema: seis tests exclusivos #171 aprobados.
+- Validación final: 472 Node aprobados y uno omitido sin concurrencia; 602 Vitest aprobados, incluidos seis tests exclusivos #171. Una repetición concurrente tuvo dos fallos de umbral de tiempo (hook 537 ms y store 6,35 s) que aprobaron al ejecutarlos sin concurrencia.
 - Playwright Chrome, puerto aislado 3171: 18/18 aprobados en la repetición completa.
   El primer pase tuvo un fallo intermitente existente en la comprobación de
   drawImage de sprites; la repetición aislada y completa aprobaron.

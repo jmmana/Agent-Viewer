@@ -3,7 +3,7 @@ import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
 import { crewAgentsInRoom } from './crewEvents';
 import type { Agent } from '../types/agent';
-import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
+import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /**
  * Minimal independent Crew engine proof of concept. NOT a finished scene:
@@ -88,7 +88,15 @@ export function CrewStage({ locale = 'es', agents = [] }: { locale?: string; age
     </div>
     <canvas ref={canvasRef} style={{ width: '100%', flex: 1, minHeight: 120, touchAction: 'none', cursor: 'grab' }}
       aria-label={isEs ? `Vista de oficina: ${room.label.es}` : `Office view: ${room.label.en}`}
-      onWheel={e => { e.preventDefault(); setZoom(z => Math.max(.5, Math.min(3, z * (e.deltaY < 0 ? 1.1 : .9)))); }}
+      onWheel={e => {
+        e.preventDefault();
+        const bounds = e.currentTarget.getBoundingClientRect();
+        const cursor = { x: e.clientX - bounds.left - bounds.width / 2, y: e.clientY - bounds.top - bounds.height / 2 };
+        setCameraByRoom(prev => {
+          const current = prev[roomId] ?? defaultCrewCamera();
+          return { ...prev, [roomId]: zoomCrewCameraAt(current, current.zoom * (e.deltaY < 0 ? 1.1 : .9), cursor) };
+        });
+      }}
       onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); e.currentTarget.dataset.px = String(e.clientX); e.currentTarget.dataset.py = String(e.clientY); }}
       onPointerMove={e => { if (!e.currentTarget.hasPointerCapture(e.pointerId)) return; const px = Number(e.currentTarget.dataset.px || e.clientX), py = Number(e.currentTarget.dataset.py || e.clientY); setPan(p => ({ x: p.x + e.clientX - px, y: p.y + e.clientY - py })); e.currentTarget.dataset.px = String(e.clientX); e.currentTarget.dataset.py = String(e.clientY); }}
       onPointerUp={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }}

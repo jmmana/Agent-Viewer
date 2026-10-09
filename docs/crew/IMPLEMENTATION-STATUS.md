@@ -1,9 +1,15 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-09 (America/Bogota).
-Último issue trabajado: #118/#117/#172, piloto estático del CEO y carga de recursos. Epic: #114.
+Último issue trabajado: #117/#118, controlador de fotogramas y parpadeo frontal del CEO. Epic: #114.
 
 ## Resumen de la ejecución
+
+Último incremento: atlas original RGBA de cuatro expresiones y controlador temporal de parpadeo frontal, con anclajes por fotograma, carga diferida, recuperación ante error y respeto por movimiento reducido. El reloj se detiene al ocultar la pestaña o salir de Crew. No escribe eventos, tareas ni métricas. [Recurso, procedencia y prompt](../../assets/crew/clips/README.md). [Captura](evidence/blink-117/ceo-blink.png) y [vídeo](evidence/blink-117/runtime.mp4).
+
+Validación local del incremento: 554 Vitest y 16 E2E aprobados, tipos, compilaciones app/lib/CLI, paquete e integridad del banco aprobados. La suite Node también pasó; el detalle queda en el PR. Las pruebas cubren límites temporales, fin/repetición de clips, cancelación, pestaña oculta, movimiento reducido dinámico, cuatro rectángulos dibujados y atlas ausente. Los clips laborales y de locomoción, otros roles y G1 siguen pendientes.
+
+### Historial de integración
 
 El [PR #194](https://github.com/jmmana/Agent-Viewer/pull/194) integra los incrementos #175, #177, #182, #183, #185, #186, #187, #189, #190 y #191 en main, conservando sus commits. Merge `a867cd2`, 2026-10-09. Se reconciliaron los cambios recientes de CLI, contratos, almacenamiento y CI; los tres conflictos de configuración conservaron ambos conjuntos de comprobaciones. #175 quedó fusionado automáticamente y los PR apilados restantes se cerraron por integración, tras verificar que sus commits son ancestros de main. #43 no se fusionó. Ningún issue funcional se cerró.
 
@@ -16,7 +22,8 @@ Crew sigue en Beta. G1 no está certificado: faltan arte final de salas, animaci
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-character-assets-118`, basada en la integración `f2cfc11` de #194.
+- Rama actual: `feat/crew-animation-controller-117`, basada en main `6f756c1`.
+- Piloto estático anterior: `feat/crew-character-assets-118`, integrado mediante #195.
 - Banco: `feat/crew-asset-bank-172`, basado en `5cb4643` de #191.
 - Cámara Caricatura: `fix/crew-cartoon-camera-166`, basada en `cccc4bd` de #190.
 - Presencia: `feat/crew-presence-focus-155`, basada en `2c7461d` de #189.
@@ -202,3 +209,11 @@ Solo agentes con rol boss presentes en la sala reciben la pose original correspo
 Los módulos diferidos cargan únicamente la vista solicitada; al cambiar sala, vista o modo se limpian callbacks de imagen y se descartan resultados tardíos. Fallos de descarga o dimensiones inconsistentes mantienen el marcador y un mensaje ES/EN. La biblioteca empaqueta las cuatro imágenes en módulos diferidos; la aplicación produce archivos con hash. El banco pasa de bank-only a source-bank sin alterar hashes ni archivos originales.
 
 Pruebas nuevas: selección por rol, cancelación antes de resolver el módulo, errores de importación/imagen, dimensiones, integridad del anclaje, render sin imagen y sala vacía. Dos E2E verifican drawImage con cada original, ausencia de descargas en otra sala, las cuatro vistas, móvil, regreso Caricatura y PNG no disponible. Se revisaron capturas de las cuatro vistas y móvil; [MP4 de ejecución](evidence/ceo-118/four-views.mp4) obtenido del vídeo Playwright de la misma prueba. Una primera ejecución detectó un selector de status ambiguo, corregido usando aria-live en el texto de arte, y un fallo intermitente de interacción embebida no reproducido en la repetición específica ni en la suite completa posterior. CI debe confirmar el conjunto.
+
+## Parpadeo frontal y controlador de fotogramas, #117/#118
+
+Se añadió un atlas derivado mediante image_gen integrado, preservando los originales. El PNG mide 1070 × 1470 y contiene cuatro celdas diferentes. La medición de los pies opacos detectó desplazamientos de hasta ocho píxeles entre columnas; el contrato compensa con anclajes por cuadro, sin alterar el archivo. Se revisaron identidad, expresiones y ejecución en la sala Crew. Sigue clasificado prototype.
+
+El controlador puro selecciona cuadros por tiempo transcurrido y duraciones explícitas. La integración programa solo la próxima transición, sin RAF continuo de animación. Movimiento reducido usa el original estático; pestaña oculta cancela el temporizador y reanuda desde ojos abiertos. Un atlas fallido conserva el original y una sala sin CEO no lo descarga.
+
+No se implementaron caminar, giros, sentarse, teclear ni llamada. No se convierte el parpadeo en prueba de animación laboral ni de orientación del dominio. #117/#118 continúan abiertos.

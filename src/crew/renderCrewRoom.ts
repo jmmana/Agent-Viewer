@@ -1,6 +1,7 @@
 import { crewProject, type CrewRoomDefinition, type CrewView } from './crewModel';
 import { CREW_PROP_SIZE } from './crewSpatial';
 import type { CrewPresenceMarker } from './crewPresence';
+import type { CrewAnimationFrame } from './crewAnimation';
 import type { CrewCamera } from './crewCamera';
 import { CREW_CEO_SPRITE, crewSpriteView } from './crewSprites';
 
@@ -20,6 +21,7 @@ export interface CrewRenderInput {
   locale?: string;
   markers?: readonly CrewPresenceMarker[];
   sprite?: HTMLImageElement;
+  blink?: {image: HTMLImageElement; frame: CrewAnimationFrame};
 }
 export const CREW_TILE_X = 34;
 export const CREW_TILE_Y = 18;
@@ -80,7 +82,7 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprite }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprite, blink }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
@@ -128,7 +130,11 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
         if (sprite && crewSpriteView(marker, view)) {
           const spec = CREW_CEO_SPRITE;
           const height = spec.displayHeight, width = height * spec.width / spec.height;
-          ctx.drawImage(sprite,point.x-width*spec.anchor.x,point.y-height*spec.anchor.y,width,height);
+          if (blink && view === 'front') {
+            const f=blink.frame, scale=height/f.height;
+            ctx.drawImage(blink.image,f.x,f.y,f.width,f.height,
+              point.x-f.anchor.x*scale,point.y-f.anchor.y*scale,f.width*scale,height);
+          } else ctx.drawImage(sprite,point.x-width*spec.anchor.x,point.y-height*spec.anchor.y,width,height);
         }
         const badgeY = point.y + (sprite && crewSpriteView(marker,view) ? 9 : 0);
         ctx.beginPath();

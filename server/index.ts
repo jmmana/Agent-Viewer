@@ -14,7 +14,7 @@ import type { AgentStatus } from '../src/types/agent';
 import { OTLP_LOGS_PATH } from '../src/integrations/otelConstants';
 import { serverEventId } from './ids';
 import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
-import { createEventStore, type AppendResult, type AppendBatchResult, type EventStore } from './store';
+import { createEventStore, type AppendResult, type AppendBatchResult, type EventSeq, type EventStore } from './store';
 import { readPackageVersion } from './version';
 import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from './otlp/logs';
 
@@ -52,6 +52,26 @@ const webhookToleranceMs = 300_000;
 /** Upper bound of remembered webhook signatures. */
 const webhookReplayCacheMax = 10_000;
 
+/**
+ * Maximum number of missed events a reconnect replays in full (issue #54). `0` means a reconnect that missed
+ * anything always resyncs instead of replaying. Read and validated once at module load, like `parseMaxEvents`.
+ */
+function parseSseReplayMax(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return 10000;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`AGENT_VIEWER_SSE_REPLAY_MAX must be a non-negative integer, got ${JSON.stringify(raw)}`);
+  }
+  return Number(trimmed);
+}
+
+/** Events fetched from the store per `listBetween` page while replaying a reconnect (issue #54). */
+const sseReplayPageSize = 500;
+/** Live frames buffered per connection while its replay is in flight; past this, the connection resyncs instead. */
+const sseReplayBufferMax = 5000;
+/** How long a stalled connection may take to drain before it is disconnected mid-replay. */
+const sseDrainTimeoutMs = 30_000;
+
 /** Agent statuses the office understands. Kept exhaustive against `AgentStatus` at compile time. */
 const AGENT_STATUSES = [
   'OFFLINE', 'IDLE', 'AVAILABLE', 'THINKING', 'READING', 'RESEARCHING', 'CODING', 'WRITING', 'TESTING',
@@ -77,8 +97,10 @@ const PATCH_USAGE_MESSAGE =
   'Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.';
 
 let store: EventStore;
+let sseReplayMax: number;
 try {
   store = createEventStore();
+  sseReplayMax = parseSseReplayMax(process.env.AGENT_VIEWER_SSE_REPLAY_MAX);
 } catch (error) {
   if (!isDirectRun) throw error;
   const message = error instanceof Error ? error.message : String(error);
@@ -113,6 +135,13 @@ function requireReady<P = Record<string, string>, ResBody = any, ReqBody = any, 
 }
 
 const clients = new Set<express.Response>();
+/**
+ * Live frames queued for a connection while its reconnect replay is in flight, keyed by the response (issue
+ * #54). A connection is present here only between being added to `clients` and going live (or resyncing).
+ */
+const replayBuffers = new Map<express.Response, { buffer: Array<{ seq: EventSeq | null; frame: string }>; overflowed: boolean }>();
+/** Stream counters exposed by `/health` (issue #54). Per process, reset on restart. */
+const sseCounters = { replaysSinceStart: 0, eventsReplayedSinceStart: 0, resyncsSinceStart: 0 };
 
 // Rate limiter storage
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
@@ -318,7 +347,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
     return;
   }
 
-  for (const event of appendResult.acceptedEvents) broadcastEvent(event);
+  appendResult.acceptedEvents.forEach((event, index) => broadcastEvent(event, appendResult.acceptedSeqs[index] ?? null));
 
   // A conflict (same content-derived id already stored with different content) can only happen when two
   // otherwise-identical records resolved to different timestamps because neither had `event.timestamp` nor a
@@ -522,6 +551,12 @@ app.get('/health', (_req, res) => {
     clientsConnected: clients.size,
     auth: currentAuthMode(),
     webhookAuth: currentWebhookAuthMode(),
+    sse: {
+      replayMax: sseReplayMax,
+      replaysSinceStart: sseCounters.replaysSinceStart,
+      eventsReplayedSinceStart: sseCounters.eventsReplayedSinceStart,
+      resyncsSinceStart: sseCounters.resyncsSinceStart,
+    },
   });
 });
 
@@ -558,7 +593,13 @@ export function onEventAccepted(listener: AcceptedEventListener): () => void {
 }
 
 // Helper to broadcast event to SSE subscribers (without named event so EventSource.onmessage receives all)
-function broadcastEvent(event: CanonicalEvent) {
+/**
+ * Broadcasts an accepted event to SSE subscribers (without a named event, so `EventSource.onmessage` receives
+ * all of them). `seq` is the event's insertion seq (issue #54), used to order the live buffer of a connection
+ * still replaying a reconnect gap: `broadcastEvent` queues the frame for it instead of writing it right away, so
+ * nothing broadcast during its replay is ever lost or delivered out of order.
+ */
+function broadcastEvent(event: CanonicalEvent, seq: EventSeq | null) {
   for (const listener of acceptedEventListeners) {
     // A failing listener must never break ingestion, whether it throws or returns a rejected promise.
     try {
@@ -572,6 +613,16 @@ function broadcastEvent(event: CanonicalEvent) {
   }
   const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
   for (const client of clients) {
+    const replay = replayBuffers.get(client);
+    if (replay) {
+      if (replay.overflowed) continue;
+      if (replay.buffer.length >= sseReplayBufferMax) {
+        replay.overflowed = true;
+        continue;
+      }
+      replay.buffer.push({ seq, frame });
+      continue;
+    }
     try {
       client.write(frame);
     } catch {
@@ -593,7 +644,7 @@ function conflictMessage(id: string): string {
 async function appendServerEvent(event: CanonicalEvent, res: express.Response): Promise<boolean> {
   const result: AppendResult = await store.append(event);
   if (result.outcome === 'accepted') {
-    broadcastEvent(event);
+    broadcastEvent(event, result.seq);
     return true;
   }
   console.error(
@@ -668,7 +719,7 @@ app.post('/api/v1/events', async (req, res) => {
     return;
   }
 
-  broadcastEvent(event);
+  broadcastEvent(event, result.seq);
 
   res.status(202).json({
     accepted: true,
@@ -729,11 +780,9 @@ app.post('/api/v1/events/batch', async (req, res) => {
     return;
   }
 
-  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(validatedEvents);
+  const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(validatedEvents);
 
-  for (const event of acceptedEvents) {
-    broadcastEvent(event);
-  }
+  acceptedEvents.forEach((event, index) => broadcastEvent(event, acceptedSeqs[index] ?? null));
 
   // 202 even when every item is a conflict, so existing clients keep working: read `conflicts` and each `status`.
   res.status(202).json({
@@ -849,6 +898,26 @@ app.get('/api/v1/usage/duplicates', async (req, res) => {
 // -------------------------------------------------------------
 // Realtime Stream (SSE)
 // -------------------------------------------------------------
+/** Resolves once `res` drains or `timeoutMs` elapses; resolves early (as "not drained") if `res` closes first. */
+function waitForDrain(res: express.Response, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (drained: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      res.off('drain', onDrain);
+      res.off('close', onClose);
+      resolve(drained);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    const onDrain = () => finish(true);
+    const onClose = () => finish(false);
+    res.once('drain', onDrain);
+    res.once('close', onClose);
+  });
+}
+
 app.get('/api/v1/events/stream', async (req, res) => {
   res.status(200);
   res.setHeader('Content-Type', 'text/event-stream');
@@ -857,28 +926,11 @@ app.get('/api/v1/events/stream', async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  // Handle missed events if Last-Event-ID or lastEventId query param is provided
-  const lastEventId = req.header('last-event-id') || (typeof req.query.lastEventId === 'string' ? req.query.lastEventId : undefined);
-  if (lastEventId) {
-    const missed = await store.list({ afterId: lastEventId, limit: 100 });
-    // missed events are descending; replay in chronological order
-    for (const evt of missed.reverse()) {
-      res.write(`id: ${evt.id}\ndata: ${JSON.stringify(evt)}\n\n`);
-    }
-  }
+  let closed = false;
 
-  // Read retention before the first write and send ": connected" plus the first heartbeat in one write (issue
-  // #53), so a client knows the retention state as soon as it connects and no live event can land between the
-  // two frames. A rejected retention() falls back to the old empty heartbeat instead of failing the connection.
-  let initialRetentionData = '{}';
-  try {
-    initialRetentionData = JSON.stringify({ retention: await store.retention() });
-  } catch {
-    // Keep the empty-payload fallback; the client watchdog only needs a frame to arrive, not its content.
-  }
-  res.write(`: connected\n\n: heartbeat\nevent: heartbeat\ndata: ${initialRetentionData}\n\n`);
-  clients.add(res);
-
+  // Registered before any await (issue #54), so a client that disconnects during a longer replay never leaks in
+  // `clients` and the heartbeat timer is always cleared. The heartbeat itself still carries retention (issue
+  // #53), read fresh on every tick.
   const heartbeat = setInterval(() => {
     if (res.writableEnded || res.destroyed) return;
     store.retention().then(
@@ -898,11 +950,170 @@ app.get('/api/v1/events/stream', async (req, res) => {
       }
     );
   }, 15000);
-
   req.on('close', () => {
+    closed = true;
     clearInterval(heartbeat);
     clients.delete(res);
+    replayBuffers.delete(res);
   });
+
+  /**
+   * Writes ": connected" and the first heartbeat atomically (issue #53), so a client knows the retention state as
+   * soon as it connects and no live event can land between the two frames. Called right after the reconnect
+   * replay or resync frame (issue #54), so existing clients and tests keep seeing "connected" at that point.
+   */
+  async function sendConnectedFrame(): Promise<void> {
+    let initialRetentionData = '{}';
+    try {
+      initialRetentionData = JSON.stringify({ retention: await store.retention() });
+    } catch {
+      // Keep the empty-payload fallback; the client watchdog only needs a frame to arrive, not its content.
+    }
+    if (closed) return;
+    try {
+      res.write(`: connected\n\n: heartbeat\nevent: heartbeat\ndata: ${initialRetentionData}\n\n`);
+    } catch {
+      clients.delete(res);
+    }
+  }
+
+  const lastEventId = req.header('last-event-id') || (typeof req.query.lastEventId === 'string' ? req.query.lastEventId : undefined);
+
+  if (!lastEventId) {
+    // No cursor: today's first-connection behavior, unchanged.
+    clients.add(res);
+    await sendConnectedFrame();
+    return;
+  }
+
+  /** Writes a `resync` frame and counts it (issue #54). */
+  function sendResync(reason: 'cursor_unknown' | 'gap_too_large' | 'buffer_overflow', missed: number | null) {
+    sseCounters.resyncsSinceStart++;
+    try {
+      res.write(
+        `event: resync\ndata: ${JSON.stringify({
+          schemaVersion: '1.0',
+          reason,
+          cursor: lastEventId,
+          missed,
+          replayMax: sseReplayMax,
+          snapshotPath: '/api/v1/snapshot',
+        })}\n\n`
+      );
+    } catch {
+      clients.delete(res);
+    }
+  }
+
+  /** Flushes the buffered live frames (if any) accumulated during the replay, then sends "connected". */
+  async function goLive(): Promise<void> {
+    const replay = replayBuffers.get(res);
+    replayBuffers.delete(res);
+    if (closed) return;
+    if (replay) {
+      for (const { frame } of replay.buffer) {
+        try {
+          res.write(frame);
+        } catch {
+          clients.delete(res);
+          return;
+        }
+      }
+    }
+    await sendConnectedFrame();
+  }
+
+  // The connection is added to `clients` (so `/health` counts it right away) in a "replaying" state before any
+  // await: `broadcastEvent` queues live frames for it instead of writing them, so nothing stored after the
+  // replay query and broadcast before `goLive()` is ever lost (issue #54).
+  clients.add(res);
+  replayBuffers.set(res, { buffer: [], overflowed: false });
+
+  const resolvedCursorSeq = await store.resolveCursor(lastEventId);
+  if (closed) return;
+  if (resolvedCursorSeq === null) {
+    // No event frames are replayed, but `goLive()` still flushes whatever was buffered during the `await`
+    // above, so a live event broadcast while the cursor lookup was pending is never lost.
+    sendResync('cursor_unknown', null);
+    await goLive();
+    return;
+  }
+  // Narrowed to a plain `const` so the closures below can use it without `null` in its type.
+  const cursorSeq: EventSeq = resolvedCursorSeq;
+
+  /** Reads the buffer-overflow flag and, if set, discards the buffer and resyncs instead of flushing it. */
+  async function bailOnOverflow(): Promise<boolean> {
+    const replay = replayBuffers.get(res);
+    if (!replay?.overflowed) return false;
+    replayBuffers.delete(res);
+    const headNow = (await store.headSeq()) ?? cursorSeq;
+    const missedNow = await store.countBetween(cursorSeq, headNow);
+    sendResync('buffer_overflow', missedNow);
+    return true;
+  }
+
+  const head = (await store.headSeq()) ?? cursorSeq;
+  if (closed) return;
+  const missed = await store.countBetween(cursorSeq, head);
+  if (closed) return;
+
+  if (missed > sseReplayMax) {
+    // Same as above: no event frames from the gap, but the live buffer accumulated so far is still flushed.
+    sendResync('gap_too_large', missed);
+    await goLive();
+    return;
+  }
+
+  let replayedCount = 0;
+  let lastReplayedId: string | null = null;
+  let cursorPos = cursorSeq;
+  while (cursorPos < head) {
+    if (await bailOnOverflow()) return;
+    const page = await store.listBetween(cursorPos, head, sseReplayPageSize);
+    if (closed) return;
+    if (page.length === 0) break;
+    for (const { seq, event } of page) {
+      if (await bailOnOverflow()) return;
+      const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
+      let ok: boolean;
+      try {
+        ok = res.write(frame);
+      } catch {
+        clients.delete(res);
+        replayBuffers.delete(res);
+        return;
+      }
+      replayedCount++;
+      lastReplayedId = event.id;
+      cursorPos = seq;
+      if (!ok) {
+        const drained = await waitForDrain(res, sseDrainTimeoutMs);
+        if (closed) return;
+        if (!drained) {
+          replayBuffers.delete(res);
+          res.destroy();
+          return;
+        }
+      }
+    }
+  }
+
+  if (await bailOnOverflow()) return;
+  sseCounters.replaysSinceStart++;
+  sseCounters.eventsReplayedSinceStart += replayedCount;
+  try {
+    res.write(
+      `event: replayed\ndata: ${JSON.stringify({
+        schemaVersion: '1.0',
+        cursor: lastEventId,
+        replayed: replayedCount,
+        lastEventId: lastReplayedId,
+      })}\n\n`
+    );
+  } catch {
+    clients.delete(res);
+  }
+  await goLive();
 });
 
 // -------------------------------------------------------------
@@ -1470,7 +1681,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     appendOptions.ignoreTimestamp = payload.timestamp === undefined;
   }
 
-  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(generatedEvents, appendOptions as any);
+  const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(generatedEvents, appendOptions as any);
 
   // Step 7: Record signature only after successful append
   if (verifiedSignature && accepted > 0) {
@@ -1481,9 +1692,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   }
 
   // Step 8: Broadcast only newly accepted events
-  for (const evt of acceptedEvents) {
-    broadcastEvent(evt);
-  }
+  acceptedEvents.forEach((evt, index) => broadcastEvent(evt, acceptedSeqs[index] ?? null));
 
   const isDuplicate = accepted === 0 && duplicates > 0 && conflicts === 0;
   const statusCode = conflicts > 0 ? 409 : accepted > 0 ? 202 : 200;

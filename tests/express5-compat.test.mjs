@@ -155,7 +155,24 @@ test('Async handlers: a rejected store call returns a JSON 500 and the server ke
       assert.match(res.headers.get('content-type') ?? '', /application\/json/);
       assert.deepEqual(await res.json(), { error: 'internal_server_error', message: 'storage unavailable' });
 
-      // The SSE stream already sent its headers when the replay fails, so the connection is closed instead.
+      const health = await fetch(`${baseUrl}/health`);
+      assert.equal(health.status, 200);
+    } finally {
+      listMock.mock.restore();
+      server.close();
+    }
+  });
+});
+
+test('Async handlers: a rejected cursor lookup during an SSE reconnect closes the connection instead of hanging it, and the server keeps serving (issue #54)', async () => {
+  await withEnv(NO_AUTH_ENV, async () => {
+    const { server, baseUrl } = await startTestServer();
+    const cursorMock = mock.method(store, 'resolveCursor', async () => {
+      throw new Error('storage unavailable');
+    });
+    try {
+      // The SSE stream already sent its headers (and registered the connection) before the cursor lookup
+      // rejects, so the connection is closed instead of answering with a JSON 500.
       const stream = await fetch(`${baseUrl}/api/v1/events/stream`, { headers: { 'Last-Event-ID': 'evt_missing' } });
       assert.equal(stream.status, 200);
       await assert.rejects(stream.text());
@@ -163,7 +180,7 @@ test('Async handlers: a rejected store call returns a JSON 500 and the server ke
       const health = await fetch(`${baseUrl}/health`);
       assert.equal(health.status, 200);
     } finally {
-      listMock.mock.restore();
+      cursorMock.mock.restore();
       server.close();
     }
   });

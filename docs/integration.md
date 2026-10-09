@@ -304,7 +304,7 @@ The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or 
 - `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header. Answers `202` (accepted), `200` (duplicate: same id, same content) or `409 conflicting_duplicate` (same id, different content, not applied), each with the event `fingerprint`. A header that differs from a non-empty body `id` is a `400 idempotency_key_mismatch`.
 - `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch). Each result has a `status` of `accepted`, `duplicate` or `conflict`.
 - `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`). The body also carries `retention` (see below), so a caller can tell whether the list is complete.
-- `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay. The first frames after `: connected` are a heartbeat whose `data` carries `{ "retention": {...} }`, and every later heartbeat (every 15s) carries it too; a client that does not read `data` on the `heartbeat` event is unaffected.
+- `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream. On reconnect (`Last-Event-ID` header or `lastEventId` query parameter), it replays every missed event in full or sends an explicit `resync` frame, never a partial replay; see [Reconnect replay and resync](#reconnect-replay-and-resync-issue-54) below. The first frames after `: connected` are a heartbeat whose `data` carries `{ "retention": {...} }`, and every later heartbeat (every 15s) carries it too; a client that does not read `data` on the `heartbeat` event is unaffected.
 - `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block, `usageDuplicates: { count, mismatched, unverified }` (request-id duplicate references, see [Idempotency & Replays](#-5-idempotency--replays)), `retention` (see below) and the deprecated `totalTokens`, `totalCost` and `eventsCount`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
 
 `retention` (added by issue #53) tells a reader whether the event list is complete, so a truncated history is never mistaken for the full one:
@@ -322,6 +322,27 @@ The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or 
 ```
 
 `maxEvents` is `null` in `sqlite` mode (the database keeps every row). `retainedEvents` is how many events `GET /api/v1/events` and SSE replay can currently return; `acceptedEvents` is how many were accepted since `totalsSince` (duplicates never counted), including any that no longer fit in the retained window; `droppedEvents` is the difference, `0` meaning the list is complete. `since` is the server receive time of the oldest retained event, or `null` before anything was dropped. `totalsSince` is when the totals and per-agent figures started counting (the process start time; after a future SQLite rebuild, issue #52, it becomes the receive time of the oldest stored event). In memory mode, a retry of an event id (or, for `llm.usage`/`llm.failed`, a `(provider, requestId)` pair) is still recognized as a duplicate after the event itself falls out of the retained window: the dedup index is never trimmed by eviction, so totals never double count a late retry.
+#### Reconnect replay and resync (issue #54)
+
+The rule: after a reconnect, a client either gets every event it missed, in insertion order and exactly once, or it is told plainly that it must resync from the snapshot. There is no third, silent outcome. `AGENT_VIEWER_SSE_REPLAY_MAX` (default `10000`, `0` allowed) caps how many missed events a reconnect replays in full; past that, or when the cursor is unknown (never stored, evicted in memory mode, or lost after a memory-mode restart), the server sends a `resync` frame instead and no event frames from the gap. A `resync` whose reason is `buffer_overflow` means too many live events arrived while a replay was already in flight; the replay already sent is valid, only the live events after it were not delivered.
+
+The server always keeps the connection open and keeps streaming live events after a `resync`, on purpose: a 0.2.x client ignores the named frame and would otherwise reconnect with the same cursor in a loop. A client built against this contract closes the connection itself and reconnects from a fresh snapshot.
+
+Both frames are named SSE events with no `id:` line, so they never move a reader's `Last-Event-ID` cursor and a 0.2.x client (which only reads unnamed `onmessage` frames) never sees them:
+
+```text
+event: replayed
+data: {"schemaVersion":"1.0","cursor":"evt_0412","replayed":5000,"lastEventId":"evt_5412"}
+
+event: resync
+data: {"schemaVersion":"1.0","reason":"gap_too_large","cursor":"evt_0412","missed":12873,"replayMax":10000,"snapshotPath":"/api/v1/snapshot"}
+
+event: resync
+data: {"schemaVersion":"1.0","reason":"cursor_unknown","cursor":"evt_gone","missed":null,"replayMax":10000,"snapshotPath":"/api/v1/snapshot"}
+```
+
+`reason` is `cursor_unknown`, `gap_too_large` or `buffer_overflow`. `missed` is the event count, or `null` only when the server cannot know it (an unknown cursor); it is never `0` for an unknown cursor. On any `resync`, a client must reload its state from `snapshotPath` (`GET /api/v1/snapshot`): apply `snapshot.events` oldest first to rebuild the office, but take usage figures (`totalTokens`, `totalCost`, `agents[].tokens*`) from the snapshot's own aggregates, never from re-adding those events, since the snapshot carries only the newest 100. The [library guide](library.md#reconnect-replay-and-resync-issue-54) documents the `connectEventStream` helper that implements this (`lastEventId`, `onResync`, `onReplayed`, the `resyncing` status and `resyncCount()`).
+
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
 - `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
 

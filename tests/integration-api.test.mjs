@@ -1073,7 +1073,7 @@ test('REST API: a webhook whose generated ids conflict returns 409 and does not 
         fingerprint: 'sha256:test',
         storedFingerprint: 'sha256:different',
       }));
-      return { accepted: 1, duplicates: 1, conflicts: events.length - 2, results, acceptedEvents: [events[0]] };
+      return { accepted: 1, duplicates: 1, conflicts: events.length - 2, results, acceptedEvents: [events[0]], acceptedSeqs: [1] };
     };
     const res = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
       method: 'POST',

@@ -577,7 +577,7 @@ flowchart LR
   subgraph Server["Agent Viewer server :8787"]
     I["REST + webhooks<br/>Zod validation, contract V1"]
     D[("Memory ring buffer<br/>or SQLite")]
-    E["SSE stream<br/>resume by Last-Event-ID"]
+    E["SSE stream<br/>full replay or resync"]
   end
   subgraph Office["The office"]
     W["Demo app :3000"]
@@ -600,7 +600,7 @@ flowchart LR
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
-| `GET` | `/api/v1/events/stream` | Server-Sent Events. Replays missed events from `Last-Event-ID`; heartbeat every 15 s. |
+| `GET` | `/api/v1/events/stream` | Server-Sent Events. On reconnect, replays every event missed since `Last-Event-ID` in full, up to `AGENT_VIEWER_SSE_REPLAY_MAX` (default 10,000), or sends an explicit `resync` frame instead, never a partial replay; the connection stays open either way. Heartbeat every 15 s. |
 | `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
 | `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
@@ -780,6 +780,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` | `0` | Extra delay awaited after each rebuild page, for tests and diagnostics. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Maximum events per batch request. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
+| `AGENT_VIEWER_SSE_REPLAY_MAX` | `10000` | Maximum missed events a reconnect replays in full. `0` means any reconnect that missed something resyncs instead of replaying. An invalid value stops the server at startup. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | none | Demo app: `live` boots in live mode, like `?mode=live`. `npm run dev:full` sets it for you. |

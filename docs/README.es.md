@@ -577,7 +577,7 @@ flowchart LR
   subgraph Server["Servidor de Agent Viewer :8787"]
     I["REST + webhooks<br/>validación Zod, contrato V1"]
     D[("Búfer circular en memoria<br/>o SQLite")]
-    E["Flujo SSE<br/>reanuda con Last-Event-ID"]
+    E["Flujo SSE<br/>reenvío completo o resincronización"]
   end
   subgraph Office["La oficina"]
     W["App de demostración :3000"]
@@ -600,7 +600,7 @@ flowchart LR
 | `POST` | `/api/v1/events` | Ingesta de un evento. Respeta el encabezado `Idempotency-Key`. Un reintento real es un duplicado `200`; el mismo id con otro contenido es un `409`. |
 | `POST` | `/api/v1/events/batch` | Ingesta de hasta 100 eventos (configurable). Cada elemento informa `accepted`, `duplicate` o `conflict`; solo los aceptados se guardan y se transmiten. |
 | `GET` | `/api/v1/events` | Consulta con `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
-| `GET` | `/api/v1/events/stream` | Server-Sent Events. Reenvía los eventos perdidos desde `Last-Event-ID`; latido cada 15 s. |
+| `GET` | `/api/v1/events/stream` | Server-Sent Events. Al reconectar, reenvía todo lo perdido desde `Last-Event-ID` en su totalidad, hasta `AGENT_VIEWER_SSE_REPLAY_MAX` (10.000 por defecto), o envía un cuadro `resync` explícito en vez de un reenvío parcial; la conexión sigue abierta en ambos casos. Latido cada 15 s. |
 | `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes y el bloque `usage`. Los campos obsoletos `totalCost` y `cost` de cada agente son `null` salvo que todas las llamadas reporten una sola moneda conocida (una moneda, un origen de costo). |
 | `GET` | `/api/v1/usage` | Solo los agregados de consumo, llamada por llamada: por agente y por `(provider, model)`, con los conteos de lo desconocido y los costos por moneda, nunca sumados entre monedas. [Detalles](integration.md#usage-aggregates-get-apiv1usage) (en inglés). |
 | `POST` | `/api/v1/agents` | Registra o actualiza un agente. |
@@ -780,6 +780,7 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` | `0` | Retraso adicional después de cada página de la reconstrucción, para pruebas y diagnóstico. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Máximo de eventos por petición de lote. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Peticiones por minuto por IP en `/api/v1`. |
+| `AGENT_VIEWER_SSE_REPLAY_MAX` | `10000` | Máximo de eventos perdidos que una reconexión reenvía en su totalidad. `0` significa que cualquier reconexión que haya perdido algo resincroniza en vez de reenviar. Un valor inválido detiene el servidor al iniciar. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | vacío | Activa la verificación HMAC del webhook genérico. |
 | `VITE_AGENT_VIEWER_API_URL` | ninguno | App de demostración: servidor del que recibe el flujo. Sin ella, solo el modo en vivo se conecta (a `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | ninguno | App de demostración: `live` arranca en modo en vivo, igual que `?mode=live`. `npm run dev:full` la define por ti. |

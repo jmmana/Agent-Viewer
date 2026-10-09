@@ -565,15 +565,18 @@ for (const [label, create] of STORE_FACTORIES) {
         outcome: 'accepted',
         id: 'evt_int_1',
         fingerprint: eventFingerprint(original),
+        seq: first.seq,
         duplicate: false,
         accepted: true,
       });
+      assert.equal(typeof first.seq, 'number', 'an accepted event gets a seq (issue #54)');
 
       const retry = await store.append(JSON.parse(JSON.stringify(original)));
       assert.deepEqual(retry, {
         outcome: 'duplicate',
         id: 'evt_int_1',
         fingerprint: first.fingerprint,
+        seq: null,
         duplicate: true,
         accepted: true,
         duplicateReason: 'event_id',
@@ -1608,4 +1611,191 @@ test('createEventStore: in SQLite mode, AGENT_VIEWER_MAX_EVENTS has no effect an
   assert.ok(store instanceof SQLiteEventStore);
   const notice = log.mock.calls.find((call) => String(call.arguments[0]).includes('AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode'));
   assert.ok(notice, 'expected a one-time notice that AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode');
+});
+
+// -------------------------------------------------------------
+// Seq methods for SSE reconnect replay (issue #54)
+// -------------------------------------------------------------
+
+for (const [label, create] of STORE_FACTORIES) {
+  test(`${label}: resolveCursor resolves a stored id and is null for an unknown one`, async () => {
+    const { store, cleanup } = create();
+    try {
+      assert.equal(await store.resolveCursor('evt_seq_missing'), null);
+      assert.equal(await store.headSeq(), null);
+
+      const a = await store.append(storeEvent('evt_seq_a', 1));
+      const b = await store.append(storeEvent('evt_seq_b', 2));
+      assert.equal(typeof a.seq, 'number');
+      assert.equal(typeof b.seq, 'number');
+      assert.ok(b.seq > a.seq, 'seqs grow with each insertion');
+
+      assert.equal(await store.resolveCursor('evt_seq_a'), a.seq);
+      assert.equal(await store.resolveCursor('evt_seq_b'), b.seq);
+      assert.equal(await store.resolveCursor('evt_seq_missing'), null);
+      assert.equal(await store.headSeq(), b.seq);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a duplicate or a conflict never gets a seq`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const original = storeEvent('evt_seq_dup', 1);
+      const first = await store.append(original);
+      const duplicate = await store.append(JSON.parse(JSON.stringify(original)));
+      const conflict = await store.append({ ...original, summary: 'different' });
+      assert.equal(typeof first.seq, 'number');
+      assert.equal(duplicate.seq, null);
+      assert.equal(conflict.seq, null);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: appendBatch returns acceptedSeqs aligned with acceptedEvents, growing with each insertion`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const events = [storeEvent('evt_seq_batch_1', 1), storeEvent('evt_seq_batch_2', 2), storeEvent('evt_seq_batch_3', 3)];
+      const result = await store.appendBatch(events);
+      assert.equal(result.acceptedEvents.length, 3);
+      assert.equal(result.acceptedSeqs.length, 3);
+      assert.ok(result.acceptedSeqs.every((seq) => typeof seq === 'number'));
+      assert.ok(result.acceptedSeqs[0] < result.acceptedSeqs[1]);
+      assert.ok(result.acceptedSeqs[1] < result.acceptedSeqs[2]);
+
+      // A resend in a second batch is a duplicate: no seq, and acceptedSeqs stays aligned with acceptedEvents.
+      const second = await store.appendBatch([events[0], storeEvent('evt_seq_batch_4', 4)]);
+      assert.equal(second.acceptedEvents.length, 1);
+      assert.equal(second.acceptedEvents[0].id, 'evt_seq_batch_4');
+      assert.equal(second.acceptedSeqs.length, 1);
+      assert.ok(second.acceptedSeqs[0] > result.acceptedSeqs[2]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: countBetween and listBetween return exactly the events after the cursor, ascending, with no gaps or overlap across a page boundary`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const seqs = [];
+      for (let i = 0; i < 1200; i++) {
+        const result = await store.append(storeEvent(`evt_seq_page_${i}`, i));
+        seqs.push(result.seq);
+      }
+      const head = await store.headSeq();
+      assert.equal(head, seqs.at(-1));
+
+      const cursor = seqs[99]; // after the 100th event
+      const total = await store.countBetween(cursor, head);
+      assert.equal(total, 1100);
+
+      // Page through with a page size that does not evenly divide the remainder, like the server does.
+      const pageSize = 500;
+      const pages = [];
+      let afterSeq = cursor;
+      for (;;) {
+        const page = await store.listBetween(afterSeq, head, pageSize);
+        if (page.length === 0) break;
+        pages.push(page);
+        afterSeq = page.at(-1).seq;
+      }
+      const allIds = pages.flat().map((entry) => entry.event.id);
+      const expectedIds = seqs.slice(100).map((_, index) => `evt_seq_page_${index + 100}`);
+      assert.deepStrictEqual(allIds, expectedIds, 'ascending, no gaps, no overlap, no duplicates');
+      assert.deepStrictEqual(
+        pages.map((page) => page.length),
+        [500, 500, 100],
+        'pages split exactly on the page-size boundary'
+      );
+
+      // Every page's seqs are ascending and the last seq of one page is less than the first of the next.
+      let previousLast = cursor;
+      for (const page of pages) {
+        assert.ok(page[0].seq > previousLast);
+        for (let i = 1; i < page.length; i++) assert.ok(page[i].seq > page[i - 1].seq);
+        previousLast = page.at(-1).seq;
+      }
+
+      assert.deepStrictEqual(await store.listBetween(head, head, 10), [], 'nothing after the head itself');
+      assert.equal(await store.countBetween(head, head), 0);
+    } finally {
+      await cleanup();
+    }
+  });
+}
+
+test('MemoryEventStore: an evicted cursor resolves to null, never to an unrelated event', async () => {
+  const store = new MemoryEventStore(50);
+  for (let i = 0; i < 60; i++) {
+    await store.append(storeEvent(`evt_seq_evict_${i}`, i));
+  }
+  // The oldest 10 events fell off the 50-event ring.
+  assert.equal(await store.resolveCursor('evt_seq_evict_0'), null);
+  assert.equal(await store.resolveCursor('evt_seq_evict_9'), null);
+  const stillThere = await store.resolveCursor('evt_seq_evict_10');
+  assert.equal(typeof stillThere, 'number');
+  const head = await store.headSeq();
+  assert.equal(await store.countBetween(stillThere, head), 49);
+});
+
+test('SQLiteEventStore: events appended with descending timestamps still come back from listBetween in insertion order, and the seq from append equals the stored row seq', async () => {
+  const { dir, file } = tempDbPath('seq-insertion-order');
+  const store = new SQLiteEventStore(file);
+  try {
+    const first = await store.append(storeEvent('evt_seq_sqlite_old', 5_000));
+    const second = await store.append(storeEvent('evt_seq_sqlite_mid', 3_000));
+    const third = await store.append(storeEvent('evt_seq_sqlite_new', 1_000));
+
+    const db = new DatabaseSync(file);
+    for (const [id, result] of [
+      ['evt_seq_sqlite_old', first],
+      ['evt_seq_sqlite_mid', second],
+      ['evt_seq_sqlite_new', third],
+    ]) {
+      const row = db.prepare('SELECT seq FROM events WHERE id = ?').get(id);
+      assert.equal(result.seq, Number(row.seq), `${id}: append()'s seq equals the stored row's seq`);
+    }
+    db.close();
+
+    const head = await store.headSeq();
+    const page = await store.listBetween(0, head, 10);
+    assert.deepStrictEqual(
+      page.map((entry) => entry.event.id),
+      ['evt_seq_sqlite_old', 'evt_seq_sqlite_mid', 'evt_seq_sqlite_new'],
+      'ascending by insertion seq, not by the descending client timestamps'
+    );
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: resolveCursor, headSeq, countBetween and listBetween never see a duplicate reference row', async () => {
+  const { dir, file } = tempDbPath('seq-duplicate-of');
+  const store = new SQLiteEventStore(file);
+  try {
+    const original = usageEvent('evt_seq_dup_original', { provider: 'seqp', requestId: 'req-seq' });
+    const originalResult = await store.append(original);
+    const dup = usageEvent('evt_seq_dup_second', { provider: 'seqp', requestId: 'req-seq', inputTokens: 999 });
+    const dupResult = await store.append(dup);
+    assert.equal(dupResult.outcome, 'duplicate');
+    assert.equal(dupResult.seq, null);
+
+    // The duplicate's own id resolves to nothing: it was never broadcast, so it is never a valid cursor.
+    assert.equal(await store.resolveCursor('evt_seq_dup_second'), null);
+
+    const marker = await store.append(storeEvent('evt_seq_dup_marker', 1));
+    const between = await store.listBetween(originalResult.seq, marker.seq, 10);
+    assert.deepStrictEqual(
+      between.map((entry) => entry.event.id),
+      ['evt_seq_dup_marker'],
+      'the duplicate reference row in between is never replayed'
+    );
+    assert.equal(await store.countBetween(originalResult.seq, marker.seq), 1);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

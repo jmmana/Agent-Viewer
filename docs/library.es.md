@@ -823,11 +823,37 @@ Todo se exporta desde `@warlockcode/agent-viewer`. La hoja de estilos es `@warlo
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Tipos base | ninguno | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
 | Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
-| Stream en vivo | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions` |
+| Stream en vivo | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions`, `RealtimeResync`, `RealtimeReplayed` |
 | Archivos de log | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |
 
-`connectEventStream(baseUrl, onEvent, onStatus?, options?)` abre el flujo en `${baseUrl}/api/v1/events/stream`, llama a `onEvent` con cada evento válido y se reconecta con espera progresiva, retomando desde el último id de evento. Opciones: `token` (viaja en una cabecera `Authorization: Bearer` sobre un `fetch` con streaming, así que no queda en URLs ni en registros de acceso; solo donde `fetch` no puede hacer streaming se usa un `EventSource` con el parámetro `token` de la URL), `fetch` (el `fetch` que usa ese flujo, por defecto el global), `maxReconnectAttempts` (por defecto sin límite), `initialBackoffMs` (1000), `maxBackoffMs` (15000) y `heartbeatTimeoutMs` (35000). `onStatus` recibe `connecting`, `connected`, `reconnecting`, `disconnected`, `error` o `closed`. La conexión devuelta tiene `close()`, `status()` y `getLastEventId()`.
+`connectEventStream(baseUrl, onEvent, onStatus?, options?)` abre el flujo en `${baseUrl}/api/v1/events/stream`, llama a `onEvent` con cada evento válido y se reconecta con espera progresiva, retomando desde el último id de evento. Opciones: `token` (viaja en una cabecera `Authorization: Bearer` sobre un `fetch` con streaming, así que no queda en URLs ni en registros de acceso; solo donde `fetch` no puede hacer streaming se usa un `EventSource` con el parámetro `token` de la URL), `fetch` (el `fetch` que usa ese flujo, por defecto el global), `maxReconnectAttempts` (por defecto sin límite), `initialBackoffMs` (1000), `maxBackoffMs` (15000), `heartbeatTimeoutMs` (35000), `lastEventId` (inicia el flujo desde este cursor, normalmente `snapshot.lastEventId`) y `onResync` / `onReplayed` (abajo). `onStatus` recibe `connecting`, `connected`, `reconnecting`, `disconnected`, `error`, `closed` o `resyncing`. La conexión devuelta tiene `close()`, `status()`, `getLastEventId()` y `resyncCount()`.
+
+### Reenvío al reconectar y resincronización (issue #54)
+
+Al reconectar, el servidor reenvía cada evento perdido, en orden y exactamente una vez, o lo avisa con un cuadro `resync`; nunca envía un reenvío parcial. El formato y la regla del servidor están en [integration.md](integration.md#reconnect-replay-and-resync). La ayuda expone los dos resultados en vez de ocultarlos:
+
+- `onResync?: (info: RealtimeResync) => string | null | undefined | Promise<...>` se llama cuando el servidor no pudo reenviar todo lo perdido. `info.reason` es `cursor_unknown`, `gap_too_large` o `buffer_overflow`; `info.missed` es la cantidad de eventos que el cliente nunca vio, o `null` cuando el servidor mismo no lo sabe (un cursor desconocido: nunca trates `null` como `0`). Recarga tu estado (normalmente `GET /api/v1/snapshot`) y devuelve el cursor desde el que retomar, usualmente `snapshot.lastEventId`; devolver `null` o `undefined` retoma solo en vivo. Si lanza o rechaza, se reconecta con la espera progresiva existente y vuelve a llamar a `onResync` en la siguiente resincronización, sin tocar el cursor. Resincronizaciones consecutivas sin nada recibido entre ellas también esperan el retraso de espera progresiva, así un servidor atascado resincronizando no puede causar un bucle de reconexión apretado.
+- `onReplayed?: (info: RealtimeReplayed) => void` se llama cuando termina un reenvío de reconexión, incluso uno que reenvió `0` eventos. `info.replayed` es la cantidad de cuadros y `info.lastEventId` el id del último (`null` cuando `replayed` es `0`).
+- Sin `onResync`, una resincronización igual reporta el estado `resyncing` e incrementa `resyncCount()`, y luego se reconecta solo en vivo: el anfitrión se entera del hueco aunque no recargue un snapshot.
+
+Patrón recomendado: carga el snapshot una vez, inicia el flujo desde su cursor, y recarga de la misma forma al resincronizar. `snapshot.events` solo trae los 100 eventos más recientes (reconstruye la oficina, nunca los totales), y las cifras de consumo deben venir de los agregados propios del snapshot (`totalTokens`, `totalCost`), nunca de volver a sumar esos 100 eventos:
+
+```ts
+const load = async () => {
+  const snapshot = await fetch(`${base}/api/v1/snapshot`).then((r) => r.json());
+  setEvents(snapshot.events.slice().reverse());
+  setServerTotals({ tokens: snapshot.totalTokens, cost: snapshot.totalCost });
+  return snapshot.lastEventId ?? undefined;
+};
+const lastEventId = await load();
+const connection = connectEventStream(base, (event) => setEvents((prev) => [...prev, event]), setStatus, {
+  lastEventId,
+  onResync: async () => (await load()) ?? null,
+});
+```
+
+`snapshot.totalCost` y `agents[].cost` por ahora cuentan un costo faltante como `0` en el servidor (seguido aparte); no los muestres a un usuario como una cifra segura.
 
 ## Garantías de aislamiento
 

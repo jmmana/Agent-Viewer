@@ -16,6 +16,7 @@ import type { CameraState } from './engine/canvasRenderer';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { CrewStage } from './crew/CrewStage';
 import type { VisualMode } from './crew/crewModel';
+import { readCrewPreferences, saveCrewPreferences } from './crew/crewPreferences';
 import { readCrewEntry, saveCrewNavigation, replaceCrewLink } from './crew/crewNavigation';
 import { AgentInspector } from './components/AgentInspector';
 import { ActivityTimeline } from './components/ActivityTimeline';
@@ -82,6 +83,8 @@ export default function App() {
   const [currentTab, setCurrentTab] = useState<'office' | 'tasks' | 'meetings' | 'timeline'>('office');
   // UI-only mode: does not alter event telemetry, simulation, replay or the legacy renderer.
   const cartoonCameraMemory = useRef<CameraState | null>(null);
+  const [crewPreferences, setCrewPreferences] = useState(readCrewPreferences);
+  useEffect(() => saveCrewPreferences(crewPreferences), [crewPreferences]);
   const [crewEntry] = useState(readCrewEntry);
   const [crewNavigation, setCrewNavigation] = useState(crewEntry.navigation);
   const [crewMissingRoom, setCrewMissingRoom] = useState(crewEntry.missingRoom);
@@ -694,7 +697,7 @@ export default function App() {
               {visualMode === 'crew' ? (
                 <CrewStage locale={locale} agents={canvasAgents}
                   selectedRoomId={crewNavigation.selectedRoomId} onRoomChange={setCrewRoom}
-                  missingRoom={crewMissingRoom} />
+                  missingRoom={crewMissingRoom} preferences={crewPreferences} onPreferencesChange={setCrewPreferences} />
               ) : currentFloor === 1 ? (
                 <>
                   <OfficeCanvas

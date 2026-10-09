@@ -8,6 +8,7 @@ import { crewSpriteView } from './crewSprites';
 import { useCrewBlink } from './useCrewBlink';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
+import { defaultCrewPreferences, validateCrewPreferences, type CrewPreferences } from './crewPreferences';
 import { CrewGestures } from './crewGestures';
 import type { Agent } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
@@ -17,18 +18,26 @@ import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, valid
  * Consume presencia del dominio sin importar el renderer ni la cuadrícula Caricatura.
  */
 export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange, missingRoom = false,
-  cameraState, onCameraStateChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
+  cameraState, onCameraStateChange, preferences, onPreferencesChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
   locale?: string;
   agents?: readonly Agent[];
   selectedRoomId?: string;
   missingRoom?: boolean;
   cameraState?: CrewCameraByRoom;
   onCameraStateChange?: (cameras: CrewCameraByRoom) => void;
+  preferences?: CrewPreferences;
+  onPreferencesChange?: (preferences: CrewPreferences) => void;
   persistCamera?: boolean;
   showRoomLink?: boolean;
   idPrefix?: string;
   onRoomChange?: (roomId: string) => void;
 }) {
+  const [internalPreferences, setInternalPreferences] = useState(defaultCrewPreferences);
+  const visualPreferences = validateCrewPreferences(preferences ?? internalPreferences);
+  const changePreferences = (value: CrewPreferences) => {
+    if (preferences === undefined) setInternalPreferences(value);
+    onPreferencesChange?.(value);
+  };
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gestures = useRef(new CrewGestures());
   const frameRef = useRef<number>(0);
@@ -110,7 +119,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const directions = presence.markers.map(marker => crewSpriteView(marker, view)).filter((direction): direction is CrewView => direction !== null);
   const sprite = useCrewSprites(directions);
   const illustratedAgents = directions.filter(direction => !!sprite.images[direction]).length;
-  const blink = useCrewBlink(directions.includes('front') && !!sprite.images.front, roomId);
+  const blink = useCrewBlink(directions.includes('front') && !!sprite.images.front, roomId, visualPreferences.reducedMotion);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -150,6 +159,14 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
         style={{ color: '#111827', background: '#fff', padding: 6 }}>
         {CREW_ROOMS.map(r => <option key={r.id} value={r.id}>{isEs ? r.label.es : r.label.en}</option>)}
       </select>
+      <button type="button" disabled={roomId === CREW_ROOMS[0].id}
+        onClick={() => setRoomId(CREW_ROOMS[Math.max(0, CREW_ROOMS.findIndex(item => item.id === roomId) - 1)].id)}>
+        {isEs ? 'Oficina anterior' : 'Previous office'}
+      </button>
+      <button type="button" disabled={roomId === CREW_ROOMS[CREW_ROOMS.length - 1].id}
+        onClick={() => setRoomId(CREW_ROOMS[Math.min(CREW_ROOMS.length - 1, CREW_ROOMS.findIndex(item => item.id === roomId) + 1)].id)}>
+        {isEs ? 'Oficina siguiente' : 'Next office'}
+      </button>
       <label htmlFor={`${idPrefix}-view`}>{isEs ? 'Cámara' : 'Camera'}</label>
       <select id={`${idPrefix}-view`} value={view} onChange={e => setView(e.target.value as CrewView)}
         style={{ color: '#111827', background: '#fff', padding: 6 }}>
@@ -176,8 +193,13 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       <button type="button" onClick={() => {
         gestures.current.clear();
         setCameraByRoom({});
+        changePreferences(defaultCrewPreferences());
         setRoomId(CREW_ROOMS[0].id);
       }}>{isEs ? 'Restablecer Crew' : 'Reset Crew preferences'}</button>
+      <label><input type="checkbox" checked={visualPreferences.reducedMotion}
+        onChange={event => changePreferences({ version: 1, reducedMotion: event.target.checked })} />
+        {isEs ? 'Reducir movimiento' : 'Reduce motion'}
+      </label>
       {showRoomLink && typeof window !== 'undefined' && <a href={crewRoomLink(window.location.href, roomId)}>
         {isEs ? 'Enlace a esta oficina' : 'Link to this office'}
       </a>}

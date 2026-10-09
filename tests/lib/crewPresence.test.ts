@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CREW_ROOMS } from '../../src/crew/crewModel';
 import { projectCrewPresence } from '../../src/crew/crewPresence';
-import { crewPointIsFree, crewPresenceSlots, CREW_PRESENCE_RADIUS } from '../../src/crew/crewSpatial';
+import { crewFacingToward, crewPointIsFree, crewPresenceSlots, CREW_PRESENCE_RADIUS } from '../../src/crew/crewSpatial';
 
 const room = CREW_ROOMS[1];
 const agent = (index: number) => Object.freeze({id:`agent-${index}`,name:`Fixture ${index}`,workspace:'development' as const,status:'CODING' as const});
@@ -43,5 +43,14 @@ describe('Presencia espacial Crew de solo lectura', () => {
     expect(crewPointIsFree(room,desk)).toBe(false);
     expect(crewPointIsFree(room,{x:desk.x+.8,y:desk.y+.5})).toBe(false);
     expect(crewPointIsFree(room,{x:room.width+1,y:room.depth+1})).toBe(false);
+  });
+  it('orienta a cada actor hacia el escritorio o pantalla más cercano', () => {
+    const r = CREW_ROOMS[0]; // escritorio en (5,3), pantalla en (8,2)
+    expect(crewFacingToward(r,{x:5,y:1})).toBe('front');
+    expect(crewFacingToward(r,{x:5,y:7})).toBe('back');
+    expect(crewFacingToward(r,{x:1,y:3})).toBe('right');
+    expect(crewFacingToward(r,{x:10,y:2})).toBe('left');
+    expect(crewFacingToward({...r,furniture:[]},{x:1,y:1})).toBeUndefined();
+    for (const m of projectCrewPresence([agent(1)],room).markers) expect(m.facing).toBeDefined();
   });
 });

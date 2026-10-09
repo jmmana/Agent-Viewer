@@ -1,7 +1,7 @@
 import type { Agent } from '../types/agent';
 import type { CrewRoomDefinition, CrewView } from './crewModel';
 import { crewAgentsInRoom } from './crewEvents';
-import { crewPresenceSlots, type CrewLocalPoint } from './crewSpatial';
+import { crewFacingToward, crewPresenceSlots, type CrewLocalPoint } from './crewSpatial';
 
 type PresenceAgent = Pick<Agent,'id'|'name'|'status'|'workspace'> & Partial<Pick<Agent,'role'>>;
 export interface CrewPresenceMarker extends CrewLocalPoint {
@@ -10,7 +10,7 @@ export interface CrewPresenceMarker extends CrewLocalPoint {
   status: Agent['status'];
   number: number;
   role?: Agent['role'];
-  /** Orientación local opcional; ausente equivale a `front`. */
+  /** Orientación local provisional hacia el mobiliario de trabajo; ausente equivale a `front`. */
   facing?: CrewView;
 }
 
@@ -30,7 +30,7 @@ export function projectCrewPresence(agents: readonly PresenceAgent[], room: Crew
     let index = hash % slots.length;
     while (occupied.has(index)) index = (index+1)%slots.length;
     occupied.add(index);
-    markers.push({...slots[index], id:agent.id, name:agent.name,status:agent.status,...(agent.role ? {role:agent.role} : {}),number:markers.length+1});
+    markers.push({...slots[index], ...(crewFacingToward(room,slots[index]) ? {facing:crewFacingToward(room,slots[index])} : {}), id:agent.id, name:agent.name,status:agent.status,...(agent.role ? {role:agent.role} : {}),number:markers.length+1});
   }
   return {markers,unplaced};
 }

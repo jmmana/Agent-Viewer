@@ -119,7 +119,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 ## Continuación #118: contrato de orientación
 
-`crewRelativeView(facing, view)` define que `facing` (opcional en el marcador de presencia, por defecto `front`) es la vista de cámara desde la que se ve el frente del actor; la pose mostrada es la relativa a la cámara actual. Dato local de la sala, sin escritura en dominio. El renderer dibuja la pose solo en marcadores cuya vista resuelta coincide con la imagen cargada; el resto conserva el marcador numerado (una única vista cargada a la vez). Pruebas unitarias en `tests/lib/crewSprites.test.ts`. Pendiente: origen real de `facing` (movimiento/acciones), clips animados y carga de varias vistas simultáneas. #118 sigue abierto. Siguiente sugerida: #118/#128 clips animados reales, o #155 bridge de tareas/reuniones.
+`crewRelativeView(facing, view)` define que `facing` (opcional en el marcador de presencia, por defecto `front`) es la vista de cámara desde la que se ve el frente del actor; la pose mostrada es la relativa a la cámara actual. Dato local de la sala, sin escritura en dominio. El renderer dibuja la pose solo en marcadores cuya vista resuelta coincide con la imagen cargada; el resto conserva el marcador numerado (una única vista cargada a la vez). Pruebas unitarias en `tests/lib/crewSprites.test.ts`. `facing` ya tiene origen provisional: `crewFacingToward` orienta al actor hacia el escritorio/pantalla más cercano de su sala. Pendiente: orientación por movimiento/acciones/sillas, clips animados y carga de varias vistas simultáneas. #118 sigue abierto. Siguiente sugerida: #118/#128 clips animados reales, o #155 bridge de tareas/reuniones.
 
 ## Riesgos y decisiones
 

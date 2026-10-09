@@ -1,0 +1,49 @@
+[
+  {
+    "schemaVersion": "1.0",
+    "id": "evt_fixture_usage_1",
+    "type": "llm.usage",
+    "timestamp": 1700000000000,
+    "source": "agent:researcher",
+    "agentId": "researcher",
+    "severity": "normal",
+    "summary": "First usage – 東京",
+    "payload": {
+      "provider": "fixture-provider",
+      "model": "fixture-model",
+      "inputTokens": 31,
+      "outputTokens": 12,
+      "costUsd": 0.0012,
+      "currency": "USD"
+    }
+  },
+  {
+    "schemaVersion": "1.0",
+    "id": "evt_fixture_usage_2",
+    "type": "llm.usage",
+    "timestamp": 1700000000000,
+    "source": "agent:researcher",
+    "agentId": "researcher",
+    "severity": "normal",
+    "summary": "Usage without reported cost",
+    "payload": {
+      "provider": "fixture-provider",
+      "model": "fixture-model",
+      "inputTokens": 8,
+      "outputTokens": 3
+    }
+  },
+  {
+    "schemaVersion": "1.0",
+    "id": "evt_fixture_message",
+    "type": "agent.message.sent",
+    "timestamp": 1700000001000,
+    "source": "agent:writer",
+    "agentId": "writer",
+    "severity": "normal",
+    "summary": "A large fixture payload",
+    "payload": {
+      "text": "__FIXTURE_LARGE_PAYLOAD__"
+    }
+  }
+]

@@ -6,6 +6,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { CliUsageError, parseCliArgs } from '../cli/args.ts';
 import { buildSendEvents } from '../cli/send.ts';
 import { normalizeStatus } from '../cli/statuses.ts';
@@ -306,6 +307,47 @@ test('CLI end to end: a busy port is reported clearly', { timeout: 60_000 }, asy
     assert.match(stderr, new RegExp(`Port ${port} is already in use`));
   } finally {
     blocker.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('CLI end to end: a too-new SQLite database prints one error line and exits', { timeout: 60_000 }, async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'av-schema-too-new-'));
+  const dbPath = path.join(home, 'newer.db');
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, app_version TEXT NOT NULL);
+    INSERT INTO schema_migrations VALUES (3, 'future', 1, '9.0.0');
+  `);
+  db.close();
+  try {
+    const child = spawn(process.execPath, ['--import', 'tsx', cliEntry, '--no-open'], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        AGENT_VIEWER_HOME: home,
+        AGENT_VIEWER_STORAGE: 'sqlite',
+        AGENT_VIEWER_SQLITE_PATH: dbPath,
+        AGENT_VIEWER_SQLITE_BACKUP: 'off',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const result = await new Promise((resolve, reject) => {
+      child.on('error', reject);
+      child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+    assert.equal(result.code, 1);
+    const lines = result.stderr
+      .split(/\r?\n/)
+      .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^agent-viewer: The database .* has schema version 3, but this server \(.+\) only knows up to version 1\./);
+    assert.doesNotMatch(result.stderr, /at .*server|MigrationFailedError/);
+  } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });

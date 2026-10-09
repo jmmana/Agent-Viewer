@@ -2,6 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
+import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
+import { readPackageVersion } from './version';
+
+function sqliteBackupMode(value: string | undefined): 'auto' | 'off' {
+  const backup = value ?? 'auto';
+  if (backup !== 'auto' && backup !== 'off') {
+    throw new Error(`Invalid AGENT_VIEWER_SQLITE_BACKUP value "${backup}"; use "auto" or "off".`);
+  }
+  return backup;
+}
 import {
   createUsageReducer,
   resolveEventAgentId,
@@ -119,6 +129,7 @@ export interface EventStore {
   exists(eventId: string): Promise<boolean>;
   list(options?: ListEventsOptions): Promise<CanonicalEvent[]>;
   snapshot(): Promise<ViewerSnapshot>;
+  getSchemaInfo?(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } | undefined;
   /** Usage aggregates of every accepted `llm.usage` and `llm.failed` event. */
   usageSummary(): Promise<UsageSummary>;
 
@@ -488,10 +499,15 @@ export class MemoryEventStore implements EventStore {
 export class SQLiteEventStore implements EventStore {
   private db: any;
   private memoryFallback: MemoryEventStore;
-  private filePath: string;
+  readonly migration: MigrationResult;
+  private migrations: readonly Migration[];
 
-  constructor(filePath = './data/agent-viewer.db') {
-    this.filePath = filePath;
+  constructor(
+    filePath = './data/agent-viewer.db',
+    options: { backup?: 'auto' | 'off'; appVersion?: string; migrations?: readonly Migration[] } = {}
+  ) {
+    const backup = sqliteBackupMode(options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP);
+
     const dir = path.dirname(filePath);
     if (dir && dir !== '.' && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -500,81 +516,40 @@ export class SQLiteEventStore implements EventStore {
     const DBSync = getDatabaseSync();
     this.db = new DBSync(filePath);
     this.memoryFallback = new MemoryEventStore();
-    this.initSchema();
+    this.migrations = options.migrations ?? MIGRATIONS;
+    try {
+      this.migration = runMigrations(this.db, {
+        appVersion: options.appVersion ?? readPackageVersion(),
+        filePath,
+        backup,
+        migrations: this.migrations,
+      });
+      if (this.migration.applied.length > 0) {
+        const { fromVersion, toVersion, backupPath } = this.migration;
+        const appliedNames = this.migration.applied.map(({ name }) => name).join(', ');
+        console.log(
+          `[agent-viewer] SQLite schema migrated from v${fromVersion} to v${toVersion} (${appliedNames}).${backupPath ? ` Backup: ${backupPath}` : ''}`
+        );
+      }
+    } catch (error) {
+      try {
+        this.db.close();
+      } catch {
+        // Ignore close errors while preserving the migration error.
+      }
+      throw error;
+    }
   }
 
-  private initSchema() {
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = NORMAL;
-
-      CREATE TABLE IF NOT EXISTS events (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        runtime_id TEXT,
-        session_id TEXT,
-        agent_id TEXT,
-        task_id TEXT,
-        severity TEXT NOT NULL,
-        summary TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
-      CREATE INDEX IF NOT EXISTS idx_events_runtime ON events(runtime_id);
-      CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-      CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
-      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
-
-      CREATE TABLE IF NOT EXISTS runtimes (
-        id TEXT PRIMARY KEY,
-        name TEXT,
-        framework TEXT,
-        version TEXT,
-        metadata TEXT,
-        status TEXT,
-        first_seen_at INTEGER,
-        last_seen_at INTEGER,
-        events_count INTEGER DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        runtime_id TEXT,
-        name TEXT,
-        created_at INTEGER,
-        last_active_at INTEGER,
-        status TEXT,
-        events_count INTEGER DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS agents (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        role_title TEXT,
-        role TEXT,
-        provider TEXT,
-        model TEXT,
-        status TEXT,
-        status_text TEXT,
-        workspace TEXT,
-        tokens_input INTEGER DEFAULT 0,
-        tokens_output INTEGER DEFAULT 0,
-        cached_tokens INTEGER DEFAULT 0,
-        reasoning_tokens INTEGER DEFAULT 0,
-        cost REAL DEFAULT 0,
-        last_seen_at INTEGER
-      );
-    `);
-
-    // Migration: databases created before 0.2.0 have no event_json column. Their rows stay readable
-    // through the legacy column mapping in rowToEvent; new rows store the full canonical event.
-    const columns = this.db.prepare('PRAGMA table_info(events)').all() as Array<{ name: string }>;
-    if (!columns.some((c) => c.name === 'event_json')) {
-      this.db.exec('ALTER TABLE events ADD COLUMN event_json TEXT');
-    }
+  getSchemaInfo(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } {
+    const row = this.db
+      .prepare('SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 1')
+      .get() as { version: number; applied_at: number } | undefined;
+    return {
+      schemaVersion: row?.version ?? 0,
+      latestKnownSchemaVersion: this.migrations.at(-1)?.version ?? 0,
+      appliedAt: row?.applied_at ?? null,
+    };
   }
 
   private insertEvent(insertStmt: any, event: CanonicalEvent): void {
@@ -771,7 +746,8 @@ export function createEventStore(): EventStore {
   const storageType = (process.env.AGENT_VIEWER_STORAGE || 'memory').toLowerCase();
   if (storageType === 'sqlite') {
     const dbPath = process.env.AGENT_VIEWER_SQLITE_PATH || './data/agent-viewer.db';
-    return new SQLiteEventStore(dbPath);
+    const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
+    return new SQLiteEventStore(dbPath, { backup });
   }
   return new MemoryEventStore();
 }

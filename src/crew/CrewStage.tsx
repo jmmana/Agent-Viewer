@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { CREW_ROOMS, CREW_VIEWS, crewProject, type CrewView } from './crewModel';
+import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
+import { renderCrewRoom } from './renderCrewRoom';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /**
@@ -43,50 +44,9 @@ export function CrewStage({ locale = 'es' }: { locale?: string }) {
     canvas.height = Math.round(bounds.height * dpr);
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.scale(dpr, dpr);
-    const w = bounds.width, h = bounds.height;
-    ctx.fillStyle = '#172136';
-    ctx.fillRect(0, 0, w, h);
-    const flip = view === 'right' || view === 'left';
-    const roomW = (flip ? room.depth : room.width) * 50;
-    const roomH = (flip ? room.width : room.depth) * 50;
-    const base = Math.min((w - 48) / roomW, (h - 88) / roomH, 2.2);
-    ctx.translate(w / 2 + pan.x, h / 2 + pan.y);
-    ctx.scale(base * zoom, base * zoom);
-    ctx.translate(-roomW / 2, -roomH / 2);
-
-    // The room has its own world, walls and camera-projected geometry.
-    ctx.fillStyle = '#c9bdab'; ctx.fillRect(0, 0, roomW, roomH);
-    ctx.strokeStyle = '#bdad98'; ctx.lineWidth = 1.2;
-    for (let x = 0; x <= roomW; x += 50) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, roomH); ctx.stroke();
-    }
-    for (let y = 0; y <= roomH; y += 50) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(roomW, y); ctx.stroke();
-    }
-    ctx.fillStyle = '#748aa0';
-    // Cutaway walls: choose wall pairs by camera preset instead of rotating a flat screenshot.
-    ctx.fillRect(0, 0, roomW, 14);
-    ctx.fillRect(0, 0, 14, roomH);
-    ctx.fillStyle = '#a8bed2';
-    ctx.fillRect(roomW * 0.3, 2, roomW * 0.36, 10);
-
-    const projected = room.furniture.map(item => ({ ...item, ...crewProject(item.x, item.y, room, view) }));
-    for (const item of projected.sort((a, b) => a.y - b.y)) {
-      const x = item.x * 50, y = item.y * 50;
-      ctx.fillStyle = item.type === 'desk' ? '#78543b'
-        : item.type === 'chair' ? '#4a6689'
-        : item.type === 'plant' ? '#277f60' : '#24334b';
-      const size = item.type === 'desk' ? 46 : item.type === 'screen' ? 32 : 24;
-      ctx.beginPath(); ctx.roundRect(x - size / 2, y - size / 2, size, size * .72, 5); ctx.fill();
-      if (item.type === 'screen') {
-        ctx.fillStyle = '#35b7c9'; ctx.fillRect(x - 11, y - 8, 22, 10);
-      }
-    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#e2e8f0'; ctx.font = '12px sans-serif';
-    ctx.fillText(isEs ? 'PROTOTIPO · arte final pendiente' : 'PROTOTYPE · final artwork pending', 12, h - 14);
-  }, [room, view, zoom, pan, isEs]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera, locale });
+  }, [room, camera, locale]);
 
   useEffect(() => {
     const el = canvasRef.current;

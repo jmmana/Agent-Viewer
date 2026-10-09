@@ -73,6 +73,14 @@ export type {
 } from '../integrations/canonicalTypes';
 export { validateCanonicalEvent } from '../integrations/canonicalContract';
 
+// Usage tally (portal display only)
+export type {
+  UsageTally,
+  TokenTally,
+  CostBucket,
+  CostSource,
+} from '../integrations/usageTally';
+
 // Realtime stream from an Agent Viewer server
 export { connectEventStream } from '../integrations/realtimeClient';
 export type { RealtimeConnection, RealtimeStatus, RealtimeConnectionOptions } from '../integrations/realtimeClient';

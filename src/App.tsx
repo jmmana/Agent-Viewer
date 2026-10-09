@@ -35,6 +35,7 @@ import { connectEventStream } from './integrations/realtimeClient';
 import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './integrations/liveConnection';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
+import { cloneUsageTally } from './integrations/usageTally';
 import { Upload, AlertCircle, X } from 'lucide-react';
 
 export default function App() {
@@ -140,11 +141,12 @@ export default function App() {
       // Deep clone to update reactively
       const nextState: SimulationState = {
         ...prevState,
-        agents: prevState.agents.map((a) => ({ ...a })),
-        tasks: prevState.tasks.map((t) => ({ ...t, artifacts: [...t.artifacts], toolsUsed: [...t.toolsUsed] })),
+        agents: prevState.agents.map((a) => ({ ...a, usage: a.usage ? cloneUsageTally(a.usage) : undefined })),
+        tasks: prevState.tasks.map((t) => ({ ...t, artifacts: [...t.artifacts], toolsUsed: [...t.toolsUsed], usage: t.usage ? cloneUsageTally(t.usage) : undefined })),
         meetings: prevState.meetings.map((m) => ({ ...m, agenda: [...m.agenda], decisions: [...m.decisions], messages: [...m.messages] })),
         events: [...prevState.events],
         totalTokens: { ...prevState.totalTokens },
+        usage: cloneUsageTally(prevState.usage),
         roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
         socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
       };
@@ -161,8 +163,8 @@ export default function App() {
       setSimState((prevState) => {
         const nextState: SimulationState = {
           ...prevState,
-          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
-          tasks: prevState.tasks,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null, usage: a.usage ? cloneUsageTally(a.usage) : undefined })),
+          tasks: prevState.tasks.map((t) => ({ ...t, usage: t.usage ? cloneUsageTally(t.usage) : undefined })),
           meetings: prevState.meetings.map((meeting) => ({
             ...meeting,
             participants: [...meeting.participants],
@@ -173,6 +175,7 @@ export default function App() {
           })),
           events: [...prevState.events],
           totalTokens: { ...prevState.totalTokens },
+          usage: cloneUsageTally(prevState.usage),
           roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
           socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
           coffeeSeatAssignments: prevState.coffeeSeatAssignments ? [...prevState.coffeeSeatAssignments] : [],
@@ -191,11 +194,12 @@ export default function App() {
       setSimState((prevState) => {
         const nextState: SimulationState = {
           ...prevState,
-          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
-          tasks: prevState.tasks,
+          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null, usage: a.usage ? cloneUsageTally(a.usage) : undefined })),
+          tasks: prevState.tasks.map((t) => ({ ...t, usage: t.usage ? cloneUsageTally(t.usage) : undefined })),
           meetings: prevState.meetings,
           events: [...prevState.events],
           totalTokens: { ...prevState.totalTokens },
+          usage: cloneUsageTally(prevState.usage),
           roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
           socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
           coffeeSeatAssignments: prevState.coffeeSeatAssignments ? [...prevState.coffeeSeatAssignments] : [],
@@ -236,8 +240,8 @@ export default function App() {
         setSimState((prevState) => {
           const nextState: SimulationState = {
             ...prevState,
-            agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
-            tasks: prevState.tasks.map((task) => ({ ...task, artifacts: [...task.artifacts], toolsUsed: [...task.toolsUsed], collaboratorIds: [...task.collaboratorIds] })),
+            agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null, usage: a.usage ? cloneUsageTally(a.usage) : undefined })),
+            tasks: prevState.tasks.map((task) => ({ ...task, artifacts: [...task.artifacts], toolsUsed: [...task.toolsUsed], collaboratorIds: [...task.collaboratorIds], usage: task.usage ? cloneUsageTally(task.usage) : undefined })),
             meetings: prevState.meetings.map((meeting) => ({
               ...meeting,
               participants: [...meeting.participants],
@@ -248,6 +252,7 @@ export default function App() {
             })),
             events: [...prevState.events],
             totalTokens: { ...prevState.totalTokens },
+            usage: cloneUsageTally(prevState.usage),
             roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
             socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
           };

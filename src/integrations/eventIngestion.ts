@@ -9,6 +9,13 @@ import {
   EVENT_TYPE_ALIASES,
   isMessageKind,
 } from './canonicalTypes';
+import {
+  emptyUsageTally,
+  cloneUsageTally,
+  addUsageCall,
+  readUsageCall,
+  type UsageTally,
+} from './usageTally';
 
 const STATUS_VALUES = new Set<AgentStatus>([
   'OFFLINE', 'IDLE', 'AVAILABLE', 'THINKING', 'READING', 'RESEARCHING', 'CODING', 'WRITING', 'TESTING',
@@ -358,31 +365,57 @@ export function applyExternalEvent(
       if (agent) {
         if (typeof payload.provider === 'string') agent.provider = payload.provider;
         if (typeof payload.model === 'string') agent.model = payload.model;
-        if (options.trackUsage === false) break;
+      }
+      if (options.trackUsage === false) break;
 
-        const input = Number(payload.inputTokens ?? 0);
-        const output = Number(payload.outputTokens ?? 0);
-        const cached = Number(payload.cachedTokens ?? 0);
-        const reasoning = Number(payload.reasoningTokens ?? 0);
-        const cost = typeof payload.cost === 'number' && Number.isFinite(payload.cost) ? payload.cost : 0;
+      // Read the usage call and add it to the state tally
+      const call = readUsageCall(payload);
+      addUsageCall(state.usage, call);
 
+      // Add to agent tally if agent exists
+      if (agent) {
+        if (!agent.usage) {
+          agent.usage = emptyUsageTally();
+        }
+        addUsageCall(agent.usage, call);
+      }
+
+      // Add to task tally if task is associated
+      if (incoming.taskId) {
+        const task = state.tasks.find((t) => t.id === incoming.taskId);
+        if (task) {
+          if (!task.usage) {
+            task.usage = emptyUsageTally();
+          }
+          addUsageCall(task.usage, call);
+        }
+      }
+
+      // Keep legacy fields updated for compatibility
+      const input = Number(payload.inputTokens ?? 0);
+      const output = Number(payload.outputTokens ?? 0);
+      const cached = Number(payload.cachedTokens ?? 0);
+      const reasoning = Number(payload.reasoningTokens ?? 0);
+      const cost = typeof payload.cost === 'number' && Number.isFinite(payload.cost) ? payload.cost : 0;
+
+      if (agent) {
         agent.tokensInput += Number.isFinite(input) ? input : 0;
         agent.tokensOutput += Number.isFinite(output) ? output : 0;
         agent.cachedTokens += Number.isFinite(cached) ? cached : 0;
         agent.reasoningTokens += Number.isFinite(reasoning) ? reasoning : 0;
         agent.cost += cost;
+      }
 
-        state.totalTokens.input += Number.isFinite(input) ? input : 0;
-        state.totalTokens.output += Number.isFinite(output) ? output : 0;
-        state.totalTokens.cached += Number.isFinite(cached) ? cached : 0;
-        state.totalCost += cost;
+      state.totalTokens.input += Number.isFinite(input) ? input : 0;
+      state.totalTokens.output += Number.isFinite(output) ? output : 0;
+      state.totalTokens.cached += Number.isFinite(cached) ? cached : 0;
+      state.totalCost += cost;
 
-        if (incoming.taskId) {
-          const task = state.tasks.find((t) => t.id === incoming.taskId);
-          if (task) {
-            task.tokensTotal += (input + output);
-            task.costTotal += cost;
-          }
+      if (incoming.taskId) {
+        const task = state.tasks.find((t) => t.id === incoming.taskId);
+        if (task) {
+          task.tokensTotal += (input + output);
+          task.costTotal += cost;
         }
       }
       break;

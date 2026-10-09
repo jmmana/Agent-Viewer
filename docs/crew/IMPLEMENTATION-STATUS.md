@@ -1,27 +1,23 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-09 (America/Bogota).
-Último issue trabajado: #172/#115, banco de recursos originales. Epic: #114.
+Último issue trabajado: #118/#117/#172, piloto estático del CEO y carga de recursos. Epic: #114.
 
 ## Resumen de la ejecución
 
-| PR abierto | Commits de implementación | CI verificado |
-| --- | --- | --- |
-| [#182](https://github.com/jmmana/Agent-Viewer/pull/182), gestos | `75f2da7` | Aprobado, run 37868883704 |
-| [#183](https://github.com/jmmana/Agent-Viewer/pull/183), persistencia | `b563258` | Aprobado, run 37869062554 |
-| [#185](https://github.com/jmmana/Agent-Viewer/pull/185), foco/pan | `e337f33` | Aprobado, run 37869312615 |
-| [#186](https://github.com/jmmana/Agent-Viewer/pull/186), QA y corrección móvil | `0e46a0f`, `ded4717` | Aprobado, [run 37869699546](https://github.com/jmmana/Agent-Viewer/actions/runs/37869699546) |
+El [PR #194](https://github.com/jmmana/Agent-Viewer/pull/194) integra los incrementos #175, #177, #182, #183, #185, #186, #187, #189, #190 y #191 en main, conservando sus commits. Merge `a867cd2`, 2026-10-09. Se reconciliaron los cambios recientes de CLI, contratos, almacenamiento y CI; los tres conflictos de configuración conservaron ambos conjuntos de comprobaciones. #175 quedó fusionado automáticamente y los PR apilados restantes se cerraron por integración, tras verificar que sus commits son ancestros de main. #43 no se fusionó. Ningún issue funcional se cerró.
 
-Ramas publicadas, commits conservados, PR sin fusionar. Dependencias #175/#177 continúan en borrador; main no se modificó. Epic #114 e issues #156/#171/#159 actualizados con evidencia. Ningún issue cerrado. Servidor local de validación detenido al terminar; no hay desarrollo autónomo ejecutándose fuera de esta sesión.
+[CI previo al merge](https://github.com/jmmana/Agent-Viewer/actions/runs/37923447700) y [CI posterior en main](https://github.com/jmmana/Agent-Viewer/actions/runs/37923645463) aprobados, incluidos navegador, CLI Node 22.13, Python y contenedores. Validación local del conjunto integrado: 275 Node aprobados y uno omitido, 522 Vitest, 12 E2E y 12 Python; tipos, compilaciones app/lib/CLI y paquete aprobados.
 
-Validación acumulada: 71 node, 463 Vitest, 12 E2E y 3 SDK Python; typecheck, app/lib/paquete, audit y Docker en CI. Capturas revisadas y MP4 de runtime de 10,16 segundos. No se certifica arte final, personajes, animaciones, dispositivos físicos ni cumplimiento total de G1.
+El incremento posterior incorpora el piloto estático del CEO en cuatro vistas, con carga bajo demanda, conservación de marcadores ante fallos y pruebas de limpieza. Validación local: 276 Node aprobados y uno omitido, 528 Vitest y 14 E2E. Compilaciones app/lib/CLI, typecheck, integridad del banco y paquete aprobados. Los PNG originales no se modificaron. Evidencia en [ceo-118](evidence/ceo-118/).
 
-Los apartados posteriores conservan el historial de cada incremento; sus cantidades de pruebas y pendientes corresponden a ese momento. El resumen anterior refleja el último estado local.
+Crew sigue en Beta. G1 no está certificado: faltan arte final de salas, animaciones verdaderas, integración completa de acciones, rendimiento y dispositivos físicos. Los apartados históricos siguientes registran cada incremento con los pendientes que existían entonces.
 
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-asset-bank-172`, basada en `5cb4643` de #191.
+- Rama actual: `feat/crew-character-assets-118`, basada en la integración `f2cfc11` de #194.
+- Banco: `feat/crew-asset-bank-172`, basado en `5cb4643` de #191.
 - Cámara Caricatura: `fix/crew-cartoon-camera-166`, basada en `cccc4bd` de #190.
 - Presencia: `feat/crew-presence-focus-155`, basada en `2c7461d` de #189.
 - API embebida: `feat/crew-embedded-api-171`, basada en `b607d83` de #187.
@@ -62,7 +58,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#115](https://github.com/jmmana/Agent-Viewer/issues/115) | 53 originales recuperados con hashes y procedencia; banco aislado, revisión artística e integración pendientes. |
 | [#116](https://github.com/jmmana/Agent-Viewer/issues/116) | Guías históricas en #43 requieren adaptación al ADR Crew. |
 | [#117](https://github.com/jmmana/Agent-Viewer/issues/117) | Pipeline histórico en #162 sobre #43; adaptación independiente pendiente. |
-| [#118](https://github.com/jmmana/Agent-Viewer/issues/118) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
+| [#118](https://github.com/jmmana/Agent-Viewer/issues/118) | Piloto CEO estático de cuatro vistas integrado en el renderer Crew; animaciones y orientación de dominio pendientes. |
 | [#119](https://github.com/jmmana/Agent-Viewer/issues/119) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#120](https://github.com/jmmana/Agent-Viewer/issues/120) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#121](https://github.com/jmmana/Agent-Viewer/issues/121) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
@@ -117,7 +113,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 ## Próximos tres pasos
 
-1. #172/#115: revisar visualmente el banco recuperado y preparar integración selectiva por vista, con trazabilidad.
+1. #118/#117: completar contrato de orientación y clips animados a partir del piloto estático, sin contar poses como animaciones.
 2. #155/#156: ampliar el bridge de tareas y reuniones sobre las posiciones locales y el foco ya implementados; arte multivista pendiente.
 3. #159: servidor SSE real, reproducción temporal, rendimiento y dispositivos físicos antes de aprobar G1.
 
@@ -198,3 +194,11 @@ La validación offline corre en CI y detecta cambios de hash, rutas inválidas, 
 El banco no se carga en runtime. Falta la revisión visual por recurso y la adaptación al contrato espacial Crew antes de utilizarlo en salas. G1 y los issues permanecen abiertos.
 
 Implementación del banco: `a878c29`, [PR #194](https://github.com/jmmana/Agent-Viewer/pull/194), abierto sobre #191. [CI](https://github.com/jmmana/Agent-Viewer/actions/runs/37923058757) aprobado para el commit de implementación, incluidos navegador, Python y Docker.
+
+## Piloto ilustrado del CEO, #118/#117
+
+Solo agentes con rol boss presentes en la sala reciben la pose original correspondiente al preset de cámara. Se conserva el número de presencia y el orden de profundidad compartido con los muebles. El piloto no interpreta orientación ni acciones del dominio. Otros roles y recursos faltantes usan marcadores. Una sala vacía no carga imágenes.
+
+Los módulos diferidos cargan únicamente la vista solicitada; al cambiar sala, vista o modo se limpian callbacks de imagen y se descartan resultados tardíos. Fallos de descarga o dimensiones inconsistentes mantienen el marcador y un mensaje ES/EN. La biblioteca empaqueta las cuatro imágenes en módulos diferidos; la aplicación produce archivos con hash. El banco pasa de bank-only a source-bank sin alterar hashes ni archivos originales.
+
+Pruebas nuevas: selección por rol, cancelación antes de resolver el módulo, errores de importación/imagen, dimensiones, integridad del anclaje, render sin imagen y sala vacía. Dos E2E verifican drawImage con cada original, ausencia de descargas en otra sala, las cuatro vistas, móvil, regreso Caricatura y PNG no disponible. Se revisaron capturas de las cuatro vistas y móvil; [MP4 de ejecución](evidence/ceo-118/four-views.mp4) obtenido del vídeo Playwright de la misma prueba. Una primera ejecución detectó un selector de status ambiguo, corregido usando aria-live en el texto de arte, y un fallo intermitente de interacción embebida no reproducido en la repetición específica ni en la suite completa posterior. CI debe confirmar el conjunto.

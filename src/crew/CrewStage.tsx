@@ -3,6 +3,7 @@ import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
+import { useCrewSprite } from './useCrewSprite';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
 import { CrewGestures } from './crewGestures';
@@ -10,9 +11,8 @@ import type { Agent } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /**
- * Minimal independent Crew engine proof of concept. NOT a finished scene:
- * placeholders explicitly indicate missing approved multi-view artwork.
- * Neither the legacy renderer nor its office coordinates are imported.
+ * Escena Crew independiente con arte incremental y geometría provisional.
+ * Consume presencia del dominio sin importar el renderer ni la cuadrícula Caricatura.
  */
 export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange, missingRoom = false,
   cameraState, onCameraStateChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
@@ -105,6 +105,9 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const visibleAgents = crewAgentsInRoom(agents, roomId);
   const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
 
+  const illustratedAgents = presence.markers.filter(marker => marker.role === 'boss').length;
+  const sprite = useCrewSprite(illustratedAgents ? view : null);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -116,8 +119,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, locale });
-  }, [room, camera, locale, presence]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprite: sprite.image, locale });
+  }, [room, camera, locale, presence, sprite.image]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -225,8 +228,12 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       onPointerCancel={endPointer}
       onLostPointerCapture={event => gestures.current.end(event.pointerId)}
     />
+    <p aria-live="polite" data-testid="crew-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
+      {isEs ? `Ilustraciones estáticas: ${sprite.image ? illustratedAgents : 0}.` : `Static illustrations: ${sprite.image ? illustratedAgents : 0}.`}
+      {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
+    </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>
-      {isEs ? 'PROTOTIPO 2.5D: los marcadores numerados indican presencia, no personajes animados.' : '2.5D PROTOTYPE: numbered markers show presence, not animated characters.'}
+      {isEs ? 'PROTOTIPO 2.5D: poses estáticas del CEO y marcadores de presencia; animaciones pendientes.' : '2.5D PROTOTYPE: static CEO poses and presence markers; animations pending.'}
     </p>
   </section>;
 }

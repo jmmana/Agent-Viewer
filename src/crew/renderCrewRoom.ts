@@ -2,13 +2,14 @@ import { crewProject, type CrewRoomDefinition, type CrewView } from './crewModel
 import { CREW_PROP_SIZE } from './crewSpatial';
 import type { CrewPresenceMarker } from './crewPresence';
 import type { CrewCamera } from './crewCamera';
+import { CREW_CEO_SPRITE, crewSpriteView } from './crewSprites';
 
 /**
  * A standalone 2.5D Crew renderer prototype.
  *
  * It draws ONE room in local coordinates, with physical cutaway walls and
  * separate depth-sorted props. The old office grid/renderer is never imported.
- * Geometry is intentionally placeholder art; no characters or fake LIVE data.
+ * Geometry is provisional; illustrated actors require actual room presence.
  */
 export interface CrewRenderInput {
   ctx: CanvasRenderingContext2D;
@@ -18,6 +19,7 @@ export interface CrewRenderInput {
   camera: CrewCamera;
   locale?: string;
   markers?: readonly CrewPresenceMarker[];
+  sprite?: HTMLImageElement;
 }
 export const CREW_TILE_X = 34;
 export const CREW_TILE_Y = 18;
@@ -78,7 +80,7 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [] }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprite }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
@@ -123,13 +125,19 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [] 
       const p = crewProject(marker.x,marker.y,room,view);
       return {x:p.x,y:p.y,draw:()=>{
         const point = crewIsoPoint(p.x,p.y);
+        if (sprite && crewSpriteView(marker, view)) {
+          const spec = CREW_CEO_SPRITE;
+          const height = spec.displayHeight, width = height * spec.width / spec.height;
+          ctx.drawImage(sprite,point.x-width*spec.anchor.x,point.y-height*spec.anchor.y,width,height);
+        }
+        const badgeY = point.y + (sprite && crewSpriteView(marker,view) ? 9 : 0);
         ctx.beginPath();
-        ctx.ellipse(point.x,point.y,12,8,0,0,Math.PI*2);
+        ctx.ellipse(point.x,badgeY,12,8,0,0,Math.PI*2);
         ctx.fillStyle = marker.status === 'ERROR' || marker.status === 'BLOCKED' ? '#b91c1c' : '#1d4ed8';
         ctx.fill();
         ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 1; ctx.stroke();
         ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(String(marker.number),point.x,point.y);
+        ctx.fillText(String(marker.number),point.x,badgeY);
       }};
     }),
   ].sort((a,b)=>(a.x+a.y)-(b.x+b.y));

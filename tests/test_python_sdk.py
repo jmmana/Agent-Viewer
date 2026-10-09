@@ -110,6 +110,21 @@ class TestPythonSDK(unittest.TestCase):
             self.assertIsNotNone(bot_agent, "Registered agent not found in server snapshot")
             self.assertEqual(bot_agent["name"], "Python Bot")
 
+            # Usage aggregates round trip
+            summary = viewer.usage_summary()
+            self.assertEqual(summary["schemaVersion"], "1.0")
+            self.assertEqual(summary, snapshot["usage"])
+            bot_usage = next((a for a in summary["byAgent"] if a["agentId"] == "py_bot"), None)
+            self.assertIsNotNone(bot_usage, "Agent missing from the usage summary")
+            self.assertEqual(bot_usage["calls"], 1)
+            self.assertEqual(bot_usage["tokens"]["input"]["sum"], 500)
+            gpt = next(m for m in bot_usage["byModel"] if m["provider"] == "OpenAI" and m["model"] == "gpt-4o")
+            self.assertEqual(gpt["calls"], 1)
+            # The SDK sends no currency, so the cost is kept apart as unknown instead of summed.
+            self.assertEqual(gpt["byCurrency"], [])
+            self.assertEqual(gpt["currencyMissingCount"], 1)
+            self.assertIsNone(snapshot["totalCost"])
+
         finally:
             proc.terminate()
             try:

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { app } from '../server/index.ts';
-import { AgentViewer } from '../sdk/typescript/index.ts';
+import { AgentViewer, AgentViewerError } from '../sdk/typescript/index.ts';
 
 function startTestServer() {
   return new Promise((resolve) => {
@@ -59,7 +59,34 @@ test('TypeScript SDK: completes the exact 5-minute developer experience workflow
     const researcher = snapshot.agents.find((a) => a.id === 'researcher');
     assert.equal(researcher?.tokensInput, 4500);
     assert.equal(researcher?.tokensOutput, 900);
+
+    // Usage aggregates, call by call
+    const summary = await viewer.usageSummary();
+    assert.equal(summary.schemaVersion, '1.0');
+    const gemini = summary.byModel.find((entry) => entry.provider === 'Google' && entry.model === 'gemini-3.1-pro');
+    assert.ok(gemini, 'Expected a byModel entry for Google gemini-3.1-pro');
+    assert.equal(gemini.calls, 1);
+    assert.equal(gemini.tokens.input.sum, 4500);
+    const researcherUsage = summary.byAgent.find((entry) => entry.agentId === 'researcher');
+    assert.equal(researcherUsage?.calls, 1);
+    assert.deepEqual(summary, snapshot.usage);
   } finally {
+    server.close();
+  }
+});
+
+test('TypeScript SDK: usageSummary() raises AgentViewerError when the server refuses the request', async () => {
+  const previous = process.env.AGENT_VIEWER_API_TOKEN;
+  process.env.AGENT_VIEWER_API_TOKEN = 'sdk-usage-token';
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl });
+    await assert.rejects(viewer.usageSummary(), (err) => err instanceof AgentViewerError && err.status === 401);
+    const authorized = new AgentViewer({ url: baseUrl, token: 'sdk-usage-token' });
+    assert.equal((await authorized.usageSummary()).schemaVersion, '1.0');
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_VIEWER_API_TOKEN;
+    else process.env.AGENT_VIEWER_API_TOKEN = previous;
     server.close();
   }
 });

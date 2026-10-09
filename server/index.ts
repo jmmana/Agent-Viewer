@@ -11,10 +11,12 @@ import {
   LlmUsagePayloadSchema,
 } from '../src/integrations/canonicalContract';
 import type { AgentStatus } from '../src/types/agent';
+import { OTLP_LOGS_PATH } from '../src/integrations/otelConstants';
 import { serverEventId } from './ids';
 import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
-import { createEventStore, type AppendResult, type EventStore } from './store';
+import { createEventStore, type AppendResult, type AppendBatchResult, type EventStore } from './store';
 import { readPackageVersion } from './version';
+import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from './otlp/logs';
 
 /**
  * Set by the `agent-viewer` CLI before it imports this module. The CLI configures the server through its own
@@ -130,11 +132,237 @@ function rateLimiter(req: express.Request, res: express.Response, next: express.
   }
   entry.count++;
   if (entry.count > rateLimitMax) {
+    // Issue #59: every 429, on every route this limiter guards, carries Retry-After so OTLP exporters (and any
+    // other well-behaved client) back off instead of retrying immediately. At least 1 second, rounded up.
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))));
     res.status(429).json({ error: 'rate_limit_exceeded', message: `Too many requests. Limit: ${rateLimitMax}/min` });
     return;
   }
   next();
 }
+
+/** Builds a short, fixed-shape body for a `/v1/logs` error response. Never includes request content. */
+function otlpErrorBody(code: number, message: string): { code: number; message: string } {
+  return { code, message };
+}
+
+// -------------------------------------------------------------
+// OTLP/HTTP logs receiver: POST /v1/logs (issue #59)
+//
+// Claude Code's native OpenTelemetry telemetry (not the hook above, which never reads tokens or cost) is the
+// only documented source of per-request token and cost figures. This turns its `claude_code.api_request` and
+// `claude_code.api_error` events into `llm.usage`/`llm.failed` on the same main agent the hook already draws.
+// See `docs/otlp.md` for the full reference and `tests/fixtures/claude-code-otlp/README.md` for how the
+// mapping was confirmed against real Claude Code exports.
+//
+// Mounted before the global `express.json()` below, with its own middleware chain, so none of the global
+// body-parsing, auth or rate-limit decisions for /api/v1 ever apply here and vice versa: rate limit, then
+// token check, then content-type/encoding check, then this route's own size- and record-limited body parser,
+// then the shape/record-count check, then the handler. An unauthenticated request never reaches the body
+// parser; a wrong token with a malformed body still answers 401, not 400.
+// -------------------------------------------------------------
+function isValidByteSizeString(value: string): boolean {
+  return /^[0-9]+(\.[0-9]+)?\s*(b|kb|mb|gb|tb)?$/i.test(value.trim());
+}
+
+const otlpMaxBodyLabel = (() => {
+  const raw = process.env.AGENT_VIEWER_OTLP_MAX_BODY;
+  return raw && isValidByteSizeString(raw) ? raw.trim() : '5mb';
+})();
+
+const otlpMaxRecords = (() => {
+  const raw = Number(process.env.AGENT_VIEWER_OTLP_MAX_RECORDS);
+  return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 5000;
+})();
+
+const OTLP_UNSUPPORTED_MEDIA_MESSAGE =
+  `Agent Viewer accepts OTLP http/json on ${OTLP_LOGS_PATH}, uncompressed or gzip. Set OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json.`;
+const OTLP_MALFORMED_BODY_MESSAGE = 'Expected an OTLP ExportLogsServiceRequest with resourceLogs';
+
+/** Per-process counters behind `GET /api/v1/otlp/stats`. Documented as reset on restart. */
+const otlpStats = {
+  since: Date.now(),
+  requestsAccepted: 0,
+  requestsRejected: 0,
+  logRecordsReceived: 0,
+  logRecordsMapped: 0,
+  logRecordsDuplicates: 0,
+  logRecordsIgnored: 0,
+  logRecordsUnknown: 0,
+  logRecordsUnattributed: 0,
+  logRecordsInvalid: 0,
+  mappedByType: { 'llm.usage': 0, 'llm.failed': 0 } as Record<'llm.usage' | 'llm.failed', number>,
+  unknownEventNames: new Map<string, number>(),
+};
+
+/**
+ * The same Bearer-token-or-query-token decision `/api/v1` has always used, factored out so `/v1/logs` can
+ * reuse it (issue #59: "extract the token check ... so the decision logic is identical"). Reads `getApiToken`
+ * and `safeEqual`, both defined later in this module as hoisted `function` declarations.
+ */
+function isRequestAuthorized(req: express.Request): boolean {
+  const expectedToken = getApiToken();
+  if (!expectedToken) return true;
+
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
+  const queryToken =
+    typeof req.query.token === 'string'
+      ? req.query.token
+      : typeof req.query.api_key === 'string'
+        ? req.query.api_key
+        : undefined;
+
+  const headerOk = bearerMatch ? safeEqual(bearerMatch[1], expectedToken) : false;
+  const queryOk = queryToken !== undefined ? safeEqual(queryToken, expectedToken) : false;
+  return headerOk || queryOk;
+}
+
+/**
+ * Named token-check middleware (issue #59), parameterized so `/api/v1` keeps its own response shape and
+ * webhook HMAC exemption while `/v1/logs` gets an OTLP-style 401. The authorization decision itself
+ * (`isRequestAuthorized`) is identical on both routes.
+ */
+function requireApiToken(options: { webhookBypass?: boolean; onUnauthorized: (res: express.Response) => void }) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (options.webhookBypass && req.path.startsWith('/webhooks') && process.env.AGENT_VIEWER_WEBHOOK_SECRET) {
+      next();
+      return;
+    }
+    if (isRequestAuthorized(req)) {
+      next();
+      return;
+    }
+    options.onUnauthorized(res);
+  };
+}
+
+app.use(OTLP_LOGS_PATH, rateLimiter);
+app.use(
+  OTLP_LOGS_PATH,
+  requireApiToken({
+    onUnauthorized: (res) => res.status(401).json(otlpErrorBody(16, 'Valid Bearer token required')),
+  })
+);
+
+// Content-Type guard: body-parser's own `type` option silently skips parsing for a non-matching type instead
+// of erroring, so a wrong type needs its own check before the parser runs.
+app.use(OTLP_LOGS_PATH, (req, res, next) => {
+  const contentType = (req.header('content-type') ?? '').split(';')[0].trim().toLowerCase();
+  if (contentType !== '' && contentType !== 'application/json') {
+    otlpStats.requestsRejected += 1;
+    res.status(415).json(otlpErrorBody(3, OTLP_UNSUPPORTED_MEDIA_MESSAGE));
+    return;
+  }
+  next();
+});
+
+app.use(
+  OTLP_LOGS_PATH,
+  express.json({ type: 'application/json', limit: otlpMaxBodyLabel })
+);
+
+// Route-specific body-parser error handler: body-parser (via raw-body) tags its errors with `err.type`, which
+// this maps to the OTLP-style bodies from issue #59's status-code table, so the global, non-OTLP error
+// handler further down in this file never answers on this route.
+app.use(OTLP_LOGS_PATH, (err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!err) {
+    next();
+    return;
+  }
+  const type = typeof err?.type === 'string' ? err.type : undefined;
+  const status = typeof err?.status === 'number' ? err.status : typeof err?.statusCode === 'number' ? err.statusCode : undefined;
+
+  otlpStats.requestsRejected += 1;
+  if (type === 'entity.too.large' || status === 413) {
+    res.status(413).json(otlpErrorBody(3, `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} log records`));
+    return;
+  }
+  if (type === 'encoding.unsupported' || type === 'charset.unsupported' || status === 415) {
+    res.status(415).json(otlpErrorBody(3, OTLP_UNSUPPORTED_MEDIA_MESSAGE));
+    return;
+  }
+  // entity.parse.failed (malformed JSON), request.aborted, request.size.invalid, a corrupt gzip stream, or
+  // anything else this route's parser can throw: all answered the same way as a malformed body (400).
+  res.status(400).json(otlpErrorBody(3, OTLP_MALFORMED_BODY_MESSAGE));
+});
+
+app.post(OTLP_LOGS_PATH, async (req, res) => {
+  const body: unknown = req.body ?? {};
+
+  if (!looksLikeOtlpLogsRequest(body)) {
+    otlpStats.requestsRejected += 1;
+    res.status(400).json(otlpErrorBody(3, OTLP_MALFORMED_BODY_MESSAGE));
+    return;
+  }
+
+  if (countLogRecords(body) > otlpMaxRecords) {
+    otlpStats.requestsRejected += 1;
+    res.status(413).json(otlpErrorBody(3, `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} log records`));
+    return;
+  }
+
+  const mapped = mapOtlpLogsRequest(body, {
+    onUnknownEventName: (name) => {
+      if (process.env.AGENT_VIEWER_DEBUG) {
+        console.warn(`[agent-viewer otlp] unrecognized Claude Code event name: ${name}`);
+      }
+    },
+  });
+
+  let appendResult: AppendBatchResult;
+  try {
+    appendResult = await store.appendBatch(mapped.events);
+  } catch (error) {
+    otlpStats.requestsRejected += 1;
+    res.status(503).json(otlpErrorBody(14, 'Storage unavailable, retry'));
+    return;
+  }
+
+  for (const event of appendResult.acceptedEvents) broadcastEvent(event);
+
+  // A conflict (same content-derived id already stored with different content) can only happen when two
+  // otherwise-identical records resolved to different timestamps because neither had `event.timestamp` nor a
+  // `timeUnixNano`/`observedTimeUnixNano` (see the id formula in `server/otlp/logs.ts`): a vanishingly rare
+  // case, folded into `invalid` here so the published counter invariant still holds.
+  const acceptedByType: Record<'llm.usage' | 'llm.failed', number> = { 'llm.usage': 0, 'llm.failed': 0 };
+  for (const event of appendResult.acceptedEvents) {
+    if (event.type === 'llm.usage' || event.type === 'llm.failed') acceptedByType[event.type] += 1;
+  }
+
+  otlpStats.requestsAccepted += 1;
+  otlpStats.logRecordsReceived += mapped.stats.received;
+  otlpStats.logRecordsMapped += appendResult.accepted;
+  otlpStats.logRecordsDuplicates += appendResult.duplicates;
+  otlpStats.logRecordsIgnored += mapped.stats.ignored;
+  otlpStats.logRecordsUnknown += mapped.stats.unknown;
+  otlpStats.logRecordsUnattributed += mapped.stats.unattributed;
+  otlpStats.logRecordsInvalid += mapped.stats.invalid + appendResult.conflicts;
+  otlpStats.mappedByType['llm.usage'] += acceptedByType['llm.usage'];
+  otlpStats.mappedByType['llm.failed'] += acceptedByType['llm.failed'];
+  for (const [name, count] of mapped.unknownEventNames) {
+    otlpStats.unknownEventNames.set(name, (otlpStats.unknownEventNames.get(name) ?? 0) + count);
+  }
+
+  const rejectedCount = mapped.stats.unattributed + mapped.stats.invalid;
+  if (rejectedCount === 0) {
+    res.status(200).json({});
+    return;
+  }
+
+  const reasonCounts = new Map<string, number>();
+  for (const reason of mapped.rejectionReasons) reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+  const errorMessage = Array.from(reasonCounts.entries())
+    .map(([reason, count]) => `${count} ${reason}`)
+    .join('; ')
+    .slice(0, 2000);
+
+  res.status(200).json({
+    partialSuccess: {
+      rejectedLogRecords: String(rejectedCount),
+      errorMessage,
+    },
+  });
+});
 
 // Body parsing with raw buffer capture for webhook HMAC
 app.use(
@@ -264,34 +492,20 @@ function safeEqual(provided: string, expected: string): boolean {
 // Rate limiting runs before authentication so failed token guesses count toward the limit.
 app.use('/api/v1', rateLimiter);
 
-// Authentication middleware for /api/v1/*
-app.use('/api/v1', (req, res, next) => {
-  // With a webhook secret configured, webhooks authenticate with their HMAC signature (checked in the route).
-  // Without one, they need the API token like every other ingestion endpoint.
-  if (req.path.startsWith('/webhooks') && process.env.AGENT_VIEWER_WEBHOOK_SECRET) return next();
-
-  const expectedToken = getApiToken();
-  if (!expectedToken) return next();
-
-  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
-  const queryToken =
-    typeof req.query.token === 'string'
-      ? req.query.token
-      : typeof req.query.api_key === 'string'
-        ? req.query.api_key
-        : undefined;
-
-  const headerOk = bearerMatch ? safeEqual(bearerMatch[1], expectedToken) : false;
-  const queryOk = queryToken !== undefined ? safeEqual(queryToken, expectedToken) : false;
-  if (headerOk || queryOk) {
-    return next();
-  }
-
-  res.status(401).json({
-    error: 'unauthorized',
-    message: 'Valid Bearer token or token query parameter required',
-  });
-});
+// Authentication middleware for /api/v1/*. With a webhook secret configured, webhooks authenticate with
+// their HMAC signature (checked in the route) instead of the token; every other /api/v1 route, and
+// OTLP_LOGS_PATH above, share the same isRequestAuthorized decision through requireApiToken (issue #59).
+app.use(
+  '/api/v1',
+  requireApiToken({
+    webhookBypass: true,
+    onUnauthorized: (res) =>
+      res.status(401).json({
+        error: 'unauthorized',
+        message: 'Valid Bearer token or token query parameter required',
+      }),
+  })
+);
 
 // -------------------------------------------------------------
 // Health & Ready
@@ -583,6 +797,30 @@ app.get('/api/v1/snapshot', requireReady, async (_req, res) => {
 // Usage aggregates only (the snapshot's `usage` block), without the event list.
 app.get('/api/v1/usage', async (_req, res) => {
   res.json(await store.usageSummary());
+});
+
+// OTLP/HTTP logs receiver counters (issue #59). Per-process, reset on restart like store.ingestionCounters().
+// Holds no token or cost sums: this is a shape/volume view of what the route did, never a usage figure.
+app.get('/api/v1/otlp/stats', (_req, res) => {
+  const unknownEventNames: Record<string, number> = {};
+  for (const [name, count] of otlpStats.unknownEventNames) {
+    unknownEventNames[`claude_code.${name}`] = count;
+  }
+  res.json({
+    since: otlpStats.since,
+    requests: { accepted: otlpStats.requestsAccepted, rejected: otlpStats.requestsRejected },
+    logRecords: {
+      received: otlpStats.logRecordsReceived,
+      mapped: otlpStats.logRecordsMapped,
+      duplicates: otlpStats.logRecordsDuplicates,
+      ignored: otlpStats.logRecordsIgnored,
+      unknown: otlpStats.logRecordsUnknown,
+      unattributed: otlpStats.logRecordsUnattributed,
+      invalid: otlpStats.logRecordsInvalid,
+    },
+    mappedByType: { ...otlpStats.mappedByType },
+    unknownEventNames,
+  });
 });
 
 /** `limit` on a list endpoint: default 100, clamped to 1..1000. A non-numeric value falls back to the default. */

@@ -280,6 +280,7 @@ test('llm.failed: is a canonical type and exposes the error kinds', () => {
     'auth',
     'server_error',
     'cancelled',
+    'network',
     'unknown',
   ]);
   assert.equal(isLlmErrorKind('rate_limited'), true);
@@ -346,11 +347,27 @@ test('llm.failed: negative latency, token counts and cost are rejected', () => {
   }
 });
 
-test('llm.failed: requires provider and model', () => {
-  const result = validateCanonicalEvent(failedEvent({ provider: '', model: undefined }));
+test('llm.failed: requires provider but not model', () => {
+  const result = validateCanonicalEvent(failedEvent({ provider: '' }));
   assert.equal(result.success, false);
   assert.ok(issueAt(result, 'payload.provider'));
-  assert.ok(issueAt(result, 'payload.model'));
+});
+
+// model became optional with issue #59 (OTLP receiver): Claude Code's api_error event can lack a model
+// attribute entirely (for example a connection failure before any model was chosen), and this item never
+// invents one. llm.usage keeps requiring model: a successful call always billed a specific model.
+test('llm.failed: model is optional, left out when absent', () => {
+  // A real request arrives as JSON, where an explicit `undefined` and a missing key are the same thing: the
+  // round-trip below reproduces that so this test does not depend on JS object-spread quirks around `undefined`.
+  const eventWithoutModel = JSON.parse(JSON.stringify(failedEvent({ model: undefined })));
+  assert.equal('model' in eventWithoutModel.payload, false);
+  const withoutModel = validateCanonicalEvent(eventWithoutModel);
+  assert.equal(withoutModel.success, true);
+  assert.equal('model' in withoutModel.data.payload, false);
+
+  const withModel = validateCanonicalEvent(failedEvent({ model: 'claude-sonnet-5' }));
+  assert.equal(withModel.success, true);
+  assert.equal(withModel.data.payload.model, 'claude-sonnet-5');
 });
 
 test('llm.failed: the subset check is skipped without inputTokens and applied with it', () => {

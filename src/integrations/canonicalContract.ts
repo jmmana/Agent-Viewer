@@ -103,13 +103,19 @@ export type LlmUsagePayload = z.infer<typeof LlmUsagePayloadSchema>;
  */
 export const LlmFailedPayloadSchema = z.object({
   provider: z.string().min(1, 'Provider is required'),
-  model: z.string().min(1, 'Model is required'),
+  /**
+   * Optional since issue #59: the OTLP receiver maps `claude_code.api_error`, whose `model` attribute can be
+   * absent (for example a connection failure before the model was even chosen). Left out, never invented.
+   */
+  model: z.string().min(1).nullish(),
   errorKind: z.enum(LLM_ERROR_KINDS).default('unknown'),
   httpStatus: z.number().int().min(100).max(599).nullish(),
   retryable: z.boolean().nullish(),
   /** Same dedup rule and warning as `LlmUsagePayloadSchema.requestId`: it shares one key space with `llm.usage`. */
   requestId: z.string().max(200).nullish(),
   providerErrorCode: z.string().max(100).nullish(),
+  /** Attempts made before giving up, including the first one (OTLP's `attempt`). Added by issue #59. */
+  attempts: tokenCount.nullish(),
   latencyMs: tokenCount.nullish(),
   inputTokens: tokenCount.nullish(),
   outputTokens: tokenCount.nullish(),

@@ -10,6 +10,9 @@ __pycache__/
 *.pyc
 data/
 *.db*
+!tests/fixtures/
+!tests/fixtures/sqlite/
+!tests/fixtures/sqlite/*.db
 .venv/
 
 # Library build output

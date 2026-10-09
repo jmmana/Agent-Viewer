@@ -1,10 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
 import { eventFingerprint } from './eventFingerprint';
 import { readPackageVersion } from './version';
+import type { TelemetryPointInput } from './otlp/metrics';
+import type { TelemetryPointRecord } from './telemetry';
 import {
   extractUsageFingerprintFields,
   fingerprintFieldsMatch,
@@ -306,6 +309,31 @@ function summarizeBatch(results: AppendResult[], events: CanonicalEvent[]): Appe
   return { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs };
 }
 
+/** Result of one `appendTelemetryPoints` call (issue #73). Never includes a point's value or any raw attribute. */
+export interface TelemetryAppendOutcome {
+  accepted: number;
+  /** Same `(series_key, start_time_unix_nano, time_unix_nano)` already stored with the same value: a harmless retry. */
+  duplicates: number;
+  /** Same key already stored with a different value: the first value is kept, this one is rejected. */
+  conflicts: number;
+  /** Memory mode only: rejected because `AGENT_VIEWER_TELEMETRY_MAX_POINTS` was already full. Always 0 for SQLite. */
+  rejectedCapacity: number;
+  /** Short, content-free reasons for every `conflicts`/`rejectedCapacity` point, for the route's `partialSuccess`. */
+  messages: string[];
+}
+
+export interface TelemetryStats {
+  pointsStored: number;
+  pointsWithoutSession: number;
+  /** Memory mode only: `true` once `AGENT_VIEWER_TELEMETRY_MAX_POINTS` has rejected at least one point. */
+  truncated: boolean;
+}
+
+export interface TelemetryPointFilter {
+  sessionId?: string;
+  runtimeId?: string;
+}
+
 export interface EventStore {
   /** Stores a new event, or classifies a repeated id as a duplicate (same content) or a conflict (different content). */
   append(event: CanonicalEvent): Promise<AppendResult>;
@@ -368,6 +396,18 @@ export interface EventStore {
   init(): Promise<void>;
   /** Current readiness, read by `GET /ready` and by the `requireReady` guard on routes that need derived state. */
   readiness(): StoreReadiness;
+
+  /**
+   * Stores OTLP metric points (issue #73). Never touches `events`, the snapshot, SSE or any rollup: a point here
+   * is evidence for the ledger-vs-metrics cross-check, never a second copy of a ledger row.
+   */
+  appendTelemetryPoints(points: TelemetryPointInput[]): Promise<TelemetryAppendOutcome>;
+  /** Raw stored points, for `server/telemetry.ts` to resolve delta/cumulative totals. No pagination: issue #73's
+   * reconciliation endpoint (deferred, see `docs/otlp.md`) will add that when it lands. */
+  listTelemetryPoints(filter?: TelemetryPointFilter): Promise<TelemetryPointRecord[]>;
+  telemetryStats(): Promise<TelemetryStats>;
+  /** The HMAC secret behind `series_key`. Generated once; persisted in SQLite mode, per-process in memory mode. */
+  getTelemetryHmacSecret(): Promise<Buffer>;
 
   close(): Promise<void>;
 }
@@ -492,9 +532,40 @@ export interface MemoryEventStoreOptions {
   rememberEvictedIds?: boolean;
   /** Server clock, injected so tests can pin `receivedAt`. Default `Date.now`. */
   now?: () => number;
+  /** Cap on stored OTLP telemetry points (issue #73). Default `100000`; must be an integer >= 1. */
+  telemetryMaxPoints?: number;
 }
 
 const DEFAULT_MAX_EVENTS = 10000;
+/** Default `AGENT_VIEWER_TELEMETRY_MAX_POINTS` (issue #73): memory-mode cap on stored OTLP metric points. */
+export const DEFAULT_TELEMETRY_MAX_POINTS = 100000;
+
+function telemetryPointKey(point: Pick<TelemetryPointInput, 'seriesKey' | 'startTimeUnixNano' | 'timeUnixNano'>): string {
+  return `${point.seriesKey}|${point.startTimeUnixNano}|${point.timeUnixNano}`;
+}
+
+function telemetryInputToRecord(point: TelemetryPointInput): TelemetryPointRecord {
+  return {
+    seriesKey: point.seriesKey,
+    temporality: point.temporality,
+    metricKind: point.metricKind,
+    tokenType: point.tokenType,
+    currency: point.currency,
+    sessionId: point.sessionId,
+    runtimeId: point.runtimeId,
+    startTimeUnixNano: point.startTimeUnixNano,
+    timeUnixNano: point.timeUnixNano,
+    timeMs: point.timeMs,
+    value: point.value,
+  };
+}
+
+function matchesTelemetryFilter(point: TelemetryPointInput, filter?: TelemetryPointFilter): boolean {
+  if (!filter) return true;
+  if (filter.sessionId !== undefined && point.sessionId !== filter.sessionId) return false;
+  if (filter.runtimeId !== undefined && point.runtimeId !== filter.runtimeId) return false;
+  return true;
+}
 /** `knownIds.size` threshold at which a single one-time memory-cost warning is logged. */
 const KNOWN_IDS_WARNING_THRESHOLD = 1_000_000;
 
@@ -542,6 +613,13 @@ export class MemoryEventStore implements EventStore {
   /** Accepted events evicted from the retained window. */
   private droppedEvents = 0;
   private warnedKnownIdsSize = false;
+  /** Keyed by `series_key|start_time_unix_nano|time_unix_nano` (issue #73's idempotency key). */
+  private telemetryPoints = new Map<string, TelemetryPointInput>();
+  private telemetryMaxPoints: number;
+  private telemetryTruncated = false;
+  private telemetryWithoutSessionCount = 0;
+  /** Generated on first use (issue #73): per-process, never persisted in memory mode. */
+  private telemetrySecret: Buffer | null = null;
 
   constructor(options?: number | MemoryEventStoreOptions) {
     const opts: MemoryEventStoreOptions = typeof options === 'number' ? { maxEvents: options } : (options ?? {});
@@ -554,6 +632,11 @@ export class MemoryEventStore implements EventStore {
     this.now = opts.now ?? Date.now;
     this.startedAt = this.now();
     this.window = new RetainedWindow(maxEvents);
+    const telemetryMaxPoints = opts.telemetryMaxPoints ?? DEFAULT_TELEMETRY_MAX_POINTS;
+    if (!Number.isInteger(telemetryMaxPoints) || telemetryMaxPoints < 1) {
+      throw new Error(`MemoryEventStore telemetryMaxPoints must be a positive integer, got ${telemetryMaxPoints}`);
+    }
+    this.telemetryMaxPoints = telemetryMaxPoints;
   }
 
   /** Nothing to replay: a `MemoryEventStore` starts empty and is ready as soon as it is constructed. */
@@ -904,6 +987,60 @@ export class MemoryEventStore implements EventStore {
 
   async listAgents(): Promise<AgentRecord[]> {
     return Array.from(this.state.agents.values(), (agent) => toAgentRecord(this.state, agent));
+  }
+
+  async appendTelemetryPoints(points: TelemetryPointInput[]): Promise<TelemetryAppendOutcome> {
+    let accepted = 0;
+    let duplicates = 0;
+    let conflicts = 0;
+    let rejectedCapacity = 0;
+    const messages: string[] = [];
+
+    for (const point of points) {
+      const key = telemetryPointKey(point);
+      const existing = this.telemetryPoints.get(key);
+      if (existing) {
+        if (existing.value === point.value) {
+          duplicates++;
+        } else {
+          conflicts++;
+          messages.push(`${point.metricName}: conflicting duplicate (same point reported twice with different values)`);
+        }
+        continue;
+      }
+      if (this.telemetryPoints.size >= this.telemetryMaxPoints) {
+        rejectedCapacity++;
+        this.telemetryTruncated = true;
+        messages.push(`${point.metricName}: rejected, AGENT_VIEWER_TELEMETRY_MAX_POINTS (${this.telemetryMaxPoints}) reached`);
+        continue;
+      }
+      this.telemetryPoints.set(key, point);
+      accepted++;
+      if (point.sessionId === null) this.telemetryWithoutSessionCount++;
+    }
+
+    return { accepted, duplicates, conflicts, rejectedCapacity, messages };
+  }
+
+  async listTelemetryPoints(filter?: TelemetryPointFilter): Promise<TelemetryPointRecord[]> {
+    const results: TelemetryPointRecord[] = [];
+    for (const point of this.telemetryPoints.values()) {
+      if (matchesTelemetryFilter(point, filter)) results.push(telemetryInputToRecord(point));
+    }
+    return results;
+  }
+
+  async telemetryStats(): Promise<TelemetryStats> {
+    return {
+      pointsStored: this.telemetryPoints.size,
+      pointsWithoutSession: this.telemetryWithoutSessionCount,
+      truncated: this.telemetryTruncated,
+    };
+  }
+
+  async getTelemetryHmacSecret(): Promise<Buffer> {
+    if (!this.telemetrySecret) this.telemetrySecret = crypto.randomBytes(32);
+    return this.telemetrySecret;
   }
 
   async close(): Promise<void> {
@@ -1736,6 +1873,168 @@ export class SQLiteEventStore implements EventStore {
     return Array.from(this.state.agents.values(), (agent) => toAgentRecord(this.state, agent));
   }
 
+  private telemetryInsertStmt(): any {
+    return this.db.prepare(`
+      INSERT INTO telemetry_metric_points (
+        received_at, metric_name, metric_kind, token_type, unit, currency, temporality, series_key,
+        session_id, runtime_id, model, service_name, service_version,
+        start_time_unix_nano, time_unix_nano, time_ms, value, wire_format
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(series_key, start_time_unix_nano, time_unix_nano) DO NOTHING
+    `);
+  }
+
+  /**
+   * Inserts every point in one transaction (issue #73: "one transaction per request in SQLite"). A point whose
+   * key is already stored is read back to tell a harmless retry (same value) from a conflicting duplicate
+   * (different value, first value kept): no retry or race path is needed here the way `classifyAndInsert` needs
+   * one for `events.id`, because `node:sqlite` is synchronous and this method never awaits mid-transaction.
+   */
+  async appendTelemetryPoints(points: TelemetryPointInput[]): Promise<TelemetryAppendOutcome> {
+    if (points.length === 0) return { accepted: 0, duplicates: 0, conflicts: 0, rejectedCapacity: 0, messages: [] };
+
+    const insertStmt = this.telemetryInsertStmt();
+    const selectStmt = this.db.prepare(
+      'SELECT value FROM telemetry_metric_points WHERE series_key = ? AND start_time_unix_nano = ? AND time_unix_nano = ?'
+    );
+
+    let accepted = 0;
+    let duplicates = 0;
+    let conflicts = 0;
+    const messages: string[] = [];
+
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const point of points) {
+        const result = insertStmt.run(
+          point.receivedAt,
+          point.metricName,
+          point.metricKind,
+          point.tokenType,
+          point.unit,
+          point.currency,
+          point.temporality,
+          point.seriesKey,
+          point.sessionId,
+          point.runtimeId,
+          point.model,
+          point.serviceName,
+          point.serviceVersion,
+          point.startTimeUnixNano,
+          point.timeUnixNano,
+          point.timeMs,
+          point.value,
+          point.wireFormat
+        );
+        const inserted = Number((result as { changes?: number | bigint }).changes ?? 0) > 0;
+        if (inserted) {
+          accepted++;
+          continue;
+        }
+        const existing = selectStmt.get(point.seriesKey, point.startTimeUnixNano, point.timeUnixNano) as
+          | { value: number }
+          | undefined;
+        if (existing && existing.value === point.value) {
+          duplicates++;
+        } else {
+          conflicts++;
+          messages.push(`${point.metricName}: conflicting duplicate (same point reported twice with different values)`);
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // Already rolled back.
+      }
+      throw error;
+    }
+
+    // Memory mode's AGENT_VIEWER_TELEMETRY_MAX_POINTS cap does not apply here: SQLite storage is durable and
+    // bounded by disk, not by an in-process map (issue #73, section 3).
+    return { accepted, duplicates, conflicts, rejectedCapacity: 0, messages };
+  }
+
+  async listTelemetryPoints(filter?: TelemetryPointFilter): Promise<TelemetryPointRecord[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter?.sessionId !== undefined) {
+      clauses.push('session_id = ?');
+      params.push(filter.sessionId);
+    }
+    if (filter?.runtimeId !== undefined) {
+      clauses.push('runtime_id = ?');
+      params.push(filter.runtimeId);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `SELECT series_key, temporality, metric_kind, token_type, currency, session_id, runtime_id,
+                start_time_unix_nano, time_unix_nano, time_ms, value
+         FROM telemetry_metric_points ${where}`
+      )
+      .all(...params) as Array<{
+      series_key: string;
+      temporality: 'delta' | 'cumulative';
+      metric_kind: 'tokens' | 'cost';
+      token_type: string | null;
+      currency: string | null;
+      session_id: string | null;
+      runtime_id: string | null;
+      start_time_unix_nano: string;
+      time_unix_nano: string;
+      time_ms: number;
+      value: number;
+    }>;
+    return rows.map((row) => ({
+      seriesKey: row.series_key,
+      temporality: row.temporality,
+      metricKind: row.metric_kind,
+      tokenType: row.token_type,
+      currency: row.currency,
+      sessionId: row.session_id,
+      runtimeId: row.runtime_id,
+      startTimeUnixNano: row.start_time_unix_nano,
+      timeUnixNano: row.time_unix_nano,
+      timeMs: row.time_ms,
+      value: row.value,
+    }));
+  }
+
+  async telemetryStats(): Promise<TelemetryStats> {
+    const stored = this.db.prepare('SELECT COUNT(*) AS count FROM telemetry_metric_points').get() as { count: number };
+    const withoutSession = this.db
+      .prepare('SELECT COUNT(*) AS count FROM telemetry_metric_points WHERE session_id IS NULL')
+      .get() as { count: number };
+    return { pointsStored: stored.count, pointsWithoutSession: withoutSession.count, truncated: false };
+  }
+
+  /** Generated once and persisted (issue #73), so retries after a restart still deduplicate against series keys
+   * computed before it. */
+  async getTelemetryHmacSecret(): Promise<Buffer> {
+    const row = this.db.prepare('SELECT value FROM telemetry_meta WHERE key = ?').get('series_hmac_secret') as
+      | { value: string }
+      | undefined;
+    if (row) return Buffer.from(row.value, 'hex');
+
+    const secret = crypto.randomBytes(32);
+    try {
+      this.db
+        .prepare('INSERT INTO telemetry_meta (key, value) VALUES (?, ?)')
+        .run('series_hmac_secret', secret.toString('hex'));
+    } catch {
+      // Lost a race with another writer in this same process (defensive only: several processes sharing one
+      // SQLite file is not officially supported, same caveat as the events table's own race paths).
+      const raced = this.db.prepare('SELECT value FROM telemetry_meta WHERE key = ?').get('series_hmac_secret') as
+        | { value: string }
+        | undefined;
+      if (raced) return Buffer.from(raced.value, 'hex');
+      throw new Error('Could not read or write the telemetry series-key secret');
+    }
+    return secret;
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     try {
@@ -1769,15 +2068,25 @@ export function parseMaxEvents(raw: string | undefined): number {
   return value;
 }
 
+/** Parses `AGENT_VIEWER_TELEMETRY_MAX_POINTS` (issue #73). Unset, empty or invalid falls back to the default:
+ * unlike `AGENT_VIEWER_MAX_EVENTS`, a typo here should not stop the whole server from starting. */
+export function parseTelemetryMaxPoints(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_TELEMETRY_MAX_POINTS;
+  const value = Number(raw.trim());
+  return Number.isInteger(value) && value >= 1 ? value : DEFAULT_TELEMETRY_MAX_POINTS;
+}
+
 export function createEventStore(): EventStore {
   const storageType = (process.env.AGENT_VIEWER_STORAGE || 'memory').toLowerCase();
   const rawMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
   const maxEvents = parseMaxEvents(rawMaxEvents);
   const maxEventsWasSet = rawMaxEvents !== undefined && rawMaxEvents.trim() !== '';
+  const telemetryMaxPoints = parseTelemetryMaxPoints(process.env.AGENT_VIEWER_TELEMETRY_MAX_POINTS);
 
   if (storageType === 'sqlite') {
     // Since issue #52, SQLite mode has no capped in-memory window to limit: every event is persisted and the
     // startup rebuild replays the whole table. AGENT_VIEWER_MAX_EVENTS only applies to the memory store.
+    // AGENT_VIEWER_TELEMETRY_MAX_POINTS has the same scope restriction for the same reason (issue #73).
     if (maxEventsWasSet) {
       console.log(`[agent-viewer] AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode; every event is stored and never capped.`);
     }
@@ -1785,5 +2094,5 @@ export function createEventStore(): EventStore {
     const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
     return new SQLiteEventStore(dbPath, { backup });
   }
-  return new MemoryEventStore({ maxEvents });
+  return new MemoryEventStore({ maxEvents, telemetryMaxPoints });
 }

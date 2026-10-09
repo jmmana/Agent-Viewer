@@ -11,14 +11,29 @@ import {
   LlmUsagePayloadSchema,
 } from '../src/integrations/canonicalContract';
 import type { AgentStatus } from '../src/types/agent';
-import { OTLP_LOGS_PATH } from '../src/integrations/otelConstants';
+import { OTLP_LOGS_PATH, OTLP_METRICS_PATH } from '../src/integrations/otelConstants';
 import { serverEventId } from './ids';
 import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
-import { createEventStore, type AppendResult, type AppendBatchResult, type EventSeq, type EventStore } from './store';
+import {
+  createEventStore,
+  type AppendResult,
+  type AppendBatchResult,
+  type EventSeq,
+  type EventStore,
+  type TelemetryAppendOutcome,
+} from './store';
 import { readPackageVersion } from './version';
 import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from './otlp/logs';
 import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
 import { createStreamTicketStore } from './stream-tickets';
+import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
+import {
+  decodeExportLogsServiceRequest,
+  decodeExportMetricsServiceRequest,
+  encodeExportLogsServiceResponse,
+  encodeExportMetricsServiceResponse,
+  encodeStatus,
+} from './otlp/otlpProtobuf';
 
 /**
  * Set by the `agent-viewer` CLI before it imports this module. The CLI configures the server through its own
@@ -178,19 +193,26 @@ function otlpErrorBody(code: number, message: string): { code: number; message: 
 }
 
 // -------------------------------------------------------------
-// OTLP/HTTP logs receiver: POST /v1/logs (issue #59)
+// OTLP/HTTP receivers: POST /v1/logs (issue #59) and POST /v1/metrics (issue #73)
 //
 // Claude Code's native OpenTelemetry telemetry (not the hook above, which never reads tokens or cost) is the
-// only documented source of per-request token and cost figures. This turns its `claude_code.api_request` and
-// `claude_code.api_error` events into `llm.usage`/`llm.failed` on the same main agent the hook already draws.
-// See `docs/otlp.md` for the full reference and `tests/fixtures/claude-code-otlp/README.md` for how the
-// mapping was confirmed against real Claude Code exports.
+// only documented source of per-request token and cost figures. `/v1/logs` turns its `claude_code.api_request`
+// and `claude_code.api_error` events into `llm.usage`/`llm.failed` on the same main agent the hook already
+// draws. `/v1/metrics` stores the same consumption's counters (`claude_code.token.usage`,
+// `claude_code.cost.usage`) as a second, independent measurement, kept in its own tables and never folded into
+// the ledger, the snapshot, SSE or any rollup: it exists only as a cross-check against the logs path. See
+// `docs/otlp.md` for the full reference.
 //
-// Mounted before the global `express.json()` below, with its own middleware chain, so none of the global
-// body-parsing, auth or rate-limit decisions for /api/v1 ever apply here and vice versa: rate limit, then
-// token check, then content-type/encoding check, then this route's own size- and record-limited body parser,
-// then the shape/record-count check, then the handler. An unauthenticated request never reaches the body
-// parser; a wrong token with a malformed body still answers 401, not 400.
+// Both routes are mounted before the global `express.json()` below, each with its own middleware chain, so
+// none of the global body-parsing, auth or rate-limit decisions for /api/v1 ever apply here and vice versa:
+// rate limit, then token check, then content-type/encoding check, then this route's own size-limited body
+// parser (JSON or protobuf, by content type), then a shape/count check, then the handler. An unauthenticated
+// request never reaches the body parser; a wrong token with a malformed body still answers 401, not 400.
+//
+// `http/protobuf` (issue #73, section 2): both routes accept `application/x-protobuf` using the zero-dependency
+// wire decoder in `server/otlp/protobufWire.ts` and `server/otlp/otlpProtobuf.ts`, so the install stays at
+// `express` and `zod`. A protobuf request gets a protobuf response (`Content-Type: application/x-protobuf`);
+// gRPC is not supported, only `http/json` and `http/protobuf`.
 // -------------------------------------------------------------
 function isValidByteSizeString(value: string): boolean {
   return /^[0-9]+(\.[0-9]+)?\s*(b|kb|mb|gb|tb)?$/i.test(value.trim());
@@ -207,8 +229,60 @@ const otlpMaxRecords = (() => {
 })();
 
 const OTLP_UNSUPPORTED_MEDIA_MESSAGE =
-  `Agent Viewer accepts OTLP http/json on ${OTLP_LOGS_PATH}, uncompressed or gzip. Set OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json.`;
+  `Agent Viewer accepts OTLP http/json or http/protobuf on ${OTLP_LOGS_PATH}, uncompressed or gzip. Set OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json or http/protobuf.`;
 const OTLP_MALFORMED_BODY_MESSAGE = 'Expected an OTLP ExportLogsServiceRequest with resourceLogs';
+const OTLP_METRICS_UNSUPPORTED_MEDIA_MESSAGE =
+  `Agent Viewer accepts OTLP http/json or http/protobuf on ${OTLP_METRICS_PATH}, uncompressed or gzip. Set OTEL_EXPORTER_OTLP_PROTOCOL=http/json or http/protobuf.`;
+const OTLP_METRICS_MALFORMED_BODY_MESSAGE = 'Expected an OTLP ExportMetricsServiceRequest with resourceMetrics';
+
+/** Accepted media types on both OTLP routes, content-type parameters (for example `; charset=utf-8`) ignored. */
+const OTLP_ACCEPTED_CONTENT_TYPES = new Set(['application/json', 'application/x-protobuf']);
+
+/**
+ * Content-Type guard shared by `/v1/logs` and `/v1/metrics` (issue #73, "one code path"): body-parser's own
+ * `type` option silently skips parsing for a non-matching type instead of erroring, so a wrong (or missing but
+ * non-empty-body) type needs its own check before either parser runs.
+ */
+function otlpContentTypeGuard(onReject: () => void, unsupportedMediaMessage: string) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const contentType = (req.header('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    if (contentType !== '' && !OTLP_ACCEPTED_CONTENT_TYPES.has(contentType)) {
+      onReject();
+      res.status(415).json(otlpErrorBody(3, unsupportedMediaMessage));
+      return;
+    }
+    next();
+  };
+}
+
+/**
+ * Route-specific body-parser error handler, shared by `/v1/logs` and `/v1/metrics`: body-parser (via raw-body)
+ * tags its errors with `err.type`, which this maps to the OTLP-style bodies from issue #59/#73's status-code
+ * table, so the global, non-OTLP error handler further down in this file never answers on either route.
+ */
+function otlpBodyErrorHandler(onReject: () => void, limitMessage: string, unsupportedMediaMessage: string, malformedMessage: string) {
+  return (err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!err) {
+      next();
+      return;
+    }
+    const type = typeof err?.type === 'string' ? err.type : undefined;
+    const status = typeof err?.status === 'number' ? err.status : typeof err?.statusCode === 'number' ? err.statusCode : undefined;
+
+    onReject();
+    if (type === 'entity.too.large' || status === 413) {
+      res.status(413).json(otlpErrorBody(3, limitMessage));
+      return;
+    }
+    if (type === 'encoding.unsupported' || type === 'charset.unsupported' || status === 415) {
+      res.status(415).json(otlpErrorBody(3, unsupportedMediaMessage));
+      return;
+    }
+    // entity.parse.failed (malformed JSON), request.aborted, request.size.invalid, a corrupt gzip stream, or
+    // anything else either route's parser can throw: all answered the same way as a malformed body (400).
+    res.status(400).json(otlpErrorBody(3, malformedMessage));
+  };
+}
 
 /** Per-process counters behind `GET /api/v1/otlp/stats`. Documented as reset on restart. */
 const otlpStats = {
@@ -393,60 +467,58 @@ app.use(
   })
 );
 
-// Content-Type guard: body-parser's own `type` option silently skips parsing for a non-matching type instead
-// of erroring, so a wrong type needs its own check before the parser runs.
-app.use(OTLP_LOGS_PATH, (req, res, next) => {
-  const contentType = (req.header('content-type') ?? '').split(';')[0].trim().toLowerCase();
-  if (contentType !== '' && contentType !== 'application/json') {
-    otlpStats.requestsRejected += 1;
-    res.status(415).json(otlpErrorBody(3, OTLP_UNSUPPORTED_MEDIA_MESSAGE));
-    return;
-  }
-  next();
-});
+app.use(OTLP_LOGS_PATH, otlpContentTypeGuard(() => (otlpStats.requestsRejected += 1), OTLP_UNSUPPORTED_MEDIA_MESSAGE));
+
+app.use(OTLP_LOGS_PATH, express.json({ type: 'application/json', limit: otlpMaxBodyLabel }));
+app.use(OTLP_LOGS_PATH, express.raw({ type: 'application/x-protobuf', limit: otlpMaxBodyLabel }));
 
 app.use(
   OTLP_LOGS_PATH,
-  express.json({ type: 'application/json', limit: otlpMaxBodyLabel })
+  otlpBodyErrorHandler(
+    () => (otlpStats.requestsRejected += 1),
+    `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} log records`,
+    OTLP_UNSUPPORTED_MEDIA_MESSAGE,
+    OTLP_MALFORMED_BODY_MESSAGE
+  )
 );
 
-// Route-specific body-parser error handler: body-parser (via raw-body) tags its errors with `err.type`, which
-// this maps to the OTLP-style bodies from issue #59's status-code table, so the global, non-OTLP error
-// handler further down in this file never answers on this route.
-app.use(OTLP_LOGS_PATH, (err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (!err) {
-    next();
-    return;
-  }
-  const type = typeof err?.type === 'string' ? err.type : undefined;
-  const status = typeof err?.status === 'number' ? err.status : typeof err?.statusCode === 'number' ? err.statusCode : undefined;
-
-  otlpStats.requestsRejected += 1;
-  if (type === 'entity.too.large' || status === 413) {
-    res.status(413).json(otlpErrorBody(3, `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} log records`));
-    return;
-  }
-  if (type === 'encoding.unsupported' || type === 'charset.unsupported' || status === 415) {
-    res.status(415).json(otlpErrorBody(3, OTLP_UNSUPPORTED_MEDIA_MESSAGE));
-    return;
-  }
-  // entity.parse.failed (malformed JSON), request.aborted, request.size.invalid, a corrupt gzip stream, or
-  // anything else this route's parser can throw: all answered the same way as a malformed body (400).
-  res.status(400).json(otlpErrorBody(3, OTLP_MALFORMED_BODY_MESSAGE));
-});
-
 app.post(OTLP_LOGS_PATH, async (req, res) => {
-  const body: unknown = req.body ?? {};
+  // `express.raw` leaves a protobuf body as a `Buffer`; `express.json` leaves a JSON body as a plain object.
+  // Exactly one of the two parsers above ever matches a given request (the content-type guard already rejected
+  // anything else), so this is enough to tell which wire format arrived (issue #73, section 2: "one code path"
+  // downstream of this point, `looksLikeOtlpLogsRequest` onward never knows the difference).
+  const isProtobufRequest = Buffer.isBuffer(req.body);
+  const respondStatus = (status: 400, message: string) => {
+    otlpStats.requestsRejected += 1;
+    if (isProtobufRequest) {
+      res.status(status).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
+    } else {
+      res.status(status).json(otlpErrorBody(3, message));
+    }
+  };
+
+  let body: unknown;
+  if (isProtobufRequest) {
+    try {
+      body = decodeExportLogsServiceRequest(req.body as Buffer);
+    } catch (error) {
+      respondStatus(400, OTLP_MALFORMED_BODY_MESSAGE);
+      return;
+    }
+  } else {
+    body = req.body ?? {};
+  }
 
   if (!looksLikeOtlpLogsRequest(body)) {
-    otlpStats.requestsRejected += 1;
-    res.status(400).json(otlpErrorBody(3, OTLP_MALFORMED_BODY_MESSAGE));
+    respondStatus(400, OTLP_MALFORMED_BODY_MESSAGE);
     return;
   }
 
   if (countLogRecords(body) > otlpMaxRecords) {
     otlpStats.requestsRejected += 1;
-    res.status(413).json(otlpErrorBody(3, `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} log records`));
+    const message = `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} log records`;
+    if (isProtobufRequest) res.status(413).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
+    else res.status(413).json(otlpErrorBody(3, message));
     return;
   }
 
@@ -463,7 +535,8 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
     appendResult = await store.appendBatch(mapped.events);
   } catch (error) {
     otlpStats.requestsRejected += 1;
-    res.status(503).json(otlpErrorBody(14, 'Storage unavailable, retry'));
+    if (isProtobufRequest) res.status(503).type('application/x-protobuf').send(Buffer.from(encodeStatus(14, 'Storage unavailable, retry')));
+    else res.status(503).json(otlpErrorBody(14, 'Storage unavailable, retry'));
     return;
   }
 
@@ -494,7 +567,8 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
 
   const rejectedCount = mapped.stats.unattributed + mapped.stats.invalid;
   if (rejectedCount === 0) {
-    res.status(200).json({});
+    if (isProtobufRequest) res.status(200).type('application/x-protobuf').send(Buffer.from(encodeExportLogsServiceResponse()));
+    else res.status(200).json({});
     return;
   }
 
@@ -505,12 +579,156 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
     .join('; ')
     .slice(0, 2000);
 
-  res.status(200).json({
-    partialSuccess: {
-      rejectedLogRecords: String(rejectedCount),
-      errorMessage,
-    },
-  });
+  if (isProtobufRequest) {
+    res
+      .status(200)
+      .type('application/x-protobuf')
+      .send(Buffer.from(encodeExportLogsServiceResponse({ rejectedCount, errorMessage })));
+  } else {
+    res.status(200).json({
+      partialSuccess: {
+        rejectedLogRecords: String(rejectedCount),
+        errorMessage,
+      },
+    });
+  }
+});
+
+// -------------------------------------------------------------
+// OTLP/HTTP metrics receiver: POST /v1/metrics (issue #73)
+//
+// Same middleware order as `/v1/logs` above. The handler never calls `store.appendBatch` and never broadcasts:
+// a metric point is stored through `store.appendTelemetryPoints` into its own tables, and is invisible to the
+// ledger, the snapshot, SSE and `--record` by design (issue #73, section 1).
+// -------------------------------------------------------------
+
+/** Per-process counters behind a future `GET /api/v1/otlp/metrics-stats` (not added by this change; see
+ * `docs/otlp.md` for why the reconciliation endpoint itself is deferred). Kept here so the route's own
+ * bookkeeping has one place to live, the same shape as `otlpStats` above. */
+const otlpMetricsStats = {
+  since: Date.now(),
+  requestsAccepted: 0,
+  requestsRejected: 0,
+  dataPointsReceived: 0,
+  dataPointsStored: 0,
+  dataPointsDuplicates: 0,
+  dataPointsInvalid: 0,
+  dataPointsIgnoredFlag: 0,
+  dataPointsWithoutSession: 0,
+  metricsIgnored: 0,
+};
+
+app.use(OTLP_METRICS_PATH, rateLimiter);
+app.use(
+  OTLP_METRICS_PATH,
+  requireApiToken({
+    onUnauthorized: (res) => res.status(401).json(otlpErrorBody(16, 'Valid Bearer token required')),
+  })
+);
+app.use(OTLP_METRICS_PATH, otlpContentTypeGuard(() => (otlpMetricsStats.requestsRejected += 1), OTLP_METRICS_UNSUPPORTED_MEDIA_MESSAGE));
+
+app.use(OTLP_METRICS_PATH, express.json({ type: 'application/json', limit: otlpMaxBodyLabel }));
+app.use(OTLP_METRICS_PATH, express.raw({ type: 'application/x-protobuf', limit: otlpMaxBodyLabel }));
+
+app.use(
+  OTLP_METRICS_PATH,
+  otlpBodyErrorHandler(
+    () => (otlpMetricsStats.requestsRejected += 1),
+    `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} data points`,
+    OTLP_METRICS_UNSUPPORTED_MEDIA_MESSAGE,
+    OTLP_METRICS_MALFORMED_BODY_MESSAGE
+  )
+);
+
+app.post(OTLP_METRICS_PATH, async (req, res) => {
+  const isProtobufRequest = Buffer.isBuffer(req.body);
+
+  let body: unknown;
+  if (isProtobufRequest) {
+    try {
+      body = decodeExportMetricsServiceRequest(req.body as Buffer);
+    } catch (error) {
+      otlpMetricsStats.requestsRejected += 1;
+      res.status(400).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, OTLP_METRICS_MALFORMED_BODY_MESSAGE)));
+      return;
+    }
+  } else {
+    body = req.body ?? {};
+  }
+
+  if (!looksLikeOtlpMetricsRequest(body)) {
+    otlpMetricsStats.requestsRejected += 1;
+    if (isProtobufRequest) res.status(400).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, OTLP_METRICS_MALFORMED_BODY_MESSAGE)));
+    else res.status(400).json(otlpErrorBody(3, OTLP_METRICS_MALFORMED_BODY_MESSAGE));
+    return;
+  }
+
+  if (countMetricDataPoints(body) > otlpMaxRecords) {
+    otlpMetricsStats.requestsRejected += 1;
+    const message = `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} data points`;
+    if (isProtobufRequest) res.status(413).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
+    else res.status(413).json(otlpErrorBody(3, message));
+    return;
+  }
+
+  let hmacSecret: Buffer;
+  try {
+    hmacSecret = await store.getTelemetryHmacSecret();
+  } catch (error) {
+    otlpMetricsStats.requestsRejected += 1;
+    if (isProtobufRequest) res.status(503).type('application/x-protobuf').send(Buffer.from(encodeStatus(14, 'Storage unavailable, retry')));
+    else res.status(503).json(otlpErrorBody(14, 'Storage unavailable, retry'));
+    return;
+  }
+
+  const mapped = mapOtlpMetricsRequest(body, { wireFormat: isProtobufRequest ? 'protobuf' : 'json', hmacSecret });
+
+  let appendResult: TelemetryAppendOutcome;
+  try {
+    appendResult = await store.appendTelemetryPoints(mapped.points);
+  } catch (error) {
+    otlpMetricsStats.requestsRejected += 1;
+    if (isProtobufRequest) res.status(503).type('application/x-protobuf').send(Buffer.from(encodeStatus(14, 'Storage unavailable, retry')));
+    else res.status(503).json(otlpErrorBody(14, 'Storage unavailable, retry'));
+    return;
+  }
+
+  otlpMetricsStats.requestsAccepted += 1;
+  otlpMetricsStats.dataPointsReceived += mapped.stats.dataPointsReceived;
+  otlpMetricsStats.dataPointsStored += appendResult.accepted;
+  otlpMetricsStats.dataPointsDuplicates += appendResult.duplicates;
+  otlpMetricsStats.dataPointsInvalid += mapped.stats.dataPointsInvalid + appendResult.conflicts + appendResult.rejectedCapacity;
+  otlpMetricsStats.dataPointsIgnoredFlag += mapped.stats.dataPointsIgnoredFlag;
+  otlpMetricsStats.dataPointsWithoutSession += mapped.stats.dataPointsWithoutSession;
+  otlpMetricsStats.metricsIgnored += mapped.stats.metricsIgnored;
+
+  const rejectedCount = mapped.stats.dataPointsInvalid + appendResult.conflicts + appendResult.rejectedCapacity;
+  if (rejectedCount === 0) {
+    if (isProtobufRequest) res.status(200).type('application/x-protobuf').send(Buffer.from(encodeExportMetricsServiceResponse()));
+    else res.status(200).json({});
+    return;
+  }
+
+  const reasonCounts = new Map<string, number>();
+  for (const reason of [...mapped.rejectionReasons, ...appendResult.messages]) reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+  const errorMessage = Array.from(reasonCounts.entries())
+    .map(([reason, count]) => `${count} ${reason}`)
+    .join('; ')
+    .slice(0, 2000);
+
+  if (isProtobufRequest) {
+    res
+      .status(200)
+      .type('application/x-protobuf')
+      .send(Buffer.from(encodeExportMetricsServiceResponse({ rejectedCount, errorMessage })));
+  } else {
+    res.status(200).json({
+      partialSuccess: {
+        rejectedDataPoints: String(rejectedCount),
+        errorMessage,
+      },
+    });
+  }
 });
 
 // Body parsing with raw buffer capture for webhook HMAC

@@ -199,7 +199,7 @@ All events follow the single official V1 envelope:
 | | `runtime.disconnected` | External runtime disconnects. |
 | | `runtime.heartbeat` | Periodic runtime health heartbeat. |
 
-`llm.usage` and `llm.failed` do not only come from `POST /api/v1/events`: a Claude Code session with `--telemetry` on sends its own OpenTelemetry logs to `POST /v1/logs`, which the server maps into the same two canonical types, with `runtimeId: "claude-code"` and `source`/`agentId` set to the session's main agent. See [docs/otlp.md](otlp.md) for that receiver's reference.
+`llm.usage` and `llm.failed` do not only come from `POST /api/v1/events`: a Claude Code session with `--telemetry` on sends its own OpenTelemetry logs to `POST /v1/logs`, which the server maps into the same two canonical types, with `runtimeId: "claude-code"` and `source`/`agentId` set to the session's main agent. The same session's OpenTelemetry *metrics* (`claude_code.token.usage`, `claude_code.cost.usage`) go to `POST /v1/metrics` instead, stored in their own tables as a second, independent measurement; they never become canonical events and never reach `GET /api/v1/events`. Both routes accept `http/json` and `http/protobuf`. See [docs/otlp.md](otlp.md) for both receivers' reference.
 
 ---
 
@@ -345,6 +345,8 @@ data: {"schemaVersion":"1.0","reason":"cursor_unknown","cursor":"evt_gone","miss
 
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
 - `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
+- `POST /v1/logs`: OTLP/HTTP logs receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Maps Claude Code's `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed`. See [docs/otlp.md](otlp.md).
+- `POST /v1/metrics`: OTLP/HTTP metrics receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Stores `claude_code.token.usage`/`claude_code.cost.usage` as independent evidence, never as canonical events: never summed into the snapshot, never broadcast over SSE, never part of `GET /api/v1/events`. See [docs/otlp.md](otlp.md#otlp-metrics-post-v1metrics).
 
 ### Agents
 - `POST /api/v1/agents`: Register or upsert an agent profile.

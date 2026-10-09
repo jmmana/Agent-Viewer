@@ -40,6 +40,8 @@ Each non-empty line is a single UTF-8 encoded canonical event matching schema ve
 
 OTLP traces are not supported yet. When the input is an OTLP JSON trace (an object with `resourceSpans`), `parseEventLog` returns no events, `format: "otlp"` and a single issue: `OTLP traces are not supported yet. Export the run as canonical JSONL V1.`
 
+Offline files from the server-side `POST /v1/logs` and `POST /v1/metrics` receivers (`docs/otlp.md`) are a separate concern, tracked under issue #74: `parseEventLog` does not recognize an OTLP logs or metrics export (`resourceLogs`/`resourceMetrics`) today, and this item does not change that.
+
 ## Replaying a Log
 
 The parsed events are ready for `useEventReplay` and `<AgentOffice>`, or for `recordReplay` to export a video. See the [library guide](library.md).

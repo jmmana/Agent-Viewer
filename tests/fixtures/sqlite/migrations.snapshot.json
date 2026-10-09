@@ -2,5 +2,6 @@
   [1, "baseline"],
   [2, "content-hash"],
   [3, "request-key-dedup"],
-  [4, "events-seq"]
+  [4, "events-seq"],
+  [5, "telemetry-metrics"]
 ]

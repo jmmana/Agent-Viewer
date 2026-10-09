@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
+import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
-import { constrainCrewPan, focusCrewFurniture } from './crewViewport';
+import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
 import { CrewGestures } from './crewGestures';
 import type { Agent } from '../types/agent';
@@ -102,6 +103,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const isEs = locale.startsWith('es');
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
   const visibleAgents = crewAgentsInRoom(agents, roomId);
+  const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -114,8 +116,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), locale });
-  }, [room, camera, locale]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, locale });
+  }, [room, camera, locale, presence]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -173,11 +175,23 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
         {isEs ? 'Enlace a esta oficina' : 'Link to this office'}
       </a>}
     </div>
-    <div aria-live="polite" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 10px', fontSize: 12 }}>
+    <div aria-live="polite" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 10px', fontSize: 12, maxHeight: 96, overflowY: 'auto', flexShrink: 0 }}>
       <span>{isEs ? 'Agentes en esta oficina:' : 'Agents in this room:'} {visibleAgents.length}</span>
-      {visibleAgents.map(agent => <span key={agent.id} style={{ border: '1px solid #64748b', padding: '2px 6px', borderRadius: 6 }}>
-        {agent.name}: {agent.status}
-      </span>)}
+      {visibleAgents.map(agent => {
+        const marker = presence.markers.find(item => item.id === agent.id);
+        return <button type="button" key={agent.id} disabled={!marker}
+          aria-label={isEs ? `Enfocar a ${agent.name}` : `Focus ${agent.name}`}
+          onClick={() => {
+            const viewport = canvasRef.current?.getBoundingClientRect();
+            if (marker && viewport) updateCamera(current => focusCrewPoint(current, room, marker, viewport));
+          }} style={{ border: '1px solid #64748b', padding: '2px 6px', borderRadius: 6 }}>
+          {marker && <span aria-hidden="true">{marker.number}. </span>}
+          <span>{agent.name}: {agent.status}</span>
+        </button>;
+      })}
+      {presence.unplaced.length > 0 && <span role="status">{isEs
+        ? `${presence.unplaced.length} agentes sin espacio de representación en esta sala.`
+        : `${presence.unplaced.length} agents have no available display position in this room.`}</span>}
     </div>
     <canvas ref={canvasRef} style={{ width: '100%', flex: 1, minHeight: 120, touchAction: 'none', cursor: 'grab' }}
       aria-label={isEs ? `Vista de oficina: ${room.label.es}` : `Office view: ${room.label.en}`}
@@ -212,7 +226,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       onLostPointerCapture={event => gestures.current.end(event.pointerId)}
     />
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>
-      {isEs ? 'PROTOTIPO 2.5D: muebles y personajes finales pendientes' : '2.5D PROTOTYPE: final furniture and characters pending'}
+      {isEs ? 'PROTOTIPO 2.5D: los marcadores numerados indican presencia, no personajes animados.' : '2.5D PROTOTYPE: numbered markers show presence, not animated characters.'}
     </p>
   </section>;
 }

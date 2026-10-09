@@ -1,7 +1,7 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #171/#166, API embebida de Crew. Epic: #114.
+Último issue trabajado: #155/#156, marcadores de presencia y foco de agentes. Epic: #114.
 
 ## Resumen de la ejecución
 
@@ -19,7 +19,8 @@ Validación acumulada: 61 node, 449 Vitest, 9 E2E y 3 SDK Python; typecheck, app
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-embedded-api-171`, basada en `b607d83` de #187.
+- Rama actual: `feat/crew-presence-focus-155`, basada en `2c7461d` de #189.
+- API embebida: `feat/crew-embedded-api-171`, basada en `b607d83` de #187.
 - Enlaces/reset: `feat/crew-navigation-links-reset-171`, basada en `dfdb060` de #186.
 - QA anterior: `test/crew-domain-continuity-159`, basada en `0832cfa` de #185.
 - Foco: `feat/crew-camera-focus-156`, basada en `1e1e591` de #183.
@@ -94,7 +95,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#152](https://github.com/jmmana/Agent-Viewer/issues/152) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#153](https://github.com/jmmana/Agent-Viewer/issues/153) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#154](https://github.com/jmmana/Agent-Viewer/issues/154) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
-| [#155](https://github.com/jmmana/Agent-Viewer/issues/155) | Adaptador de presencia de solo lectura en #177; bridge completo pendiente. |
+| [#155](https://github.com/jmmana/Agent-Viewer/issues/155) | Adaptador read-only y marcadores con foco en esta rama; asignación espacial provisional. Bridge de tareas/reuniones completo pendiente. |
 | [#156](https://github.com/jmmana/Agent-Viewer/issues/156) | Gestos, rueda y teclado en #182; foco de escritorios/monitores y pan acotado en esta rama. Foco de actores y arte final pendientes. |
 | [#157](https://github.com/jmmana/Agent-Viewer/issues/157) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#158](https://github.com/jmmana/Agent-Viewer/issues/158) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
@@ -112,7 +113,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 ## Próximos tres pasos
 
-1. #155/#156: presencia visual y foco de agentes con coordenadas locales de Crew.
+1. #166/#171: corregir la pérdida de cámara Caricatura al desmontar/reabrir el modo, detectada en revisión de lifecycle.
 2. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
 3. #159: servidor SSE real, reproducción temporal, rendimiento y dispositivos físicos antes de aprobar G1.
 
@@ -167,3 +168,11 @@ AgentOffice permite `visualMode`, `crewRoomId`/`onCrewRoomChange` y `crewCameras
 La biblioteca no accede a localStorage para Crew ni altera la URL del host. Controles con IDs únicos y enlaces de la app ocultos. [Contrato y ejemplo](EMBEDDED-API.md). Los mensajes personalizados del host aún no sustituyen los controles Crew ES/EN; foco de agentes sigue pendiente y no se afirma paridad visual final.
 
 Validación: typecheck, 61 node, 456 Vitest, once E2E Chrome, builds app/lib y validación del paquete aprobados. Cuatro tests de API cubren StrictMode, rechazo de cambios por el host, estado inválido y dos instancias sin almacenamiento global. E2E adicional verifica ambas oficinas, modo y móvil. Capturas revisadas: [dos instancias](evidence/camera-156/embedded-two-offices.png), [móvil](evidence/camera-156/embedded-mobile.png). Implementación `ac027f5`, [PR #189](https://github.com/jmmana/Agent-Viewer/pull/189), abierto sobre #187. CI en curso al publicar.
+
+## Continuación #155/#156: presencia local verificable
+
+Marcadores numerados representan exclusivamente agentes del snapshot asignados a la sala seleccionada; el panel permite enfocarlos. No representan personajes ni animaciones finales. Proyección determinista por ID y snapshot, sin usar coordenadas del mapa Caricatura ni modificar eventos. Las huellas de muebles compartidas con el renderer excluyen posiciones ocupadas; las dimensiones de props se intercambian correctamente en vistas laterales. Se informa la capacidad excedida en lugar de superponer marcadores. No son reservas de sillas ni rutas; las posiciones pueden cambiar al variar ocupación y son provisionales.
+
+Validación: 61 node, 461 Vitest, once E2E, typecheck, builds app/lib y validación de paquete aprobados. Tests incluyen 0/50 agentes, orden de replay determinista, colisiones de huellas, exceso de capacidad, aislamiento de sala y foco desde SSE/log sin alterar consumo. [Captura de presencia](evidence/camera-156/development-presence.png).
+
+Hallazgo independiente: el scaffold desmonta OfficeCanvas al cambiar de modo y su cámara es estado interno; por tanto se pierde al regresar. Las pruebas anteriores de regreso verificaban datos y canvas, no esa cámara. Se debe corregir esta regresión antes de aprobar G1; no está solucionada en este PR de presencia. PR/SHA pendientes de publicación.

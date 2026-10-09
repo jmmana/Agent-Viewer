@@ -1,4 +1,6 @@
 import { crewProject, type CrewRoomDefinition, type CrewView } from './crewModel';
+import { CREW_PROP_SIZE } from './crewSpatial';
+import type { CrewPresenceMarker } from './crewPresence';
 import type { CrewCamera } from './crewCamera';
 
 /**
@@ -15,6 +17,7 @@ export interface CrewRenderInput {
   room: CrewRoomDefinition;
   camera: CrewCamera;
   locale?: string;
+  markers?: readonly CrewPresenceMarker[];
 }
 export const CREW_TILE_X = 34;
 export const CREW_TILE_Y = 18;
@@ -75,7 +78,7 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, locale = 'es' }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [] }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
@@ -107,14 +110,29 @@ export function renderCrewRoom({ ctx, width, height, room, camera, locale = 'es'
 
   // Project every furniture anchor from ORIGINAL room-local coordinates; sorted
   // by rotated depth. This is a new renderer, not legacy furniture overlay.
-  const visible = room.furniture.map(item => {
-    const p=crewProject(item.x,item.y,room,view);
-    return { ...item,x:p.x,y:p.y };
-  }).sort((a,b)=>(a.x+a.y)-(b.x+b.y));
-  for(const item of visible){
-    const size=item.type==='desk'?[1.5,.9,28]:item.type==='chair'?[.7,.7,22]:
-      item.type==='screen'?[.9,.35,48]:[.6,.6,34];
-    box(ctx,item.x,item.y,size[0],size[1],size[2],color[item.type]);
-  }
+  const visible = [
+    ...room.furniture.map(item => {
+      const p = crewProject(item.x,item.y,room,view);
+      return {x:p.x,y:p.y,draw:()=>{
+        const size = CREW_PROP_SIZE[item.type];
+        const sideView = view === 'left' || view === 'right';
+        box(ctx,p.x,p.y,sideView?size.depth:size.width,sideView?size.width:size.depth,size.height,color[item.type]);
+      }};
+    }),
+    ...markers.map(marker => {
+      const p = crewProject(marker.x,marker.y,room,view);
+      return {x:p.x,y:p.y,draw:()=>{
+        const point = crewIsoPoint(p.x,p.y);
+        ctx.beginPath();
+        ctx.ellipse(point.x,point.y,12,8,0,0,Math.PI*2);
+        ctx.fillStyle = marker.status === 'ERROR' || marker.status === 'BLOCKED' ? '#b91c1c' : '#1d4ed8';
+        ctx.fill();
+        ctx.strokeStyle = '#f8fafc'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(String(marker.number),point.x,point.y);
+      }};
+    }),
+  ].sort((a,b)=>(a.x+a.y)-(b.x+b.y));
+  for (const item of visible) item.draw();
   ctx.restore();
 }

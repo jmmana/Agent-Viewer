@@ -17,7 +17,11 @@ export function constrainCrewPan(camera: CrewCamera, viewport: Viewport): CrewCa
 export function focusCrewFurniture(camera: CrewCamera, room: CrewRoomDefinition, id: string, viewport: Viewport): CrewCamera {
   const item = room.furniture.find(candidate => candidate.id === id);
   if (!item) return camera;
-  const anchor = crewProject(item.x, item.y, room, camera.view);
+  return focusCrewPoint(camera,room,item,viewport);
+}
+
+export function focusCrewPoint(camera: CrewCamera, room: CrewRoomDefinition, target: {x:number;y:number}, viewport: Viewport): CrewCamera {
+  const anchor = crewProject(target.x, target.y, room, camera.view);
   const point = crewIsoPoint(anchor.x, anchor.y);
   const bounds = crewGeometryBounds(room, camera.view);
   const zoom = Math.max(camera.zoom, 1.5);

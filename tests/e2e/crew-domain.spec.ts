@@ -33,6 +33,8 @@ for (const transport of ['sse','log'] as const) {
     await expect(crew.getByText('Agents in this room: 0',{exact:true})).toBeVisible();
     await page.locator('#crew-room').selectOption('development');
     await expect(crew.getByText('QA Fixture Developer: CODING',{exact:true})).toBeVisible();
+    await crew.getByRole('button',{name:'Focus QA Fixture Developer',exact:true}).click();
+    await expect(crew.getByText('150%',{exact:true})).toBeVisible();
     for (let i=0;i<3;i++) {
       await page.getByRole('button',{name:'Cartoon',exact:true}).click();
       await expect(page.locator('canvas')).toHaveCount(1);

@@ -566,7 +566,14 @@ for (const [label, create] of STORE_FACTORIES) {
       });
 
       const retry = await store.append(JSON.parse(JSON.stringify(original)));
-      assert.deepEqual(retry, { outcome: 'duplicate', id: 'evt_int_1', fingerprint: first.fingerprint, duplicate: true, accepted: true });
+      assert.deepEqual(retry, {
+        outcome: 'duplicate',
+        id: 'evt_int_1',
+        fingerprint: first.fingerprint,
+        duplicate: true,
+        accepted: true,
+        duplicateReason: 'event_id',
+      });
 
       const before = await store.snapshot();
       const variants = [
@@ -762,7 +769,7 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
   fs.copyFileSync(path.join(sqliteFixtures, 'agent-viewer-0.2.1.db'), file);
   const store = new SQLiteEventStore(file, { backup: 'off' });
   try {
-    assert.deepEqual(store.migration.applied.map(({ name }) => name), ['baseline', 'content-hash']);
+    assert.deepEqual(store.migration.applied.map(({ name }) => name), ['baseline', 'content-hash', 'request-key-dedup']);
     const db = new DatabaseSync(file);
     const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();
     db.close();
@@ -877,4 +884,335 @@ test('MemoryEventStore: ingestionCounters never reports legacy rows and exists()
   assert.equal(await store.exists('evt_exists'), true);
   assert.equal(await store.exists('evt_missing'), false);
   assert.deepEqual(store.ingestionCounters(), { conflicts: 0, legacyUnverifiedDuplicates: 0 });
+});
+
+// -------------------------------------------------------------
+// Request-id deduplication (issue #48): (provider, requestId) is a second dedup key for llm.usage/llm.failed.
+// -------------------------------------------------------------
+
+function failedEvent(id, payload = {}) {
+  const result = validateCanonicalEvent({
+    id,
+    type: 'llm.failed',
+    timestamp: 1_700_000_000_000,
+    source: 'agent:auditor',
+    agentId: 'auditor',
+    summary: 'Failed call',
+    payload: { provider: 'p', model: 'm', errorKind: 'rate_limited', ...payload },
+  });
+  assert.equal(result.success, true, JSON.stringify(result.issues));
+  return result.data;
+}
+
+for (const [label, create] of STORE_FACTORIES) {
+  test(`${label}: a request_id duplicate is stored as a reference, never counted, never listed, and findByRequest/listDuplicates see it`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const original = usageEvent('evt_rk_original', { provider: 'OpenAI', requestId: ' req-1 ' });
+      const first = await store.append(original);
+      assert.equal(first.outcome, 'accepted');
+
+      const beforeSnapshot = await store.snapshot();
+
+      const duplicate = usageEvent('evt_rk_duplicate', { provider: ' openai', requestId: 'req-1', inputTokens: 500 });
+      const second = await store.append(duplicate);
+      assert.equal(second.outcome, 'duplicate');
+      assert.equal(second.duplicateReason, 'request_id');
+      assert.equal(second.id, 'evt_rk_original');
+      assert.equal(second.submittedId, 'evt_rk_duplicate');
+      assert.equal(second.matchesOriginal, false);
+
+      // exists() is true for the duplicate's own id, but list() and the snapshot's event list never include it.
+      assert.equal(await store.exists('evt_rk_duplicate'), true);
+      const listed = await store.list({ limit: 100 });
+      assert.ok(!listed.some((e) => e.id === 'evt_rk_duplicate'));
+      assert.ok(listed.some((e) => e.id === 'evt_rk_original'));
+
+      const afterSnapshot = await store.snapshot();
+      assert.deepStrictEqual(
+        { ...afterSnapshot, timestamp: 0, usageDuplicates: null },
+        { ...beforeSnapshot, timestamp: 0, usageDuplicates: null },
+        'totals and agent fields unchanged by a request_id duplicate'
+      );
+      assert.deepStrictEqual(afterSnapshot.usageDuplicates, { count: 1, mismatched: 1, unverified: 0 });
+
+      const found = await store.findByRequest('OPENAI', ' req-1 ');
+      assert.deepEqual(found, { id: 'evt_rk_original' });
+      assert.equal(await store.findByRequest('openai', 'unknown-request'), null);
+
+      const duplicates = await store.listDuplicates();
+      assert.equal(duplicates.length, 1);
+      assert.equal(duplicates[0].id, 'evt_rk_duplicate');
+      assert.equal(duplicates[0].duplicateOf, 'evt_rk_original');
+      assert.equal(duplicates[0].provider, 'openai');
+      assert.equal(duplicates[0].requestId, 'req-1');
+      assert.equal(duplicates[0].matchesOriginal, false);
+      // SQLite round-trips through JSON, which drops undefined fields; compare the JSON-normalized shape.
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(duplicates[0].event)), JSON.parse(JSON.stringify(duplicate)));
+
+      assert.deepEqual(await store.listDuplicates({ provider: 'someone-else' }), []);
+      assert.deepEqual(await store.listDuplicates({ duplicateOf: 'evt_rk_original' }), duplicates);
+      assert.deepEqual(await store.listDuplicates({ requestId: 'req-1' }), duplicates);
+
+      // Resending the duplicate's own id resolves to the original as an event_id duplicate.
+      const resend = await store.append(duplicate);
+      assert.equal(resend.outcome, 'duplicate');
+      assert.equal(resend.duplicateReason, 'event_id');
+      assert.equal(resend.id, 'evt_rk_original');
+      assert.equal(resend.submittedId, 'evt_rk_duplicate');
+
+      // list({ afterId }) never resurrects a duplicate reference either.
+      const another = usageEvent('evt_rk_after', { provider: 'openai', requestId: 'req-after' });
+      await store.append(another);
+      const afterIdResults = await store.list({ afterId: 'evt_rk_original' });
+      assert.ok(!afterIdResults.some((e) => e.id === 'evt_rk_duplicate'));
+      assert.ok(afterIdResults.some((e) => e.id === 'evt_rk_after'));
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: the same requestId under two different providers is counted twice (two originals)`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const a = usageEvent('evt_rk_provA', { provider: 'provider-a', requestId: 'shared' });
+      const b = usageEvent('evt_rk_provB', { provider: 'provider-b', requestId: 'shared' });
+      assert.equal((await store.append(a)).outcome, 'accepted');
+      assert.equal((await store.append(b)).outcome, 'accepted');
+      assert.equal((await store.usageSummary()).total.calls, 2);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: events without a requestId, or with a blank one, are never linked by the request key`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const none = usageEvent('evt_rk_none', { provider: 'noreq' });
+      const blank = usageEvent('evt_rk_blank', { provider: 'noreq', requestId: '   ' });
+      assert.equal((await store.append(none)).outcome, 'accepted');
+      const result = await store.append(blank);
+      assert.equal(result.outcome, 'accepted', 'a blank requestId never links two different ids');
+      assert.equal(await store.findByRequest('noreq', ''), null);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: llm.failed followed by llm.usage with the same key is a request_id duplicate; a third report points to the original`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const failed = failedEvent('evt_rk_failed', { provider: 'anthropic', requestId: 'req-mixed' });
+      assert.equal((await store.append(failed)).outcome, 'accepted');
+
+      const usage = usageEvent('evt_rk_usage', { provider: 'anthropic', requestId: 'req-mixed' });
+      const second = await store.append(usage);
+      assert.equal(second.outcome, 'duplicate');
+      assert.equal(second.duplicateReason, 'request_id');
+      assert.equal(second.id, 'evt_rk_failed');
+      assert.equal(second.matchesOriginal, false, 'llm.failed and llm.usage can never match: type differs');
+
+      const third = usageEvent('evt_rk_third', { provider: 'anthropic', requestId: 'req-mixed' });
+      const thirdResult = await store.append(third);
+      assert.equal(thirdResult.id, 'evt_rk_failed', 'a third report still points to the original, never to a duplicate');
+
+      const duplicates = await store.listDuplicates({ duplicateOf: 'evt_rk_failed' });
+      assert.equal(duplicates.length, 2);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a cost of null against a stored cost of 0 (or the reverse) is a mismatch; unknown is never zero`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const original = usageEvent('evt_rk_cost_null', { provider: 'costp', requestId: 'req-cost', cost: null, currency: null, costSource: 'unknown' });
+      assert.equal((await store.append(original)).outcome, 'accepted');
+      const zeroCost = usageEvent('evt_rk_cost_zero', { provider: 'costp', requestId: 'req-cost', cost: 0, currency: 'USD', costSource: 'provider-reported' });
+      const result = await store.append(zeroCost);
+      assert.equal(result.matchesOriginal, false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a matching request_id duplicate reports matchesOriginal true and logs no warning`, async (t) => {
+    const warn = t.mock.method(console, 'warn', () => {});
+    const { store, cleanup } = create();
+    try {
+      const original = usageEvent('evt_rk_match_1', { provider: 'matchp', requestId: 'req-match' });
+      await store.append(original);
+      const matching = usageEvent('evt_rk_match_2', { provider: 'matchp', requestId: 'req-match' });
+      const result = await store.append(matching);
+      assert.equal(result.matchesOriginal, true);
+      const mismatchLines = warn.mock.calls.filter((call) => String(call.arguments[0]).includes('does not match its original'));
+      assert.equal(mismatchLines.length, 0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: in a batch, two events sharing a key resolve as original then request_id duplicate, in input order`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const first = usageEvent('evt_rk_batch_1', { provider: 'batchp', requestId: 'req-batch' });
+      const second = usageEvent('evt_rk_batch_2', { provider: 'batchp', requestId: 'req-batch', inputTokens: 1 });
+      const plainResend = { ...first };
+      const batch = await store.appendBatch([first, second, plainResend]);
+      assert.equal(batch.results.length, 3);
+      assert.equal(batch.results[0].outcome, 'accepted');
+      assert.equal(batch.results[1].outcome, 'duplicate');
+      assert.equal(batch.results[1].duplicateReason, 'request_id');
+      assert.equal(batch.results[1].id, 'evt_rk_batch_1');
+      assert.equal(batch.results[1].submittedId, 'evt_rk_batch_2');
+      assert.equal(batch.results[2].outcome, 'duplicate');
+      assert.equal(batch.results[2].duplicateReason, 'event_id');
+      assert.deepEqual(batch.acceptedEvents.map((e) => e.id), ['evt_rk_batch_1']);
+    } finally {
+      await cleanup();
+    }
+  });
+}
+
+test('MemoryEventStore: a report with the same key is still a duplicate, and totals do not change, after the original falls off the ring', async () => {
+  const store = new MemoryEventStore(3);
+  const original = usageEvent('evt_rk_evict_original', { provider: 'evictp', requestId: 'req-evict' });
+  await store.append(original);
+  await store.append(usageEvent('evt_rk_evict_filler_1'));
+  await store.append(usageEvent('evt_rk_evict_filler_2'));
+  await store.append(usageEvent('evt_rk_evict_filler_3'));
+  // The ring holds only maxEvents (3): the original has been evicted.
+  assert.equal(await store.exists('evt_rk_evict_original'), false);
+
+  const before = await store.usageSummary();
+  const late = usageEvent('evt_rk_evict_late', { provider: 'evictp', requestId: 'req-evict', inputTokens: 99999 });
+  const result = await store.append(late);
+  assert.equal(result.outcome, 'duplicate');
+  assert.equal(result.duplicateReason, 'request_id');
+  assert.equal(result.id, 'evt_rk_evict_original');
+
+  const after = await store.usageSummary();
+  assert.deepStrictEqual(after, before, 'totals unchanged by a duplicate reported after the original was evicted');
+});
+
+test('SQLiteEventStore: a 0.2.1-shaped database with two same-key usage rows migrates with duplicate_of set and matches_original NULL', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'log', () => {});
+  const { dir, file } = tempDbPath('request-key-legacy');
+  const legacy = new DatabaseSync(file);
+  legacy.exec(`
+    CREATE TABLE events (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      runtime_id TEXT,
+      session_id TEXT,
+      agent_id TEXT,
+      task_id TEXT,
+      severity TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  const insert = legacy.prepare(
+    'INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  // A row written before event_json existed (migration 0001's own legacy case), unrelated to the request key.
+  insert.run('evt_legacy_no_json', 'agent.status.changed', 100, null, null, 'old-agent', null, 'normal', 'Legacy row', '{"status":"IDLE"}', 1);
+  // Two usage rows sharing a (provider, requestId) key: the earlier one (lowest rowid) must become the original.
+  insert.run(
+    'evt_legacy_usage_1', 'llm.usage', 200, null, null, 'auditor', null, 'normal', 'First',
+    JSON.stringify({ provider: 'Legacy-Provider', model: 'm', inputTokens: 10, outputTokens: 5, requestId: 'legacy-req-1' }), 2
+  );
+  insert.run(
+    'evt_legacy_usage_2', 'llm.usage', 300, null, null, 'auditor', null, 'normal', 'Second',
+    JSON.stringify({ provider: 'legacy-provider', model: 'm', inputTokens: 10, outputTokens: 5, requestId: ' legacy-req-1 ' }), 3
+  );
+  legacy.close();
+
+  let store = new SQLiteEventStore(file, { backup: 'off' });
+  try {
+    const db = new DatabaseSync(file);
+    const columns = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
+    for (const column of ['request_provider', 'request_id', 'duplicate_of', 'matches_original']) {
+      assert.ok(columns.includes(column), `expected column ${column}`);
+    }
+    const indexNames = db.prepare('PRAGMA index_list(events)').all().map((i) => i.name);
+    assert.ok(indexNames.includes('idx_events_request_key'));
+    assert.ok(!indexNames.includes('idx_events_request_lookup_tmp'));
+
+    const rows = Object.fromEntries(
+      db.prepare('SELECT id, request_provider, request_id, duplicate_of, matches_original FROM events').all().map((r) => [r.id, r])
+    );
+    db.close();
+    assert.equal(rows.evt_legacy_no_json.request_id, null);
+    assert.equal(rows.evt_legacy_usage_1.duplicate_of, null);
+    assert.equal(rows.evt_legacy_usage_2.duplicate_of, 'evt_legacy_usage_1');
+    assert.equal(rows.evt_legacy_usage_2.matches_original, null, 'legacy content was never compared under this rule');
+
+    const duplicates = await store.listDuplicates();
+    assert.equal(duplicates.length, 1);
+    assert.equal(duplicates[0].id, 'evt_legacy_usage_2');
+    assert.equal(duplicates[0].duplicateOf, 'evt_legacy_usage_1');
+    assert.equal(duplicates[0].matchesOriginal, null);
+
+    const snapshot = await store.snapshot();
+    assert.deepStrictEqual(snapshot.usageDuplicates, { count: 1, mismatched: 0, unverified: 1 });
+
+    const listed = (await store.list({ limit: 100 })).map((e) => e.id);
+    assert.ok(!listed.includes('evt_legacy_usage_2'));
+    assert.ok(listed.includes('evt_legacy_usage_1'));
+
+    await store.close();
+
+    // Reopening is a no-op: migration 3 does not run twice and the shape stays the same.
+    store = new SQLiteEventStore(file, { backup: 'off' });
+    assert.equal(store.migration.applied.length, 0);
+    const reopened = await store.listDuplicates();
+    assert.deepStrictEqual(reopened, duplicates);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a UNIQUE violation on the request key is classified as a duplicate, never surfaced as an error, and never reaches the memory fallback', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { dir, file } = tempDbPath('request-key-race');
+  const store = new SQLiteEventStore(file);
+  try {
+    const original = usageEvent('evt_race_rk_original', { provider: 'racep', requestId: 'req-race' });
+    await store.append(original);
+
+    // Force the race path: the lookup misses the row once (another writer inserted it in between), so the plain
+    // insert runs and hits the UNIQUE index on (request_provider, request_id); the store must recover from that.
+    const realLookupRequestKey = store.lookupRequestKey.bind(store);
+    let calls = 0;
+    store.lookupRequestKey = (...args) => (++calls === 1 ? null : realLookupRequestKey(...args));
+
+    const duplicate = usageEvent('evt_race_rk_duplicate', { provider: 'racep', requestId: 'req-race', inputTokens: 1 });
+    const result = await store.append(duplicate);
+    store.lookupRequestKey = realLookupRequestKey;
+
+    assert.equal(result.outcome, 'duplicate');
+    assert.equal(result.duplicateReason, 'request_id');
+    assert.equal(result.id, 'evt_race_rk_original');
+    assert.equal(result.submittedId, 'evt_race_rk_duplicate');
+
+    const db = new DatabaseSync(file);
+    const row = db.prepare('SELECT duplicate_of FROM events WHERE id = ?').get('evt_race_rk_duplicate');
+    db.close();
+    assert.equal(row.duplicate_of, 'evt_race_rk_original');
+
+    // The race path never forwards the event to the memory fallback: only an 'accepted' outcome does that.
+    assert.equal((await store.usageSummary()).total.calls, 1);
+
+    // A true primary-key violation on events.id is still classified normally and never mistaken for the race.
+    const idConflict = await store.append({ ...original, timestamp: original.timestamp + 1 });
+    assert.equal(idConflict.outcome, 'conflict');
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

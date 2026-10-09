@@ -353,10 +353,15 @@ app.post('/api/v1/events', async (req, res) => {
   }
 
   if (result.outcome === 'duplicate') {
+    // `id` is the id the figure is held under: the original event id for a request_id duplicate, the same id
+    // sent for an event_id duplicate. `submittedId` and `matchesOriginal` appear only when they apply (#48).
     res.status(200).json({
       accepted: true,
       duplicate: true,
-      id: event.id,
+      duplicateReason: result.duplicateReason,
+      id: result.id,
+      ...(result.submittedId !== undefined ? { submittedId: result.submittedId } : {}),
+      ...(result.matchesOriginal !== undefined ? { matchesOriginal: result.matchesOriginal } : {}),
       fingerprint: result.fingerprint,
     });
     return;
@@ -445,7 +450,15 @@ app.post('/api/v1/events/batch', async (req, res) => {
             error: 'conflicting_duplicate',
             storedFingerprint: result.storedFingerprint,
           }
-        : { id: result.id, status: result.outcome, duplicate: result.duplicate, fingerprint: result.fingerprint }
+        : {
+            id: result.id,
+            status: result.outcome,
+            duplicate: result.duplicate,
+            fingerprint: result.fingerprint,
+            ...(result.duplicateReason ? { duplicateReason: result.duplicateReason } : {}),
+            ...(result.submittedId !== undefined ? { submittedId: result.submittedId } : {}),
+            ...(result.matchesOriginal !== undefined ? { matchesOriginal: result.matchesOriginal } : {}),
+          }
     ),
   });
 });
@@ -481,6 +494,29 @@ app.get('/api/v1/snapshot', async (_req, res) => {
 // Usage aggregates only (the snapshot's `usage` block), without the event list.
 app.get('/api/v1/usage', async (_req, res) => {
   res.json(await store.usageSummary());
+});
+
+/** `limit` on a list endpoint: default 100, clamped to 1..1000. A non-numeric value falls back to the default. */
+function clampedLimit(raw: unknown, fallback: number, max: number): number {
+  const value = typeof raw === 'string' ? Number(raw) : NaN;
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.trunc(value), 1), max);
+}
+
+// Audit view of request-id duplicate references (issue #48): same auth and rate limit as every /api/v1 route,
+// and the same payload shape as GET /api/v1/events, so it exposes nothing new to a token holder.
+app.get('/api/v1/usage/duplicates', async (req, res) => {
+  const limit = clampedLimit(req.query.limit, 100, 1000);
+  const provider = typeof req.query.provider === 'string' ? req.query.provider : undefined;
+  const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : undefined;
+  const duplicateOf = typeof req.query.duplicateOf === 'string' ? req.query.duplicateOf : undefined;
+
+  const duplicates = await store.listDuplicates({ limit, provider, requestId, duplicateOf });
+  res.json({
+    schemaVersion: '1.0',
+    count: duplicates.length,
+    duplicates,
+  });
 });
 
 // -------------------------------------------------------------

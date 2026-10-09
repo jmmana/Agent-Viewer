@@ -162,3 +162,63 @@ test('SSE: no frame is emitted for a duplicate or a conflicting event', async ()
     server.close();
   }
 });
+
+test('SSE: a request_id duplicate is never broadcast and never replayed on Last-Event-ID (issue #48)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  const post = (body) =>
+    fetch(`${baseUrl}/api/v1/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const original = {
+    schemaVersion: '1.0',
+    id: 'evt_sse_reqdup_original',
+    type: 'llm.usage',
+    timestamp: 1_700_000_000_000,
+    source: 'agent:tester',
+    summary: 'Original call',
+    payload: { provider: 'sse-provider', model: 'm', inputTokens: 1, outputTokens: 1, requestId: 'sse-req-1' },
+  };
+  const duplicate = {
+    ...original,
+    id: 'evt_sse_reqdup_duplicate',
+    payload: { ...original.payload, inputTokens: 999 },
+  };
+  const marker = { ...original, id: 'evt_sse_reqdup_marker', payload: { ...original.payload, requestId: 'sse-req-marker' } };
+
+  const response = await fetch(`${baseUrl}/api/v1/events/stream`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    text += decoder.decode((await reader.read()).value);
+    assert.ok(text.includes('connected'));
+
+    assert.equal((await post(original)).status, 202);
+    const dupRes = await post(duplicate);
+    assert.equal(dupRes.status, 200);
+    assert.equal((await dupRes.json()).duplicateReason, 'request_id');
+    // The marker is sent last, so once it arrives every earlier frame has arrived too.
+    assert.equal((await post(marker)).status, 202);
+
+    while (!text.includes('id: evt_sse_reqdup_marker')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value);
+    }
+    const frames = text.split('\n\n').filter((block) => block.startsWith('id: evt_sse_reqdup'));
+    assert.deepEqual(frames.map((block) => block.split('\n')[0]), ['id: evt_sse_reqdup_original', 'id: evt_sse_reqdup_marker']);
+
+    // A reconnect with Last-Event-ID does not replay the duplicate either.
+    const replay = await fetch(`${baseUrl}/api/v1/events/stream`, { headers: { 'Last-Event-ID': 'evt_sse_reqdup_original' } });
+    const replayReader = replay.body.getReader();
+    let replayText = '';
+    while (!replayText.includes('connected')) {
+      const chunk = await replayReader.read();
+      if (chunk.done) break;
+      replayText += decoder.decode(chunk.value);
+    }
+    assert.ok(!replayText.includes('evt_sse_reqdup_duplicate'), 'the duplicate is never replayed on Last-Event-ID');
+    await replayReader.cancel();
+  } finally {
+    await reader.cancel();
+    server.close();
+  }
+});

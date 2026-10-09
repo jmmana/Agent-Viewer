@@ -1,0 +1,121 @@
+{
+  "generatedAt": "2026-10-09T23:46:28.288Z",
+  "baseUrl": "http://127.0.0.1:3000",
+  "fpsResults": [
+    {
+      "room": "ceo",
+      "fps": 118.29025844930418,
+      "frames": 238,
+      "elapsedMs": 2012
+    },
+    {
+      "room": "development",
+      "fps": 118.8633071960161,
+      "frames": 238,
+      "elapsedMs": 2002.300000011921
+    },
+    {
+      "room": "planning",
+      "fps": 118.47869375032333,
+      "frames": 238,
+      "elapsedMs": 2008.7999999523163
+    },
+    {
+      "room": "research",
+      "fps": 118.78025652613464,
+      "frames": 238,
+      "elapsedMs": 2003.699999988079
+    },
+    {
+      "room": "qa",
+      "fps": 118.69140235458552,
+      "frames": 238,
+      "elapsedMs": 2005.199999988079
+    },
+    {
+      "room": "finance",
+      "fps": 118.26086956521738,
+      "frames": 238,
+      "elapsedMs": 2012.5
+    },
+    {
+      "room": "meeting",
+      "fps": 118.55541718555418,
+      "frames": 238,
+      "elapsedMs": 2007.5
+    },
+    {
+      "room": "infrastructure",
+      "fps": 118.5140922190762,
+      "frames": 238,
+      "elapsedMs": 2008.2000000476837
+    },
+    {
+      "room": "coffee",
+      "fps": 118.56722961121235,
+      "frames": 238,
+      "elapsedMs": 2007.300000011921
+    },
+    {
+      "room": "lounge",
+      "fps": 118.26674617512408,
+      "frames": 238,
+      "elapsedMs": 2012.3999999761581
+    },
+    {
+      "room": "reception",
+      "fps": 117.10415322711458,
+      "frames": 236,
+      "elapsedMs": 2015.300000011921
+    }
+  ],
+  "heapSamples": [
+    {
+      "cycle": 0,
+      "heap": 36118129
+    },
+    {
+      "cycle": 10,
+      "heap": 36260676
+    },
+    {
+      "cycle": 20,
+      "heap": 36375940
+    },
+    {
+      "cycle": 30,
+      "heap": 36300372
+    },
+    {
+      "cycle": 40,
+      "heap": 36317063
+    },
+    {
+      "cycle": 50,
+      "heap": 36383977
+    },
+    {
+      "cycle": 60,
+      "heap": 36413168
+    },
+    {
+      "cycle": 70,
+      "heap": 36429673
+    },
+    {
+      "cycle": 80,
+      "heap": 36537204
+    },
+    {
+      "cycle": 90,
+      "heap": 36546001
+    },
+    {
+      "cycle": 100,
+      "heap": 36555950
+    }
+  ],
+  "heapGrowthBytes": 437821,
+  "canvasCountAfterCycles": 1,
+  "caveats": "performance.memory es una aproximacion de Chromium; los numeros varian segun la maquina y la carga del proceso. No es una compuerta de CI."
+}

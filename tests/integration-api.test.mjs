@@ -256,6 +256,75 @@ test('REST API: GET /api/v1/snapshot and GET /api/v1/events report retention (is
   }
 });
 
+test('REST API: GET /api/v1/events pages backward with beforeId, hasMore, nextBeforeId, a clamped limit and invalid_cursor (issue #72)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  // Scoped with agentId: the server shares one store across every test in this file.
+  const agentId = 'before-id-tester';
+  const scope = `agentId=${agentId}`;
+
+  try {
+    const ids = [];
+    for (let i = 0; i < 5; i++) {
+      const id = `evt_before_id_${i}`;
+      ids.push(id);
+      const res = await postEvent(baseUrl, {
+        id,
+        type: 'agent.message.sent',
+        timestamp: Date.now() + i,
+        source: `agent:${agentId}`,
+        agentId,
+        summary: `Before id test ${i}`,
+        payload: { text: `hi ${i}` },
+      });
+      assert.equal(res.status, 202);
+    }
+    // Newest first, like the plain GET /api/v1/events response.
+    const newestFirst = [...ids].reverse();
+
+    // A full walk with limit=2 must reach every event with no duplicates and no gaps.
+    let cursor;
+    const walked = [];
+    for (let guard = 0; guard < 10; guard++) {
+      const query = `${scope}&limit=2${cursor ? `&beforeId=${cursor}` : ''}`;
+      const res = await fetch(`${baseUrl}/api/v1/events?${query}`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.ok(body.events.length <= 2);
+      walked.push(...body.events.map((e) => e.id));
+      if (!body.hasMore) {
+        assert.equal(body.nextBeforeId, null);
+        break;
+      }
+      assert.equal(body.nextBeforeId, body.events[body.events.length - 1].id);
+      cursor = body.nextBeforeId;
+    }
+    assert.deepEqual(walked, newestFirst);
+
+    // limit is clamped to [1, 500]; a non-numeric value falls back to the default of 100.
+    const over = await (await fetch(`${baseUrl}/api/v1/events?${scope}&limit=5000`)).json();
+    assert.equal(over.hasMore, false);
+    assert.equal(over.events.length, ids.length);
+    const nonNumeric = await (await fetch(`${baseUrl}/api/v1/events?${scope}&limit=not-a-number`)).json();
+    assert.equal(nonNumeric.events.length, ids.length);
+
+    // An unknown or evicted beforeId is a client error, unlike afterId.
+    const invalid = await fetch(`${baseUrl}/api/v1/events?beforeId=evt_unknown`);
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(await invalid.json(), {
+      error: 'invalid_cursor',
+      message: 'Unknown or evicted beforeId "evt_unknown"',
+    });
+
+    // The oldest event has nothing before it.
+    const lastPage = await (await fetch(`${baseUrl}/api/v1/events?${scope}&beforeId=${ids[0]}`)).json();
+    assert.deepEqual(lastPage.events, []);
+    assert.equal(lastPage.hasMore, false);
+    assert.equal(lastPage.nextBeforeId, null);
+  } finally {
+    server.close();
+  }
+});
+
 async function postEvent(baseUrl, event) {
   return fetch(`${baseUrl}/api/v1/events`, {
     method: 'POST',

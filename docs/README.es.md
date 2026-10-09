@@ -791,6 +791,7 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | `AGENT_VIEWER_WEBHOOK_SECRET` | vacío | Activa la verificación HMAC del webhook genérico. |
 | `VITE_AGENT_VIEWER_API_URL` | ninguno | App de demostración: servidor del que recibe el flujo. Sin ella, solo el modo en vivo se conecta (a `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | ninguno | App de demostración: `live` arranca en modo en vivo, igual que `?mode=live`. `npm run dev:full` la define por ti. |
+| `VITE_AGENT_VIEWER_HISTORY_LIMIT` | `1000` | App de demostración, modo en vivo: límite (1 a 5000) de eventos que el portal carga al abrir, más allá de los 100 más recientes del snapshot, mediante `GET /api/v1/events?beforeId=...`. Solo la cronología de actividad llega a esa profundidad; las cifras de tokens y costo siempre vienen de los totales propios del snapshot. Un valor inválido usa el valor por defecto. |
 
 ---
 
@@ -812,7 +813,7 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | Idioma | Selector `EN` / `ES` |
 | Repetir un log sin servidor | Suelta un archivo JSONL V1 sobre la ventana |
 
-La demo guarda su estado en el navegador para que al recargar sigas donde ibas; Reset lo borra ([detalles](session-persistence.md), en inglés). El modo en vivo arranca limpio y no carga ese estado guardado.
+La demo guarda su estado en el navegador para que al recargar sigas donde ibas; Reset lo borra ([detalles](session-persistence.md), en inglés). El modo en vivo no usa ese estado guardado; en su lugar, al abrir carga la oficina, la actividad reciente y las cifras de tokens y costo desde el propio servidor (`GET /api/v1/snapshot` y una página de `GET /api/v1/events`) antes de suscribirse al flujo, así que una recarga o una segunda pestaña abierta a mitad de una ejecución muestran las mismas cifras, nunca cero (issue #72). Corre `npm run test:e2e` para ejercitar esto y el resto de los flujos de navegador con Playwright.
 
 ---
 

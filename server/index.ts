@@ -1165,20 +1165,48 @@ app.post('/api/v1/events/batch', async (req, res) => {
 // -------------------------------------------------------------
 // Events Query
 // -------------------------------------------------------------
+/**
+ * `limit` clamp for `GET /api/v1/events` (issue #72): absent or not a finite number gives the default `100`;
+ * otherwise `Math.floor` then clamp to `[1, 500]`. Before this the value was unbounded and unchecked.
+ */
+function parseEventsLimit(raw: unknown): number {
+  const defaultLimit = 100;
+  if (raw === undefined || raw === '') return defaultLimit;
+  // `Number(...)` on purpose, like the previous unclamped implementation: with the "extended" query parser a
+  // single-value array such as `limit[0]=1` still coerces to the expected number.
+  const parsed = Number(raw as string);
+  if (!Number.isFinite(parsed)) return defaultLimit;
+  return Math.min(500, Math.max(1, Math.floor(parsed)));
+}
+
 app.get('/api/v1/events', async (req, res) => {
-  const limit = req.query.limit ? Number(req.query.limit) : 100;
+  const limit = parseEventsLimit(req.query.limit);
   const since = req.query.since ? Number(req.query.since) : undefined;
   const afterId = typeof req.query.afterId === 'string' ? req.query.afterId : undefined;
+  const beforeId = typeof req.query.beforeId === 'string' ? req.query.beforeId : undefined;
   const runtimeId = typeof req.query.runtimeId === 'string' ? req.query.runtimeId : undefined;
   const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined;
   const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
   const type = typeof req.query.type === 'string' ? req.query.type : undefined;
 
-  const events = await store.list({ limit, since, afterId, runtimeId, sessionId, agentId, type });
+  // Backward paging (issue #72): an unknown or evicted cursor is a client error, unlike `afterId`, which applies
+  // no filter when it cannot be resolved. A partial history must never look complete.
+  if (beforeId !== undefined && (await store.resolveCursor(beforeId)) === null) {
+    res.status(400).json({ error: 'invalid_cursor', message: `Unknown or evicted beforeId "${beforeId}"` });
+    return;
+  }
+
+  // Fetch one extra row to learn whether there is a next page, without exposing it in the response.
+  const page = await store.list({ limit: limit + 1, since, afterId, beforeId, runtimeId, sessionId, agentId, type });
+  const hasMore = page.length > limit;
+  const events = hasMore ? page.slice(0, limit) : page;
+  const nextBeforeId = hasMore ? (events[events.length - 1]?.id ?? null) : null;
   const retention = await store.retention();
   res.json({
     schemaVersion: '1.0',
     count: events.length,
+    hasMore,
+    nextBeforeId,
     events,
     retention,
   });

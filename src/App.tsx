@@ -36,12 +36,19 @@ import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngi
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
 import { rebuildFromSnapshot, type LiveSnapshot } from './integrations/snapshotRebuild';
+import { loadLiveHistory, parseHistoryLimit } from './integrations/historyLoader';
 import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './integrations/liveConnection';
 import { useServerAuthState } from './integrations/serverHealth';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
 import { cloneUsageTally } from './integrations/usageTally';
 import { Upload, AlertCircle, X } from 'lucide-react';
+
+/**
+ * Bounds how many events the live portal loads on open, beyond the snapshot's own 100 (issue #72). Only the
+ * activity timeline goes this deep; figures always come from the snapshot's own totals.
+ */
+const LIVE_HISTORY_LIMIT = parseHistoryLimit(import.meta.env.VITE_AGENT_VIEWER_HISTORY_LIMIT as string | undefined);
 
 export default function App() {
   const isLiveMode = typeof window !== 'undefined' && (
@@ -60,6 +67,11 @@ export default function App() {
   const serverAuth = useServerAuthState(isLiveMode ? apiBase : undefined);
 
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  // Load phase of the live portal (issue #72): the top bar badge is driven by this, not by the arrival of an
+  // event, so a quiet server still shows a loading state instead of looking stuck on "CONNECTING".
+  const [livePhase, setLivePhase] = useState<'loading' | 'subscribing' | 'live' | 'reconnecting' | 'error'>('loading');
+  // Bumped to retry the history load after it failed (issue #72); only read by the live effect's dependency list.
+  const [historyRetryToken, setHistoryRetryToken] = useState(0);
   // Shown after the stream resyncs (issue #54): the server could not replay everything missed, so the office was
   // reloaded from a fresh snapshot. `missed` is `null` when the server itself does not know the count.
   const [resyncNotice, setResyncNotice] = useState<{ missed: number | null } | null>(null);
@@ -249,9 +261,36 @@ export default function App() {
 
     // The token leaves the address bar as soon as it is read (see liveConnection.ts).
     let cancelled = false;
+    const abortController = new AbortController();
     let connection: ReturnType<typeof connectEventStream> | undefined;
-    void loadLiveToken(window, apiBase).then((token) => {
+    setLivePhase('loading');
+
+    void loadLiveToken(window, apiBase).then(async (token) => {
       if (cancelled) return;
+
+      // Load order on open (issue #72): the server's own record, through the snapshot and a deeper page of
+      // events, before ever subscribing to the stream. A reload or a second tab must never start from an empty
+      // office while the server already has the whole history.
+      let history: Awaited<ReturnType<typeof loadLiveHistory>>;
+      try {
+        history = await loadLiveHistory(apiBase, {
+          token,
+          locale: localeRef.current,
+          maxEvents: LIVE_HISTORY_LIMIT,
+          signal: abortController.signal,
+        });
+      } catch (err) {
+        if (cancelled || abortController.signal.aborted) return;
+        console.error('[agent-viewer] Live history load failed:', err);
+        // Never subscribes without a cursor on a failed load: that would present a partial history as complete.
+        setLivePhase('error');
+        return;
+      }
+      if (cancelled) return;
+
+      setSimState(history.state);
+      setLivePhase('subscribing');
+
       connection = connectEventStream(apiBase, (incoming) => {
         setIsLiveConnected(true);
         setSimState((prevState) => {
@@ -276,8 +315,17 @@ export default function App() {
           applyExternalEvent(nextState, incoming, { locale: localeRef.current });
           return nextState;
         });
-      }, undefined, {
+      }, (status) => {
+        if (cancelled) return;
+        if (status === 'connected') setLivePhase('live');
+        else if (status === 'reconnecting' || status === 'disconnected') setLivePhase('reconnecting');
+        else if (status === 'error') setLivePhase('error');
+        else if (status === 'resyncing') setLivePhase('subscribing');
+      }, {
         token,
+        // Resumes from the newest event the history load actually received (issue #72), never from a different
+        // request, so the portal never claims to have seen an event it did not load.
+        lastEventId: history.lastEventId ?? undefined,
         // The server could not replay everything missed (issue #54): reload from `GET /api/v1/snapshot` instead
         // of trusting the 100 events it carries. Usage figures come from the snapshot's own aggregates, never
         // from re-adding those events, so a long gap never shows a silently lower total.
@@ -305,11 +353,12 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      abortController.abort();
       connection?.close();
       setIsLiveConnected(false);
       setResyncNotice(null);
     };
-  }, [apiBase, isLiveMode]);
+  }, [apiBase, isLiveMode, historyRetryToken]);
 
   // Demo playback timer
   useEffect(() => {
@@ -671,6 +720,8 @@ export default function App() {
         onOpenModelOps={() => handleOpenModelOps()}
         isLiveMode={isLiveMode}
         isLiveConnected={isLiveConnected}
+        livePhase={livePhase}
+        onRetryHistory={() => setHistoryRetryToken((n) => n + 1)}
         openApi={serverAuth === 'open'}
       />
       {isLiveMode && serverAuth === 'open' && <OpenApiBanner locale={locale} />}

@@ -139,6 +139,85 @@ test('SQLiteEventStore: afterId returns only events newer than the given id, lik
   }
 });
 
+test('SQLiteEventStore: beforeId returns only events stored before the given id, like MemoryEventStore', async () => {
+  const { dir, file } = tempDbPath('before-id');
+  const sqlite = new SQLiteEventStore(file);
+  const memory = new MemoryEventStore();
+
+  try {
+    const events = [storeEvent('evt_a', 1000), storeEvent('evt_b', 2000), storeEvent('evt_c', 3000)];
+    for (const event of events) {
+      await sqlite.append(event);
+      await memory.append(event);
+    }
+
+    const sqliteIds = (await sqlite.list({ beforeId: 'evt_c' })).map((e) => e.id);
+    const memoryIds = (await memory.list({ beforeId: 'evt_c' })).map((e) => e.id);
+    assert.deepEqual(sqliteIds, ['evt_b', 'evt_a']);
+    assert.deepEqual(sqliteIds, memoryIds);
+
+    // The oldest event has nothing before it.
+    assert.deepEqual((await sqlite.list({ beforeId: 'evt_a' })).map((e) => e.id), []);
+    // An unknown id applies no filter, like afterId; the route layer is what rejects it with 400.
+    assert.deepEqual(
+      (await sqlite.list({ beforeId: 'evt_unknown' })).map((e) => e.id),
+      (await memory.list({ beforeId: 'evt_unknown' })).map((e) => e.id)
+    );
+
+    // beforeId and afterId combine: strictly between the two cursors.
+    assert.deepEqual(
+      (await sqlite.list({ beforeId: 'evt_c', afterId: 'evt_a' })).map((e) => e.id),
+      ['evt_b']
+    );
+  } finally {
+    await sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: beforeId pages in arrival order, not timestamp order, when timestamps are not monotonic in arrival order', async () => {
+  const { dir, file } = tempDbPath('before-id-out-of-order');
+  const sqlite = new SQLiteEventStore(file);
+  const memory = new MemoryEventStore();
+
+  try {
+    // Arrival order evt_1..evt_4, but timestamps are not monotonic (a backfilled batch, a second runtime, a
+    // clock correction). Both stores must page by arrival order (seq), never by timestamp, so a cursor and the
+    // list order always agree (issue #72).
+    const events = [
+      storeEvent('evt_1', 5000),
+      storeEvent('evt_2', 1000),
+      storeEvent('evt_3', 9000),
+      storeEvent('evt_4', 2000),
+    ];
+    for (const event of events) {
+      await sqlite.append(event);
+      await memory.append(event);
+    }
+
+    const expectedNewestFirst = ['evt_4', 'evt_3', 'evt_2', 'evt_1'];
+    assert.deepEqual((await sqlite.list()).map((e) => e.id), expectedNewestFirst);
+    assert.deepEqual((await memory.list()).map((e) => e.id), expectedNewestFirst);
+
+    // A full backward walk with a small page size reaches every event with no duplicates and no gaps, on both
+    // stores, and the two stores agree at every step.
+    for (const store of [sqlite, memory]) {
+      let cursor;
+      const walked = [];
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await store.list({ limit: 2, beforeId: cursor });
+        if (page.length === 0) break;
+        walked.push(...page.map((e) => e.id));
+        cursor = page[page.length - 1].id;
+      }
+      assert.deepEqual(walked, expectedNewestFirst);
+    }
+  } finally {
+    await sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('SQLiteEventStore: persists the full canonical event so it round-trips identically', async () => {
   const { dir, file } = tempDbPath('round-trip');
   const event = storeEvent('evt_round_trip', 4000, {

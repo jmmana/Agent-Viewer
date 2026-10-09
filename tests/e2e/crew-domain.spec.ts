@@ -12,6 +12,10 @@ const events = [
 
 for (const transport of ['sse','log'] as const) {
   test(`conserva presencia y consumo de ${transport} entre salas y modos`, async ({page}) => {
+    // El portal carga el historial del servidor antes de suscribirse al stream (issue #72): un snapshot vacío
+    // mantiene este fixture igual que antes de ese cambio.
+    await page.route('**/api/v1/snapshot', route => route.fulfill({ contentType:'application/json',
+      body: JSON.stringify({ lastEventId:null, events:[], agents:[], totalTokens:{input:0,output:0,cached:0,reasoning:0}, totalCost:0 }) }));
     await page.route('**/api/v1/events/stream*', route => transport === 'sse'
       ? route.fulfill({ contentType:'text/event-stream', headers:{'Access-Control-Allow-Origin':'*'},
         body:events.map(event => `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`).join('') })
@@ -49,6 +53,8 @@ for (const transport of ['sse','log'] as const) {
 }
 
 test('LIVE sin eventos permanece vacío en todas las salas del catálogo', async ({page}) => {
+  await page.route('**/api/v1/snapshot', route => route.fulfill({ contentType:'application/json',
+    body: JSON.stringify({ lastEventId:null, events:[], agents:[], totalTokens:{input:0,output:0,cached:0,reasoning:0}, totalCost:0 }) }));
   await page.route('**/api/v1/events/stream*', route => route.abort());
   await page.goto('/?mode=live');
   await page.getByRole('button',{name:'Crew · Beta',exact:true}).click();

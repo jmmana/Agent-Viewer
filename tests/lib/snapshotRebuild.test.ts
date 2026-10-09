@@ -79,6 +79,62 @@ describe('rebuildFromSnapshot', () => {
     expect(zeroCost.totalCost).toBe(0);
   });
 
+  it('priorEvents (issue #72) extend the timeline deeper than the snapshot without touching totals or agent fields', () => {
+    const snapshot = sampleSnapshot();
+    // Older than every event the snapshot itself carries (evt-1 is at T0), newest first like the API returns them.
+    const priorEvents = [
+      messageSent('ana', 'Second oldest message.', {}, { id: 'evt-deep-2', at: T0 - 10 }),
+      registered('ana', 'Ana Rivas', { roleTitle: 'Planner', workspace: 'leads_area' }, { id: 'evt-deep-1', at: T0 - 20 }),
+    ];
+
+    const state = rebuildFromSnapshot(snapshot, { locale: 'en', now: NOW, priorEvents });
+
+    // The timeline now carries the snapshot's own events plus the deeper ones, newest first overall.
+    expect(state.events.map((e) => e.id)).toEqual(['evt-3', 'evt-2', 'evt-1', 'evt-deep-2', 'evt-deep-1']);
+
+    // Figures and agent fields still come only from the snapshot, never from the extra events.
+    const ana = state.agents.find((a) => a.id === 'ana')!;
+    expect(ana.tokensInput).toBe(500);
+    expect(state.totalTokens).toEqual({ input: 510, output: 51, cached: 3, reasoning: 1 });
+    expect(state.totalCost).toBe(1.24);
+  });
+
+  it('priorEvents replay with their own timestamp as the clock, so an old speech bubble is already expired relative to now', () => {
+    // An empty snapshot.events isolates the effect: nothing newer overwrites the bubble prorEvents sets.
+    const snapshot = sampleSnapshot({ events: [] });
+    const priorEvents = [
+      messageSent('ana', 'An old message.', {}, { id: 'evt-deep-old-msg', at: T0 - 999_999 }),
+      registered('ana', 'Ana Rivas', { roleTitle: 'Planner', workspace: 'leads_area' }, { id: 'evt-deep-old-reg', at: T0 - 1_000_000 }),
+    ];
+
+    const state = rebuildFromSnapshot(snapshot, { locale: 'en', now: NOW, priorEvents });
+
+    const expectedOffice = createLiveSimulationState();
+    for (const event of [...priorEvents].reverse()) {
+      applyExternalEvent(expectedOffice, event as ExternalEventEnvelope, {
+        trackUsage: false,
+        narrate: false,
+        now: (event as ExternalEventEnvelope).timestamp,
+        locale: 'en',
+      });
+    }
+    const ana = state.agents.find((a) => a.id === 'ana')!;
+    const expectedAna = expectedOffice.agents.find((a) => a.id === 'ana')!;
+    expect(ana.speechBubble).toEqual(expectedAna.speechBubble);
+    // The bubble's expiry is anchored to the event's own old timestamp, long since passed relative to NOW: it
+    // never plays back as if the agent had just spoken.
+    expect(ana.speechBubble?.expiresAt).toBeLessThan(NOW);
+  });
+
+  it('an invalid event in priorEvents is skipped, like an invalid event in snapshot.events', () => {
+    const snapshot = sampleSnapshot();
+    const priorEvents = [{ not: 'a canonical event' }, registered('ana', 'Ana Rivas', {}, { id: 'evt-deep-1', at: T0 - 20 })];
+
+    const state = rebuildFromSnapshot(snapshot, { locale: 'en', now: NOW, priorEvents });
+    expect(state.events.map((e) => e.id)).toContain('evt-deep-1');
+    expect(state.events.some((e) => e.id === undefined)).toBe(false);
+  });
+
   it('a live event applied after the rebuild adds to the server total once, starting from the snapshot totals, not from zero', () => {
     const snapshot = sampleSnapshot();
     const state = rebuildFromSnapshot(snapshot, { locale: 'en', now: NOW });

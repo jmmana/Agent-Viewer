@@ -44,6 +44,14 @@ export interface RebuildFromSnapshotOptions {
   locale?: string;
   /** Clock for the replay. Defaults to `Date.now()`; tests pass their own for reproducible output. */
   now?: number;
+  /**
+   * Events older than the snapshot's own window (issue #72: `GET /api/v1/events?beforeId=...` paging), newest
+   * first like the API returns them. Applied oldest first, before `snapshot.events`, so the activity timeline can
+   * go deeper than the newest 100 without touching the totals or the per-agent fields, which still come only
+   * from the snapshot. Each one replays with its own timestamp as the clock (`narrate: false`), so old speech
+   * bubbles and walks do not play back as if they just happened.
+   */
+  priorEvents?: unknown[];
 }
 
 /**
@@ -57,6 +65,13 @@ export interface RebuildFromSnapshotOptions {
 export function rebuildFromSnapshot(snapshot: LiveSnapshot, options: RebuildFromSnapshotOptions = {}): SimulationState {
   const state = createLiveSimulationState();
   const now = options.now ?? Date.now();
+
+  const priorOldestFirst = options.priorEvents ? [...options.priorEvents].reverse() : [];
+  for (const raw of priorOldestFirst) {
+    if (!validateExternalEvent(raw)) continue;
+    const eventNow = typeof (raw as { timestamp?: unknown }).timestamp === 'number' ? (raw as { timestamp: number }).timestamp : now;
+    applyExternalEvent(state, raw as ExternalEventEnvelope, { trackUsage: false, narrate: false, locale: options.locale, now: eventNow });
+  }
 
   const oldestFirst = [...snapshot.events].reverse();
   for (const raw of oldestFirst) {

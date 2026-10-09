@@ -113,6 +113,12 @@ export interface ListEventsOptions {
   limit?: number;
   since?: number;
   afterId?: string;
+  /**
+   * Backward paging cursor (issue #72): only events stored strictly before this id, in arrival order. Combines
+   * with `afterId` and the other filters. Like `afterId`, a cursor not found (or filtered out by the other
+   * options) applies no cut; the route layer is the one that rejects an unresolvable `beforeId` with `400`.
+   */
+  beforeId?: string;
   runtimeId?: string;
   sessionId?: string;
   agentId?: string;
@@ -842,9 +848,9 @@ export class MemoryEventStore implements EventStore {
   /**
    * Same ordering and filter semantics as the previous array implementation (newest first; `runtimeId`,
    * `sessionId`, `agentId`, `type`, `since` filter on `event.timestamp`; `afterId` is exclusive and applied after
-   * the other filters; an `afterId` not found, or filtered out, applies no cut; default limit 100). Walks the
-   * ring newest to oldest and stops as soon as `limit` entries are collected, instead of copying the whole
-   * window per call (issue #53).
+   * the other filters; an `afterId` not found, or filtered out, applies no cut; default limit 100). Without
+   * `beforeId`, walks the ring newest to oldest and stops as soon as `limit` entries are collected, instead of
+   * copying the whole window per call (issue #53).
    */
   async list(options: ListEventsOptions = {}): Promise<CanonicalEvent[]> {
     const limit = options.limit && options.limit > 0 ? options.limit : 100;
@@ -857,16 +863,37 @@ export class MemoryEventStore implements EventStore {
       return true;
     };
 
-    const result: CanonicalEvent[] = [];
+    if (!options.beforeId) {
+      const result: CanonicalEvent[] = [];
+      this.window.forEachNewestToOldest(({ event }) => {
+        if (!matches(event)) return true;
+        // Mirrors `result.slice(0, index)` on the equivalent array implementation: everything from the cursor
+        // onward (older, in this walk order) is excluded, whether or not `limit` was reached yet.
+        if (options.afterId && event.id === options.afterId) return false;
+        result.push(event);
+        return result.length < limit;
+      });
+      return result;
+    }
+
+    // `beforeId` (issue #72), the mirror of `afterId`: a cursor not found, or filtered out, applies no cut, same
+    // convention as `afterId`. Whether the cursor turns up at all is only known once the walk (down to any
+    // `afterId` cut) finishes, so the matched events are collected first and sliced relative to the cursor
+    // afterward, rather than exited early the way the no-`beforeId` branch above does.
+    const matched: CanonicalEvent[] = [];
+    let cursorIndex = -1;
     this.window.forEachNewestToOldest(({ event }) => {
       if (!matches(event)) return true;
-      // Mirrors `result.slice(0, index)` on the equivalent array implementation: everything from the cursor
-      // onward (older, in this walk order) is excluded, whether or not `limit` was reached yet.
       if (options.afterId && event.id === options.afterId) return false;
-      result.push(event);
-      return result.length < limit;
+      if (event.id === options.beforeId) {
+        cursorIndex = matched.length;
+        return true;
+      }
+      matched.push(event);
+      return true;
     });
-    return result;
+    const start = cursorIndex === -1 ? 0 : cursorIndex;
+    return matched.slice(start, start + limit);
   }
 
   /** The newest `limit` retained events, with no filter. Used by `snapshot().events`. */
@@ -1655,12 +1682,27 @@ export class SQLiteEventStore implements EventStore {
         params.push(cursor.seq);
       }
     }
+    if (options.beforeId) {
+      // Mirror of `afterId` (issue #72): only events stored before the cursor event. Same "unknown cursor applies
+      // no filter" convention; the route layer rejects an unresolvable `beforeId` before calling `list()`.
+      const cursor = this.db.prepare('SELECT seq FROM events WHERE id = ?').get(options.beforeId) as
+        | { seq: number }
+        | undefined;
+      if (cursor) {
+        conditions.push('seq < ?');
+        params.push(cursor.seq);
+      }
+    }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = options.limit && options.limit > 0 ? options.limit : 100;
     params.push(limit);
 
-    const sql = `SELECT * FROM events ${whereClause} ORDER BY timestamp DESC, created_at DESC, seq DESC LIMIT ?`;
+    // Ordered by `seq` alone (issue #72), the same durable arrival order `afterId`/`beforeId` cursors compare
+    // against. Ordering by `timestamp` first disagreed with a `seq` cursor whenever events arrive with a
+    // non-monotonic `timestamp` (batches, several runtimes, backfills), which could duplicate or skip rows while
+    // paging. `since` still filters on `timestamp`; only the row order changes here.
+    const sql = `SELECT * FROM events ${whereClause} ORDER BY seq DESC LIMIT ?`;
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as any[];
 

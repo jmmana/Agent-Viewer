@@ -53,4 +53,18 @@ test('catálogo aislado, búsqueda, cambios rápidos y conservación con eventos
     return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===element;
   })).toBe(true);
   await page.screenshot({path:testInfo.outputPath('catalog-mobile.png')});
+  for (const size of [{width:360,height:740},{width:390,height:844}]) {
+    await page.setViewportSize(size);
+    await expect(page.getByRole('button',{name:'Oficina siguiente',exact:true})).toBeVisible();
+    await expect(page.getByRole('checkbox',{name:'Reducir movimiento',exact:true})).toBeVisible();
+    const bounds = (await canvas.boundingBox())!;
+    expect(bounds.height).toBeGreaterThanOrEqual(120);
+    expect(bounds.x+bounds.width).toBeLessThanOrEqual(size.width);
+    expect(await canvas.evaluate(element=>{
+      const r=element.getBoundingClientRect();
+      return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===element;
+    })).toBe(true);
+    await page.screenshot({path:testInfo.outputPath(`catalog-mobile-${size.width}.png`)});
+  }
+
 });

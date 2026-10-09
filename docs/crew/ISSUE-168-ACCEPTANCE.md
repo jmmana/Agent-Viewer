@@ -52,7 +52,7 @@ La elección no filtra la ingestión de eventos: las otras salas mantienen prese
 | No regresión Caricatura | E2E cámara compara PNG antes/después de volver; suites dominio/embebido conservan eventos y consumo |
 | Interfaces, eventos, cámara y accesibilidad | Contrato anterior, diagrama y pruebas unitarias; revisión de integración en PR, sin cambios a API de eventos/telemetría |
 
-Capturas del runtime real Crew, con eventos sintéticos inequívocamente identificados en el test: [escritorio](evidence/catalog-168/catalog-desktop.png), [móvil](evidence/catalog-168/catalog-mobile.png), [grabación](evidence/catalog-168/catalog-runtime.mp4). Se revisaron visualmente: búsqueda y selector accesibles, mobiliario de la sala elegida, cero personajes inventados en Investigación, canvas sin oclusión a 320 px.
+Capturas del runtime real Crew, con eventos sintéticos inequívocamente identificados en el test: [escritorio](evidence/catalog-168/catalog-desktop.png), [móvil](evidence/catalog-168/catalog-mobile.png), [grabación](evidence/catalog-168/catalog-runtime.mp4). Se revisaron visualmente: búsqueda y selector accesibles, mobiliario de la sala elegida, cero personajes inventados en Investigación, canvas sin oclusión a 320 px. El conjunto integrado con #171 también se verificó visualmente en [360 × 740](evidence/catalog-168/catalog-mobile-360.png) y [390 × 844](evidence/catalog-168/catalog-mobile-390.png): botones, checkbox, selector y búsqueda visibles; altura del canvas al menos 120 px y centro sin oclusión.
 
 ## Reproducción y validación
 
@@ -71,6 +71,10 @@ python3 tests/test_python_sdk.py
 
 La ejecución aislada de este issue usa puerto 3168 mediante configuración temporal equivalente a `playwright.config.ts` con baseURL y webServer en 3168. No usa el servidor compartido en 3000. Playwright conserva video, capturas y trazas en `test-results`; CI publica estos artefactos.
 
-Verificaciones locales: TypeScript; 472 Node aprobados y uno omitido; 601 Vitest; 18 E2E Chrome; builds app/lib/CLI; validación del paquete; audit de producción sin vulnerabilidades; SDK Python. CI del PR vuelve a ejecutar los checks y builds Docker.
+Verificaciones locales: TypeScript; 472 Node aprobados y uno omitido; 607 Vitest; 19 E2E Chrome; builds app/lib/CLI; validación del paquete; audit de producción sin vulnerabilidades; SDK Python. CI del PR vuelve a ejecutar los checks y builds Docker.
 
 Limitaciones de evidencia: Chrome headless sobre macOS y móvil emulado, sin dispositivo físico ni Safari certificado. El catálogo utiliza geometría provisional y marcadores en los roles cuyo arte continúa pendiente en otros issues. Esta entrega no declara arte final, locomoción animada ni aprobación de G1. No cambia ni cierra otros tickets por añadir geometría.
+
+## Trazabilidad de entrega
+
+[PR #222](https://github.com/jmmana/Agent-Viewer/pull/222), implementación inicial `c9cacbb`, teclado `c820686`; integración de preferencias #171 mediante merge `2ac7bdd`, sin squash. [CI del PR y commit vigente](https://github.com/jmmana/Agent-Viewer/pull/222/checks) valida el conjunto. La revisión del mantenedor autoriza la integración final; este agente no fusiona ni cierra #168.

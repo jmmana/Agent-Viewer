@@ -9,10 +9,11 @@ describe('independent Crew room and mode contract', () => {
     expect(isVisualMode('showcase')).toBe(false);
   });
   it('defines two autonomous scenes, not a crop of the legacy layout', () => {
-    expect(CREW_ROOMS.map(r => r.id)).toEqual(['ceo', 'development']);
+    expect(CREW_ROOMS.map(r => r.id)).toEqual(['ceo', 'development', 'planning', 'research', 'qa', 'finance', 'meeting', 'infrastructure', 'coffee', 'lounge', 'reception']);
     expect(crewRoom('ceo')?.furniture[0]?.id).toBe('ceo-desk');
     expect(crewRoom('development')?.furniture[0]?.id).toBe('dev-desk-1');
-    expect(crewRoom('qa')).toBeUndefined();
+    expect(crewRoom('qa')?.furniture[0]?.id).toBe('qa-desk-a');
+    expect(crewRoom('unknown')).toBeUndefined();
     expect(new Set(CREW_ROOMS.flatMap(r => r.furniture.map(f => f.id))).size)
       .toBe(CREW_ROOMS.reduce((n, r) => n + r.furniture.length, 0));
   });

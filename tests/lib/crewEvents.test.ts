@@ -10,12 +10,14 @@ describe('Crew read-only event bridge', () => {
   it('maps only explicitly built rooms', () => {
     expect(crewRoomForWorkspace('boss_office')).toBe('ceo');
     expect(crewRoomForWorkspace('development')).toBe('development');
-    expect(crewRoomForWorkspace('qa_lab')).toBeNull();
+    expect(crewRoomForWorkspace('qa_lab')).toBe('qa');
+    expect(crewRoomForWorkspace('unknown')).toBeNull();
   });
   it('shows real actors of selected room, not agents from another room', () => {
     expect(crewAgentsInRoom(agents, 'ceo').map(a=>a.id)).toEqual(['2']);
     expect(crewAgentsInRoom(agents, 'development').map(a=>a.id)).toEqual(['1']);
-    expect(crewAgentsInRoom(agents, 'qa')).toEqual([]);
+    expect(crewAgentsInRoom(agents, 'qa').map(a=>a.id)).toEqual(['3']);
+    expect(crewAgentsInRoom(agents, 'finance')).toEqual([]);
     expect(crewAgentsInRoom([], 'ceo')).toEqual([]);
   });
   it('never mutates the authoritative input', () => {

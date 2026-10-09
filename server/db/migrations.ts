@@ -185,7 +185,7 @@ function backupDatabase(
 
   const escapedPath = backupPath.replaceAll("'", "''");
   try {
-    withBusyRetry(() => db.exec(`VACUUM INTO '${escapedPath}'`));
+    db.exec(`VACUUM INTO '${escapedPath}'`);
   } catch (error) {
     for (const partialPath of [backupPath, `${backupPath}-journal`]) {
       try {

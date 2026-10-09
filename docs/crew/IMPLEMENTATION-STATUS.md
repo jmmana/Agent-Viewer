@@ -1,7 +1,7 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #159, QA de continuidad de dominio y lifecycle Crew. Epic: #114.
+Último issue trabajado: #171, enlaces directos y restablecimiento de Crew. Epic: #114.
 
 ## Resumen de la ejecución
 
@@ -19,7 +19,8 @@ Validación acumulada: 61 node, 449 Vitest, 9 E2E y 3 SDK Python; typecheck, app
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `test/crew-domain-continuity-159`, basada en `0832cfa` de #185.
+- Rama actual: `feat/crew-navigation-links-reset-171`, basada en `dfdb060` de #186.
+- QA anterior: `test/crew-domain-continuity-159`, basada en `0832cfa` de #185.
 - Foco: `feat/crew-camera-focus-156`, basada en `1e1e591` de #183.
 - Persistencia: `feat/crew-navigation-persistence-171`, basada en `0b513ea` de #182.
 - Rama anterior: `feat/crew-camera-gestures-156`, basada en `3e18d2a` de #177.
@@ -104,13 +105,13 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#168](https://github.com/jmmana/Agent-Viewer/issues/168) | Registro y selector de 11 salas prototipo en #177. |
 | [#169](https://github.com/jmmana/Agent-Viewer/issues/169) | Aislamiento y fit prototipo en #177; QA completa pendiente. |
 | [#170](https://github.com/jmmana/Agent-Viewer/issues/170) | 11 layouts locales prototipo en #177; faltan colisiones y arte final. |
-| [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Modo y sala persisten con versión 1 en esta rama; cámaras anteriores conservadas. Deep links, reset general y API embebida pendientes. |
+| [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Persistencia en #183, enlaces directos y reset Crew en esta rama. API embebida pendiente. |
 | [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Inventario fusionado (#176); recursos sin migrar al runtime. |
 | [#173](https://github.com/jmmana/Agent-Viewer/issues/173) | ADR fusionado (#174); validación gráfica final pendiente. |
 
 ## Próximos tres pasos
 
-1. #171: reset general y navegación accesible; deep links y API embebida.
+1. #171/#166: API embebida de modos, navegación y cámara; aislamiento entre instancias.
 2. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
 3. #159: servidor SSE real, reproducción temporal, rendimiento y dispositivos físicos antes de aprobar G1.
 
@@ -149,3 +150,11 @@ Validación final de esta continuación, incluida la corrección móvil: `npm ru
 ### Hallazgo de QA visual móvil
 
 La captura de 320 px tras iniciar en escritorio mostró la barra lateral superpuesta a Crew. La primera aserción de tamaño del canvas no detectaba la oclusión. Corregido en App mediante visibilidad responsive de la barra únicamente en modo Crew, sin modificar el componente/renderer Caricatura ni su estado de apertura. La actividad sigue accesible desde la pestaña de actividad. El E2E ahora exige que `elementFromPoint` en el centro del canvas sea el propio canvas, además de revisar tamaño y visibilidad. Corrección validada: typecheck, 61 node, 449 Vitest, nueve E2E y build app aprobados. [Captura móvil corregida](evidence/camera-156/crew-mobile-es.png).
+
+## Continuación #171: enlaces directos y restablecimiento
+
+Enlaces `?visualMode=crew&crewRoom=development` prevalecen sobre la selección guardada. Una sala desconocida abre Dirección y muestra un aviso bilingüe, sin pantalla vacía; seleccionar otra sala limpia el aviso. La navegación actualiza enlaces activos con replaceState conservando parámetros ajenos como `mode=live`. El enlace compartible contiene solo modo visual/sala y LIVE si corresponde, sin copiar credenciales, fragmentos ni datos de sesión.
+
+Restablecer Crew vuelve a Dirección, limpia todas sus cámaras y mantiene Crew abierto; no reinicia agentes, coste ni tokens. La recarga conserva el reset, incluso al haber entrado por un enlace a otra oficina.
+
+Validación: typecheck, 61 node, 452 Vitest, diez E2E Chrome, builds app/lib y validación de paquete aprobados. Captura móvil con nuevos controles revisada a 320 px. Base #186 en `dfdb060` tiene CI aprobado (run 37869826733). Falta API embebida; #171 no se cierra. PR/SHA de esta continuación pendientes de publicación.

@@ -3,6 +3,7 @@ import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
 import { crewAgentsInRoom } from './crewEvents';
 import { constrainCrewPan, focusCrewFurniture } from './crewViewport';
+import { crewRoomLink } from './crewNavigation';
 import { CrewGestures } from './crewGestures';
 import type { Agent } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
@@ -12,10 +13,11 @@ import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, zoomC
  * placeholders explicitly indicate missing approved multi-view artwork.
  * Neither the legacy renderer nor its office coordinates are imported.
  */
-export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange }: {
+export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange, missingRoom = false }: {
   locale?: string;
   agents?: readonly Agent[];
   selectedRoomId?: string;
+  missingRoom?: boolean;
   onRoomChange?: (roomId: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -109,6 +111,10 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
 
   return <section aria-label={isEs ? 'Modo Crew: oficina independiente' : 'Crew mode: independent office'}
     style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#101a2b', color: '#f1f5f9' }}>
+    {missingRoom && <p role="status" style={{ margin: 0, padding: '8px 12px' }}>
+      {isEs ? 'La oficina del enlace no está disponible. Mostramos Dirección; puedes elegir otra oficina o volver a Caricatura.'
+        : 'The linked office is unavailable. Showing CEO Office; choose another office or return to Cartoon.'}
+    </p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', padding: 10, gap: 8, alignItems: 'center' }}>
       <label htmlFor="crew-room">{isEs ? 'Oficina' : 'Office'}</label>
       <select id="crew-room" value={roomId} onChange={e => setRoomId(e.target.value)}
@@ -138,6 +144,14 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
             {item.type === 'desk' ? (isEs ? 'Escritorio' : 'Desk') : (isEs ? 'Monitor' : 'Monitor')} {index + 1}
           </option>)}
       </select>
+      <button type="button" onClick={() => {
+        gestures.current.clear();
+        setCameraByRoom({});
+        setRoomId(CREW_ROOMS[0].id);
+      }}>{isEs ? 'Restablecer Crew' : 'Reset Crew preferences'}</button>
+      {typeof window !== 'undefined' && <a href={crewRoomLink(window.location.href, roomId)}>
+        {isEs ? 'Enlace a esta oficina' : 'Link to this office'}
+      </a>}
     </div>
     <div aria-live="polite" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 10px', fontSize: 12 }}>
       <span>{isEs ? 'Agentes en esta oficina:' : 'Agents in this room:'} {visibleAgents.length}</span>

@@ -27,3 +27,27 @@ test('una sala eliminada usa CEO sin pantalla vacía', async ({ page }) => {
   await expect(page.locator('#crew-room')).toHaveValue('ceo');
   await expect(page.locator('canvas')).toBeVisible();
 });
+
+test('enlace directo, aviso de sala inexistente y reset sin perder consumo', async ({page}) => {
+  await page.goto('/?visualMode=crew&crewRoom=development');
+  await expect(page.locator('#crew-room')).toHaveValue('development');
+  await page.locator('#crew-view').selectOption('right');
+  await page.getByRole('button',{name:'Zoom in',exact:true}).click();
+  const usage = await page.getByRole('button').filter({hasText:'222.6K'}).innerText();
+  await expect(page.getByRole('link',{name:'Link to this office',exact:true})).toHaveAttribute('href','/?visualMode=crew&crewRoom=development');
+  await page.getByRole('button',{name:'Reset Crew preferences',exact:true}).click();
+  await expect(page.locator('#crew-room')).toHaveValue('ceo');
+  await expect(page.locator('#crew-view')).toHaveValue('front');
+  await expect(page.getByText('100%',{exact:true})).toBeVisible();
+  expect(await page.getByRole('button').filter({hasText:'222.6K'}).innerText()).toBe(usage);
+  await expect.poll(() => page.evaluate(()=>localStorage.getItem('agent-viewer-crew-camera-v1'))).toBe('{}');
+  await page.reload();
+  await expect(page.locator('#crew-room')).toHaveValue('ceo');
+  await page.goto('/?crewRoom=deleted');
+  await expect(page.getByRole('status')).toContainText('linked office is unavailable');
+  await expect(page.locator('#crew-room')).toHaveValue('ceo');
+  await page.locator('#crew-room').selectOption('development');
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('#crew-room')).toHaveValue('development');
+});

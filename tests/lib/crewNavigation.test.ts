@@ -34,3 +34,25 @@ describe('Preferencias de navegación Crew', () => {
     expect(() => saveCrewNavigation(defaultCrewNavigation())).not.toThrow();
   });
 });
+
+describe('Enlaces de oficinas Crew', () => {
+  it('da prioridad al enlace sin interpretar mode=live como modo visual', async () => {
+    const { resolveCrewEntry } = await import('../../src/crew/crewNavigation');
+    const saved = {version:1 as const,selectedMode:'cartoon' as const,selectedRoomId:'ceo'};
+    expect(resolveCrewEntry(saved,'?mode=live&crewRoom=development')).toEqual({
+      navigation:{version:1,selectedMode:'crew',selectedRoomId:'development'},missingRoom:false,
+    });
+    expect(resolveCrewEntry(saved,'?mode=live').navigation).toEqual(saved);
+  });
+  it('avisa de salas desconocidas sin almacenar el texto arbitrario de la URL', async () => {
+    const { resolveCrewEntry } = await import('../../src/crew/crewNavigation');
+    const entry = resolveCrewEntry(defaultCrewNavigation(), '?crewRoom=missing');
+    expect(entry.missingRoom).toBe(true);
+    expect(entry.navigation.selectedRoomId).toBe('ceo');
+  });
+  it('el enlace compartible conserva LIVE y subruta pero omite credenciales y datos ajenos', async () => {
+    const { crewRoomLink } = await import('../../src/crew/crewNavigation');
+    expect(crewRoomLink('https://example.test/Agent-Viewer/?mode=live&token=private#secret','development'))
+      .toBe('/Agent-Viewer/?mode=live&visualMode=crew&crewRoom=development');
+  });
+});

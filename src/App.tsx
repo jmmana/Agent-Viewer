@@ -13,7 +13,7 @@ import { TopBar } from './components/TopBar';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { CrewStage } from './crew/CrewStage';
 import type { VisualMode } from './crew/crewModel';
-import { readCrewNavigation, saveCrewNavigation } from './crew/crewNavigation';
+import { readCrewEntry, saveCrewNavigation, replaceCrewLink } from './crew/crewNavigation';
 import { AgentInspector } from './components/AgentInspector';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { TaskBoard } from './components/TaskBoard';
@@ -61,11 +61,16 @@ export default function App() {
   // Active navigation tab
   const [currentTab, setCurrentTab] = useState<'office' | 'tasks' | 'meetings' | 'timeline'>('office');
   // UI-only mode: does not alter event telemetry, simulation, replay or the legacy renderer.
-  const [crewNavigation, setCrewNavigation] = useState(readCrewNavigation);
+  const [crewEntry] = useState(readCrewEntry);
+  const [crewNavigation, setCrewNavigation] = useState(crewEntry.navigation);
+  const [crewMissingRoom, setCrewMissingRoom] = useState(crewEntry.missingRoom);
   const visualMode = crewNavigation.selectedMode;
   const setVisualMode = (selectedMode: VisualMode) => setCrewNavigation(previous => ({ ...previous, selectedMode }));
-  const setCrewRoom = (selectedRoomId: string) => setCrewNavigation(previous => ({ ...previous, selectedRoomId }));
-  useEffect(() => { saveCrewNavigation(crewNavigation); }, [crewNavigation]);
+  const setCrewRoom = (selectedRoomId: string) => {
+    setCrewMissingRoom(false);
+    setCrewNavigation(previous => ({ ...previous, selectedRoomId }));
+  };
+  useEffect(() => { saveCrewNavigation(crewNavigation); replaceCrewLink(crewNavigation); }, [crewNavigation]);
 
   // Collapsible vertical live timeline sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
@@ -654,7 +659,8 @@ export default function App() {
             <div className="flex-1 h-full relative overflow-hidden">
               {visualMode === 'crew' ? (
                 <CrewStage locale={locale} agents={canvasAgents}
-                  selectedRoomId={crewNavigation.selectedRoomId} onRoomChange={setCrewRoom} />
+                  selectedRoomId={crewNavigation.selectedRoomId} onRoomChange={setCrewRoom}
+                  missingRoom={crewMissingRoom} />
               ) : currentFloor === 1 ? (
                 <>
                   <OfficeCanvas

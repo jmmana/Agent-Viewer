@@ -38,3 +38,52 @@ export function saveCrewNavigation(navigation: CrewNavigation): void {
   try { window.localStorage.setItem(CREW_NAVIGATION_STORAGE_KEY, JSON.stringify(navigation)); }
   catch { /* La navegación sigue funcionando si el navegador bloquea el almacenamiento. */ }
 }
+
+export interface CrewEntry {
+  navigation: CrewNavigation;
+  missingRoom: boolean;
+}
+
+/** El enlace explícito prevalece sobre preferencias locales, sin alterar LIVE/DEMO. */
+export function resolveCrewEntry(saved: CrewNavigation, search: string): CrewEntry {
+  const params = new URLSearchParams(search);
+  const requestedMode = params.get('visualMode');
+  const requestedRoom = params.get('crewRoom');
+  const knownRoom = requestedRoom !== null && CREW_ROOMS.some(room => room.id === requestedRoom);
+  return {
+    navigation: {
+      ...saved,
+      selectedMode: requestedMode === 'cartoon' ? 'cartoon'
+        : requestedMode === 'crew' || requestedRoom !== null ? 'crew' : saved.selectedMode,
+      selectedRoomId: requestedRoom === null ? saved.selectedRoomId
+        : knownRoom ? requestedRoom : CREW_ROOMS[0].id,
+    },
+    missingRoom: requestedRoom !== null && !knownRoom,
+  };
+}
+
+export function readCrewEntry(): CrewEntry {
+  const saved = readCrewNavigation();
+  return resolveCrewEntry(saved, typeof window === 'undefined' ? '' : window.location.search);
+}
+
+/** Enlace local sin parámetros de credenciales, datos de sesión ni contenido de agentes. */
+export function crewRoomLink(href: string, roomId: string): string {
+  const url = new URL(href);
+  const params = new URLSearchParams();
+  if (url.searchParams.get('mode') === 'live') params.set('mode', 'live');
+  params.set('visualMode', 'crew');
+  params.set('crewRoom', CREW_ROOMS.some(room => room.id === roomId) ? roomId : CREW_ROOMS[0].id);
+  return `${url.pathname}?${params}`;
+}
+
+/** Actualiza solo enlaces Crew ya activos; conserva el resto de la URL. */
+export function replaceCrewLink(navigation: CrewNavigation): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has('visualMode') && !url.searchParams.has('crewRoom')) return;
+  url.searchParams.set('visualMode', navigation.selectedMode);
+  url.searchParams.set('crewRoom', navigation.selectedRoomId);
+  try { window.history.replaceState(window.history.state, '', url); }
+  catch { /* Un host que bloquea History API conserva la navegación en memoria. */ }
+}

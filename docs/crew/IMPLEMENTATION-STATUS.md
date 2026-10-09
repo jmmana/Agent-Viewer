@@ -28,7 +28,7 @@ Gestos por pointerId con pinch anclado al centro de los dedos, paneo simultáneo
 - Capturas: [CEO](evidence/camera-156/ceo-front.png), [Desarrollo](evidence/camera-156/development-right.png), [pinch móvil](evidence/camera-156/mobile-pinch.png), [regreso Caricatura](evidence/camera-156/cartoon-return.png). Las ocho vistas se regeneran en test-results.
 - QA restante: dispositivos físicos/iOS, continuidad completa LIVE/REPLAY/telemetría, animaciones, proporciones de arte final, rendimiento y vídeo del hito G1. Pruebas de navegación no equivalen a paridad total.
 - Docker local: daemon no respondió a la consulta; builds pendientes de CI.
-- CI de esta rama: pendiente de publicación. PR y SHA se incorporarán tras crearlos.
+- Implementación: commit `75f2da7`, [PR #182](https://github.com/jmmana/Agent-Viewer/pull/182), abierto sobre #177. [CI](https://github.com/jmmana/Agent-Viewer/actions/runs/37868817792) en curso al registrar el PR.
 
 ## Estado real de los 55 issues
 

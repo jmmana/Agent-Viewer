@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
+import { crewAgentsInRoom } from './crewEvents';
+import type { Agent } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /**
@@ -8,7 +10,7 @@ import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, type 
  * placeholders explicitly indicate missing approved multi-view artwork.
  * Neither the legacy renderer nor its office coordinates are imported.
  */
-export function CrewStage({ locale = 'es' }: { locale?: string }) {
+export function CrewStage({ locale = 'es', agents = [] }: { locale?: string; agents?: readonly Agent[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number>(0);
   const [roomId, setRoomId] = useState(CREW_ROOMS[0].id);
@@ -33,6 +35,7 @@ export function CrewStage({ locale = 'es' }: { locale?: string }) {
   }, [cameraByRoom]);
   const isEs = locale.startsWith('es');
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
+  const visibleAgents = crewAgentsInRoom(agents, roomId);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -76,6 +79,12 @@ export function CrewStage({ locale = 'es' }: { locale?: string }) {
       <button type="button" onClick={() => patchCamera(defaultCrewCamera())}>
         {isEs ? 'Ajustar' : 'Fit room'}
       </button>
+    </div>
+    <div aria-live="polite" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 10px', fontSize: 12 }}>
+      <span>{isEs ? 'Agentes reales en esta oficina:' : 'Actual agents in this room:'} {visibleAgents.length}</span>
+      {visibleAgents.map(agent => <span key={agent.id} style={{ border: '1px solid #64748b', padding: '2px 6px', borderRadius: 6 }}>
+        {agent.name}: {agent.status}
+      </span>)}
     </div>
     <canvas ref={canvasRef} style={{ width: '100%', flex: 1, minHeight: 120, touchAction: 'none', cursor: 'grab' }}
       aria-label={isEs ? `Vista de oficina: ${room.label.es}` : `Office view: ${room.label.en}`}

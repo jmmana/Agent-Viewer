@@ -5,9 +5,9 @@ Actualizado: 2026-10-09 (America/Bogota).
 
 ## Resumen de la ejecución
 
-Último incremento: atlas original RGBA de cuatro expresiones y controlador temporal de parpadeo frontal, con anclajes por fotograma, carga diferida, recuperación ante error y respeto por movimiento reducido. El reloj se detiene al ocultar la pestaña o salir de Crew. No escribe eventos, tareas ni métricas. [Recurso, procedencia y prompt](../../assets/crew/clips/README.md). [Captura](evidence/blink-117/ceo-blink.png) y [vídeo](evidence/blink-117/runtime.mp4).
+Último incremento: atlas original RGBA de cuatro fotogramas y controlador temporal de parpadeo frontal, con anclajes por fotograma, carga diferida, recuperación ante error y respeto por movimiento reducido. El reloj se detiene al ocultar la pestaña o salir de Crew. No escribe eventos, tareas ni métricas. [Recurso, procedencia y prompt](../../assets/crew/clips/README.md). [Captura](evidence/blink-117/ceo-blink.png) y [vídeo](evidence/blink-117/runtime.mp4).
 
-Validación local del incremento: 554 Vitest y 16 E2E aprobados, tipos, compilaciones app/lib/CLI, paquete e integridad del banco aprobados. La suite Node también pasó; el detalle queda en el PR. Las pruebas cubren límites temporales, fin/repetición de clips, cancelación, pestaña oculta, movimiento reducido dinámico, cuatro rectángulos dibujados y atlas ausente. Los clips laborales y de locomoción, otros roles y G1 siguen pendientes.
+Validación local tras incorporar main `8218153`: 334 Node aprobados y uno omitido, 575 Vitest y 16 E2E aprobados, tipos, compilaciones app/lib/CLI, paquete e integridad del banco aprobados. [PR #205](https://github.com/jmmana/Agent-Viewer/pull/205). Las pruebas cubren límites temporales, fin/repetición de clips, cancelación, pestaña oculta, movimiento reducido dinámico, cuatro rectángulos dibujados y atlas ausente. Los clips laborales y de locomoción, otros roles y G1 siguen pendientes.
 
 ### Historial de integración
 
@@ -217,3 +217,5 @@ Se añadió un atlas derivado mediante image_gen integrado, preservando los orig
 El controlador puro selecciona cuadros por tiempo transcurrido y duraciones explícitas. La integración programa solo la próxima transición, sin RAF continuo de animación. Movimiento reducido usa el original estático; pestaña oculta cancela el temporizador y reanuda desde ojos abiertos. Un atlas fallido conserva el original y una sala sin CEO no lo descarga.
 
 No se implementaron caminar, giros, sentarse, teclear ni llamada. No se convierte el parpadeo en prueba de animación laboral ni de orientación del dominio. #117/#118 continúan abiertos.
+
+La integración `6583a3f` incorpora main `8218153` sin conflictos. Se repitieron tipos, tests, builds app/lib/CLI y paquete sobre esa base; todos aprobaron localmente. CI del PR valida también Python, CLI Node 22.13 y contenedores.

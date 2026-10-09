@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
+import { CrewRoomSelector } from './CrewRoomSelector';
 import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
@@ -154,11 +155,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
         : 'The linked office is unavailable. Showing CEO Office; choose another office or return to Cartoon.'}
     </p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', padding: 10, gap: 8, alignItems: 'center' }}>
-      <label htmlFor={`${idPrefix}-room`}>{isEs ? 'Oficina' : 'Office'}</label>
-      <select id={`${idPrefix}-room`} value={roomId} onChange={e => setRoomId(e.target.value)}
-        style={{ color: '#111827', background: '#fff', padding: 6 }}>
-        {CREW_ROOMS.map(r => <option key={r.id} value={r.id}>{isEs ? r.label.es : r.label.en}</option>)}
-      </select>
+      <CrewRoomSelector roomId={roomId} onChange={setRoomId} agents={agents} isEs={isEs} idPrefix={idPrefix} />
       <button type="button" disabled={roomId === CREW_ROOMS[0].id}
         onClick={() => setRoomId(CREW_ROOMS[Math.max(0, CREW_ROOMS.findIndex(item => item.id === roomId) - 1)].id)}>
         {isEs ? 'Oficina anterior' : 'Previous office'}
@@ -205,6 +202,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       </a>}
     </div>
     <div aria-live="polite" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 10px', fontSize: 12, maxHeight: 96, overflowY: 'auto', flexShrink: 0 }}>
+      {visibleAgents.length === 0 && <span>{isEs ? 'Oficina vacía. El mobiliario sigue disponible.' : 'Empty office. Furniture remains visible.'}</span>}
       <span>{isEs ? 'Agentes en esta oficina:' : 'Agents in this room:'} {visibleAgents.length}</span>
       {visibleAgents.map(agent => {
         const marker = presence.markers.find(item => item.id === agent.id);
@@ -216,6 +214,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
           }} style={{ border: '1px solid #64748b', padding: '2px 6px', borderRadius: 6 }}>
           {marker && <span aria-hidden="true">{marker.number}. </span>}
           <span>{agent.name}: {agent.status}</span>
+          {agent.isWalking && <span>{isEs ? ' · En tránsito' : ' · In transit'}</span>}
         </button>;
       })}
       {presence.unplaced.length > 0 && <span role="status">{isEs
@@ -256,6 +255,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     />
     <p aria-live="polite" data-testid="crew-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
       {isEs ? `Ilustraciones: ${illustratedAgents}.` : `Illustrations: ${illustratedAgents}.`}
+      {!sprite.failed && directions.some(direction => !sprite.images[direction]) && (isEs ? ' Cargando ilustraciones…' : ' Loading illustrations…')}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>

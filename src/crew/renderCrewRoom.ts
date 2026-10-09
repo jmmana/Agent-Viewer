@@ -112,6 +112,14 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
     ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();
   }
 
+  // Umbral local de entrada: se reproyecta con la sala, sin utilizar el mapa global.
+  for (const door of room.doors) {
+    const start = crewProject(door.offset - door.width / 2, room.depth, room, view);
+    const end = crewProject(door.offset + door.width / 2, room.depth, room, view);
+    polygon(ctx, [crewIsoPoint(start.x, start.y), crewIsoPoint(end.x, end.y),
+      crewIsoPoint(end.x, end.y, 38), crewIsoPoint(start.x, start.y, 38)], '#263b4d', '#e2e8f0');
+  }
+
   // Project every furniture anchor from ORIGINAL room-local coordinates; sorted
   // by rotated depth. This is a new renderer, not legacy furniture overlay.
   const visible = [

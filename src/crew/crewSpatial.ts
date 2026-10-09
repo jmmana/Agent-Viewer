@@ -29,5 +29,14 @@ export function crewPresenceSlots(room: CrewRoomDefinition): CrewLocalPoint[] {
       if (crewPointIsFree(room,{x,y})) points.push({x,y});
     }
   }
+  // Reservar el anclaje de llegada dentro del mismo presupuesto de posiciones libres.
+  for (const arrival of room.arrivalPoints) {
+    if (!crewPointIsFree(room, arrival) || !points.length) continue;
+    const nearest = points.reduce((best, point, index) =>
+      Math.hypot(point.x-arrival.x, point.y-arrival.y) < Math.hypot(points[best].x-arrival.x, points[best].y-arrival.y) ? index : best, 0);
+    if (points.every((point, index) => index === nearest || Math.hypot(point.x-arrival.x, point.y-arrival.y) > 2*CREW_PRESENCE_RADIUS)) {
+      points[nearest] = {x:arrival.x, y:arrival.y};
+    }
+  }
   return points;
 }

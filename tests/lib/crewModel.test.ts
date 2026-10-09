@@ -1,3 +1,4 @@
+import { crewPointIsFree, crewPresenceSlots } from '../../src/crew/crewSpatial';
 import { describe, expect, it } from 'vitest';
 import { CREW_ROOMS, CREW_VIEWS, crewProject, crewRoom, isVisualMode } from '../../src/crew/crewModel';
 
@@ -16,6 +17,22 @@ describe('independent Crew room and mode contract', () => {
     expect(crewRoom('unknown')).toBeUndefined();
     expect(new Set(CREW_ROOMS.flatMap(r => r.furniture.map(f => f.id))).size)
       .toBe(CREW_ROOMS.reduce((n, r) => n + r.furniture.length, 0));
+  });
+  it('valida entradas y capacidad contra la geometría libre de las once salas', () => {
+    for (const room of CREW_ROOMS) {
+      expect(room.type).toBeTruthy();
+      expect(room.capacity).toBe(crewPresenceSlots(room).length);
+      expect(room.capacity).toBeGreaterThan(0);
+      expect(room.doors.length).toBeGreaterThan(0);
+      for (const door of room.doors) {
+        expect(door.offset - door.width / 2).toBeGreaterThanOrEqual(0);
+        expect(door.offset + door.width / 2).toBeLessThanOrEqual(room.width);
+      }
+      for (const arrival of room.arrivalPoints) {
+        expect(room.doors.some(door => door.id === arrival.doorId)).toBe(true);
+        expect(crewPointIsFree(room, arrival)).toBe(true);
+      }
+    }
   });
   it('maps original local actor coordinates through each of four camera orientations', () => {
     const room = CREW_ROOMS[0];

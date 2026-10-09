@@ -28,7 +28,7 @@ function stableStringify(value: unknown): string {
   return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`).join(',')}}`;
 }
 
-/** First occurrence wins per key (same dedup rule `server/otlp/logs.ts` uses for attribute lookups), then sorted
+/** First occurrence wins per key (same dedup rule `src/integrations/otlp/claudeCodeLogs.ts` uses for attribute lookups), then sorted
  * by key so two requests that list the same attributes in a different order produce the same series key. */
 function canonicalAttributes(attributes: readonly AttributeLike[]): Array<[string, unknown]> {
   const seen = new Map<string, unknown>();

@@ -152,7 +152,7 @@ export interface MapOtlpMetricsOptions {
 }
 
 // -------------------------------------------------------------
-// Value parsing helpers (mirrors the flexibility `server/otlp/logs.ts` already needs for OTLP/JSON numbers)
+// Value parsing helpers (mirrors the flexibility `src/integrations/otlp/claudeCodeLogs.ts` already needs for OTLP/JSON numbers)
 // -------------------------------------------------------------
 
 function attributeMap(attributes: OtlpKeyValueIn[] | undefined): Map<string, OtlpAnyValueIn> {

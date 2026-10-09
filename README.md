@@ -453,6 +453,7 @@ Honest maturity, so you know what you are getting:
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
 | **JSONL log replay** | [`parseEventLog`](docs/event-log.md) | ✅ **Stable.** Library API, and drag and drop in the demo app. |
+| **OTLP logs file import (Claude Code)** | [`parseEventLog`](docs/event-log.md#otlp-files) | ✅ **Stable.** Reads a saved OTLP/JSON export (pretty-printed, or one request per line from a Collector `file` exporter) and converts `resourceLogs` into `llm.usage`/`llm.failed` events through the same mapper as the live `POST /v1/logs` receiver. `resourceMetrics` returns one clear issue instead of inventing per-call figures; `resourceSpans` is not supported yet. |
 | **LangGraph** | [`examples/langgraph-adapter.ts`](examples/langgraph-adapter.ts) | 🧪 **Example adapter.** Node, tool and usage callbacks mapped to SDK calls. Type-checked in CI, not run against LangGraph. |
 | **CrewAI** | [`examples/crewai-adapter.py`](examples/crewai-adapter.py) | 🧪 **Example adapter.** Crew agents, tasks, tools, messages and usage. Not run in CI. |
 | **AutoGen** | [`examples/autogen-adapter.py`](examples/autogen-adapter.py) | 🧪 **Example adapter.** Conversable agents and group chat messages, tools and usage. Not run in CI. |

@@ -2,17 +2,20 @@
  * Pure mapping of a Claude Code OTLP/HTTP logs export (`POST /v1/logs`, issue #59) into canonical V1 events.
  *
  * No network, no store, no process-wide state: `mapOtlpLogsRequest` takes a parsed JSON body and the current
- * time, and returns the canonical events it could build plus counters. The route in `server/index.ts` owns
- * auth, rate limiting, body size and record-count limits, and persistence.
+ * time, and returns the canonical events it could build plus counters. The route in `server/index.ts` and the
+ * browser-side `parseEventLog` (issue #74, `src/integrations/eventLogParser.ts`) both call this module and own
+ * auth/limits/persistence or file detection and issue reporting themselves.
+ *
+ * Browser-safe by design (issue #74): no `node:*` import, no `Buffer`, no I/O, so `src/lib` can bundle it for
+ * an OTLP file dropped in the browser, not only for the server's live receiver.
  *
  * Privacy (see `docs/claude-code.md` and the Context section of issue #59): this module reads an allowlist of
  * attributes only. Everything else (emails, account ids, `prompt`, `response`, `error`, `tool_*`, `vcs.*`,
  * `body`) is never copied, logged or kept. The raw `session.id` is hashed through `sessionIdentity` and never
  * stored or returned.
  */
-import { createHash } from 'node:crypto';
-import { sessionIdentity } from '../../src/integrations/claudeCodeIdentity';
-import { validateCanonicalEvent, type CanonicalEvent } from '../../src/integrations/canonicalContract';
+import { sessionIdentity } from '../claudeCodeIdentity';
+import { validateCanonicalEvent, type CanonicalEvent } from '../canonicalContract';
 
 const ACCEPTED_SERVICE_NAMES = new Set(['claude-code', 'claude-code-desktop']);
 
@@ -213,8 +216,35 @@ interface IdHashInputs {
   attempt: number | null;
 }
 
+/**
+ * One 32-bit FNV-1a pass. Not cryptographic, deterministic and allocation-free: exactly what a content-derived
+ * id needs here (issue #74 forbids `Math.random()`/`Date.now()` and `node:crypto`, not strong hashing).
+ */
+function fnv1a32(text: string, seed: number): number {
+  let hash = seed >>> 0;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function hex8(value: number): string {
+  return value.toString(16).padStart(8, '0');
+}
+
+/**
+ * A 128-bit (32 hex char) digest from four independent FNV-1a passes over the same payload, one per seed.
+ * Four 32-bit lanes keep the function trivial to audit while giving the same collision resistance a reader
+ * would expect from a deterministic id: parsing the same bytes twice always yields the same 32 hex characters.
+ */
+function deterministicHashHex32(payload: string): string {
+  const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+  return seeds.map((seed) => hex8(fnv1a32(payload, seed))).join('');
+}
+
 export function otlpDeterministicId(inputs: IdHashInputs): string {
-  const payload = [
+  const payload = JSON.stringify([
     ID_HASH_VERSION,
     inputs.rawSessionId,
     inputs.eventName,
@@ -232,9 +262,8 @@ export function otlpDeterministicId(inputs: IdHashInputs): string {
     inputs.durationMs,
     inputs.statusCode,
     inputs.attempt,
-  ];
-  const hash = createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 32);
-  return `${ID_PREFIX}${hash}`;
+  ]);
+  return `${ID_PREFIX}${deterministicHashHex32(payload)}`;
 }
 
 // -------------------------------------------------------------

@@ -41,6 +41,7 @@ import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './int
 import { useServerAuthState } from './integrations/serverHealth';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
+import { getDropErrorKey } from './integrations/dropErrorKey';
 import { cloneUsageTally } from './integrations/usageTally';
 import { Upload, AlertCircle, X } from 'lucide-react';
 
@@ -643,7 +644,8 @@ export default function App() {
     try {
       const parsed = await parseEventLog(file);
       if (parsed.events.length === 0) {
-        setDropError(t(locale, 'drop.noEvents'));
+        const key = getDropErrorKey(parsed) || 'drop.noEvents';
+        setDropError(t(locale, key as Parameters<typeof t>[1]));
         return;
       }
       // Replay all events into a fresh state

@@ -13,7 +13,7 @@ import {
   mapOtlpLogsRequest,
   looksLikeOtlpLogsRequest,
   countLogRecords,
-} from '../server/otlp/logs.ts';
+} from '../src/integrations/otlp/claudeCodeLogs.ts';
 import { sessionIdentity } from '../src/integrations/claudeCodeIdentity.ts';
 import { OTLP_LOGS_PATH } from '../src/integrations/otelConstants.ts';
 import { app, store } from '../server/index.ts';

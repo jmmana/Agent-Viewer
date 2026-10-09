@@ -693,7 +693,7 @@ Saltar hacia atrás reconstruye la oficina desde el inicio de la ejecución hast
 
 ## Cargar un archivo de log
 
-`parseEventLog(input)` lee un log JSONL V1 canónico (un `string`, `File` o `Blob`, de hasta `MAX_EVENT_LOG_SIZE_BYTES`, 25 MB) y valida cada línea. El formato está en [event-log.md](event-log.md).
+`parseEventLog(input)` lee un log JSONL V1 canónico, o un archivo OTLP/JSON (un `string`, `File` o `Blob`, de hasta `MAX_EVENT_LOG_SIZE_BYTES`, 25 MB) y valida cada línea. El formato está en [event-log.md](event-log.md), incluida la sección sobre archivos OTLP de logs, métricas y trazas.
 
 ```tsx
 async function cargarEjecucion(file: File) {
@@ -703,7 +703,7 @@ async function cargarEjecucion(file: File) {
 }
 ```
 
-El resultado es `{ events, issues, totalLines, format }`. Las líneas inválidas se reportan en `issues` (`line`, `error`, `raw`) sin detener la lectura. Las trazas OTLP no se admiten: devuelven cero eventos y un aviso que dice que las trazas OTLP aún no se admiten. El componente no trae una zona para soltar archivos; conecta tu propio selector de archivos a `parseEventLog`.
+El resultado es `{ events, issues, totalLines, format, otlp? }`. Las líneas inválidas se reportan en `issues` (`line`, `error`, `raw?`, `code?`, `path?`) sin detener la lectura. Los logs OTLP se convierten en eventos `llm.usage`/`llm.failed`; las métricas OTLP devuelven cero eventos y un aviso explicando que son contadores preagregados; las trazas OTLP aún no se admiten y también devuelven cero eventos más un aviso. `otlp` (presente cuando `format === "otlp"`) reporta qué señales se encontraron y los contadores por registro `logRecords`/`converted`/`skipped`/`rejected`. El componente no trae una zona para soltar archivos; conecta tu propio selector de archivos a `parseEventLog`.
 
 ## Exportar video
 
@@ -826,7 +826,7 @@ Todo se exporta desde `@warlockcode/agent-viewer`. La hoja de estilos es `@warlo
 | Tipos base | ninguno | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
 | Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
 | Stream en vivo | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions`, `RealtimeResync`, `RealtimeReplayed` |
-| Archivos de log | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
+| Archivos de log | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue`, `EventLogIssueCode`, `EventLogOtlpSummary` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |
 
 `connectEventStream(baseUrl, onEvent, onStatus?, options?)` abre el flujo en `${baseUrl}/api/v1/events/stream`, llama a `onEvent` con cada evento válido y se reconecta con espera progresiva, retomando desde el último id de evento. El token nunca viaja en una URL, en ningún transporte (issue #71). Opciones: `token` (viaja en una cabecera `Authorization: Bearer` sobre un `fetch` con streaming, cuando el navegador puede leer el cuerpo de un `fetch` en streaming; cuando no puede, el cliente llama antes a `POST /api/v1/stream-tickets` con el token, antes de cada conexión y reconexión, y abre `EventSource` con el ticket de un solo uso que recibe; con token y sin ningún `fetch`, la conexión se detiene con estado `error` y no hace ninguna llamada de red), `fetch` (el `fetch` que usa ese flujo y para emitir tickets, por defecto el global), `maxReconnectAttempts` (por defecto sin límite), `initialBackoffMs` (1000), `maxBackoffMs` (15000), `heartbeatTimeoutMs` (35000), `lastEventId` (inicia el flujo desde este cursor, normalmente `snapshot.lastEventId`) y `onResync` / `onReplayed` (abajo). `onStatus` recibe `connecting`, `connected`, `reconnecting`, `disconnected`, `error`, `closed` o `resyncing`. La conexión devuelta tiene `close()`, `status()`, `getLastEventId()` y `resyncCount()`.

@@ -101,7 +101,7 @@ export type {
 
 // Event log files (JSONL V1)
 export { parseEventLog, MAX_EVENT_LOG_SIZE_BYTES } from '../integrations/eventLogParser';
-export type { EventLogParseResult, EventLogParseIssue } from '../integrations/eventLogParser';
+export type { EventLogParseResult, EventLogParseIssue, EventLogIssueCode, EventLogOtlpSummary } from '../integrations/eventLogParser';
 
 // Video export
 export { recordReplay, computeReplaySchedule, isRecordingSupported, getSupportedMimeType } from './recordReplay';

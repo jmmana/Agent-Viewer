@@ -540,3 +540,150 @@ test('TypeScript SDK: emitBatch against a 0.2.x server reports conflicts as 0 an
   const result = await new AgentViewer({ url: 'http://sdk.test' }).emitBatch([{ id: 'evt_old', type: 'tool.started', payload: { tool: 'x' } }]);
   assert.deepEqual(result, { accepted: 1, duplicates: 0, conflicts: 0, results: legacyResults });
 });
+
+// -------------------------------------------------------------
+// listCalls / iterateCalls (issue #67)
+// -------------------------------------------------------------
+
+test('TypeScript SDK: listCalls maps filters to the documented query parameters', async (t) => {
+  let requestUrl;
+  let requestHeaders;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    requestUrl = url;
+    requestHeaders = init.headers;
+    return new Response(
+      JSON.stringify({ schemaVersion: '1.0', asOf: 1, storage: 'memory', data: [], page: { limit: 2, order: 'asc', hasMore: false, nextCursor: null } }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  });
+  const viewer = new AgentViewer({ url: 'http://sdk.test', token: 'secret-token' });
+  const page = await viewer.listCalls({
+    from: 1700000000000,
+    to: '2026-10-08T00:00:00Z',
+    timeBasis: 'occurred',
+    agentId: ['researcher', 'writer'],
+    provider: 'anthropic',
+    status: 'rate_limited',
+    costSource: 'unknown',
+    currency: ['USD', 'none'],
+    requestId: 'req_1',
+    traceId: 'trace_1',
+    order: 'asc',
+    limit: 2,
+    cursor: 'abc',
+  });
+  assert.deepEqual(page.page, { limit: 2, order: 'asc', hasMore: false, nextCursor: null });
+
+  const parsed = new URL(String(requestUrl));
+  assert.equal(parsed.pathname, '/api/v1/usage/calls');
+  assert.equal(parsed.searchParams.get('from'), '1700000000000');
+  assert.equal(parsed.searchParams.get('to'), '2026-10-08T00:00:00Z');
+  assert.equal(parsed.searchParams.get('timeBasis'), 'occurred');
+  assert.deepEqual(parsed.searchParams.getAll('agentId'), ['researcher', 'writer']);
+  assert.equal(parsed.searchParams.get('provider'), 'anthropic');
+  assert.equal(parsed.searchParams.get('status'), 'rate_limited');
+  assert.equal(parsed.searchParams.get('costSource'), 'unknown');
+  assert.deepEqual(parsed.searchParams.getAll('currency'), ['USD', 'none']);
+  assert.equal(parsed.searchParams.get('requestId'), 'req_1');
+  assert.equal(parsed.searchParams.get('traceId'), 'trace_1');
+  assert.equal(parsed.searchParams.get('order'), 'asc');
+  assert.equal(parsed.searchParams.get('limit'), '2');
+  assert.equal(parsed.searchParams.get('cursor'), 'abc');
+  // The token is sent only in the Authorization header, never in the URL.
+  assert.equal(parsed.searchParams.has('token'), false);
+  assert.equal(requestHeaders.authorization, 'Bearer secret-token');
+});
+
+test('TypeScript SDK: listCalls against a live server, metadata only, nulls preserved', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl, runtimeId: 'sdk-calls' });
+    const agent = viewer.agent({ id: 'calls-agent-ts', name: 'Calls Agent' });
+    await agent.usage({ provider: 'anthropic', model: 'claude', inputTokens: 10, outputTokens: 5 });
+
+    const page = await viewer.listCalls({ agentId: 'calls-agent-ts' });
+    assert.equal(page.data.length, 1);
+    assert.equal(page.data[0].agentId, 'calls-agent-ts');
+    assert.equal(page.data[0].cost, null);
+    assert.equal(page.data[0].tokens.cacheRead, null);
+  } finally {
+    server.close();
+  }
+});
+
+test('TypeScript SDK: iterateCalls follows nextCursor until hasMore is false', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl, runtimeId: 'sdk-iterate' });
+    const agent = viewer.agent({ id: 'iterate-agent-ts', name: 'Iterate Agent' });
+    for (let i = 0; i < 5; i++) {
+      await agent.usage({ provider: 'anthropic', model: 'claude', inputTokens: i, outputTokens: 0 });
+    }
+
+    const seen = [];
+    for await (const call of viewer.iterateCalls({ agentId: 'iterate-agent-ts', limit: 2, order: 'asc' })) {
+      seen.push(call.tokens.input);
+    }
+    assert.deepEqual(seen, [0, 1, 2, 3, 4]);
+  } finally {
+    server.close();
+  }
+});
+
+test('TypeScript SDK: iterateCalls raises if the server returns the same cursor twice in a row', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    new Response(
+      JSON.stringify({
+        schemaVersion: '1.0',
+        asOf: 1,
+        storage: 'memory',
+        data: [{ seq: 1 }],
+        page: { limit: 1, order: 'desc', hasMore: true, nextCursor: 'same-cursor' },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  );
+  const viewer = new AgentViewer({ url: 'http://sdk.test' });
+  await assert.rejects(async () => {
+    for await (const _call of viewer.iterateCalls({ cursor: 'same-cursor' })) {
+      // draining the generator until it throws
+    }
+  }, (err) => err instanceof AgentViewerError && err.message.includes('same cursor twice'));
+});
+
+test('TypeScript SDK: listCalls fails immediately on 400/410, never retried', async (t) => {
+  for (const status of [400, 410]) {
+    let attempts = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      attempts++;
+      return new Response(JSON.stringify({ error: status === 400 ? 'invalid_filter' : 'cursor_expired', issues: [] }), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const viewer = new AgentViewer({ url: 'http://sdk.test', maxRetries: 3 });
+    await assert.rejects(
+      viewer.listCalls({}),
+      (err) => err instanceof AgentViewerError && err.status === status
+    );
+    assert.equal(attempts, 1, `status ${status} must not be retried`);
+  }
+});
+
+test('TypeScript SDK: listCalls retries 429 and succeeds once the server recovers', async (t) => {
+  let attempts = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    attempts++;
+    if (attempts < 3) {
+      return new Response(JSON.stringify({ error: 'rate_limit_exceeded' }), { status: 429, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(
+      JSON.stringify({ schemaVersion: '1.0', asOf: 1, storage: 'memory', data: [], page: { limit: 100, order: 'desc', hasMore: false, nextCursor: null } }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  });
+  const viewer = new AgentViewer({ url: 'http://sdk.test', maxRetries: 3 });
+  const page = await viewer.listCalls({});
+  assert.equal(page.data.length, 0);
+  assert.equal(attempts, 3);
+});

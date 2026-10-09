@@ -346,40 +346,28 @@ test('GET /api/v1/usage/calls: cursor_expired when the store epoch does not matc
   try {
     const agentId = uniqueAgentId('expired');
     await appendUsage(agentId);
-    const firstPage = await (await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&limit=1`)).json();
 
+    // Forge a cursor with a store epoch that can never equal this process's own (memory mode mints one
+    // per instance), with a filter hash computed the same way the route computes it, so the mismatch check
+    // passes and the epoch check is the one that fails.
     const realEpoch = store.usageLedgerEpoch();
-    const decoded = JSON.parse(Buffer.from(firstPage.page.nextCursor ?? encodeDummy(), 'base64url').toString('utf8'));
-    void decoded;
-
-    // Forge a cursor with the same shape but a different store epoch, as if minted by a previous process.
-    const forged = Buffer.from(
-      JSON.stringify({ v: 1, e: `${realEpoch}-not-the-same`, s: 1, o: 'desc', f: 'a'.repeat(16) }),
-      'utf8'
-    ).toString('base64url');
-    // The filter hash must match this exact query for the mismatch check to fall through to the epoch check.
     const { filterHash } = await import('../server/usage/calls.ts');
     const { parseUsageFilters } = await import('../server/usage/filters.ts');
     const parsed = parseUsageFilters({ agentId }, { allowCallsOnly: true });
     assert.equal(parsed.ok, true);
     const hash = filterHash(parsed.value.filters);
-    const forgedMatching = Buffer.from(
+    const forged = Buffer.from(
       JSON.stringify({ v: 1, e: `${realEpoch}-not-the-same`, s: 1, o: 'desc', f: hash }),
       'utf8'
     ).toString('base64url');
 
-    const response = await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&cursor=${forgedMatching}`);
+    const response = await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&cursor=${forged}`);
     assert.equal(response.status, 410);
     assert.equal((await response.json()).error, 'cursor_expired');
-    void forged;
   } finally {
     server.close();
   }
 });
-
-function encodeDummy() {
-  return Buffer.from('{}', 'utf8').toString('base64url');
-}
 
 test('GET /api/v1/usage/calls: requires auth when AGENT_VIEWER_API_TOKEN is set (header and rejects ?token=)', async () => {
   await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_API_TOKEN: 'calls-token' }, async () => {

@@ -486,6 +486,13 @@ analyst.done("Summary delivered")
 
 The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client. Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
 
+Read the calls behind a figure with `list_calls()` (one page) or `iter_calls()` (follows the cursor for you), both over `GET /api/v1/usage/calls` (issue #67):
+
+```python
+for call in viewer.iter_calls(agent_id="analyst", cost_source="unknown"):
+    print(call["requestId"], call["tokens"]["input"], call["status"])
+```
+
 ### TypeScript SDK
 
 ```ts
@@ -503,6 +510,14 @@ await builder.done('Pull request opened');
 ```
 
 Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md). Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
+
+Read the calls behind a figure with `listCalls()` (one page) or `iterateCalls()` (follows the cursor for you), both over `GET /api/v1/usage/calls` (issue #67):
+
+```ts
+for await (const call of viewer.iterateCalls({ agentId: 'builder', costSource: 'unknown' })) {
+  console.log(call.requestId, call.tokens.input, call.status);
+}
+```
 
 ---
 
@@ -602,12 +617,13 @@ flowchart LR
 | `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
-| `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
+| `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. Not the audit path: it returns whole events (including free text) and `afterId` cannot walk history; use `GET /api/v1/usage/calls` for that. |
 | `POST` | `/api/v1/stream-tickets` | Issues a short-lived, single-use ticket for `EventSource` clients, which cannot send an `Authorization` header. Requires the Bearer token; a ticket cannot mint tickets. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Authenticates with `Authorization: Bearer <token>` or a `?ticket=` from `POST /api/v1/stream-tickets`; a `token` query parameter never authenticates. On reconnect, replays every event missed since `Last-Event-ID` in full, up to `AGENT_VIEWER_SSE_REPLAY_MAX` (default 10,000), or sends an explicit `resync` frame instead, never a partial replay; the connection stays open either way. Heartbeat every 15 s. |
 | `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
 | `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
 | `GET` | `/api/v1/usage/ledger/status` | Usage ledger health: row counts by origin (`live`/`backfill`), legacy rows, skip counts and the oldest/newest server receive time. Never a sum of tokens or cost. [Details](docs/usage-ledger.md). |
+| `GET` | `/api/v1/usage/calls` | Read-only, metadata-only listing of usage ledger rows (issue #67), with the same filters as `GET /api/v1/usage` and a stable, opaque cursor that can walk the full history in either direction. Never returns prompt, completion, message, tool or provider error text. [Details](docs/integration.md#usage-calls-get-apiv1usagecalls-issue-67). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
 | `PATCH` | `/api/v1/agents/:agentId` | Update an agent's profile or status (descriptive fields only; usage is reported with `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |

@@ -350,6 +350,95 @@ data: {"schemaVersion":"1.0","reason":"cursor_unknown","cursor":"evt_gone","miss
 
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
 - `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
+
+#### Usage calls: `GET /api/v1/usage/calls` (issue #67)
+
+A read-only, metadata-only listing of the usage ledger (issue #65): the drill-down behind a rollup figure, for an operator reconciling a provider invoice who needs to list every call for an agent and model, match each one by `requestId` against the provider's console, and see which ones failed or carry no provider-reported cost. Unlike `GET /api/v1/events?type=llm.usage` (whole events, including free text, and an `afterId` cursor that cannot walk history), this endpoint never returns prompt, completion, message, tool input/output or a provider error message, and its cursor can walk the full history in either direction.
+
+**Request:**
+
+```http
+GET /api/v1/usage/calls?agentId=researcher&model=claude-sonnet-4-5&from=2026-10-01T00:00:00Z&to=2026-10-08T00:00:00Z&limit=2
+Authorization: Bearer <token>
+```
+
+**Parameters** (parsed by the one `parseUsageFilters` function shared with the future rollup endpoint, so an identical query string selects an identical row set on both):
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `from`, `to` | epoch ms, or an ISO 8601 date-time with an explicit offset | Half-open window `[from, to)`. A date-only value or one without an offset is rejected. |
+| `timeBasis` | `received` \| `occurred` | Which clock `from`/`to` apply to. Default `received` (the server receive time from issue #65), so an audit never depends on a client clock. |
+| `agentId`, `sessionId`, `runtimeId`, `taskId` | string, repeatable | OR within one key, AND across keys. |
+| `provider`, `model` | string, repeatable | Exact match on the stored value (`provider` is normalized lowercase at ingestion, issue #65). |
+| `status` | string, repeatable | `ok`, or one of issue #46's `LLM_ERROR_KINDS` (`rate_limited`, `overloaded`, `timeout`, `invalid_request`, `auth`, `server_error`, `cancelled`, `network`, `unknown`). |
+| `costSource` | `provider-reported` \| `estimated` \| `unknown`, repeatable | |
+| `currency` | uppercase ISO 4217, or the literal `none`, repeatable | `none` selects rows with no currency; combine with codes (`currency=USD&currency=none`). |
+| `requestId` | string, repeatable | Exact match on the provider request id, for invoice reconciliation. |
+| `traceId` | string | Every call in one trace (issue #64). |
+| `order` | `desc` \| `asc` | Default `desc` (newest first). |
+| `limit` | integer 1..1000 | Default 100. Out of range, non-numeric or repeated answers `400`, never a silent fallback. |
+| `cursor` | opaque string | `page.nextCursor` from a previous response. |
+
+Every value must be a non-empty string; an unknown parameter, an array where a single value is expected (or vice versa), or more than 100 values for one key all answer `400 invalid_filter`.
+
+**Response `200`:**
+
+```json
+{
+  "schemaVersion": "1.0",
+  "asOf": 1791417600000,
+  "storage": "sqlite",
+  "data": [
+    {
+      "seq": 48213,
+      "eventId": "evt_01JA7Q9X3M2V",
+      "type": "llm.usage",
+      "status": "ok",
+      "backfilled": false,
+      "occurredAt": 1791331199120,
+      "receivedAt": 1791331199342,
+      "agentId": "researcher",
+      "sessionId": "sess_42",
+      "runtimeId": "crew-marketing",
+      "taskId": "task_7",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "tokens": { "input": 1834, "output": 412, "cacheRead": 12000, "cacheWrite": null, "reasoning": null },
+      "latencyMs": 2310,
+      "requestId": "req_011CT8xK2",
+      "cost": 0.0213,
+      "currency": "USD",
+      "costSource": "provider-reported",
+      "errorCode": null,
+      "trace": { "traceId": "4bf92f3577b34da6a3ce929d0e0e4736", "parentId": null, "toolCallId": null, "meetingId": null },
+      "userId": null,
+      "tags": []
+    }
+  ],
+  "page": { "limit": 2, "order": "desc", "hasMore": true, "nextCursor": "eyJ2IjoxLCJlIjoiN2Q..." }
+}
+```
+
+**Never returned:** `summary`, `payload`, `event_json`, message text, tool input or output, or a provider error message. The serializer (`toCallRecord`) is an explicit allow-list over the already-typed ledger row, never "event minus some keys": every field above is the full set, and a new ledger column is never exposed until it is added here and to the key-set test. `errorCode` is the stored value only when it matches a short machine-code shape (`^[A-Za-z0-9_.:-]{1,64}$`); the ledger today only ever stores `errorKind` there, never the provider's own free-text error code. Unlike the issue's original proposal (`trace.spanId`), issue #65 never added a `spanId` column (it stores `meetingId` from issue #64 instead), so `trace.meetingId` takes that place; `source` (the envelope's `source` identifier) is also not in the ledger and is therefore not in a `CallRecord` either.
+
+**Backfilled rows:** a row created by issue #65's one-time backfill over events stored before 0.4.0 carries `backfilled: true` and is returned exactly as the ledger stored it, with no reinterpretation. Such a row may carry a schema default (for example `cacheRead: 0`) that was never actually reported; the flag lets an auditor exclude or discount these rows. A live row is always `backfilled: false`.
+
+**No totals.** The response carries no sum, count or total of any kind: aggregation belongs to the rollup endpoint. `page.hasMore` (computed with one extra row fetched, never `COUNT(*)`) is enough to know whether to keep paging.
+
+**Cursor.** Opaque to the client, at most 512 characters, carrying position only (a forged cursor can at most move the position; auth and filters are re-evaluated on every request). It keeps working across a SQLite restart (the store's "epoch" is a persistent random id); in memory mode, a cursor from a previous process always answers `410 cursor_expired`, since `seq` restarts there. With `order=desc`, `page.nextCursor` is a string only while `hasMore` is `true`. With `order=asc`, it is a string whenever the page returned at least one row (even with `hasMore: false`), so a tail-following client can resume later and pick up rows inserted after it last looked; it is `null` only for an empty page. A `Link: <...>; rel="next"` response header carries the same next-page URL (as a relative reference, never built from the `Host` header, and never containing a token) whenever `hasMore` is `true`.
+
+**Errors** (same shape as the rest of `/api/v1`, `{ "error": "...", "issues": [...] }` where applicable):
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `invalid_filter` | Unknown parameter, bad value shape, bad date, `from >= to`, bad enum, too many values, `limit` out of `1..1000`. |
+| 400 | `invalid_cursor` | The cursor could not be decoded, or is too long. |
+| 400 | `cursor_mismatch` | The cursor was issued for a different filter set or a different `order`. Changing only `limit` between pages is always allowed. |
+| 410 | `cursor_expired` | The store's epoch differs from the cursor's (a memory-mode restart). |
+| 401 | `unauthorized` | Missing or wrong `Authorization: Bearer` token. |
+| 429 | `rate_limit_exceeded` | Existing `/api/v1` rate limiter. |
+
+**Invoice reconciliation recipe:** to check one provider invoice line against what was recorded, walk `GET /api/v1/usage/calls?provider=anthropic&requestId=<id>` (or filter by `agentId`/`model`/a `from`/`to` window and match by eye) and compare `cost`, `currency` and `costSource` for that `requestId` against the provider's own console or export. A `costSource: "unknown"` or `"estimated"` row means the recorded figure is not what the provider billed; reconcile those first. Prefer the `Authorization` header over anything else for this endpoint: it is read by whoever holds the server's token, and nothing about the request should ever end up in a browser history or a proxy access log.
 - `POST /v1/logs`: OTLP/HTTP logs receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Maps Claude Code's `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed`. See [docs/otlp.md](otlp.md).
 - `POST /v1/metrics`: OTLP/HTTP metrics receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Stores `claude_code.token.usage`/`claude_code.cost.usage` as independent evidence, never as canonical events: never summed into the snapshot, never broadcast over SSE, never part of `GET /api/v1/events`. See [docs/otlp.md](otlp.md#otlp-metrics-post-v1metrics).
 

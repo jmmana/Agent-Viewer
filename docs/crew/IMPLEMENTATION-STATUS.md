@@ -121,6 +121,10 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 `crewRelativeView(facing, view)` define que `facing` (opcional en el marcador de presencia, por defecto `front`) es la vista de cámara desde la que se ve el frente del actor; la pose mostrada es la relativa a la cámara actual. Dato local de la sala, sin escritura en dominio. El renderer dibuja la pose solo en marcadores cuya vista resuelta coincide con la imagen cargada; el resto conserva el marcador numerado (una única vista cargada a la vez). Pruebas unitarias en `tests/lib/crewSprites.test.ts`. `facing` ya tiene origen provisional: `crewFacingToward` orienta al actor hacia el escritorio/pantalla más cercano de su sala. Pendiente: orientación por movimiento/acciones/sillas, clips animados (la carga de varias vistas simultáneas ya está resuelta: `useCrewSprites` carga cada vista distinta requerida y el renderer elige la pose por actor). #118 sigue abierto. Siguiente sugerida: #118/#128 clips animados reales, o #155 bridge de tareas/reuniones.
 
+## Continuación #128: mapeo estado a clip
+
+`src/crew/crewClips.ts`: mapa exhaustivo de los 23 estados a una intención de clip (`idle`, `work`, `phone`, `walk`, `meeting`, `coffee`, `talk`, `alert`, `offline`) y `resolveCrewClip`, que indica la pose estática del banco (idle/work/phone) o el sustituto `idle` con `fallback: true`. `animated` es siempre false: no existen cuadros animados. Módulo puro, no conectado aún al renderer (solo hay poses work/phone en vista frontal). Pendiente: transiciones, frames reales, conexión al renderer. #128 sigue abierto.
+
 ## Riesgos y decisiones
 
 - Este PR está apilado sobre #177 y #175; integrar en orden y reconciliar con main antes de release.

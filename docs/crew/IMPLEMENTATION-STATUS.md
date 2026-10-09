@@ -16,6 +16,8 @@ Ramas publicadas, commits conservados, PR sin fusionar. Dependencias #175/#177 c
 
 Validación acumulada: 71 node, 463 Vitest, 12 E2E y 3 SDK Python; typecheck, app/lib/paquete, audit y Docker en CI. Capturas revisadas y MP4 de runtime de 10,16 segundos. No se certifica arte final, personajes, animaciones, dispositivos físicos ni cumplimiento total de G1.
 
+Los apartados posteriores conservan el historial de cada incremento; sus cantidades de pruebas y pendientes corresponden a ese momento. El resumen anterior refleja el último estado local.
+
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
@@ -101,7 +103,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#156](https://github.com/jmmana/Agent-Viewer/issues/156) | Gestos, rueda y teclado en #182; foco de escritorios/monitores y pan acotado en esta rama. Foco de actores y arte final pendientes. |
 | [#157](https://github.com/jmmana/Agent-Viewer/issues/157) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#158](https://github.com/jmmana/Agent-Viewer/issues/158) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
-| [#159](https://github.com/jmmana/Agent-Viewer/issues/159) | Nueve E2E: cámara, persistencia, SSE, importación de log, vacío LIVE, lifecycle y cuatro tamaños. QA final de arte y dispositivos pendiente. |
+| [#159](https://github.com/jmmana/Agent-Viewer/issues/159) | Doce E2E: cámara, persistencia, SSE, importación de log, vacío LIVE, lifecycle, API embebida, regreso Caricatura y cuatro tamaños. QA final de arte y dispositivos pendiente. |
 | [#160](https://github.com/jmmana/Agent-Viewer/issues/160) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#161](https://github.com/jmmana/Agent-Viewer/issues/161) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#166](https://github.com/jmmana/Agent-Viewer/issues/166) | Contrato y selector en PR #175, borrador. |
@@ -110,13 +112,13 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#169](https://github.com/jmmana/Agent-Viewer/issues/169) | Aislamiento y fit prototipo en #177; QA completa pendiente. |
 | [#170](https://github.com/jmmana/Agent-Viewer/issues/170) | 11 layouts locales prototipo en #177; faltan colisiones y arte final. |
 | [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Persistencia en #183, enlaces/reset en #187, API embebida controlada en esta rama. Validación final y preferencias de accesibilidad pendientes. |
-| [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Inventario fusionado (#176); recursos sin migrar al runtime. |
+| [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Inventario fusionado (#176); banco de originales en #194, integración y QA visual en runtime pendientes. |
 | [#173](https://github.com/jmmana/Agent-Viewer/issues/173) | ADR fusionado (#174); validación gráfica final pendiente. |
 
 ## Próximos tres pasos
 
-1. #172/#115: migración selectiva de recursos originales de #43, con trazabilidad y sin código legacy.
-2. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
+1. #172/#115: revisar visualmente el banco recuperado y preparar integración selectiva por vista, con trazabilidad.
+2. #155/#156: ampliar el bridge de tareas y reuniones sobre las posiciones locales y el foco ya implementados; arte multivista pendiente.
 3. #159: servidor SSE real, reproducción temporal, rendimiento y dispositivos físicos antes de aprobar G1.
 
 ## Riesgos y decisiones
@@ -191,6 +193,8 @@ Validación: typecheck, 61 node, 463 Vitest, doce E2E, builds app/lib y paquete 
 
 Recuperados 53 archivos y la referencia del CEO desde el commit `355e9194bd83d8b741bc65d5b58a897d320ee584` de #43. Se conservan bytes, licencia, procedencia y dimensiones. El manifiesto independiente clasifica todas las poses como estáticas y los recursos como prototipos; no se importa código del renderer anterior ni se aprueba arte automáticamente. Ver [banco y procedimiento](../../assets/crew/README.md).
 
-La validación offline corre en CI y detecta cambios de hash, rutas inválidas, duplicados, dimensiones inconsistentes, licencias desconocidas y clasificaciones inventadas de animación o perspectiva. Diez pruebas nuevas. Verificación local: 71 node y 463 Vitest, typecheck, builds de aplicación y biblioteca y comprobación del paquete aprobados. Los 12 E2E del estado anterior siguen pendientes de ejecutar en el CI de esta rama.
+La validación offline corre en CI y detecta cambios de hash, rutas inválidas, duplicados, dimensiones inconsistentes, licencias desconocidas y clasificaciones inventadas de animación o perspectiva. Diez pruebas nuevas. Verificación local: 71 node y 463 Vitest, typecheck, builds de aplicación y biblioteca y comprobación del paquete aprobados. Los 12 E2E también aprobaron en el CI de esta rama, junto con el SDK Python y las dos imágenes Docker.
 
 El banco no se carga en runtime. Falta la revisión visual por recurso y la adaptación al contrato espacial Crew antes de utilizarlo en salas. G1 y los issues permanecen abiertos.
+
+Implementación del banco: `a878c29`, [PR #194](https://github.com/jmmana/Agent-Viewer/pull/194), abierto sobre #191. [CI](https://github.com/jmmana/Agent-Viewer/actions/runs/37923058757) aprobado para el commit de implementación, incluidos navegador, Python y Docker.

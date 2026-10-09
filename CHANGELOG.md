@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `llm.usage` `cachedTokens`: send `cacheReadTokens` instead. It is still accepted, kept as sent and copied into `cacheReadTokens` when that field is absent; a different number in both fields is rejected at `payload.cachedTokens`.
 - Snapshot `totalTokens` and `totalCost`, and the `AgentRecord` usage fields `tokensInput`, `tokensOutput`, `cachedTokens`, `reasoningTokens` and `cost`: read `usage` (or `GET /api/v1/usage`) instead. The token fields are sums of reported values only, so they are lower bounds when some call did not report a kind. They will be removed in 1.0.
 
+### Breaking changes
+- `PATCH /api/v1/agents/:agentId` now accepts only descriptive profile fields (`name`, `roleTitle`, `provider`, `model`, `status`, `statusText`, `workspace`). Usage and cost fields are rejected; report each model call with an `llm.usage` event through `POST /api/v1/events`, or use the TypeScript `usage()` or Python `agent.usage(...)` helper. Arbitrary profile keys, empty values, and non-string values are also rejected.
+
 ## [0.2.1] - 2026-10-08
 
 ### Changed

@@ -74,8 +74,10 @@ export type LegacyUsageKeys = 'tokensInput' | 'tokensOutput' | 'cachedTokens' | 
 /** What the store keeps for an agent: its profile and status, never usage figures. */
 type StoredAgent = Omit<AgentRecord, LegacyUsageKeys>;
 
-/** Input of `upsertAgent`. Usage figures are not part of it: they only come from stored `llm.usage` events. */
-export type AgentProfileInput = Partial<Omit<AgentRecord, LegacyUsageKeys>> & { id: string };
+/** Input of `upsertAgent`: profile fields only. Usage figures only come from stored `llm.usage` events. */
+export type AgentProfileInput = { id: string } & Partial<
+  Pick<AgentRecord, 'name' | 'roleTitle' | 'role' | 'provider' | 'model' | 'status' | 'statusText' | 'workspace'>
+>;
 
 export interface ViewerSnapshot {
   schemaVersion: '1.0';
@@ -414,6 +416,9 @@ export class MemoryEventStore implements EventStore {
         if (typeof event.payload?.provider === 'string') ag.provider = event.payload.provider;
         if (typeof event.payload?.model === 'string') ag.model = event.payload.model;
         if (typeof event.payload?.workspace === 'string') ag.workspace = event.payload.workspace;
+        if (event.type === 'agent.updated' && typeof event.payload?.statusText === 'string') {
+          ag.statusText = event.payload.statusText;
+        }
       } else if (event.type === 'agent.status.changed') {
         if (typeof event.payload?.status === 'string') ag.status = event.payload.status.toUpperCase();
         if (typeof event.payload?.statusText === 'string') ag.statusText = event.payload.statusText;

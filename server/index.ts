@@ -56,6 +56,19 @@ type MissingAgentStatus = Exclude<AgentStatus, (typeof AGENT_STATUSES)[number]>;
 const agentStatusesAreExhaustive: [MissingAgentStatus] extends [never] ? true : never = true;
 void agentStatusesAreExhaustive;
 const AGENT_STATUS_SET: ReadonlySet<string> = new Set(AGENT_STATUSES);
+const PATCH_USAGE_FIELDS: ReadonlySet<string> = new Set([
+  'tokensInput', 'tokensOutput', 'inputTokens', 'outputTokens', 'cachedTokens', 'cacheReadTokens', 'cacheWriteTokens',
+  'reasoningTokens', 'totalTokens', 'cost', 'currency', 'costSource', 'latencyMs', 'usage',
+]);
+const PATCH_READ_ONLY_FIELDS: ReadonlySet<string> = new Set(['lastSeenAt']);
+const PATCH_PROFILE_FIELDS: ReadonlySet<string> = new Set(['name', 'roleTitle', 'provider', 'model']);
+const PATCH_STATUS_FIELDS: ReadonlySet<string> = new Set(['status', 'statusText', 'workspace']);
+const PATCH_ALLOWED_FIELDS: ReadonlySet<string> = new Set([
+  ...PATCH_PROFILE_FIELDS,
+  ...PATCH_STATUS_FIELDS,
+]);
+const PATCH_USAGE_MESSAGE =
+  'Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.';
 
 let store: EventStore;
 try {
@@ -399,6 +412,11 @@ app.get('/api/v1/snapshot', async (_req, res) => {
   res.json(snapshot);
 });
 
+// Usage aggregates only (the snapshot's `usage` block), without the event list.
+app.get('/api/v1/usage', async (_req, res) => {
+  res.json(await store.usageSummary());
+});
+
 // -------------------------------------------------------------
 // Realtime Stream (SSE)
 // -------------------------------------------------------------
@@ -490,44 +508,143 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
     res.status(400).json({ error: 'validation_failed', message: 'Request body must be a JSON object' });
     return;
   }
-  const changes = body as Record<string, any>;
 
-  let status: AgentStatus | undefined;
-  if (changes.status !== undefined && changes.status !== null) {
-    const normalized = typeof changes.status === 'string' ? changes.status.trim().toUpperCase() : '';
-    if (!AGENT_STATUS_SET.has(normalized)) {
-      const message = `Invalid status "${String(changes.status).slice(0, 100)}". Expected one of: ${AGENT_STATUSES.join(', ')}`;
-      res.status(400).json({ error: 'validation_failed', message, issues: [{ path: 'status', message }] });
-      return;
-    }
-    status = normalized as AgentStatus;
+  if (agentId === 'system' || agentId === 'external-runtime' || agentId.startsWith('runtime:')) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: `Agent "${agentId}" is reserved and cannot be updated through PATCH`,
+      issues: [{
+        path: 'agentId',
+        code: 'reserved_agent_id',
+        message: 'Reserved agent ids cannot be updated through PATCH',
+      }],
+    });
+    return;
   }
 
-  // The path id always wins over any id in the body.
-  const updated = await store.upsertAgent({
-    ...changes,
-    id: agentId,
-    status: status ?? existing.status,
-  });
+  const changes = body as Record<string, unknown>;
+  const issues: Array<{ path: string; code: string; message: string }> = [];
+  const profilePayload: Record<string, string> = {};
+  const statusPayload: Record<string, string> = {};
+  let status: AgentStatus | undefined;
+  let hasAllowedField = false;
 
-  // Emit status change or update event
+  for (const key of Object.keys(changes)) {
+    if (key === 'id') continue;
+    if (PATCH_USAGE_FIELDS.has(key)) {
+      const codeMessage =
+        key === 'cost' || key === 'currency' || key === 'costSource'
+          ? 'Report cost with an llm.usage event.'
+          : key === 'latencyMs' || key === 'usage'
+            ? 'Report usage with an llm.usage event.'
+            : 'Report tokens with an llm.usage event.';
+      issues.push({ path: key, code: 'usage_not_patchable', message: codeMessage });
+      continue;
+    }
+    if (PATCH_READ_ONLY_FIELDS.has(key)) {
+      issues.push({ path: key, code: 'read_only_field', message: 'This field is managed by the server.' });
+      continue;
+    }
+    if (!PATCH_ALLOWED_FIELDS.has(key)) {
+      issues.push({ path: key, code: 'unknown_field', message: 'This field is not patchable.' });
+      continue;
+    }
+
+    hasAllowedField = true;
+    const value = changes[key];
+    if (key === 'status') {
+      const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+      if (!AGENT_STATUS_SET.has(normalized)) {
+        const message = `Invalid status "${String(value).slice(0, 100)}". Expected one of: ${AGENT_STATUSES.join(', ')}`;
+        issues.push({ path: 'status', code: 'invalid_status', message });
+      } else {
+        status = normalized as AgentStatus;
+        statusPayload.status = status;
+      }
+      continue;
+    }
+
+    if (typeof value !== 'string') {
+      issues.push({ path: key, code: 'invalid_type', message: 'Expected a string.' });
+      continue;
+    }
+    const normalized = value.trim();
+    const maxLength = key === 'statusText' ? 1000 : 200;
+    if (normalized.length > maxLength || (key !== 'statusText' && normalized.length === 0)) {
+      issues.push({
+        path: key,
+        code: 'invalid_type',
+        message: key === 'statusText' ? 'Expected a string of at most 1000 characters.' : 'Expected a non-empty string of at most 200 characters.',
+      });
+      continue;
+    }
+
+    if (key === 'statusText' || key === 'workspace') statusPayload[key] = normalized;
+    else profilePayload[key] = normalized;
+  }
+
+  if (!hasAllowedField) {
+    issues.push({ path: '', code: 'empty_patch', message: 'At least one patchable field is required.' });
+  }
+
+  if (issues.length > 0) {
+    const usageIssue = issues.find((issue) => issue.code === 'usage_not_patchable');
+    res.status(400).json({
+      error: 'validation_failed',
+      message: usageIssue ? PATCH_USAGE_MESSAGE : issues[0].message,
+      issues,
+    });
+    return;
+  }
+
   if (status) {
-    const statusEvt: CanonicalEvent = {
+    const statusEventTimestamp = Date.now();
+    if (Object.keys(profilePayload).length > 0) {
+      const updatedEvent: CanonicalEvent = {
+        schemaVersion: '1.0',
+        id: `evt_upd_${agentId}_${crypto.randomUUID()}`,
+        type: 'agent.updated',
+        timestamp: statusEventTimestamp,
+        source: `agent:${agentId}`,
+        agentId,
+        severity: 'normal',
+        summary: `${agentId} profile updated`,
+        payload: profilePayload,
+      };
+      await store.append(updatedEvent);
+      broadcastEvent(updatedEvent);
+    }
+
+    const statusEvent: CanonicalEvent = {
       schemaVersion: '1.0',
-      id: `evt_status_${agentId}_${Date.now()}`,
+      id: `evt_status_${agentId}_${crypto.randomUUID()}`,
       type: 'agent.status.changed',
-      timestamp: Date.now(),
+      timestamp: statusEventTimestamp,
       source: `agent:${agentId}`,
       agentId,
       severity: 'normal',
       summary: `${agentId} status updated to ${status}`,
-      payload: { status, statusText: changes.statusText, workspace: changes.workspace },
+      payload: statusPayload,
     };
-    await store.append(statusEvt);
-    broadcastEvent(statusEvt);
+    await store.append(statusEvent);
+    broadcastEvent(statusEvent);
+  } else {
+    const updatedEvent: CanonicalEvent = {
+      schemaVersion: '1.0',
+      id: `evt_upd_${agentId}_${crypto.randomUUID()}`,
+      type: 'agent.updated',
+      timestamp: Date.now(),
+      source: `agent:${agentId}`,
+      agentId,
+      severity: 'normal',
+      summary: `${agentId} profile updated`,
+      payload: { ...profilePayload, ...statusPayload },
+    };
+    await store.append(updatedEvent);
+    broadcastEvent(updatedEvent);
   }
 
-  res.json(updated);
+  res.json(await store.getAgent(agentId));
 });
 
 // -------------------------------------------------------------

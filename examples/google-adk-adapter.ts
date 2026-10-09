@@ -72,6 +72,12 @@ export class GoogleADKViewerAdapter {
 
   /**
    * Called when GenAI usageMetadata is received.
+   *
+   * `costEstimate` is a cost the host app estimated from its own price list (Gemini responses
+   * carry no cost), so it is always sent as `estimated`. Leave it out when the host does not
+   * estimate cost. The counts are forwarded as reported: a missing cache count stays unknown,
+   * and a call without both prompt and candidate counts is not reported, because the contract
+   * requires them and the adapter never fills them with 0.
    */
   async onUsageMetadata(
     agentId: string,
@@ -83,15 +89,17 @@ export class GoogleADKViewerAdapter {
       costEstimate?: number | null;
     }
   ): Promise<void> {
+    if (metadata.promptTokenCount === undefined || metadata.candidatesTokenCount === undefined) return;
     const agent = this.viewer.agent(agentId);
+    const cost = metadata.costEstimate ?? null;
     await agent.usage({
       provider: 'Google',
       model: metadata.model ?? 'gemini-2.5-pro',
-      inputTokens: metadata.promptTokenCount ?? 0,
-      outputTokens: metadata.candidatesTokenCount ?? 0,
-      cachedTokens: metadata.cachedContentTokenCount ?? 0,
-      cost: metadata.costEstimate ?? null,
-      costSource: metadata.costEstimate ? 'estimated' : 'unknown',
+      inputTokens: metadata.promptTokenCount,
+      outputTokens: metadata.candidatesTokenCount,
+      cachedTokens: metadata.cachedContentTokenCount,
+      cost,
+      costSource: cost !== null ? 'estimated' : 'unknown',
     });
   }
 

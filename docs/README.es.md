@@ -317,7 +317,7 @@ Todo texto visible sale de un catálogo de 116 claves. Cambia el nombre de una s
 | Repetición | `useEventReplay`, `ReplayControls` |
 | Consumo (solo visualización) | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` |
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` |
-| Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
+| Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
 | Flujo en vivo | `connectEventStream` |
 | Archivos de log | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` |
@@ -376,7 +376,7 @@ export function OficinaConConsumo({ events }: { events: readonly OfficeEventInpu
 }
 ```
 
-`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`, y devuelve un costo desconocido antes que una suma parcial.
+`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`: ignora los ids de evento repetidos, deja como desconocido un conteo de tokens que un evento no reporta y devuelve un costo desconocido antes que una suma parcial o una suma de monedas mezcladas o ausentes.
 
 </details>
 
@@ -466,12 +466,12 @@ analista = viewer.agent("analyst", name="Iris", role_title="Analista de mercado"
 analista.researching("Leyendo los informes trimestrales")
 analista.tool_started("lector_de_informes", input_summary="Formulario 10-K")
 analista.tool_completed("lector_de_informes", output_summary="42 páginas recuperadas")
-analista.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
+analista.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024, cost_source="provider-reported", currency="USD")
 analista.message("El resumen está listo para revisión.", target_agent_name="Nova")
 analista.done("Resumen entregado")
 ```
 
-El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido.
+El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido. Los tokens que no envías siguen desconocidos, nunca `0`. El SDK nunca supone `provider-reported`: un `cost` sin `cost_source` se envía como `unknown`, con un solo aviso por cliente.
 
 ### SDK de TypeScript
 
@@ -484,7 +484,7 @@ const builder = viewer.agent({ id: 'builder', name: 'Atlas', roleTitle: 'Desarro
 await builder.coding('Implementando el manejador del webhook');
 await builder.toolStarted('npm.test', 'pruebas unitarias');
 await builder.toolCompleted('npm.test', '128 aprobadas');
-await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012 });
+await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012, costSource: 'provider-reported', currency: 'USD' });
 await builder.message('El manejador está listo para revisión.', 'Nova');
 await builder.done('Pull request abierto');
 ```
@@ -544,14 +544,15 @@ Un solo sobre para todo. Los productores lo envían, el servidor lo valida con Z
 | | `meeting.started` | Empieza de inmediato. |
 | | `meeting.message` | Burbuja encabezada por su tipo; una `decision` se suma a las decisiones de la reunión. |
 | | `meeting.ended`, `meeting.cancelled` | Libera la sala; los participantes vuelven caminando a su puesto. |
-| Telemetría | `llm.usage` | Proveedor, modelo, tokens de entrada, salida, caché y razonamiento, latencia, costo, origen del costo y moneda. |
+| Telemetría | `llm.usage` | Proveedor, modelo, tokens de entrada y salida, tokens leídos y escritos en caché, tokens de razonamiento, latencia, costo, origen del costo y moneda. Una cifra que no se reportó queda como desconocida, nunca como 0. |
+| | `llm.failed` | Un intento fallido de llamada al modelo: proveedor, modelo, tipo de error, estado HTTP y si se puede reintentar. Tokens y costo solo cuando el proveedor cobró el intento. Sin cambio de estado. |
 | Runtime | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | Salud del runtime; sin cambio visible. |
 
 Los alias como `message.sent`, `meeting.decision` o `approval.requested` se traducen a su tipo canónico. La tabla completa de efectos está en la [guía de la librería](library.es.md#cómo-cambian-la-oficina-los-eventos), y el esquema en [`canonicalContract.ts`](../src/integrations/canonicalContract.ts).
 
 </details>
 
-**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés).
+**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los SDK nunca suponen `provider-reported`: un costo enviado sin `costSource` declarado sale como `unknown`. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés).
 
 ---
 
@@ -590,12 +591,25 @@ flowchart LR
 | `POST` | `/api/v1/events/batch` | Ingesta de hasta 100 eventos (configurable). Los duplicados se omiten sin error. |
 | `GET` | `/api/v1/events` | Consulta con `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Reenvía los eventos perdidos desde `Last-Event-ID`; latido cada 15 s. |
-| `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes, tokens y costo. |
+| `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes y el bloque `usage`. Los campos obsoletos `totalCost` y `cost` de cada agente son `null` salvo que todas las llamadas reporten una sola moneda conocida (una moneda, un origen de costo). |
+| `GET` | `/api/v1/usage` | Solo los agregados de consumo, llamada por llamada: por agente y por `(provider, model)`, con los conteos de lo desconocido y los costos por moneda, nunca sumados entre monedas. [Detalles](integration.md#usage-aggregates-get-apiv1usage) (en inglés). |
 | `POST` | `/api/v1/agents` | Registra o actualiza un agente. |
-| `PATCH` | `/api/v1/agents/:agentId` | Actualiza el estado o las propiedades de un agente. |
+| `PATCH` | `/api/v1/agents/:agentId` | Actualiza el perfil o el estado de un agente (solo campos descriptivos; el uso se reporta con `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Registra un runtime (latido) / lista los runtimes. |
 | `GET` | `/api/v1/sessions`, `/api/v1/sessions/:sessionId` | Lista las sesiones / muestra una con sus eventos. |
 | `POST` | `/api/v1/webhooks/generic` | Webhook plano: `agent`, `status`, `message`, `tool`, `usage`. |
+
+**Campos PATCH del agente:** `name`, `roleTitle`, `provider` y `model` emiten `agent.updated`. `status` emite `agent.status.changed`; `statusText` y `workspace` acompañan ese evento cuando se incluye `status`, y en caso contrario emiten `agent.updated`. Los valores deben ser cadenas: los campos del perfil y `workspace` se recortan y deben tener entre 1 y 200 caracteres; `statusText`, entre 0 y 1000; y `status` debe ser un estado conocido. Se rechazan los demás campos. No se pueden modificar campos de uso como `tokensInput`, `inputTokens`, `cachedTokens`, `cost`, `currency` y `latencyMs`. Reporta el uso con un evento `llm.usage` en `POST /api/v1/events` o con la función auxiliar `usage()` del SDK.
+
+Por ejemplo, un campo de uso devuelve HTTP 400:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.",
+  "issues": [{ "path": "cost", "code": "usage_not_patchable", "message": "Report cost with an llm.usage event." }]
+}
+```
 
 <details>
 <summary><b>🧾 Validación, idempotencia y respuestas por lotes</b></summary>

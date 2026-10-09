@@ -388,6 +388,16 @@ export function applyExternalEvent(
       break;
     }
 
+    case 'llm.failed': {
+      // A failed attempt is often retried, so the runtime stays the source of truth for the status.
+      // Tokens and cost from failed calls are never added here, even with trackUsage.
+      if (agent) {
+        if (typeof payload.provider === 'string') agent.provider = payload.provider;
+        if (typeof payload.model === 'string') agent.model = payload.model;
+      }
+      break;
+    }
+
     case 'meeting.requested': {
       const participants = Array.isArray(payload.participantIds)
         ? payload.participantIds.filter((id): id is string => typeof id === 'string')

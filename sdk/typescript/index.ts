@@ -1,9 +1,40 @@
+import type { z } from 'zod';
 import type {
   CanonicalEvent,
   CanonicalEventType,
   EventSeverity,
-  LlmUsagePayload,
+  LlmUsagePayloadSchema,
 } from '../../src/integrations/canonicalContract';
+import type { ViewerSnapshot } from '../../server/store';
+import type { UsageSummary } from '../../server/usageAggregates';
+
+export type { ViewerSnapshot } from '../../server/store';
+export type {
+  UsageSummary,
+  UsageAggregate,
+  UsageBucket,
+  ModelUsage,
+  AgentUsage,
+  TokenFigure,
+  CurrencyCost,
+} from '../../server/usageAggregates';
+
+/** Where a reported cost comes from. The SDK never chooses it for the caller. */
+export type CostSource = 'provider-reported' | 'estimated' | 'unknown';
+
+const COST_SOURCES: readonly CostSource[] = ['provider-reported', 'estimated', 'unknown'];
+
+/** Usage payload as the contract accepts it, so a renamed contract field fails type checking here. */
+type LlmUsagePayloadInput = z.input<typeof LlmUsagePayloadSchema>;
+
+const UNSTATED_COST_SOURCE_WARNING =
+  "[AgentViewer] a cost was reported without costSource, so it is sent as costSource: 'unknown'. "
+  + "Pass costSource: 'provider-reported' or 'estimated' to state where the cost comes from.";
+
+/** Turns `null` into `undefined`, so an unknown figure is left out of the JSON body. */
+function omitNull<T>(value: T | null | undefined): T | undefined {
+  return value === null ? undefined : value;
+}
 
 export interface AgentViewerOptions {
   url?: string;
@@ -46,12 +77,19 @@ export interface UsageOptions {
   model: string;
   inputTokens: number;
   outputTokens: number;
-  cachedTokens?: number;
-  reasoningTokens?: number;
+  /** Legacy name of cacheReadTokens in the contract; prefer cacheReadTokens. */
+  cachedTokens?: number | null;
+  reasoningTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
   cost?: number | null;
-  costSource?: 'provider-reported' | 'estimated' | 'unknown';
+  costSource?: CostSource | null;
+  /** ISO 4217 code, forwarded as given. No default. */
+  currency?: string | null;
   latencyMs?: number;
   requestId?: string;
+  /** Goes to the envelope `taskId`, not to the payload. */
+  taskId?: string;
 }
 
 export class AgentViewerError extends Error {
@@ -217,25 +255,46 @@ export class AgentHandle {
     });
   }
 
+  /**
+   * Reports the usage of one model call exactly as the caller knows it. A figure that is not
+   * given (or is `null`) is left out, never sent as 0. `costSource` is never inferred: a cost
+   * without it is sent as `'unknown'` and the client warns once.
+   */
   async usage(options: UsageOptions): Promise<void> {
+    const costSource: unknown = options.costSource;
+    if (costSource !== undefined && costSource !== null && !COST_SOURCES.includes(costSource as CostSource)) {
+      throw new TypeError(`costSource must be one of ${COST_SOURCES.join(', ')} (got "${String(costSource)}")`);
+    }
+    const cost = options.cost ?? null;
+    const statedCostSource = options.costSource ?? undefined;
+    if (cost !== null && statedCostSource === undefined) {
+      this.viewer.warnOnce('unstated-cost-source', UNSTATED_COST_SOURCE_WARNING);
+    }
+
+    const payload = {
+      provider: options.provider,
+      model: options.model,
+      inputTokens: options.inputTokens,
+      outputTokens: options.outputTokens,
+      cachedTokens: omitNull(options.cachedTokens),
+      cacheReadTokens: omitNull(options.cacheReadTokens),
+      cacheWriteTokens: omitNull(options.cacheWriteTokens),
+      reasoningTokens: omitNull(options.reasoningTokens),
+      cost,
+      costSource: statedCostSource ?? 'unknown',
+      currency: omitNull(options.currency),
+      latencyMs: options.latencyMs,
+      requestId: options.requestId,
+    } satisfies LlmUsagePayloadInput;
+
     await this.ensureRegistered();
     await this.viewer.emit({
       type: 'llm.usage',
       source: `agent:${this.id}`,
       agentId: this.id,
+      taskId: options.taskId,
       summary: `${options.provider}/${options.model} tokens (${options.inputTokens}+${options.outputTokens})`,
-      payload: {
-        provider: options.provider,
-        model: options.model,
-        inputTokens: options.inputTokens,
-        outputTokens: options.outputTokens,
-        cachedTokens: options.cachedTokens ?? 0,
-        reasoningTokens: options.reasoningTokens ?? 0,
-        cost: options.cost !== undefined ? options.cost : null,
-        costSource: options.costSource ?? (options.cost !== undefined && options.cost !== null ? 'provider-reported' : 'unknown'),
-        latencyMs: options.latencyMs,
-        requestId: options.requestId,
-      },
+      payload,
     });
   }
 }
@@ -252,6 +311,7 @@ export class AgentViewer {
   public readonly autoRegisterAgents: boolean;
 
   private registeredAgents = new Map<string, AgentHandle>();
+  private readonly warnedKeys = new Set<string>();
 
   constructor(options: AgentViewerOptions = {}) {
     const rawUrl = options.url || options.baseUrl || 'http://localhost:8787';
@@ -272,6 +332,13 @@ export class AgentViewer {
 
   shouldAutoRegister(): boolean {
     return this.autoRegisterAgents;
+  }
+
+  /** Prints `message` with `console.warn` the first time `key` is seen by this client, whatever `debug` says. */
+  warnOnce(key: string, message: string): void {
+    if (this.warnedKeys.has(key)) return;
+    this.warnedKeys.add(key);
+    console.warn(message);
   }
 
   agent(init: string | AgentInitOptions): AgentHandle {
@@ -353,14 +420,28 @@ export class AgentViewer {
     });
   }
 
-  async snapshot(): Promise<any> {
+  async snapshot(): Promise<ViewerSnapshot> {
     const response = await fetch(`${this.url}/api/v1/snapshot`, {
       headers: this.buildHeaders(),
     });
     if (!response.ok) {
       throw new AgentViewerError(`Failed to fetch snapshot: ${response.status}`, response.status);
     }
-    return response.json();
+    return (await response.json()) as ViewerSnapshot;
+  }
+
+  /**
+   * Usage aggregates from `GET /api/v1/usage`, by agent and by `(provider, model)`. A token `sum` is `null` when
+   * no call reported that kind, and costs are listed per currency and cost source, never added together.
+   */
+  async usageSummary(): Promise<UsageSummary> {
+    const response = await fetch(`${this.url}/api/v1/usage`, {
+      headers: this.buildHeaders(),
+    });
+    if (!response.ok) {
+      throw new AgentViewerError(`Failed to fetch usage summary: ${response.status}`, response.status);
+    }
+    return (await response.json()) as UsageSummary;
   }
 
   private buildHeaders(idempotencyKey?: string): Record<string, string> {

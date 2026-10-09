@@ -255,7 +255,16 @@ test('CLI end to end: start, send an event, read it back from the API and the li
     });
     assert.equal(duplicate.status, 200);
 
-    const lines = readFileSync(record, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    // The recorder writes through a stream, so wait until both lines are complete on disk before reading them.
+    const recordDeadline = Date.now() + 10_000;
+    let recorded = '';
+    while (true) {
+      recorded = existsSync(record) ? readFileSync(record, 'utf8') : '';
+      if (recorded.endsWith('\n') && recorded.trim().split('\n').length >= 2) break;
+      if (Date.now() > recordDeadline) throw new Error(`--record did not write both events:\n${recorded}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const lines = recorded.trim().split('\n').map((line) => JSON.parse(line));
     assert.deepEqual(lines.map((event) => event.type), ['agent.status.changed', 'agent.message.sent']);
     for (const event of lines) assert.equal(validateCanonicalEvent(event).success, true);
     if (process.platform !== 'win32') assert.equal(statSync(record).mode & 0o777, 0o600, 'only the owner can read the recording');

@@ -85,6 +85,10 @@ export function llmUsage(agentId: string, payload: Record<string, unknown>, opti
   return makeEvent('llm.usage', agentId, payload, options);
 }
 
+export function llmFailed(agentId: string, payload: Record<string, unknown>, options: EventOptions = {}): CanonicalEvent {
+  return makeEvent('llm.failed', agentId, payload, options);
+}
+
 /* ------------------------------------------------------------------------------------------------ */
 /* Language checks                                                                                  */
 /* ------------------------------------------------------------------------------------------------ */

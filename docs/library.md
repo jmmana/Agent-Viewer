@@ -208,6 +208,7 @@ The agent of an event is `agentId`, then `payload.agentId`, then `payload.id` fo
 | `task.failed` | `taskId`, `error` | Status `ERROR` if it was the agent's current task. |
 | `task.blocked` | `taskId`, `reason` | Status `BLOCKED`. |
 | `llm.usage` | `provider`, `model` | Stores the agent's provider and model. Tokens and cost are not added up (see [Usage figures](#usage-figures)). |
+| `llm.failed` | `provider`, `model` | Stores the agent's provider and model. No status change; tokens and cost are never added up. |
 | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | none | No visible change. |
 
 More details:
@@ -584,10 +585,62 @@ If your app has no usage service, `summarizeUsage(events)` is an explicit opt-in
 const usage = useMemo(() => summarizeUsage(events), [events]);
 ```
 
-- `totalTokens` is `inputTokens + outputTokens`. Token counts an event does not report count as zero.
-- The `cost` is `null` (shown as "unknown") when any `llm.usage` event lacks a reported cost, or when events report different currencies. A partial sum is never shown.
-- The same rules apply to each agent in `byAgent`, using only that agent's events.
-- Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero.
+- Events are deduplicated by `id`, like the office and the server do: the first event with a given id wins, whatever its type or agent, and later events with that id are ignored (SSE reconnects, retries and merged replay files repeat events). An event without an `id` (or with an empty or non-string one) cannot be matched, so each one is counted; the same object passed twice counts once.
+- Token counts come from the raw payload. A count is reported only when it is a non-negative integer. If any event does not report `inputTokens`, the `inputTokens` figure is `null` (shown as "unknown"), and the same goes for `outputTokens`. `totalTokens` is `inputTokens + outputTokens` only when both are known, and `null` otherwise.
+- A cost is reported only when it is a finite, non-negative number, and a currency counts only when it is an ISO 4217 code (`^[A-Z]{3}$`, such as `USD`). Values like `'usd'`, `'dollars'` or `''` count as no currency. Costs are never converted:
+
+  | Costs seen (after deduplication) | `cost` | `currency` |
+  |---|---|---|
+  | No `llm.usage` event | `null` | `undefined` |
+  | Any event without a reported cost | `null` | `undefined` |
+  | All costs in one ISO currency, e.g. all `USD` | sum | `'USD'` |
+  | Two or more ISO currencies, e.g. `USD` and `EUR` | `null` | `undefined` |
+  | At least one ISO currency and at least one cost without currency | `null` | `undefined` |
+  | All costs reported, none with a currency | sum | `undefined` (shown as a plain number) |
+
+- `currency` is set only when `cost` is known, so no currency label ever appears next to an unknown cost. A partial sum is never shown.
+- The same rules apply to each agent in `byAgent`, using only that agent's events: when one agent lacks a figure, only that agent and the run total become unknown.
+- Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}`.
+
+### Figures from the Agent Viewer server
+
+When your app is connected to the Agent Viewer server, read `GET /api/v1/usage` (`usageSummary()` in the TypeScript SDK) and pass its figures through. The library still does no math: the host maps each bucket, and only figures that are fully known become numbers.
+
+```tsx
+import type { UsageFigures } from '@warlockcode/agent-viewer';
+import type { UsageBucket } from './sdk/typescript/index';
+
+/** Exact figures only: a partial sum would be shown as if it were exact, so it becomes null ("unknown"). */
+function toFigures(bucket: UsageBucket): UsageFigures {
+  const input = bucket.tokens.input.unreportedCount === 0 ? bucket.tokens.input.sum : null;
+  const output = bucket.tokens.output.unreportedCount === 0 ? bucket.tokens.output.sum : null;
+  const single = bucket.calls > 0 && bucket.costUnknownCount === 0 && bucket.byCurrency.length === 1
+    ? bucket.byCurrency[0]
+    : null;
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: input !== null && output !== null ? input + output : null,
+    cost: single ? single.amount : null,
+    currency: single ? single.currency : undefined,
+  };
+}
+
+const summary = await viewer.usageSummary();
+const usage = {
+  total: toFigures(summary.total),
+  byAgent: Object.fromEntries(
+    summary.byAgent
+      .filter((agent) => agent.agentId !== null)
+      .map((agent) => [agent.agentId, toFigures(agent)]),
+  ),
+};
+```
+
+- `inputTokens` and `outputTokens` come from `tokens.input.sum` and `tokens.output.sum` only when that kind's `unreportedCount` is `0`; otherwise pass `null`.
+- `totalTokens` is the host's own addition of the two, sent only when both pass that test; otherwise `null`.
+- `cost` and `currency` are sent only when the bucket has calls, `costUnknownCount` is `0` and `byCurrency` has exactly one entry (one currency, one cost source). Otherwise send `cost: null`, shown as "unknown".
+- The `agentId: null` bucket (calls without an agent) has no key in `byAgent`; it only counts in `total`. Failed calls (`failed`) are not part of these figures.
 
 ## Replay
 
@@ -744,12 +797,16 @@ The office accepts `OfficeEventInput`: a full `CanonicalEvent`, a `CanonicalEven
 - `validateCanonicalEvent(input)` checks an event strictly against the V1 contract and returns `{ success, data, issues }`.
 - `normalizeCanonicalEvent(input)` completes a loose event without validating it.
 - `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS` and `isMessageKind` describe the contract.
+- `LLM_ERROR_KINDS` lists the `errorKind` values of `llm.failed` (`rate_limited`, `overloaded`, `timeout`, `invalid_request`, `auth`, `server_error`, `cancelled`, `unknown`), and `isLlmErrorKind(value)` checks one. The type is `LlmErrorKind`.
 
 Contract fields used by the office in this version:
 
 - `agent.message.sent` accepts an optional `kind`, one of `MESSAGE_KINDS`.
 - `meeting.message` `type` is one of `MESSAGE_KINDS` (default `statement`).
 - `llm.usage` accepts an optional `currency`, an ISO 4217 code of three uppercase letters such as `USD`.
+- `llm.usage` reports cache tokens in `cacheReadTokens` (served from the prompt cache) and `cacheWriteTokens` (written to it). Both are part of `inputTokens`. `cachedTokens` is deprecated: it is still accepted and copied into `cacheReadTokens`.
+- A counter that was not reported (`cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `cachedTokens`) stays absent or `null` after validation, never `0`. `normalizeCanonicalEvent` does not invent `inputTokens` or `outputTokens` either.
+- `llm.failed` reports one failed model call attempt with `provider`, `model` and `errorKind`. The office only stores the provider and model from it.
 
 The full contract is in [integration.md](integration.md) and [`canonicalContract.ts`](../src/integrations/canonicalContract.ts).
 
@@ -765,7 +822,7 @@ Everything is exported from `@warlockcode/agent-viewer`. The stylesheet is `@war
 | Usage | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Core types | none | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
-| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `ValidationIssue`, `ValidationResult` |
+| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
 | Live stream | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions` |
 | Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |

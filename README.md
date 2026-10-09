@@ -317,7 +317,7 @@ Every visible text comes from a catalog of 116 keys. Rename a room with `message
 | Replay | `useEventReplay`, `ReplayControls` |
 | Usage (display only) | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` |
-| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
+| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
 | Live stream | `connectEventStream` |
 | Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` |
@@ -376,7 +376,7 @@ export function OfficeWithUsage({ events }: { events: readonly OfficeEventInput[
 }
 ```
 
-`showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported, and returns an unknown cost rather than a partial sum.
+`showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported: it ignores repeated event ids, keeps a token count unknown when an event does not report it, and returns an unknown cost rather than a partial sum or a sum of mixed or missing currencies.
 
 </details>
 
@@ -466,12 +466,12 @@ analyst = viewer.agent("analyst", name="Iris", role_title="Market analyst", work
 analyst.researching("Reading the quarterly filings")
 analyst.tool_started("filing_fetcher", input_summary="Form 10-K")
 analyst.tool_completed("filing_fetcher", output_summary="42 pages retrieved")
-analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
+analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024, cost_source="provider-reported", currency="USD")
 analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown.
+The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client.
 
 ### TypeScript SDK
 
@@ -484,7 +484,7 @@ const builder = viewer.agent({ id: 'builder', name: 'Atlas', roleTitle: 'Builder
 await builder.coding('Implementing the webhook handler');
 await builder.toolStarted('npm.test', 'unit suite');
 await builder.toolCompleted('npm.test', '128 passed');
-await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012 });
+await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012, costSource: 'provider-reported', currency: 'USD' });
 await builder.message('Handler is ready for review.', 'Nova');
 await builder.done('Pull request opened');
 ```
@@ -544,14 +544,15 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | | `meeting.started` | Starts at once. |
 | | `meeting.message` | Bubble headed by its kind; a `decision` is added to the meeting decisions. |
 | | `meeting.ended`, `meeting.cancelled` | Frees the room; participants walk back to their workspace. |
-| Telemetry | `llm.usage` | Provider, model, input, output, cached and reasoning tokens, latency, cost, cost source and currency. |
+| Telemetry | `llm.usage` | Provider, model, input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost, cost source and currency. A figure that was not reported stays unknown, never 0. |
+| | `llm.failed` | One failed model call attempt: provider, model, error kind, HTTP status and whether it can be retried. Tokens and cost only when the provider billed the attempt. No status change. |
 | Runtime | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | Runtime health; no visible change. |
 
 Aliases such as `message.sent`, `meeting.decision` or `approval.requested` are mapped to their canonical type. The complete effect table is in the [library guide](docs/library.md#how-events-change-the-office), and the schema in [`canonicalContract.ts`](src/integrations/canonicalContract.ts).
 
 </details>
 
-**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md).
+**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. The SDKs never assume `provider-reported`: a cost sent without a stated `costSource` goes out as `unknown`. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md).
 
 ---
 
@@ -590,12 +591,25 @@ flowchart LR
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Duplicates are skipped, not errors. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Replays missed events from `Last-Event-ID`; heartbeat every 15 s. |
-| `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes, tokens and cost. |
+| `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
+| `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
-| `PATCH` | `/api/v1/agents/:agentId` | Update an agent's status or properties. |
+| `PATCH` | `/api/v1/agents/:agentId` | Update an agent's profile or status (descriptive fields only; usage is reported with `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |
 | `GET` | `/api/v1/sessions`, `/api/v1/sessions/:sessionId` | List sessions / inspect one with its events. |
 | `POST` | `/api/v1/webhooks/generic` | Flat webhook: `agent`, `status`, `message`, `tool`, `usage`. |
+
+**PATCH agent fields:** `name`, `roleTitle`, `provider`, and `model` emit `agent.updated`. `status` emits `agent.status.changed`; `statusText` and `workspace` accompany that event when `status` is present, and otherwise emit `agent.updated`. Values must be strings: profile fields and `workspace` are trimmed and limited to 1-200 characters, `statusText` to 0-1000 characters, and `status` must be a known status. All other fields are rejected. Usage fields such as `tokensInput`, `inputTokens`, `cachedTokens`, `cost`, `currency`, and `latencyMs` cannot be patched. Report usage through `POST /api/v1/events` with an `llm.usage` event or the SDK `usage()` helper.
+
+For example, a usage field returns HTTP 400:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.",
+  "issues": [{ "path": "cost", "code": "usage_not_patchable", "message": "Report cost with an llm.usage event." }]
+}
+```
 
 <details>
 <summary><b>🧾 Validation, idempotency and batch responses</b></summary>

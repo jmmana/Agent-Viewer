@@ -27,6 +27,7 @@ export const CANONICAL_EVENT_TYPES = [
   'meeting.ended',
   'meeting.cancelled',
   'llm.usage',
+  'llm.failed',
   'runtime.connected',
   'runtime.disconnected',
   'runtime.heartbeat',
@@ -79,6 +80,27 @@ export type MessageKind = (typeof MESSAGE_KINDS)[number];
 
 export function isMessageKind(value: unknown): value is MessageKind {
   return typeof value === 'string' && (MESSAGE_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Why a model call failed, carried by `llm.failed`. A label, not a figure. Senders map errors they do not
+ * recognize to `unknown` and may put the provider's own code in `providerErrorCode`.
+ */
+export const LLM_ERROR_KINDS = [
+  'rate_limited',
+  'overloaded',
+  'timeout',
+  'invalid_request',
+  'auth',
+  'server_error',
+  'cancelled',
+  'unknown',
+] as const;
+
+export type LlmErrorKind = (typeof LLM_ERROR_KINDS)[number];
+
+export function isLlmErrorKind(value: unknown): value is LlmErrorKind {
+  return typeof value === 'string' && (LLM_ERROR_KINDS as readonly string[]).includes(value);
 }
 
 export type EventSeverity = 'low' | 'normal' | 'high' | 'critical';
@@ -170,12 +192,21 @@ export function normalizeCanonicalEvent(input: any): CanonicalEvent {
 
   const payload = input?.payload && typeof input.payload === 'object' ? { ...input.payload } : {};
 
-  // Normalize usage payload if type is llm.usage
-  if (type === 'llm.usage') {
+  // Usage and failure payloads: unknown figures stay unknown. Token counts are never invented here.
+  if (type === 'llm.usage' || type === 'llm.failed') {
     if (payload.cost === undefined) payload.cost = null;
     if (!payload.costSource) payload.costSource = 'unknown';
-    if (typeof payload.inputTokens !== 'number') payload.inputTokens = 0;
-    if (typeof payload.outputTokens !== 'number') payload.outputTokens = 0;
+  }
+  if (
+    type === 'llm.usage'
+    && payload.cacheReadTokens === undefined
+    && (typeof payload.cachedTokens === 'number' || payload.cachedTokens === null)
+  ) {
+    // Deprecated alias, copied as the strict validator does. The normalizer never rejects a conflict.
+    payload.cacheReadTokens = payload.cachedTokens;
+  }
+  if (type === 'llm.failed' && !isLlmErrorKind(payload.errorKind)) {
+    payload.errorKind = 'unknown';
   }
 
   return {

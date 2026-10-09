@@ -17,6 +17,13 @@ from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger("agent_viewer")
 
+COST_SOURCES = ("provider-reported", "estimated", "unknown")
+
+_UNSTATED_COST_SOURCE_WARNING = (
+    'Agent Viewer: a cost was reported without cost_source, so it is sent as costSource="unknown". '
+    'Pass cost_source="provider-reported" or "estimated" to state where the cost comes from.'
+)
+
 
 class AgentViewerError(Exception):
     """Exception raised by Agent Viewer API client."""
@@ -179,25 +186,43 @@ class AgentHandle:
         model: str,
         input_tokens: int,
         output_tokens: int,
-        cached_tokens: int = 0,
-        reasoning_tokens: int = 0,
+        cached_tokens: Optional[int] = None,
+        reasoning_tokens: Optional[int] = None,
         cost: Optional[float] = None,
         cost_source: Optional[str] = None,
         latency_ms: Optional[int] = None,
         request_id: Optional[str] = None,
+        *,
+        cache_read_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        currency: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> None:
-        """Report token and cost usage."""
+        """Report the token and cost usage of one model call, exactly as the caller knows it.
+
+        A figure that is not given stays unknown: it is left out of the payload, never sent as 0.
+        ``cost_source`` is never inferred. A cost given without it is sent as ``"unknown"`` and
+        the client logs one warning. ``task_id`` goes to the envelope ``taskId``.
+        """
+        if cost_source is not None and cost_source not in COST_SOURCES:
+            raise ValueError(
+                f'costSource must be one of {", ".join(COST_SOURCES)} (got "{cost_source}")'
+            )
+        if cost is not None and cost_source is None:
+            self.viewer._warn_unstated_cost_source()
         self._ensure_registered()
-        resolved_cost_source = cost_source or ("provider-reported" if cost is not None else "unknown")
         payload = {
             "provider": provider,
             "model": model,
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
             "cachedTokens": cached_tokens,
+            "cacheReadTokens": cache_read_tokens,
+            "cacheWriteTokens": cache_write_tokens,
             "reasoningTokens": reasoning_tokens,
             "cost": cost,
-            "costSource": resolved_cost_source,
+            "costSource": cost_source if cost_source is not None else "unknown",
+            "currency": currency,
             "latencyMs": latency_ms,
             "requestId": request_id,
         }
@@ -207,6 +232,7 @@ class AgentHandle:
             {k: v for k, v in payload.items() if v is not None},
             agent_id=self.id,
             source=f"agent:{self.id}",
+            task_id=task_id,
         )
 
 
@@ -238,6 +264,13 @@ class AgentViewer:
         self.auto_register = auto_register
         self.debug = debug
         self._agents: Dict[str, AgentHandle] = {}
+        self._warned_unstated_cost_source = False
+
+    def _warn_unstated_cost_source(self) -> None:
+        """Log, once per client, that a cost was sent without a stated source."""
+        if not self._warned_unstated_cost_source:
+            self._warned_unstated_cost_source = True
+            logger.warning(_UNSTATED_COST_SOURCE_WARNING)
 
     def agent(
         self,
@@ -340,6 +373,18 @@ class AgentViewer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def usage_summary(self) -> Dict[str, Any]:
+        """Fetch the usage aggregates from ``GET /api/v1/usage``.
+
+        The summary groups every ``llm.usage`` call by agent and by ``(provider, model)``, with failed calls
+        (``llm.failed``) kept under ``failed``. A token ``sum`` may be ``None``: it means no call reported that
+        kind, never zero; ``unreportedCount`` says how many calls left it out. Amounts are listed per currency
+        and cost source in ``byCurrency`` and are never summed across them.
+        """
+        req = urllib.request.Request(f"{self.url}/api/v1/usage", headers=self._build_headers(), method="GET")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     # Legacy method compatibility
     def register_agent(
         self,
@@ -368,21 +413,34 @@ class AgentViewer:
         model: str,
         input_tokens: int,
         output_tokens: int,
-        cached_tokens: int = 0,
+        cached_tokens: Optional[int] = None,
         cost: Optional[float] = None,
-        cost_source: str = "unknown",
+        cost_source: Optional[str] = None,
         latency_ms: Optional[int] = None,
+        *,
+        reasoning_tokens: Optional[int] = None,
+        cache_read_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        request_id: Optional[str] = None,
+        currency: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> None:
-        """Report LLM usage (legacy helper)."""
+        """Report LLM usage (legacy helper). Same rules as ``AgentHandle.usage()``."""
         self.agent(agent_id).usage(
             provider=provider,
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_tokens=cached_tokens,
+            reasoning_tokens=reasoning_tokens,
             cost=cost,
             cost_source=cost_source,
             latency_ms=latency_ms,
+            request_id=request_id,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            currency=currency,
+            task_id=task_id,
         )
 
     def _build_headers(self, idempotency_key: Optional[str] = None) -> Dict[str, str]:

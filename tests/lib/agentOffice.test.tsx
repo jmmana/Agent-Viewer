@@ -13,6 +13,7 @@ import {
   T0,
   collectVisibleTexts,
   findEnglishLeaks,
+  llmFailed,
   llmUsage,
   meetingMessage,
   meetingRequested,
@@ -312,6 +313,47 @@ describe('AgentOffice: usage privacy', () => {
     }
     expect(document.body.textContent).not.toMatch(/Tokens|Cost/);
     expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking');
+  });
+
+  it('never adds up llm.failed events or changes the status they report', () => {
+    const events: OfficeEventInput[] = [
+      ...englishTeam,
+      llmFailed('planner', {
+        provider: 'OpenAI',
+        model: 'gpt-x',
+        errorKind: 'timeout',
+        httpStatus: 504,
+        inputTokens: 1200,
+        outputTokens: 300,
+        cost: 0.75,
+        costSource: 'provider-reported',
+        currency: 'USD',
+      }, { at: T0 + 4000 }),
+      llmFailed('builder', {
+        provider: 'Anthropic',
+        model: 'claude-x',
+        errorKind: 'rate_limited',
+        httpStatus: 429,
+        inputTokens: 900,
+        outputTokens: 600,
+        cost: 1.25,
+        currency: 'USD',
+      }, { at: T0 + 5000 }),
+    ];
+    render(<AgentOffice events={events} showUsage />);
+    const lines = agentLines();
+
+    expect(document.querySelector('.av-usage')).toBeNull();
+    const html = document.body.innerHTML;
+    for (const fragment of ['$', '0.75', '1.25', '2.00', '3,000', '3000', '1,500', '1200', '1,200']) {
+      expect(html).not.toContain(fragment);
+    }
+    expect(document.body.textContent).not.toMatch(/Tokens|Cost|Error/);
+    expect(lines).toEqual({
+      planner: 'Ana Rivas, Planner: Thinking',
+      builder: 'Bruno Díaz, Engineer: Coding',
+      reviewer: 'Carla Méndez: Idle',
+    });
   });
 });
 

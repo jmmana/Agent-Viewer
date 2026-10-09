@@ -4,6 +4,7 @@ export * from './canonicalTypes';
 import {
   CANONICAL_EVENT_TYPES,
   EVENT_TYPE_ALIASES,
+  LLM_ERROR_KINDS,
   MESSAGE_KINDS,
   type CanonicalEvent,
   type CanonicalEventType,
@@ -16,21 +17,104 @@ import {
 // Payload Schemas
 // -------------------------------------------------------------
 
+const tokenCount = z.number().int().nonnegative('Expected non-negative integer');
+
+const costSchema = z.number().nonnegative('Cost cannot be negative').nullish().default(null);
+const costSourceSchema = z.enum(['provider-reported', 'estimated', 'unknown']).nullish().default('unknown');
+const currencySchema = z.string().regex(/^[A-Z]{3}$/, 'Expected an ISO 4217 currency code').nullish();
+
+interface CacheFields {
+  inputTokens?: number | null;
+  cachedTokens?: number | null;
+  cacheReadTokens?: number | null;
+  cacheWriteTokens?: number | null;
+}
+
+/**
+ * Shared by `llm.usage` and `llm.failed`. Runs before the alias transform, so it sees the values as sent.
+ */
+function checkCacheFields(value: CacheFields, ctx: z.RefinementCtx): void {
+  // Conflict: only meaningful for llm.usage (llm.failed has no cachedTokens, so it never fires there).
+  if (
+    typeof value.cachedTokens === 'number'
+    && typeof value.cacheReadTokens === 'number'
+    && value.cachedTokens !== value.cacheReadTokens
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['cachedTokens'],
+      message: 'cachedTokens is deprecated and conflicts with cacheReadTokens; send only cacheReadTokens',
+    });
+  }
+  // Subset: only the new fields, and only when inputTokens is a number (it may be missing on llm.failed).
+  // Values from the legacy cachedTokens are left out on purpose, because older clients used both meanings.
+  const explicit = (typeof value.cacheReadTokens === 'number' ? value.cacheReadTokens : 0)
+    + (typeof value.cacheWriteTokens === 'number' ? value.cacheWriteTokens : 0);
+  if (typeof value.inputTokens === 'number' && explicit > value.inputTokens) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['cacheReadTokens'],
+      message: 'cacheReadTokens + cacheWriteTokens cannot exceed inputTokens (inputTokens includes cached tokens)',
+    });
+  }
+}
+
+/** Deprecated alias: copies cachedTokens (a number or null) into cacheReadTokens when that field is absent. */
+function applyCachedAlias<T extends { cachedTokens?: number | null; cacheReadTokens?: number | null }>(value: T): T {
+  return value.cacheReadTokens === undefined && value.cachedTokens !== undefined
+    ? { ...value, cacheReadTokens: value.cachedTokens }
+    : value;
+}
+
+/**
+ * Payload of a successful model call. Token semantics: `inputTokens` includes `cacheReadTokens` and
+ * `cacheWriteTokens`; `outputTokens` includes `reasoningTokens` when the provider bills them as output.
+ * A breakdown field that was not reported stays absent (or `null`), never `0`.
+ */
 export const LlmUsagePayloadSchema = z.object({
   provider: z.string().min(1, 'Provider is required'),
   model: z.string().min(1, 'Model is required'),
-  inputTokens: z.number().int().nonnegative('Expected non-negative integer'),
-  outputTokens: z.number().int().nonnegative('Expected non-negative integer'),
-  cachedTokens: z.number().int().nonnegative('Expected non-negative integer').optional().default(0),
-  reasoningTokens: z.number().int().nonnegative('Expected non-negative integer').optional().default(0),
-  latencyMs: z.number().int().nonnegative('Expected non-negative integer').nullish(),
+  inputTokens: tokenCount,
+  outputTokens: tokenCount,
+  cacheReadTokens: tokenCount.nullish(),
+  cacheWriteTokens: tokenCount.nullish(),
+  /** @deprecated Use cacheReadTokens. Kept as sent; copied to cacheReadTokens when that field is absent. */
+  cachedTokens: tokenCount.nullish(),
+  reasoningTokens: tokenCount.nullish(),
+  latencyMs: tokenCount.nullish(),
   requestId: z.string().nullish(),
-  cost: z.number().nonnegative('Cost cannot be negative').nullish().default(null),
-  costSource: z.enum(['provider-reported', 'estimated', 'unknown']).nullish().default('unknown'),
-  currency: z.string().regex(/^[A-Z]{3}$/, 'Expected an ISO 4217 currency code').nullish(),
-});
+  cost: costSchema,
+  costSource: costSourceSchema,
+  currency: currencySchema,
+}).superRefine(checkCacheFields).transform(applyCachedAlias);
 
 export type LlmUsagePayload = z.infer<typeof LlmUsagePayloadSchema>;
+
+/**
+ * Payload of one failed model call attempt. A retry that succeeds is a separate `llm.usage` event.
+ * Token and cost fields are filled only when the provider billed the failed attempt; none defaults to 0.
+ * There is no free-text error field on purpose: provider messages can echo prompts or credentials.
+ */
+export const LlmFailedPayloadSchema = z.object({
+  provider: z.string().min(1, 'Provider is required'),
+  model: z.string().min(1, 'Model is required'),
+  errorKind: z.enum(LLM_ERROR_KINDS).default('unknown'),
+  httpStatus: z.number().int().min(100).max(599).nullish(),
+  retryable: z.boolean().nullish(),
+  requestId: z.string().max(200).nullish(),
+  providerErrorCode: z.string().max(100).nullish(),
+  latencyMs: tokenCount.nullish(),
+  inputTokens: tokenCount.nullish(),
+  outputTokens: tokenCount.nullish(),
+  cacheReadTokens: tokenCount.nullish(),
+  cacheWriteTokens: tokenCount.nullish(),
+  reasoningTokens: tokenCount.nullish(),
+  cost: costSchema,
+  costSource: costSourceSchema,
+  currency: currencySchema,
+}).superRefine(checkCacheFields);
+
+export type LlmFailedPayload = z.infer<typeof LlmFailedPayloadSchema>;
 
 export const AgentRegisteredPayloadSchema = z.object({
   id: z.string().optional(),
@@ -204,6 +288,7 @@ const PAYLOAD_SCHEMAS: Record<CanonicalEventType, z.ZodTypeAny> = {
   'meeting.ended': MeetingEndedPayloadSchema,
   'meeting.cancelled': MeetingCancelledPayloadSchema,
   'llm.usage': LlmUsagePayloadSchema,
+  'llm.failed': LlmFailedPayloadSchema,
   'runtime.connected': RuntimeConnectedPayloadSchema,
   'runtime.disconnected': RuntimeDisconnectedPayloadSchema,
   'runtime.heartbeat': RuntimeHeartbeatPayloadSchema,

@@ -9,6 +9,8 @@ import { WORKSPACE_ANCHORS } from '../../src/engine/livingOfficeEngine';
 import type { CanonicalEvent } from '../../src/lib/index';
 import {
   T0,
+  llmFailed,
+  llmUsage,
   makeEvent,
   meetingMessage,
   meetingRequested,
@@ -283,5 +285,81 @@ describe('applyExternalEvent: return after a meeting', () => {
     ]);
     expect(agentIn(state, 'ana').workspace).toBe(before);
     expect(agentIn(state, 'ana').workspace).not.toBe('break_room');
+  });
+});
+
+describe('llm.failed', () => {
+  /** A failed attempt that the provider still billed in part. */
+  const billedFailure = {
+    provider: 'Anthropic',
+    model: 'claude-sonnet',
+    errorKind: 'timeout',
+    httpStatus: 504,
+    inputTokens: 900,
+    outputTokens: 30,
+    cacheReadTokens: 400,
+    cacheWriteTokens: 100,
+    reasoningTokens: 10,
+    cost: 0.5,
+    costSource: 'provider-reported',
+    currency: 'USD',
+  };
+
+  function counters(state: SimulationState, id: string) {
+    const agent = agentIn(state, id);
+    return {
+      agent: [agent.tokensInput, agent.tokensOutput, agent.cachedTokens, agent.reasoningTokens, agent.cost],
+      totals: { ...state.totalTokens },
+      totalCost: state.totalCost,
+      tasks: state.tasks.map((task) => [task.tokensTotal, task.costTotal]),
+    };
+  }
+
+  it.each([
+    ['trackUsage true', { ...PROFESSIONAL, trackUsage: true }],
+    ['trackUsage false', PROFESSIONAL],
+  ] as const)('updates provider and model and leaves status and counters alone with %s', (_label, options) => {
+    const state = apply(createLiveSimulationState(), [
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      llmUsage('ana', { provider: 'OpenAI', model: 'gpt-x', inputTokens: 500, outputTokens: 50, cost: 0.3 }, { at: T0 + 10 }),
+      statusChanged('ana', 'CODING', { at: T0 + 20 }),
+    ], options);
+    const before = counters(state, 'ana');
+    const ana = agentIn(state, 'ana');
+    const statusBefore = [ana.status, ana.statusText];
+
+    apply(state, [
+      llmFailed('ana', billedFailure, { at: T0 + 30 }),
+      llmFailed('ana', { provider: 'Anthropic', model: 'claude-sonnet', errorKind: 'rate_limited' }, { at: T0 + 40 }),
+    ], options);
+
+    expect(ana.provider).toBe('Anthropic');
+    expect(ana.model).toBe('claude-sonnet');
+    expect([ana.status, ana.statusText]).toEqual(statusBefore);
+    expect(ana.status).toBe('CODING');
+    expect(counters(state, 'ana')).toEqual(before);
+    expect(state.events.filter((event) => event.type === 'llm.failed')).toHaveLength(2);
+  });
+
+  it('keeps provider and model when the payload does not carry them as strings', () => {
+    const state = apply(createLiveSimulationState(), [
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      llmUsage('ana', { provider: 'OpenAI', model: 'gpt-x', inputTokens: 5, outputTokens: 1 }, { at: T0 + 10 }),
+      llmFailed('ana', { provider: 42, errorKind: 'unknown' }, { at: T0 + 20 }),
+    ]);
+    const ana = agentIn(state, 'ana');
+    expect(ana.provider).toBe('OpenAI');
+    expect(ana.model).toBe('gpt-x');
+  });
+
+  it('is kept as llm.failed and never rewritten to a status change', () => {
+    const state = apply(createLiveSimulationState(), [
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      llmFailed('ana', { provider: 'Anthropic', model: 'claude-sonnet', errorKind: 'overloaded' }, { at: T0 + 10 }),
+    ]);
+    const stored = state.events.find((event) => event.type === 'llm.failed');
+    expect(stored).toBeDefined();
+    expect(state.events.some((event) => event.type === 'agent.status.changed')).toBe(false);
+    expect(agentIn(state, 'ana').status).toBe('IDLE');
   });
 });

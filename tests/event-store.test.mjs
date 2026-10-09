@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { MemoryEventStore, SQLiteEventStore } from '../server/store.ts';
+import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
 
 test('MemoryEventStore: appends events, detects duplicates, and maintains snapshot', async () => {
   const store = new MemoryEventStore(50);
@@ -167,6 +168,67 @@ test('SQLiteEventStore: persists the full canonical event so it round-trips iden
   } finally {
     await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function validatedUsageWithoutCache(id) {
+  const result = validateCanonicalEvent({
+    id,
+    type: 'llm.usage',
+    timestamp: 5000,
+    runtimeId: 'rt_usage_unknown',
+    source: 'agent:gemini',
+    agentId: 'gemini',
+    summary: 'Usage without cache data',
+    payload: { provider: 'Google', model: 'gemini-2.5-pro', inputTokens: 5000, outputTokens: 1000 },
+  });
+  assert.equal(result.success, true);
+  return result.data;
+}
+
+const UNKNOWN_COUNTERS = ['cachedTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'];
+
+test('SQLiteEventStore: llm.usage without cache fields is stored without invented zeros', async () => {
+  const { dir, file } = tempDbPath('usage-unknown');
+  let store = new SQLiteEventStore(file);
+  try {
+    await store.append(validatedUsageWithoutCache('evt_usage_unknown_sql'));
+    await store.close();
+
+    const raw = new DatabaseSync(file);
+    const row = raw.prepare('SELECT event_json, payload FROM events WHERE id = ?').get('evt_usage_unknown_sql');
+    raw.close();
+    const eventJson = JSON.parse(row.event_json);
+    const payloadJson = JSON.parse(row.payload);
+    for (const key of UNKNOWN_COUNTERS) {
+      assert.equal(key in eventJson.payload, false, `event_json should not hold ${key}`);
+      assert.equal(key in payloadJson, false, `payload column should not hold ${key}`);
+    }
+
+    store = new SQLiteEventStore(file);
+    const [listed] = await store.list({ runtimeId: 'rt_usage_unknown' });
+    assert.deepStrictEqual(listed.payload, {
+      provider: 'Google',
+      model: 'gemini-2.5-pro',
+      inputTokens: 5000,
+      outputTokens: 1000,
+      cost: null,
+      costSource: 'unknown',
+    });
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MemoryEventStore: llm.usage without cache fields is stored without invented zeros', async () => {
+  const store = new MemoryEventStore();
+  await store.append(validatedUsageWithoutCache('evt_usage_unknown_mem'));
+  const [listed] = await store.list({ runtimeId: 'rt_usage_unknown' });
+  const serialized = JSON.parse(JSON.stringify(listed));
+  for (const key of UNKNOWN_COUNTERS) {
+    assert.equal(key in listed.payload, false, `memory store should not hold ${key}`);
+    assert.equal(key in serialized.payload, false, `serialized event should not hold ${key}`);
   }
 });
 

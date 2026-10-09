@@ -76,6 +76,43 @@ test('Event log parser: captures invalid and malformed lines without aborting va
   assert.equal(res.issues[1].line, 3); // invalid schema
 });
 
+test('Event log parser: accepts llm.failed lines and keeps unknown figures absent', async () => {
+  const jsonl = [
+    JSON.stringify({
+      schemaVersion: '1.0',
+      id: 'evt_usage_log',
+      type: 'llm.usage',
+      timestamp: 1000,
+      source: 'agent:researcher',
+      summary: 'Usage report',
+      payload: { provider: 'Anthropic', model: 'claude-sonnet', inputTokens: 1200, outputTokens: 80, cacheReadTokens: 1000 },
+    }),
+    JSON.stringify({
+      schemaVersion: '1.0',
+      id: 'evt_failed_log',
+      type: 'llm.failed',
+      timestamp: 2000,
+      source: 'agent:researcher',
+      summary: 'Anthropic/claude-sonnet call failed (overloaded)',
+      payload: { provider: 'Anthropic', model: 'claude-sonnet', errorKind: 'overloaded', httpStatus: 529, retryable: true },
+    }),
+  ].join('\n');
+
+  const res = await parseEventLog(jsonl);
+  assert.equal(res.issues.length, 0);
+  assert.equal(res.events.length, 2);
+  const failed = res.events.find((event) => event.id === 'evt_failed_log');
+  assert.equal(failed.type, 'llm.failed');
+  assert.equal(failed.agentId, 'researcher');
+  assert.equal(failed.payload.errorKind, 'overloaded');
+  assert.equal(failed.payload.cost, null);
+  assert.equal('inputTokens' in failed.payload, false);
+  const usage = res.events.find((event) => event.id === 'evt_usage_log');
+  assert.equal(usage.payload.cacheReadTokens, 1000);
+  assert.equal('cachedTokens' in usage.payload, false);
+  assert.equal('reasoningTokens' in usage.payload, false);
+});
+
 test('Event log parser: rejects payloads exceeding 25 MB limit', async () => {
   // Create an artificial oversized string
   const giant = 'a'.repeat(MAX_EVENT_LOG_SIZE_BYTES + 10);

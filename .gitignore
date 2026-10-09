@@ -10,6 +10,9 @@ __pycache__/
 *.pyc
 data/
 *.db*
+!tests/fixtures/
+!tests/fixtures/sqlite/
+!tests/fixtures/sqlite/*.db
 .venv/
 
 # Library build output
@@ -19,3 +22,6 @@ dist-lib/
 # Evidencias locales de navegador
 /test-results/
 /playwright-report/
+
+# CLI build output (npm run build:cli)
+dist-cli/

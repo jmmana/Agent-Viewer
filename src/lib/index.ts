@@ -56,6 +56,8 @@ export {
   EVENT_TYPE_ALIASES,
   MESSAGE_KINDS,
   isMessageKind,
+  LLM_ERROR_KINDS,
+  isLlmErrorKind,
   normalizeCanonicalEvent,
 } from '../integrations/canonicalTypes';
 export type {
@@ -63,6 +65,7 @@ export type {
   CanonicalEventType,
   EventSeverity,
   MessageKind,
+  LlmErrorKind,
   CanonicalEventInput,
   LegacyEventType,
   ValidationIssue,

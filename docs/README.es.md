@@ -91,6 +91,30 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 
 ## ⚡ Inicio rápido
 
+### Un solo comando
+
+```bash
+npx @warlockcode/agent-viewer
+```
+
+Levanta el servidor de ingesta y la oficina juntos en `http://127.0.0.1:8787`, abre el navegador e imprime el token de la sesión y un comando `curl` que puedes pegar para que aparezca tu primer agente. Después, sin escribir JSON:
+
+```bash
+npx @warlockcode/agent-viewer send --agent demo --status working --message "Hola"
+```
+
+Las opciones (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) están en la [guía de la CLI](cli.md) (en inglés). Lo mismo con Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (las opciones después del nombre de la imagen se suman a sus valores por defecto; etiquetas y tokens en la [guía de la CLI](cli.md#docker)). Mientras el paquete no esté en npm y la próxima versión no publique la imagen, ejecuta el `.tgz` de la versión con `npx ./warlockcode-agent-viewer-<versión>.tgz`.
+
+### Mira trabajar a Claude Code
+
+```bash
+npx @warlockcode/agent-viewer install claude-code   # en tu proyecto; muestra el cambio y pregunta antes
+```
+
+Tus sesiones de Claude Code y sus subagentes aparecen en la oficina: herramientas, traspasos y cuándo Claude te espera. Solo viajan nombres de herramientas, tipos de agente, tiempos y estados; nunca argumentos, prompts, código ni rutas. Instalación, privacidad y desinstalación: [claude-code.md](claude-code.md) (en inglés).
+
+### Desde el repositorio
+
 Para trabajar en el repositorio necesitas Node.js 24 o superior. Las apps que solo instalan la librería necesitan React 19, nada más.
 
 ```bash
@@ -153,7 +177,9 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compilada en **:3000**. Abre **http://localhost:3000/?mode=live** para ver el flujo.
+Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compilada en **:3000**. La API nunca corre sin token: define `AGENT_VIEWER_API_TOKEN` antes de `up` para elegirlo, o lee el que genera con `docker compose -f docker/compose.yml logs api`. Luego abre **http://localhost:3000/?mode=live#token=&lt;token&gt;** para ver el flujo (la oficina quita el token de la barra de direcciones en cuanto lo lee).
+
+> **Mantenedores:** GitHub Container Registry crea el paquete `ghcr.io/jmmana/agent-viewer` como privado, y el flujo de publicación no puede cambiarlo. Después de la primera versión que lo publique, hazlo público una vez en la página del paquete: **Package settings > Danger Zone > Change visibility > Public**. El resumen de la ejecución de la publicación muestra la visibilidad actual.
 
 ---
 
@@ -166,7 +192,7 @@ Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compi
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> en modo profesional: una reunión donde los agentes proponen, objetan, acuerdan y deciden. Solo se dibujan los eventos que recibe el componente.</sub>
 </p>
 
-Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.2.1**. Solo módulos ES, React y React DOM 19 como dependencias peer, `lucide-react` y `zod` como únicas dependencias de ejecución, y declaraciones de TypeScript incluidas.
+Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.2.1**. Solo módulos ES, React y React DOM 19 como dependencias peer, `express`, `lucide-react` y `zod` como dependencias de ejecución (con `express` corre el servidor del comando `agent-viewer`; los módulos de la librería nunca lo importan), y declaraciones de TypeScript incluidas.
 
 La publicación en npm llegará muy pronto. Mientras tanto, instálala desde el archivo de la release de GitHub (el nombre del paquete y tus imports no cambian cuando pases a npm):
 
@@ -291,7 +317,7 @@ Todo texto visible sale de un catálogo de 116 claves. Cambia el nombre de una s
 | Repetición | `useEventReplay`, `ReplayControls` |
 | Consumo (solo visualización) | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` |
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` |
-| Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
+| Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
 | Flujo en vivo | `connectEventStream` |
 | Archivos de log | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` |
@@ -350,7 +376,7 @@ export function OficinaConConsumo({ events }: { events: readonly OfficeEventInpu
 }
 ```
 
-`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`, y devuelve un costo desconocido antes que una suma parcial.
+`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`: ignora los ids de evento repetidos, deja como desconocido un conteo de tokens que un evento no reporta y devuelve un costo desconocido antes que una suma parcial o una suma de monedas mezcladas o ausentes.
 
 </details>
 
@@ -409,6 +435,8 @@ Madurez honesta, para que sepas qué te llevas:
 | Integración | Dónde | Madurez |
 |---|---|---|
 | **API REST, lotes, SSE** | [`server/`](../server/index.ts) | ✅ **Estable.** Cubierta por pruebas de integración, de SSE y de seguridad del webhook en CI. |
+| **Claude Code** | [`agent-viewer install claude-code`](claude-code.md) | ✅ **Estable.** Hooks oficiales de Claude Code: sesiones, subagentes como agentes propios, herramientas y esperas. Pruebas con fixtures de cada tipo de hook demuestran que no salen argumentos ni contenido. |
+| **CLI** | [`npx @warlockcode/agent-viewer`](cli.md) | ✅ **Estable.** Servidor y oficina en un comando, y `send` para eventos rápidos. Prueba de punta a punta en CI. |
 | **Webhook genérico** | `POST /api/v1/webhooks/generic` | ✅ **Estable.** Cuerpo plano, firma HMAC-SHA256 opcional con ventana anti repetición de 5 minutos. |
 | **SDK de Python** | [`sdk/python/`](../sdk/python/agent_viewer.py) | ✅ **Estable.** Solo biblioteca estándar, probado contra un servidor real en CI. Todavía no está en PyPI. |
 | **SDK de TypeScript** | [`sdk/typescript/`](../sdk/typescript/index.ts) | ✅ **Estable.** Probado en CI. Aún no es un paquete aparte: impórtalo desde una copia del repositorio. |
@@ -438,12 +466,12 @@ analista = viewer.agent("analyst", name="Iris", role_title="Analista de mercado"
 analista.researching("Leyendo los informes trimestrales")
 analista.tool_started("lector_de_informes", input_summary="Formulario 10-K")
 analista.tool_completed("lector_de_informes", output_summary="42 páginas recuperadas")
-analista.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
+analista.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024, cost_source="provider-reported", currency="USD")
 analista.message("El resumen está listo para revisión.", target_agent_name="Nova")
 analista.done("Resumen entregado")
 ```
 
-El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido.
+El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido. Los tokens que no envías siguen desconocidos, nunca `0`. El SDK nunca supone `provider-reported`: un `cost` sin `cost_source` se envía como `unknown`, con un solo aviso por cliente.
 
 ### SDK de TypeScript
 
@@ -456,7 +484,7 @@ const builder = viewer.agent({ id: 'builder', name: 'Atlas', roleTitle: 'Desarro
 await builder.coding('Implementando el manejador del webhook');
 await builder.toolStarted('npm.test', 'pruebas unitarias');
 await builder.toolCompleted('npm.test', '128 aprobadas');
-await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012 });
+await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012, costSource: 'provider-reported', currency: 'USD' });
 await builder.message('El manejador está listo para revisión.', 'Nova');
 await builder.done('Pull request abierto');
 ```
@@ -489,7 +517,7 @@ Un solo sobre para todo. Los productores lo envían, el servidor lo valida con Z
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `schemaVersion` | `"1.0"` | Versión del contrato. |
-| `id` | `string` | Id único del evento; también es la clave de idempotencia. |
+| `id` | `string` | Id único del evento; también es la clave de idempotencia. Un id nombra exactamente un evento: reutilizarlo con otro contenido se rechaza con 409. |
 | `type` | `string` | Uno de los 22 tipos canónicos (se aceptan alias). |
 | `timestamp` | `number` | Época Unix en milisegundos. |
 | `source` | `string` | Quién lo produce, por ejemplo `runtime:crewai` o `agent:researcher`. |
@@ -516,14 +544,15 @@ Un solo sobre para todo. Los productores lo envían, el servidor lo valida con Z
 | | `meeting.started` | Empieza de inmediato. |
 | | `meeting.message` | Burbuja encabezada por su tipo; una `decision` se suma a las decisiones de la reunión. |
 | | `meeting.ended`, `meeting.cancelled` | Libera la sala; los participantes vuelven caminando a su puesto. |
-| Telemetría | `llm.usage` | Proveedor, modelo, tokens de entrada, salida, caché y razonamiento, latencia, costo, origen del costo y moneda. |
+| Telemetría | `llm.usage` | Proveedor, modelo, tokens de entrada y salida, tokens leídos y escritos en caché, tokens de razonamiento, latencia, costo, origen del costo y moneda. Una cifra que no se reportó queda como desconocida, nunca como 0. |
+| | `llm.failed` | Un intento fallido de llamada al modelo: proveedor, modelo, tipo de error, estado HTTP y si se puede reintentar. Tokens y costo solo cuando el proveedor cobró el intento. Sin cambio de estado. |
 | Runtime | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | Salud del runtime; sin cambio visible. |
 
 Los alias como `message.sent`, `meeting.decision` o `approval.requested` se traducen a su tipo canónico. La tabla completa de efectos está en la [guía de la librería](library.es.md#cómo-cambian-la-oficina-los-eventos), y el esquema en [`canonicalContract.ts`](../src/integrations/canonicalContract.ts).
 
 </details>
 
-**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés).
+**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los SDK nunca suponen `provider-reported`: un costo enviado sin `costSource` declarado sale como `unknown`. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés).
 
 ---
 
@@ -557,17 +586,30 @@ flowchart LR
 | Método | Endpoint | Para qué |
 |---|---|---|
 | `GET` | `/health` | Estado, versión, versión del esquema y clientes SSE conectados. |
-| `GET` | `/ready` | Disponibilidad del almacenamiento. |
-| `POST` | `/api/v1/events` | Ingesta de un evento. Respeta el encabezado `Idempotency-Key`. |
-| `POST` | `/api/v1/events/batch` | Ingesta de hasta 100 eventos (configurable). Los duplicados se omiten sin error. |
+| `GET` | `/ready` | Disponibilidad del almacenamiento y los contadores `ingestion` (conflictos rechazados y filas antiguas que coincidieron solo por id). SQLite también devuelve la versión del esquema y la hora de la última migración. |
+| `POST` | `/api/v1/events` | Ingesta de un evento. Respeta el encabezado `Idempotency-Key`. Un reintento real es un duplicado `200`; el mismo id con otro contenido es un `409`. |
+| `POST` | `/api/v1/events/batch` | Ingesta de hasta 100 eventos (configurable). Cada elemento informa `accepted`, `duplicate` o `conflict`; solo los aceptados se guardan y se transmiten. |
 | `GET` | `/api/v1/events` | Consulta con `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Reenvía los eventos perdidos desde `Last-Event-ID`; latido cada 15 s. |
-| `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes, tokens y costo. |
+| `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes y el bloque `usage`. Los campos obsoletos `totalCost` y `cost` de cada agente son `null` salvo que todas las llamadas reporten una sola moneda conocida (una moneda, un origen de costo). |
+| `GET` | `/api/v1/usage` | Solo los agregados de consumo, llamada por llamada: por agente y por `(provider, model)`, con los conteos de lo desconocido y los costos por moneda, nunca sumados entre monedas. [Detalles](integration.md#usage-aggregates-get-apiv1usage) (en inglés). |
 | `POST` | `/api/v1/agents` | Registra o actualiza un agente. |
-| `PATCH` | `/api/v1/agents/:agentId` | Actualiza el estado o las propiedades de un agente. |
+| `PATCH` | `/api/v1/agents/:agentId` | Actualiza el perfil o el estado de un agente (solo campos descriptivos; el uso se reporta con `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Registra un runtime (latido) / lista los runtimes. |
 | `GET` | `/api/v1/sessions`, `/api/v1/sessions/:sessionId` | Lista las sesiones / muestra una con sus eventos. |
 | `POST` | `/api/v1/webhooks/generic` | Webhook plano: `agent`, `status`, `message`, `tool`, `usage`. |
+
+**Campos PATCH del agente:** `name`, `roleTitle`, `provider` y `model` emiten `agent.updated`. `status` emite `agent.status.changed`; `statusText` y `workspace` acompañan ese evento cuando se incluye `status`, y en caso contrario emiten `agent.updated`. Los valores deben ser cadenas: los campos del perfil y `workspace` se recortan y deben tener entre 1 y 200 caracteres; `statusText`, entre 0 y 1000; y `status` debe ser un estado conocido. Se rechazan los demás campos. No se pueden modificar campos de uso como `tokensInput`, `inputTokens`, `cachedTokens`, `cost`, `currency` y `latencyMs`. Reporta el uso con un evento `llm.usage` en `POST /api/v1/events` o con la función auxiliar `usage()` del SDK.
+
+Por ejemplo, un campo de uso devuelve HTTP 400:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.",
+  "issues": [{ "path": "cost", "code": "usage_not_patchable", "message": "Report cost with an llm.usage event." }]
+}
+```
 
 <details>
 <summary><b>🧾 Validación, idempotencia y respuestas por lotes</b></summary>
@@ -582,22 +624,64 @@ Un evento inválido recibe HTTP 400 con las rutas exactas que fallaron:
 }
 ```
 
-Un id de evento que ya se recibió devuelve HTTP 200 en lugar de guardar una segunda copia:
+El id del evento es la clave de idempotencia, y el contenido decide qué significa un id repetido. El servidor compara una huella `fingerprint` (`sha256:` sobre el evento validado, con las claves ordenadas y los valores por defecto ya puestos) con la que guardó:
+
+| Guardado | Recibido | Respuesta | Efecto |
+|---|---|---|---|
+| ningún evento con ese id | cualquiera | `202` aceptado | Se guarda, se agrega y se transmite. |
+| mismo id, mismo contenido | | `200` duplicado | No cambia nada. Es un reintento real. |
+| mismo id, otro contenido | | `409 conflicting_duplicate` | No se guarda, no se agrega ni se transmite. El evento guardado queda como estaba. |
+
+El primer envío devuelve `202` con la huella, y un reintento real devuelve HTTP 200 con la misma huella en lugar de guardar una segunda copia:
 
 ```json
-{ "accepted": true, "duplicate": true, "id": "evt_req_9921" }
+{ "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
 ```
 
-Un lote informa el resultado de cada evento:
+El mismo id con cualquier campo guardado distinto (un conteo de tokens, el costo, un costo que era `0` y ahora falta, o el `timestamp`) se rechaza con HTTP 409:
 
 ```json
 {
-  "accepted": 2,
-  "duplicates": 0,
-  "total": 2,
-  "results": [{ "id": "evt_b1", "duplicate": false }, { "id": "evt_b2", "duplicate": false }]
+  "error": "conflicting_duplicate",
+  "message": "An event with id \"evt_req_9921\" was already stored with different content. The new event was not applied.",
+  "id": "evt_req_9921",
+  "fingerprint": "sha256:9b0e...",
+  "storedFingerprint": "sha256:3f1c..."
 }
 ```
+
+Un reintento debe reenviar el evento idéntico, con el mismo `timestamp`; rehacer el cuerpo con un `Date.now()` nuevo es otro evento. Da a cada evento distinto su propio id. Un alias de tipo que la validación resuelve al tipo canónico es el mismo evento, así que es un duplicado.
+
+Si se envían el encabezado `Idempotency-Key` y un `id` no vacío en el cuerpo y no coinciden, no se guarda nada y la respuesta es HTTP 400. Un encabezado sin `id` en el cuerpo se usa como id, como antes:
+
+```json
+{ "error": "idempotency_key_mismatch", "message": "Idempotency-Key \"a\" does not match the event id \"b\"." }
+```
+
+Un lote responde `202` siempre que la validación pase, aunque no se haya aplicado ningún elemento, así que lee `conflicts` y el `status` de cada elemento (en el orden de entrada). Cada elemento se compara con lo guardado y con los elementos anteriores del mismo lote:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 1,
+  "conflicts": 1,
+  "total": 3,
+  "results": [
+    { "id": "evt_b1", "status": "accepted",  "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b2", "status": "duplicate", "duplicate": true,  "fingerprint": "sha256:bb..." },
+    { "id": "evt_b3", "status": "conflict",  "duplicate": false, "fingerprint": "sha256:cc...",
+      "error": "conflicting_duplicate", "storedFingerprint": "sha256:3f1c..." }
+  ]
+}
+```
+
+Cada conflicto también escribe una línea de registro `warn` con el id, el tipo, el origen, el agente y las dos huellas (nunca el payload), y `GET /ready` los cuenta desde que arrancó el proceso:
+
+```json
+{ "ok": true, "ready": true, "storage": "sqlite", "ingestion": { "conflicts": 1, "legacyUnverifiedDuplicates": 0 } }
+```
+
+`legacyUnverifiedDuplicates` cuenta los ids repetidos que coincidieron con filas de SQLite escritas antes de 0.2.0 (o con un `event_json` ilegible): su contenido no se puede comparar, así que se tratan como duplicados. Los contadores se reinician al reiniciar el servidor.
 
 </details>
 
@@ -625,7 +709,9 @@ La firma se compara en tiempo constante. Las marcas de tiempo vencidas y las fir
 
 </details>
 
-**Almacenamiento:** `memory` (por defecto) guarda los últimos 10.000 eventos en un búfer circular. `sqlite` usa el módulo `node:sqlite` incluido en Node y guarda eventos, runtimes, sesiones y agentes en `./data/agent-viewer.db`.
+**Almacenamiento:** `memory` (por defecto) guarda los últimos 10.000 eventos en un búfer circular. `sqlite` usa el módulo `node:sqlite` incluido en Node y guarda eventos en `./data/agent-viewer.db`; el estado de runtimes, sesiones y agentes permanece en memoria.
+
+Las migraciones del esquema SQLite se ejecutan automáticamente al iniciar. Antes de actualizar una base de datos existente, `AGENT_VIEWER_SQLITE_BACKUP=auto` crea por defecto un archivo `.bak` junto a ella. Las copias contienen los mismos datos de eventos, nunca se eliminan automáticamente y pueden alargar el primer inicio si el archivo es grande. Usa `AGENT_VIEWER_SQLITE_BACKUP=off` si gestionas las copias por tu cuenta. El servidor rechaza una base con un esquema más reciente; para volver atrás, detén el servidor y restaura el archivo `.bak` antes de iniciar una versión anterior. En modo SQLite, `/ready` informa `database.schemaVersion`, `database.latestKnownSchemaVersion` y `database.appliedAt`. Son datos de migración de la base; `schemaVersion` de `/health` corresponde a la versión del contrato de eventos (`1.0`).
 
 ---
 
@@ -636,10 +722,11 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | Variable | Por defecto | Qué hace |
 |---|---|---|
 | `PORT` | `8787` | Puerto del servidor. |
-| `AGENT_VIEWER_API_TOKEN` | vacío | Protege `/api/v1/*`. Los clientes envían `Authorization: Bearer <token>`, o `?token=` (o `?api_key=`) para `EventSource`. Vacío significa abierto, para desarrollo local. `AGENT_VIEWER_API_KEY`, que todavía leen los adaptadores de ejemplo, es un alias obsoleto. |
+| `AGENT_VIEWER_API_TOKEN` | vacío | Protege `/api/v1/*`. Los clientes envían `Authorization: Bearer <token>`, o `?token=` (o `?api_key=`) para `EventSource`. Vacío significa abierto, para desarrollo local con `npm run server`; la CLI `agent-viewer` y las imágenes Docker nunca corren abiertas (un valor en blanco cuenta como no definido y se genera un token). `AGENT_VIEWER_API_KEY`, que todavía leen los adaptadores de ejemplo, es un alias obsoleto. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` si no se define | Orígenes de navegador permitidos, separados por comas. `server/.env.example` trae `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` o `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | Archivo SQLite cuando el almacenamiento es `sqlite`. |
+| `AGENT_VIEWER_SQLITE_BACKUP` | `auto` | Hace una copia de una base SQLite existente antes de migrarla, o usa `off` si gestionas las copias por separado. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Máximo de eventos por petición de lote. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Peticiones por minuto por IP en `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | vacío | Activa la verificación HMAC del webhook genérico. |

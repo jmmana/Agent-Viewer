@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import type { Server } from 'node:http';
 import express from 'express';
-import dotenv from 'dotenv';
 import { z } from 'zod';
 import {
   type CanonicalEvent,
@@ -10,9 +9,28 @@ import {
   ValidationIssue,
 } from '../src/integrations/canonicalContract';
 import type { AgentStatus } from '../src/types/agent';
-import { createEventStore, type EventStore } from './store';
+import { serverEventId } from './ids';
+import { createEventStore, type AppendResult, type EventStore } from './store';
+import { readPackageVersion } from './version';
 
-dotenv.config({ quiet: true });
+/**
+ * Set by the `agent-viewer` CLI before it imports this module. The CLI configures the server through its own
+ * flags, so it neither reads a `.env` file from the user's directory nor lets this module listen on its own.
+ */
+const embedded = process.env.AGENT_VIEWER_EMBEDDED === '1';
+const isDirectRun =
+  !embedded &&
+  process.argv[1] &&
+  (process.argv[1].endsWith('server/index.ts') ||
+    process.argv[1].endsWith('server/index.js') ||
+    process.argv[1].endsWith('server') ||
+    process.env.npm_lifecycle_event === 'server');
+
+// dotenv is a development dependency: the published CLI runs embedded and never loads it.
+if (!embedded) {
+  const dotenv = await import('dotenv');
+  dotenv.config({ quiet: true });
+}
 
 const app = express();
 // Express 5 defaults to the "simple" query parser. Keep the "extended" (qs) parser of Express 4 so query
@@ -39,8 +57,30 @@ type MissingAgentStatus = Exclude<AgentStatus, (typeof AGENT_STATUSES)[number]>;
 const agentStatusesAreExhaustive: [MissingAgentStatus] extends [never] ? true : never = true;
 void agentStatusesAreExhaustive;
 const AGENT_STATUS_SET: ReadonlySet<string> = new Set(AGENT_STATUSES);
+const PATCH_USAGE_FIELDS: ReadonlySet<string> = new Set([
+  'tokensInput', 'tokensOutput', 'inputTokens', 'outputTokens', 'cachedTokens', 'cacheReadTokens', 'cacheWriteTokens',
+  'reasoningTokens', 'totalTokens', 'cost', 'currency', 'costSource', 'latencyMs', 'usage',
+]);
+const PATCH_READ_ONLY_FIELDS: ReadonlySet<string> = new Set(['lastSeenAt']);
+const PATCH_PROFILE_FIELDS: ReadonlySet<string> = new Set(['name', 'roleTitle', 'provider', 'model']);
+const PATCH_STATUS_FIELDS: ReadonlySet<string> = new Set(['status', 'statusText', 'workspace']);
+const PATCH_ALLOWED_FIELDS: ReadonlySet<string> = new Set([
+  ...PATCH_PROFILE_FIELDS,
+  ...PATCH_STATUS_FIELDS,
+]);
+const PATCH_USAGE_MESSAGE =
+  'Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.';
 
-const store: EventStore = createEventStore();
+let store: EventStore;
+try {
+  store = createEventStore();
+} catch (error) {
+  if (!isDirectRun) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message.replace(/[\r\n]+/g, ' ').trim());
+  if (process.env.DEBUG && error instanceof Error && error.stack) console.error(error.stack);
+  process.exit(1);
+}
 const clients = new Set<express.Response>();
 
 // Rate limiter storage
@@ -172,8 +212,7 @@ app.use('/api/v1', (req, res, next) => {
 // -------------------------------------------------------------
 // Health & Ready
 // -------------------------------------------------------------
-/** Single source of the version: package.json, the same number the release tag uses. */
-const SERVER_VERSION: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const SERVER_VERSION: string = readPackageVersion();
 
 app.get('/health', (_req, res) => {
   res.json({
@@ -189,18 +228,45 @@ app.get('/health', (_req, res) => {
 app.get('/ready', async (_req, res) => {
   try {
     const storageType = process.env.AGENT_VIEWER_STORAGE || 'memory';
+    const database = store.getSchemaInfo?.();
     res.json({
       ok: true,
       ready: true,
       storage: storageType,
+      ...(database ? { database } : {}),
+      // Per process, reset on restart: conflicting duplicates rejected and legacy rows matched by id only.
+      ingestion: store.ingestionCounters(),
     });
   } catch (err: any) {
     res.status(503).json({ ok: false, ready: false, error: err?.message || 'Storage error' });
   }
 });
 
+/** Listeners told about every event the server accepts, in the order they are broadcast (used by `--record`). */
+type AcceptedEventListener = (event: CanonicalEvent) => void | Promise<void>;
+const acceptedEventListeners = new Set<AcceptedEventListener>();
+
+/** Calls `listener` with each accepted event. Returns a function that removes the listener. */
+export function onEventAccepted(listener: AcceptedEventListener): () => void {
+  acceptedEventListeners.add(listener);
+  return () => {
+    acceptedEventListeners.delete(listener);
+  };
+}
+
 // Helper to broadcast event to SSE subscribers (without named event so EventSource.onmessage receives all)
 function broadcastEvent(event: CanonicalEvent) {
+  for (const listener of acceptedEventListeners) {
+    // A failing listener must never break ingestion, whether it throws or returns a rejected promise.
+    try {
+      const result = listener(event);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // Ignored on purpose, see above.
+    }
+  }
   const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
   for (const client of clients) {
     try {
@@ -211,6 +277,32 @@ function broadcastEvent(event: CanonicalEvent) {
   }
 }
 
+/** Body of a `409 conflicting_duplicate`, also used for conflicting items of a batch. */
+function conflictMessage(id: string): string {
+  return `An event with id "${id}" was already stored with different content. The new event was not applied.`;
+}
+
+/**
+ * Stores an event the server built itself and broadcasts it only when the store accepted it. Any other outcome
+ * means a server-generated id was reused, which is a server bug: it is logged at error and answered with
+ * `500 internal_id_collision` instead of being hidden. Returns false when the response was already sent.
+ */
+async function appendServerEvent(event: CanonicalEvent, res: express.Response): Promise<boolean> {
+  const result: AppendResult = await store.append(event);
+  if (result.outcome === 'accepted') {
+    broadcastEvent(event);
+    return true;
+  }
+  console.error(
+    `[agent-viewer] Server-generated event id collided: ${JSON.stringify({ id: event.id, type: event.type, outcome: result.outcome })}`
+  );
+  res.status(500).json({
+    error: 'internal_id_collision',
+    message: `The server generated event id "${event.id}", which was already stored. The event was not applied.`,
+  });
+  return false;
+}
+
 // -------------------------------------------------------------
 // Event Ingestion (Single)
 // -------------------------------------------------------------
@@ -219,8 +311,19 @@ app.post('/api/v1/events', async (req, res) => {
   // Express 5 leaves req.body undefined when the request has no JSON body (Express 4 set it to {}).
   let body = req.body ?? {};
 
-  if (idempotencyKey && !body.id) {
-    body = { ...body, id: idempotencyKey };
+  if (idempotencyKey) {
+    // The header and the body id name the same event. When both are given and differ, nothing is stored.
+    const bodyId: unknown = typeof body === 'object' && body !== null ? body.id : undefined;
+    if (typeof bodyId === 'string' && bodyId.length > 0 && bodyId !== idempotencyKey) {
+      res.status(400).json({
+        error: 'idempotency_key_mismatch',
+        message: `Idempotency-Key "${idempotencyKey}" does not match the event id "${bodyId}".`,
+      });
+      return;
+    }
+    if (!body.id) {
+      body = { ...body, id: idempotencyKey };
+    }
   }
 
   const validation = validateCanonicalEvent(body);
@@ -235,11 +338,24 @@ app.post('/api/v1/events', async (req, res) => {
   const event = validation.data;
   const result = await store.append(event);
 
-  if (result.duplicate) {
+  if (result.outcome === 'conflict') {
+    // Same id, different content: not applied, not stored, not broadcast. The stored event stays as it was.
+    res.status(409).json({
+      error: 'conflicting_duplicate',
+      message: conflictMessage(event.id),
+      id: event.id,
+      fingerprint: result.fingerprint,
+      storedFingerprint: result.storedFingerprint,
+    });
+    return;
+  }
+
+  if (result.outcome === 'duplicate') {
     res.status(200).json({
       accepted: true,
       duplicate: true,
       id: event.id,
+      fingerprint: result.fingerprint,
     });
     return;
   }
@@ -250,6 +366,7 @@ app.post('/api/v1/events', async (req, res) => {
     accepted: true,
     duplicate: false,
     id: event.id,
+    fingerprint: result.fingerprint,
   });
 });
 
@@ -304,20 +421,30 @@ app.post('/api/v1/events/batch', async (req, res) => {
     return;
   }
 
-  const { accepted, duplicates, acceptedEvents } = await store.appendBatch(validatedEvents);
+  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(validatedEvents);
 
   for (const event of acceptedEvents) {
     broadcastEvent(event);
   }
 
+  // 202 even when every item is a conflict, so existing clients keep working: read `conflicts` and each `status`.
   res.status(202).json({
     accepted,
     duplicates,
+    conflicts,
     total: rawEvents.length,
-    results: validatedEvents.map((e) => ({
-      id: e.id,
-      duplicate: !acceptedEvents.some((acc) => acc.id === e.id),
-    })),
+    results: results.map((result) =>
+      result.outcome === 'conflict'
+        ? {
+            id: result.id,
+            status: result.outcome,
+            duplicate: false,
+            fingerprint: result.fingerprint,
+            error: 'conflicting_duplicate',
+            storedFingerprint: result.storedFingerprint,
+          }
+        : { id: result.id, status: result.outcome, duplicate: result.duplicate, fingerprint: result.fingerprint }
+    ),
   });
 });
 
@@ -347,6 +474,11 @@ app.get('/api/v1/events', async (req, res) => {
 app.get('/api/v1/snapshot', async (_req, res) => {
   const snapshot = await store.snapshot();
   res.json(snapshot);
+});
+
+// Usage aggregates only (the snapshot's `usage` block), without the event list.
+app.get('/api/v1/usage', async (_req, res) => {
+  res.json(await store.usageSummary());
 });
 
 // -------------------------------------------------------------
@@ -411,7 +543,7 @@ app.post('/api/v1/agents', async (req, res) => {
 
   const regEvent: CanonicalEvent = {
     schemaVersion: '1.0',
-    id: `evt_reg_${id}_${Date.now()}`,
+    id: serverEventId('reg'),
     type: 'agent.registered',
     timestamp: Date.now(),
     source: `agent:${id}`,
@@ -421,8 +553,7 @@ app.post('/api/v1/agents', async (req, res) => {
     payload: { id, name, roleTitle, provider, model, workspace },
   };
 
-  await store.append(regEvent);
-  broadcastEvent(regEvent);
+  if (!(await appendServerEvent(regEvent, res))) return;
 
   res.status(201).json(agent);
 });
@@ -440,44 +571,140 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
     res.status(400).json({ error: 'validation_failed', message: 'Request body must be a JSON object' });
     return;
   }
-  const changes = body as Record<string, any>;
 
-  let status: AgentStatus | undefined;
-  if (changes.status !== undefined && changes.status !== null) {
-    const normalized = typeof changes.status === 'string' ? changes.status.trim().toUpperCase() : '';
-    if (!AGENT_STATUS_SET.has(normalized)) {
-      const message = `Invalid status "${String(changes.status).slice(0, 100)}". Expected one of: ${AGENT_STATUSES.join(', ')}`;
-      res.status(400).json({ error: 'validation_failed', message, issues: [{ path: 'status', message }] });
-      return;
-    }
-    status = normalized as AgentStatus;
+  if (agentId === 'system' || agentId === 'external-runtime' || agentId.startsWith('runtime:')) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: `Agent "${agentId}" is reserved and cannot be updated through PATCH`,
+      issues: [{
+        path: 'agentId',
+        code: 'reserved_agent_id',
+        message: 'Reserved agent ids cannot be updated through PATCH',
+      }],
+    });
+    return;
   }
 
-  // The path id always wins over any id in the body.
-  const updated = await store.upsertAgent({
-    ...changes,
-    id: agentId,
-    status: status ?? existing.status,
-  });
+  const changes = body as Record<string, unknown>;
+  const issues: Array<{ path: string; code: string; message: string }> = [];
+  const profilePayload: Record<string, string> = {};
+  const statusPayload: Record<string, string> = {};
+  let status: AgentStatus | undefined;
+  let hasAllowedField = false;
 
-  // Emit status change or update event
+  for (const key of Object.keys(changes)) {
+    if (key === 'id') continue;
+    if (PATCH_USAGE_FIELDS.has(key)) {
+      const codeMessage =
+        key === 'cost' || key === 'currency' || key === 'costSource'
+          ? 'Report cost with an llm.usage event.'
+          : key === 'latencyMs' || key === 'usage'
+            ? 'Report usage with an llm.usage event.'
+            : 'Report tokens with an llm.usage event.';
+      issues.push({ path: key, code: 'usage_not_patchable', message: codeMessage });
+      continue;
+    }
+    if (PATCH_READ_ONLY_FIELDS.has(key)) {
+      issues.push({ path: key, code: 'read_only_field', message: 'This field is managed by the server.' });
+      continue;
+    }
+    if (!PATCH_ALLOWED_FIELDS.has(key)) {
+      issues.push({ path: key, code: 'unknown_field', message: 'This field is not patchable.' });
+      continue;
+    }
+
+    hasAllowedField = true;
+    const value = changes[key];
+    if (key === 'status') {
+      const normalized = typeof value === 'string' ? value.trim().toUpperCase() : '';
+      if (!AGENT_STATUS_SET.has(normalized)) {
+        const message = `Invalid status "${String(value).slice(0, 100)}". Expected one of: ${AGENT_STATUSES.join(', ')}`;
+        issues.push({ path: 'status', code: 'invalid_status', message });
+      } else {
+        status = normalized as AgentStatus;
+        statusPayload.status = status;
+      }
+      continue;
+    }
+
+    if (typeof value !== 'string') {
+      issues.push({ path: key, code: 'invalid_type', message: 'Expected a string.' });
+      continue;
+    }
+    const normalized = value.trim();
+    const maxLength = key === 'statusText' ? 1000 : 200;
+    if (normalized.length > maxLength || (key !== 'statusText' && normalized.length === 0)) {
+      issues.push({
+        path: key,
+        code: 'invalid_type',
+        message: key === 'statusText' ? 'Expected a string of at most 1000 characters.' : 'Expected a non-empty string of at most 200 characters.',
+      });
+      continue;
+    }
+
+    if (key === 'statusText' || key === 'workspace') statusPayload[key] = normalized;
+    else profilePayload[key] = normalized;
+  }
+
+  if (!hasAllowedField) {
+    issues.push({ path: '', code: 'empty_patch', message: 'At least one patchable field is required.' });
+  }
+
+  if (issues.length > 0) {
+    const usageIssue = issues.find((issue) => issue.code === 'usage_not_patchable');
+    res.status(400).json({
+      error: 'validation_failed',
+      message: usageIssue ? PATCH_USAGE_MESSAGE : issues[0].message,
+      issues,
+    });
+    return;
+  }
+
   if (status) {
-    const statusEvt: CanonicalEvent = {
+    const statusEventTimestamp = Date.now();
+    if (Object.keys(profilePayload).length > 0) {
+      const updatedEvent: CanonicalEvent = {
+        schemaVersion: '1.0',
+        id: serverEventId('upd'),
+        type: 'agent.updated',
+        timestamp: statusEventTimestamp,
+        source: `agent:${agentId}`,
+        agentId,
+        severity: 'normal',
+        summary: `${agentId} profile updated`,
+        payload: profilePayload,
+      };
+      if (!(await appendServerEvent(updatedEvent, res))) return;
+    }
+
+    const statusEvent: CanonicalEvent = {
       schemaVersion: '1.0',
-      id: `evt_status_${agentId}_${Date.now()}`,
+      id: serverEventId('status'),
       type: 'agent.status.changed',
-      timestamp: Date.now(),
+      timestamp: statusEventTimestamp,
       source: `agent:${agentId}`,
       agentId,
       severity: 'normal',
       summary: `${agentId} status updated to ${status}`,
-      payload: { status, statusText: changes.statusText, workspace: changes.workspace },
+      payload: statusPayload,
     };
-    await store.append(statusEvt);
-    broadcastEvent(statusEvt);
+    if (!(await appendServerEvent(statusEvent, res))) return;
+  } else {
+    const updatedEvent: CanonicalEvent = {
+      schemaVersion: '1.0',
+      id: serverEventId('upd'),
+      type: 'agent.updated',
+      timestamp: Date.now(),
+      source: `agent:${agentId}`,
+      agentId,
+      severity: 'normal',
+      summary: `${agentId} profile updated`,
+      payload: { ...profilePayload, ...statusPayload },
+    };
+    if (!(await appendServerEvent(updatedEvent, res))) return;
   }
 
-  res.json(updated);
+  res.json(await store.getAgent(agentId));
 });
 
 // -------------------------------------------------------------
@@ -493,7 +720,7 @@ app.post('/api/v1/runtimes', async (req, res) => {
   const runtime = await store.upsertRuntime({ id, name, framework, version, metadata });
   const event: CanonicalEvent = {
     schemaVersion: '1.0',
-    id: `evt_rt_${id}_${Date.now()}`,
+    id: serverEventId('rt'),
     type: 'runtime.connected',
     timestamp: Date.now(),
     runtimeId: id,
@@ -502,8 +729,7 @@ app.post('/api/v1/runtimes', async (req, res) => {
     summary: `Runtime ${id} connected`,
     payload: { id, name, framework, version, metadata },
   };
-  await store.append(event);
-  broadcastEvent(event);
+  if (!(await appendServerEvent(event, res))) return;
 
   res.status(201).json(runtime);
 });
@@ -658,7 +884,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   // Generate status changed event
   generatedEvents.push(
     normalizeCanonicalEvent({
-      id: `evt_wh_status_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: serverEventId('wh_status'),
       type: 'agent.status.changed',
       agentId: agentName,
       source: `agent:${agentName}`,
@@ -671,7 +897,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   if (message) {
     generatedEvents.push(
       normalizeCanonicalEvent({
-        id: `evt_wh_msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: serverEventId('wh_msg'),
         type: 'agent.message.sent',
         agentId: agentName,
         source: `agent:${agentName}`,
@@ -685,7 +911,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   if (tool) {
     generatedEvents.push(
       normalizeCanonicalEvent({
-        id: `evt_wh_tool_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: serverEventId('wh_tool'),
         type: 'tool.started',
         agentId: agentName,
         source: `agent:${agentName}`,
@@ -699,7 +925,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   if (usage && typeof usage === 'object') {
     generatedEvents.push(
       normalizeCanonicalEvent({
-        id: `evt_wh_usage_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: serverEventId('wh_usage'),
         type: 'llm.usage',
         agentId: agentName,
         source: `agent:${agentName}`,
@@ -709,15 +935,22 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     );
   }
 
-  const { accepted, acceptedEvents } = await store.appendBatch(generatedEvents);
+  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(generatedEvents);
   for (const evt of acceptedEvents) {
     broadcastEvent(evt);
+  }
+  if (duplicates > 0 || conflicts > 0) {
+    // Webhook ids are random UUIDs, so a repeat is a server bug, never a client retry.
+    const collided = results.filter((result) => result.outcome !== 'accepted').map(({ id, outcome }) => ({ id, outcome }));
+    console.error(`[agent-viewer] Webhook event ids collided: ${JSON.stringify(collided)}`);
   }
 
   res.status(202).json({
     accepted: true,
     eventsGenerated: generatedEvents.length,
     acceptedCount: accepted,
+    duplicateCount: duplicates,
+    conflictCount: conflicts,
     eventIds: generatedEvents.map((e) => e.id),
   });
 });
@@ -739,15 +972,10 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 });
 
 let serverInstance: any = null;
-const isDirectRun =
-  process.argv[1] &&
-  (process.argv[1].endsWith('server/index.ts') ||
-    process.argv[1].endsWith('server/index.js') ||
-    process.argv[1].endsWith('server') ||
-    (process.env.npm_lifecycle_event === 'server'));
 
-export function startServer(portToListen = port) {
-  return app.listen(portToListen);
+/** Starts listening. Without `host` it binds every interface, as before; the CLI passes `127.0.0.1`. */
+export function startServer(portToListen = port, host?: string): Server {
+  return host ? app.listen(portToListen, host) : app.listen(portToListen);
 }
 
 if (isDirectRun && process.env.NODE_ENV !== 'test') {

@@ -2,6 +2,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
+import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
+import { eventFingerprint } from './eventFingerprint';
+import { readPackageVersion } from './version';
+
+function sqliteBackupMode(value: string | undefined): 'auto' | 'off' {
+  const backup = value ?? 'auto';
+  if (backup !== 'auto' && backup !== 'off') {
+    throw new Error(`Invalid AGENT_VIEWER_SQLITE_BACKUP value "${backup}"; use "auto" or "off".`);
+  }
+  return backup;
+}
+import {
+  createUsageReducer,
+  resolveEventAgentId,
+  type LegacyUsageFields,
+  type UsageReducer,
+  type UsageSummary,
+} from './usageAggregates';
 
 let _DatabaseSync: any = null;
 function getDatabaseSync(): any {
@@ -45,13 +63,32 @@ export interface AgentRecord {
   status: string;
   statusText?: string;
   workspace?: string;
+  /** @deprecated Use the usage summary. Sum of reported input tokens only; a lower bound when some call did not report them. */
   tokensInput: number;
+  /** @deprecated Use the usage summary. Sum of reported output tokens only; a lower bound when some call did not report them. */
   tokensOutput: number;
+  /** @deprecated Use the usage summary. Sum of reported cache-read tokens only; a lower bound when some call did not report them. */
   cachedTokens: number;
+  /** @deprecated Use the usage summary. Sum of reported reasoning tokens only; a lower bound when some call did not report them. */
   reasoningTokens: number;
+  /**
+   * @deprecated Use the usage summary (`byAgent[].byCurrency`). Null unless every successful call of the agent
+   * reported a cost in one single currency with one single costSource, and null for an agent without calls.
+   */
   cost: number | null;
   lastSeenAt: number;
 }
+
+/** Usage figures of `AgentRecord`. They are projected from the usage reducer and never stored or written directly. */
+export type LegacyUsageKeys = 'tokensInput' | 'tokensOutput' | 'cachedTokens' | 'reasoningTokens' | 'cost';
+
+/** What the store keeps for an agent: its profile and status, never usage figures. */
+type StoredAgent = Omit<AgentRecord, LegacyUsageKeys>;
+
+/** Input of `upsertAgent`: profile fields only. Usage figures only come from stored `llm.usage` events. */
+export type AgentProfileInput = { id: string } & Partial<
+  Pick<AgentRecord, 'name' | 'roleTitle' | 'role' | 'provider' | 'model' | 'status' | 'statusText' | 'workspace'>
+>;
 
 export interface ViewerSnapshot {
   schemaVersion: '1.0';
@@ -62,13 +99,17 @@ export interface ViewerSnapshot {
   agents: AgentRecord[];
   activeTasks: any[];
   activeMeetings: any[];
+  /** Canonical usage figures, aggregated call by call. Same object as `GET /api/v1/usage`. */
+  usage: UsageSummary;
+  /** @deprecated Use usage.total.tokens. Sum of reported values only; a lower bound when unreportedCount > 0. */
   totalTokens: {
     input: number;
     output: number;
     cached: number;
     reasoning: number;
   };
-  totalCost: number;
+  /** @deprecated Use usage.total.byCurrency. Null unless every call reported a cost in one single currency with one single costSource. */
+  totalCost: number | null;
   eventsCount: number;
   events: CanonicalEvent[];
 }
@@ -83,12 +124,100 @@ export interface ListEventsOptions {
   type?: string;
 }
 
+/**
+ * What the store did with one event. The id is the idempotency key, and the content decides between a retry and a
+ * collision: `accepted` (new id, stored), `duplicate` (same id, same fingerprint, nothing done) or `conflict`
+ * (same id, different fingerprint: not stored, not aggregated, not broadcast, stored row unchanged).
+ */
+export type AppendOutcome = 'accepted' | 'duplicate' | 'conflict';
+
+export interface AppendResult {
+  outcome: AppendOutcome;
+  id: string;
+  /** Fingerprint of the received event. */
+  fingerprint: string;
+  /** Fingerprint of the stored event; set when outcome is 'conflict'. */
+  storedFingerprint?: string;
+  /** Kept for existing callers and tests: true only when outcome === 'duplicate'. */
+  duplicate: boolean;
+  /** Kept for existing callers: true for 'accepted' and 'duplicate', false for 'conflict'. */
+  accepted: boolean;
+}
+
+export interface AppendBatchResult {
+  accepted: number;
+  duplicates: number;
+  conflicts: number;
+  /** Same order and length as the input. */
+  results: AppendResult[];
+  /** Only outcome === 'accepted', in input order. */
+  acceptedEvents: CanonicalEvent[];
+}
+
+/** Per-process ingestion counters, reset on restart. Exposed by `GET /ready`. */
+export interface IngestionCounters {
+  /** Conflicting duplicates rejected since process start. */
+  conflicts: number;
+  /** SQLite rows with a NULL content_hash that matched by id only, so their content could not be compared. */
+  legacyUnverifiedDuplicates: number;
+}
+
+function appendResult(outcome: AppendOutcome, id: string, fingerprint: string, storedFingerprint?: string): AppendResult {
+  return {
+    outcome,
+    id,
+    fingerprint,
+    ...(outcome === 'conflict' ? { storedFingerprint } : {}),
+    duplicate: outcome === 'duplicate',
+    accepted: outcome !== 'conflict',
+  };
+}
+
+/** One warn line per rejected conflict. It names the event but never logs the payload, which can hold content. */
+function warnConflict(event: CanonicalEvent, fingerprint: string, storedFingerprint: string): void {
+  console.warn(
+    `[agent-viewer] Rejected conflicting duplicate: ${JSON.stringify({
+      id: event.id,
+      type: event.type,
+      source: event.source,
+      agentId: event.agentId ?? null,
+      fingerprint,
+      storedFingerprint,
+    })}`
+  );
+}
+
+function summarizeBatch(results: AppendResult[], events: CanonicalEvent[]): AppendBatchResult {
+  let accepted = 0;
+  let duplicates = 0;
+  let conflicts = 0;
+  const acceptedEvents: CanonicalEvent[] = [];
+  results.forEach((result, index) => {
+    if (result.outcome === 'accepted') {
+      accepted++;
+      acceptedEvents.push(events[index]);
+    } else if (result.outcome === 'duplicate') {
+      duplicates++;
+    } else {
+      conflicts++;
+    }
+  });
+  return { accepted, duplicates, conflicts, results, acceptedEvents };
+}
+
 export interface EventStore {
-  append(event: CanonicalEvent): Promise<{ accepted: boolean; duplicate: boolean }>;
-  appendBatch(events: CanonicalEvent[]): Promise<{ accepted: number; duplicates: number; acceptedEvents: CanonicalEvent[] }>;
+  /** Stores a new event, or classifies a repeated id as a duplicate (same content) or a conflict (different content). */
+  append(event: CanonicalEvent): Promise<AppendResult>;
+  /** Same rules as `append`, item by item in input order, also against earlier items of the same batch. */
+  appendBatch(events: CanonicalEvent[]): Promise<AppendBatchResult>;
+  /** Conflicts rejected and legacy rows matched by id only, since process start. */
+  ingestionCounters(): IngestionCounters;
   exists(eventId: string): Promise<boolean>;
   list(options?: ListEventsOptions): Promise<CanonicalEvent[]>;
   snapshot(): Promise<ViewerSnapshot>;
+  getSchemaInfo?(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } | undefined;
+  /** Usage aggregates of every accepted `llm.usage` and `llm.failed` event. */
+  usageSummary(): Promise<UsageSummary>;
 
   upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord>;
   listRuntimes(): Promise<RuntimeRecord[]>;
@@ -97,11 +226,22 @@ export interface EventStore {
   listSessions(): Promise<SessionRecord[]>;
   getSession(sessionId: string): Promise<SessionRecord | null>;
 
-  upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord>;
+  /** Creates or updates an agent profile. Usage fields passed by a caller are ignored. */
+  upsertAgent(agent: AgentProfileInput): Promise<AgentRecord>;
   getAgent(agentId: string): Promise<AgentRecord | null>;
   listAgents(): Promise<AgentRecord[]>;
 
   close(): Promise<void>;
+}
+
+function toLegacyKeys(fields: LegacyUsageFields): Pick<AgentRecord, LegacyUsageKeys> {
+  return {
+    tokensInput: fields.tokens.input,
+    tokensOutput: fields.tokens.output,
+    cachedTokens: fields.tokens.cached,
+    reasoningTokens: fields.tokens.reasoning,
+    cost: fields.cost,
+  };
 }
 
 // -------------------------------------------------------------
@@ -109,63 +249,68 @@ export interface EventStore {
 // -------------------------------------------------------------
 export class MemoryEventStore implements EventStore {
   private events: CanonicalEvent[] = [];
-  private eventIds = new Set<string>();
+  /** Id to fingerprint of every event in the ring. Eviction removes the entry. */
+  private eventHashes = new Map<string, string>();
+  private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
   private runtimes = new Map<string, RuntimeRecord>();
   private sessions = new Map<string, SessionRecord>();
-  private agents = new Map<string, AgentRecord>();
+  private agents = new Map<string, StoredAgent>();
   private tasks = new Map<string, any>();
   private meetings = new Map<string, any>();
-  private totalTokens = { input: 0, output: 0, cached: 0, reasoning: 0 };
-  private totalCost = 0;
+  /** The only place that turns usage events into figures. Fed once per accepted event, never decremented. */
+  private usage: UsageReducer = createUsageReducer();
   private maxEvents: number;
 
   constructor(maxEvents = 10000) {
     this.maxEvents = maxEvents;
   }
 
-  async append(event: CanonicalEvent): Promise<{ accepted: boolean; duplicate: boolean }> {
-    if (this.eventIds.has(event.id)) {
-      return { accepted: true, duplicate: true };
+  /**
+   * Classifies one event against the ring and stores it when it is new. Synchronous on purpose: nothing can run
+   * between the lookup and the insert, so concurrent requests cannot interleave.
+   */
+  private appendOne(event: CanonicalEvent): AppendResult {
+    const fingerprint = eventFingerprint(event);
+    const storedFingerprint = this.eventHashes.get(event.id);
+    if (storedFingerprint === undefined) {
+      this.eventHashes.set(event.id, fingerprint);
+      this.events.unshift(event);
+      this.processEventSideEffects(event);
+      return appendResult('accepted', event.id, fingerprint);
     }
-
-    this.eventIds.add(event.id);
-    this.events.unshift(event);
-    if (this.events.length > this.maxEvents) {
-      const removed = this.events.pop();
-      if (removed) this.eventIds.delete(removed.id);
+    if (storedFingerprint === fingerprint) {
+      return appendResult('duplicate', event.id, fingerprint);
     }
-
-    this.processEventSideEffects(event);
-    return { accepted: true, duplicate: false };
+    this.counters.conflicts++;
+    warnConflict(event, fingerprint, storedFingerprint);
+    return appendResult('conflict', event.id, fingerprint, storedFingerprint);
   }
 
-  async appendBatch(events: CanonicalEvent[]): Promise<{ accepted: number; duplicates: number; acceptedEvents: CanonicalEvent[] }> {
-    let accepted = 0;
-    let duplicates = 0;
-    const acceptedEvents: CanonicalEvent[] = [];
-
-    for (const event of events) {
-      if (this.eventIds.has(event.id)) {
-        duplicates++;
-      } else {
-        this.eventIds.add(event.id);
-        this.events.unshift(event);
-        accepted++;
-        acceptedEvents.push(event);
-        this.processEventSideEffects(event);
-      }
-    }
-
+  private evictOverflow(): void {
     while (this.events.length > this.maxEvents) {
       const removed = this.events.pop();
-      if (removed) this.eventIds.delete(removed.id);
+      if (removed) this.eventHashes.delete(removed.id);
     }
+  }
 
-    return { accepted, duplicates, acceptedEvents };
+  async append(event: CanonicalEvent): Promise<AppendResult> {
+    const result = this.appendOne(event);
+    this.evictOverflow();
+    return result;
+  }
+
+  async appendBatch(events: CanonicalEvent[]): Promise<AppendBatchResult> {
+    const results = events.map((event) => this.appendOne(event));
+    this.evictOverflow();
+    return summarizeBatch(results, events);
+  }
+
+  ingestionCounters(): IngestionCounters {
+    return { ...this.counters };
   }
 
   async exists(eventId: string): Promise<boolean> {
-    return this.eventIds.has(eventId);
+    return this.eventHashes.has(eventId);
   }
 
   async list(options: ListEventsOptions = {}): Promise<CanonicalEvent[]> {
@@ -198,20 +343,31 @@ export class MemoryEventStore implements EventStore {
   }
 
   async snapshot(): Promise<ViewerSnapshot> {
+    const legacy = this.usage.legacyTotals();
     return {
       schemaVersion: '1.0',
       timestamp: Date.now(),
       lastEventId: this.events[0]?.id ?? null,
       runtimes: Array.from(this.runtimes.values()),
       sessions: Array.from(this.sessions.values()),
-      agents: Array.from(this.agents.values()),
+      agents: Array.from(this.agents.values(), (agent) => this.toAgentRecord(agent)),
       activeTasks: Array.from(this.tasks.values()).filter((t) => t.status !== 'COMPLETED' && t.status !== 'FAILED'),
       activeMeetings: Array.from(this.meetings.values()).filter((m) => m.status !== 'CONCLUDED'),
-      totalTokens: { ...this.totalTokens },
-      totalCost: this.totalCost,
+      usage: this.usage.summary(),
+      totalTokens: legacy.tokens,
+      totalCost: legacy.cost,
       eventsCount: this.events.length,
       events: this.events.slice(0, 100),
     };
+  }
+
+  async usageSummary(): Promise<UsageSummary> {
+    return this.usage.summary();
+  }
+
+  /** Public view of a stored agent: its profile plus the deprecated usage fields projected from the reducer. */
+  private toAgentRecord(agent: StoredAgent): AgentRecord {
+    return { ...agent, ...toLegacyKeys(this.usage.legacyAgent(agent.id)) };
   }
 
   async upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord> {
@@ -258,9 +414,10 @@ export class MemoryEventStore implements EventStore {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  async upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord> {
+  async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
     const existing = this.agents.get(agent.id);
-    const updated: AgentRecord = {
+    // Built field by field, so usage fields that a caller still passes are never read.
+    const updated: StoredAgent = {
       id: agent.id,
       name: agent.name ?? existing?.name ?? agent.id,
       roleTitle: agent.roleTitle ?? existing?.roleTitle ?? 'AI Agent',
@@ -270,23 +427,19 @@ export class MemoryEventStore implements EventStore {
       status: agent.status ?? existing?.status ?? 'IDLE',
       statusText: agent.statusText ?? existing?.statusText ?? 'Active',
       workspace: agent.workspace ?? existing?.workspace ?? 'development',
-      tokensInput: (existing?.tokensInput ?? 0) + (agent.tokensInput ?? 0),
-      tokensOutput: (existing?.tokensOutput ?? 0) + (agent.tokensOutput ?? 0),
-      cachedTokens: (existing?.cachedTokens ?? 0) + (agent.cachedTokens ?? 0),
-      reasoningTokens: (existing?.reasoningTokens ?? 0) + (agent.reasoningTokens ?? 0),
-      cost: (existing?.cost ?? 0) + (agent.cost ?? 0),
       lastSeenAt: Date.now(),
     };
     this.agents.set(agent.id, updated);
-    return updated;
+    return this.toAgentRecord(updated);
   }
 
   async getAgent(agentId: string): Promise<AgentRecord | null> {
-    return this.agents.get(agentId) ?? null;
+    const agent = this.agents.get(agentId);
+    return agent ? this.toAgentRecord(agent) : null;
   }
 
   async listAgents(): Promise<AgentRecord[]> {
-    return Array.from(this.agents.values());
+    return Array.from(this.agents.values(), (agent) => this.toAgentRecord(agent));
   }
 
   async close(): Promise<void> {
@@ -295,6 +448,9 @@ export class MemoryEventStore implements EventStore {
 
   private processEventSideEffects(event: CanonicalEvent): void {
     const now = event.timestamp || Date.now();
+
+    // Usage figures: every accepted llm.usage and llm.failed event, with or without an agent.
+    this.usage.apply(event);
 
     // Runtimes side effect
     if (event.runtimeId) {
@@ -335,8 +491,8 @@ export class MemoryEventStore implements EventStore {
     }
 
     // Agent side effect & auto-registration
-    const agentId = event.agentId || (event.source.startsWith('agent:') ? event.source.replace(/^agent:/, '') : undefined);
-    if (agentId && agentId !== 'external-runtime' && agentId !== 'system' && !agentId.startsWith('runtime:')) {
+    const agentId = resolveEventAgentId(event);
+    if (agentId !== null) {
       let ag = this.agents.get(agentId);
       if (!ag) {
         ag = {
@@ -349,11 +505,6 @@ export class MemoryEventStore implements EventStore {
           status: 'IDLE',
           statusText: 'Registered',
           workspace: 'development',
-          tokensInput: 0,
-          tokensOutput: 0,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-          cost: 0,
           lastSeenAt: now,
         };
         this.agents.set(agentId, ag);
@@ -367,6 +518,9 @@ export class MemoryEventStore implements EventStore {
         if (typeof event.payload?.provider === 'string') ag.provider = event.payload.provider;
         if (typeof event.payload?.model === 'string') ag.model = event.payload.model;
         if (typeof event.payload?.workspace === 'string') ag.workspace = event.payload.workspace;
+        if (event.type === 'agent.updated' && typeof event.payload?.statusText === 'string') {
+          ag.statusText = event.payload.statusText;
+        }
       } else if (event.type === 'agent.status.changed') {
         if (typeof event.payload?.status === 'string') ag.status = event.payload.status.toUpperCase();
         if (typeof event.payload?.statusText === 'string') ag.statusText = event.payload.statusText;
@@ -381,26 +535,9 @@ export class MemoryEventStore implements EventStore {
         ag.status = 'ERROR';
         ag.statusText = 'Tool failed';
       } else if (event.type === 'llm.usage') {
-        const inTok = Number(event.payload?.inputTokens ?? 0);
-        const outTok = Number(event.payload?.outputTokens ?? 0);
-        const cacheTok = Number(event.payload?.cachedTokens ?? 0);
-        const reasonTok = Number(event.payload?.reasoningTokens ?? 0);
-        const cost = typeof event.payload?.cost === 'number' ? event.payload.cost : 0;
-
-        ag.tokensInput += inTok;
-        ag.tokensOutput += outTok;
-        ag.cachedTokens += cacheTok;
-        ag.reasoningTokens += reasonTok;
-        ag.cost = (ag.cost ?? 0) + cost;
-
+        // Display only: the office shows the model the agent uses now. No usage figure ever reads these fields.
         if (typeof event.payload?.provider === 'string') ag.provider = event.payload.provider;
         if (typeof event.payload?.model === 'string') ag.model = event.payload.model;
-
-        this.totalTokens.input += inTok;
-        this.totalTokens.output += outTok;
-        this.totalTokens.cached += cacheTok;
-        this.totalTokens.reasoning += reasonTok;
-        this.totalCost += cost;
       }
     }
 
@@ -450,13 +587,35 @@ export class MemoryEventStore implements EventStore {
 // -------------------------------------------------------------
 // SQLite Event Store (using Node 22 node:sqlite)
 // -------------------------------------------------------------
+/** Only one warn line per process for rows whose content cannot be compared. */
+let warnedLegacyUnverified = false;
+
+function isUniqueIdViolation(error: unknown): boolean {
+  const err = error as { errcode?: number; message?: string } | null;
+  // SQLITE_CONSTRAINT_PRIMARYKEY (1555) or SQLITE_CONSTRAINT_UNIQUE (2067) on events.id.
+  return err?.errcode === 1555 || err?.errcode === 2067 || /UNIQUE constraint failed: events\.id/.test(err?.message ?? '');
+}
+
+/** What a SQLite classification decided, before the side effects (counters, logs) that wait for the commit. */
+interface PendingOutcome {
+  result: AppendResult;
+  event: CanonicalEvent;
+  legacyUnverified: boolean;
+}
+
 export class SQLiteEventStore implements EventStore {
   private db: any;
   private memoryFallback: MemoryEventStore;
-  private filePath: string;
+  private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
+  readonly migration: MigrationResult;
+  private migrations: readonly Migration[];
 
-  constructor(filePath = './data/agent-viewer.db') {
-    this.filePath = filePath;
+  constructor(
+    filePath = './data/agent-viewer.db',
+    options: { backup?: 'auto' | 'off'; appVersion?: string; migrations?: readonly Migration[] } = {}
+  ) {
+    const backup = sqliteBackupMode(options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP);
+
     const dir = path.dirname(filePath);
     if (dir && dir !== '.' && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -465,84 +624,43 @@ export class SQLiteEventStore implements EventStore {
     const DBSync = getDatabaseSync();
     this.db = new DBSync(filePath);
     this.memoryFallback = new MemoryEventStore();
-    this.initSchema();
-  }
-
-  private initSchema() {
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = NORMAL;
-
-      CREATE TABLE IF NOT EXISTS events (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        runtime_id TEXT,
-        session_id TEXT,
-        agent_id TEXT,
-        task_id TEXT,
-        severity TEXT NOT NULL,
-        summary TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
-      CREATE INDEX IF NOT EXISTS idx_events_runtime ON events(runtime_id);
-      CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-      CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent_id);
-      CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
-
-      CREATE TABLE IF NOT EXISTS runtimes (
-        id TEXT PRIMARY KEY,
-        name TEXT,
-        framework TEXT,
-        version TEXT,
-        metadata TEXT,
-        status TEXT,
-        first_seen_at INTEGER,
-        last_seen_at INTEGER,
-        events_count INTEGER DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        runtime_id TEXT,
-        name TEXT,
-        created_at INTEGER,
-        last_active_at INTEGER,
-        status TEXT,
-        events_count INTEGER DEFAULT 0
-      );
-
-      CREATE TABLE IF NOT EXISTS agents (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        role_title TEXT,
-        role TEXT,
-        provider TEXT,
-        model TEXT,
-        status TEXT,
-        status_text TEXT,
-        workspace TEXT,
-        tokens_input INTEGER DEFAULT 0,
-        tokens_output INTEGER DEFAULT 0,
-        cached_tokens INTEGER DEFAULT 0,
-        reasoning_tokens INTEGER DEFAULT 0,
-        cost REAL DEFAULT 0,
-        last_seen_at INTEGER
-      );
-    `);
-
-    // Migration: databases created before 0.2.0 have no event_json column. Their rows stay readable
-    // through the legacy column mapping in rowToEvent; new rows store the full canonical event.
-    const columns = this.db.prepare('PRAGMA table_info(events)').all() as Array<{ name: string }>;
-    if (!columns.some((c) => c.name === 'event_json')) {
-      this.db.exec('ALTER TABLE events ADD COLUMN event_json TEXT');
+    this.migrations = options.migrations ?? MIGRATIONS;
+    try {
+      this.migration = runMigrations(this.db, {
+        appVersion: options.appVersion ?? readPackageVersion(),
+        filePath,
+        backup,
+        migrations: this.migrations,
+      });
+      if (this.migration.applied.length > 0) {
+        const { fromVersion, toVersion, backupPath } = this.migration;
+        const appliedNames = this.migration.applied.map(({ name }) => name).join(', ');
+        console.log(
+          `[agent-viewer] SQLite schema migrated from v${fromVersion} to v${toVersion} (${appliedNames}).${backupPath ? ` Backup: ${backupPath}` : ''}`
+        );
+      }
+    } catch (error) {
+      try {
+        this.db.close();
+      } catch {
+        // Ignore close errors while preserving the migration error.
+      }
+      throw error;
     }
   }
 
-  private insertEvent(insertStmt: any, event: CanonicalEvent): void {
+  getSchemaInfo(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } {
+    const row = this.db
+      .prepare('SELECT version, applied_at FROM schema_migrations ORDER BY version DESC LIMIT 1')
+      .get() as { version: number; applied_at: number } | undefined;
+    return {
+      schemaVersion: row?.version ?? 0,
+      latestKnownSchemaVersion: this.migrations.at(-1)?.version ?? 0,
+      appliedAt: row?.applied_at ?? null,
+    };
+  }
+
+  private insertEvent(insertStmt: any, event: CanonicalEvent, fingerprint: string): void {
     insertStmt.run(
       event.id,
       event.type,
@@ -555,15 +673,68 @@ export class SQLiteEventStore implements EventStore {
       event.summary,
       JSON.stringify(event.payload),
       JSON.stringify(event),
-      Date.now()
+      Date.now(),
+      fingerprint
     );
   }
 
   private prepareInsert(): any {
     return this.db.prepare(`
-      INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, event_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, event_json, created_at, content_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+  }
+
+  private prepareLookup(): any {
+    return this.db.prepare('SELECT content_hash FROM events WHERE id = ?');
+  }
+
+  /** Decides the outcome for an id that is already stored. A NULL hash cannot be compared: duplicate, never conflict. */
+  private classifyStored(event: CanonicalEvent, fingerprint: string, row: { content_hash: string | null }): PendingOutcome {
+    const stored = row.content_hash;
+    if (stored === null || stored === undefined) {
+      return { result: appendResult('duplicate', event.id, fingerprint), event, legacyUnverified: true };
+    }
+    if (stored === fingerprint) {
+      return { result: appendResult('duplicate', event.id, fingerprint), event, legacyUnverified: false };
+    }
+    return { result: appendResult('conflict', event.id, fingerprint, stored), event, legacyUnverified: false };
+  }
+
+  /**
+   * Looks up the id and inserts the event when it is new, with no await in between. The PRIMARY KEY stays the
+   * backstop: if the insert still hits a UNIQUE violation, the row is read again and classified.
+   */
+  private classifyAndInsert(lookupStmt: any, insertStmt: any, event: CanonicalEvent): PendingOutcome {
+    const fingerprint = eventFingerprint(event);
+    const existing = lookupStmt.get(event.id) as { content_hash: string | null } | undefined;
+    if (existing) return this.classifyStored(event, fingerprint, existing);
+    try {
+      this.insertEvent(insertStmt, event, fingerprint);
+    } catch (error) {
+      if (!isUniqueIdViolation(error)) throw error;
+      const raced = lookupStmt.get(event.id) as { content_hash: string | null } | undefined;
+      if (!raced) throw error;
+      return this.classifyStored(event, fingerprint, raced);
+    }
+    return { result: appendResult('accepted', event.id, fingerprint), event, legacyUnverified: false };
+  }
+
+  /** Counters and log lines, applied only once the outcome is final (after the commit for a batch). */
+  private recordOutcome(pending: PendingOutcome): void {
+    const { result, event } = pending;
+    if (result.outcome === 'conflict') {
+      this.counters.conflicts++;
+      warnConflict(event, result.fingerprint, result.storedFingerprint ?? '');
+    } else if (pending.legacyUnverified) {
+      this.counters.legacyUnverifiedDuplicates++;
+      if (!warnedLegacyUnverified) {
+        warnedLegacyUnverified = true;
+        console.warn(
+          `[agent-viewer] Event ${JSON.stringify(event.id)} matched a stored row without content_hash (written before 0.2.0 or with unreadable event_json). Its content cannot be compared, so it is treated as a duplicate. Further cases are only counted in /ready (ingestion.legacyUnverifiedDuplicates).`
+        );
+      }
+    }
   }
 
   private rowToEvent(r: any): CanonicalEvent {
@@ -592,40 +763,49 @@ export class SQLiteEventStore implements EventStore {
     };
   }
 
-  async append(event: CanonicalEvent): Promise<{ accepted: boolean; duplicate: boolean }> {
-    const checkStmt = this.db.prepare('SELECT id FROM events WHERE id = ?');
-    const existing = checkStmt.get(event.id);
-    if (existing) {
-      return { accepted: true, duplicate: true };
+  async append(event: CanonicalEvent): Promise<AppendResult> {
+    const pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event);
+    this.recordOutcome(pending);
+    if (pending.result.outcome === 'accepted') {
+      // SQLite is the source of truth for ids; the memory side store only feeds snapshots and aggregates.
+      await this.memoryFallback.append(event);
     }
-
-    this.insertEvent(this.prepareInsert(), event);
-
-    await this.memoryFallback.append(event);
-    return { accepted: true, duplicate: false };
+    return pending.result;
   }
 
-  async appendBatch(events: CanonicalEvent[]): Promise<{ accepted: number; duplicates: number; acceptedEvents: CanonicalEvent[] }> {
-    let accepted = 0;
-    let duplicates = 0;
-    const acceptedEvents: CanonicalEvent[] = [];
-
-    const checkStmt = this.db.prepare('SELECT id FROM events WHERE id = ?');
+  /**
+   * All or nothing at the storage level: the batch runs inside BEGIN IMMEDIATE ... COMMIT and rolls back on any
+   * error. Rows inserted earlier in the batch are visible to later items, so repeats inside one batch are classified
+   * like repeats across requests. Memory side effects run after the commit, with the accepted events only.
+   */
+  async appendBatch(events: CanonicalEvent[]): Promise<AppendBatchResult> {
+    const lookupStmt = this.prepareLookup();
     const insertStmt = this.prepareInsert();
+    const pending: PendingOutcome[] = [];
 
-    for (const event of events) {
-      const existing = checkStmt.get(event.id);
-      if (existing) {
-        duplicates++;
-      } else {
-        this.insertEvent(insertStmt, event);
-        accepted++;
-        acceptedEvents.push(event);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const event of events) {
+        pending.push(this.classifyAndInsert(lookupStmt, insertStmt, event));
       }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // The transaction may already have been rolled back by SQLite.
+      }
+      throw error;
     }
 
-    await this.memoryFallback.appendBatch(acceptedEvents);
-    return { accepted, duplicates, acceptedEvents };
+    for (const entry of pending) this.recordOutcome(entry);
+    const summary = summarizeBatch(pending.map(({ result }) => result), events);
+    await this.memoryFallback.appendBatch(summary.acceptedEvents);
+    return summary;
+  }
+
+  ingestionCounters(): IngestionCounters {
+    return { ...this.counters };
   }
 
   async exists(eventId: string): Promise<boolean> {
@@ -684,6 +864,10 @@ export class SQLiteEventStore implements EventStore {
     return this.memoryFallback.snapshot();
   }
 
+  async usageSummary(): Promise<UsageSummary> {
+    return this.memoryFallback.usageSummary();
+  }
+
   async upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord> {
     return this.memoryFallback.upsertRuntime(runtime);
   }
@@ -704,7 +888,7 @@ export class SQLiteEventStore implements EventStore {
     return this.memoryFallback.getSession(sessionId);
   }
 
-  async upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord> {
+  async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
     return this.memoryFallback.upsertAgent(agent);
   }
 
@@ -732,7 +916,8 @@ export function createEventStore(): EventStore {
   const storageType = (process.env.AGENT_VIEWER_STORAGE || 'memory').toLowerCase();
   if (storageType === 'sqlite') {
     const dbPath = process.env.AGENT_VIEWER_SQLITE_PATH || './data/agent-viewer.db';
-    return new SQLiteEventStore(dbPath);
+    const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
+    return new SQLiteEventStore(dbPath, { backup });
   }
   return new MemoryEventStore();
 }

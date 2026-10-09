@@ -91,6 +91,30 @@ These are design rules, enforced in code, not marketing:
 
 ## ⚡ Quickstart
 
+### One command
+
+```bash
+npx @warlockcode/agent-viewer
+```
+
+Starts the ingestion server and the office together on `http://127.0.0.1:8787`, opens your browser and prints the session token and a `curl` command you can paste to make your first agent appear. Then, without JSON:
+
+```bash
+npx @warlockcode/agent-viewer send --agent demo --status working --message "Hello"
+```
+
+Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). The same with Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (flags after the image name are added to its defaults; image tags and tokens in the [CLI guide](docs/cli.md#docker)). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
+
+### Watch Claude Code work
+
+```bash
+npx @warlockcode/agent-viewer install claude-code   # in your project, shows the change and asks first
+```
+
+Your Claude Code sessions and their subagents appear in the office: tools, handoffs, and when Claude waits for you. Only tool names, agent types, timings and statuses are sent, never arguments, prompts, code or paths. Setup, privacy and uninstall: [docs/claude-code.md](docs/claude-code.md).
+
+### From the repository
+
 Working on the repository requires Node.js 24 or later. Apps that only install the library need React 19, nothing else.
 
 ```bash
@@ -153,7 +177,9 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. Open **http://localhost:3000/?mode=live** to watch the stream.
+This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
+
+> **Maintainers:** GitHub Container Registry creates the `ghcr.io/jmmana/agent-viewer` package as private, and the release workflow cannot change that. After the first release that publishes it, make it public once in the package page: **Package settings > Danger Zone > Change visibility > Public**. The release run summary shows the current visibility.
 
 ---
 
@@ -166,7 +192,7 @@ This starts the API on **:8787** with SQLite on a named volume, and the built de
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> in professional mode: a meeting where agents propose, object, agree and decide. Only the events passed to the component are drawn.</sub>
 </p>
 
-Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.2.1**. ES modules only, React and React DOM 19 as peer dependencies, `lucide-react` and `zod` as its only runtime dependencies, TypeScript declarations included.
+Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.2.1**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
 
 Publication on npm is coming soon. Until then, install it from the GitHub release asset (the package name and your imports stay the same when you switch to npm):
 
@@ -291,7 +317,7 @@ Every visible text comes from a catalog of 116 keys. Rename a room with `message
 | Replay | `useEventReplay`, `ReplayControls` |
 | Usage (display only) | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` |
-| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
+| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
 | Live stream | `connectEventStream` |
 | Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` |
@@ -350,7 +376,7 @@ export function OfficeWithUsage({ events }: { events: readonly OfficeEventInput[
 }
 ```
 
-`showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported, and returns an unknown cost rather than a partial sum.
+`showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported: it ignores repeated event ids, keeps a token count unknown when an event does not report it, and returns an unknown cost rather than a partial sum or a sum of mixed or missing currencies.
 
 </details>
 
@@ -409,6 +435,8 @@ Honest maturity, so you know what you are getting:
 | Integration | Where | Maturity |
 |---|---|---|
 | **REST API, batch, SSE** | [`server/`](server/index.ts) | ✅ **Stable.** Covered by integration, SSE and webhook security tests in CI. |
+| **Claude Code** | [`agent-viewer install claude-code`](docs/claude-code.md) | ✅ **Stable.** Official Claude Code hooks: sessions, subagents as their own agents, tools, waiting for you. Fixture tests for every hook type prove no arguments or content leave the machine. |
+| **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. Not on PyPI yet. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
@@ -438,12 +466,12 @@ analyst = viewer.agent("analyst", name="Iris", role_title="Market analyst", work
 analyst.researching("Reading the quarterly filings")
 analyst.tool_started("filing_fetcher", input_summary="Form 10-K")
 analyst.tool_completed("filing_fetcher", output_summary="42 pages retrieved")
-analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
+analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024, cost_source="provider-reported", currency="USD")
 analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown.
+The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client.
 
 ### TypeScript SDK
 
@@ -456,7 +484,7 @@ const builder = viewer.agent({ id: 'builder', name: 'Atlas', roleTitle: 'Builder
 await builder.coding('Implementing the webhook handler');
 await builder.toolStarted('npm.test', 'unit suite');
 await builder.toolCompleted('npm.test', '128 passed');
-await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012 });
+await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012, costSource: 'provider-reported', currency: 'USD' });
 await builder.message('Handler is ready for review.', 'Nova');
 await builder.done('Pull request opened');
 ```
@@ -489,7 +517,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | Field | Type | Description |
 |---|---|---|
 | `schemaVersion` | `"1.0"` | Contract version. |
-| `id` | `string` | Unique event id, also the idempotency key. |
+| `id` | `string` | Unique event id, also the idempotency key. One id names exactly one event: reusing it for different content is rejected with 409. |
 | `type` | `string` | One of the 22 canonical types (aliases accepted). |
 | `timestamp` | `number` | Unix epoch in milliseconds. |
 | `source` | `string` | Producer, for example `runtime:crewai` or `agent:researcher`. |
@@ -516,14 +544,15 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | | `meeting.started` | Starts at once. |
 | | `meeting.message` | Bubble headed by its kind; a `decision` is added to the meeting decisions. |
 | | `meeting.ended`, `meeting.cancelled` | Frees the room; participants walk back to their workspace. |
-| Telemetry | `llm.usage` | Provider, model, input, output, cached and reasoning tokens, latency, cost, cost source and currency. |
+| Telemetry | `llm.usage` | Provider, model, input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost, cost source and currency. A figure that was not reported stays unknown, never 0. |
+| | `llm.failed` | One failed model call attempt: provider, model, error kind, HTTP status and whether it can be retried. Tokens and cost only when the provider billed the attempt. No status change. |
 | Runtime | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | Runtime health; no visible change. |
 
 Aliases such as `message.sent`, `meeting.decision` or `approval.requested` are mapped to their canonical type. The complete effect table is in the [library guide](docs/library.md#how-events-change-the-office), and the schema in [`canonicalContract.ts`](src/integrations/canonicalContract.ts).
 
 </details>
 
-**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md).
+**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. The SDKs never assume `provider-reported`: a cost sent without a stated `costSource` goes out as `unknown`. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md).
 
 ---
 
@@ -557,17 +586,30 @@ flowchart LR
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/health` | Status, version, schema version and connected SSE clients. |
-| `GET` | `/ready` | Storage readiness. |
-| `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. |
-| `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Duplicates are skipped, not errors. |
+| `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
+| `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
+| `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Replays missed events from `Last-Event-ID`; heartbeat every 15 s. |
-| `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes, tokens and cost. |
+| `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
+| `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
-| `PATCH` | `/api/v1/agents/:agentId` | Update an agent's status or properties. |
+| `PATCH` | `/api/v1/agents/:agentId` | Update an agent's profile or status (descriptive fields only; usage is reported with `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |
 | `GET` | `/api/v1/sessions`, `/api/v1/sessions/:sessionId` | List sessions / inspect one with its events. |
 | `POST` | `/api/v1/webhooks/generic` | Flat webhook: `agent`, `status`, `message`, `tool`, `usage`. |
+
+**PATCH agent fields:** `name`, `roleTitle`, `provider`, and `model` emit `agent.updated`. `status` emits `agent.status.changed`; `statusText` and `workspace` accompany that event when `status` is present, and otherwise emit `agent.updated`. Values must be strings: profile fields and `workspace` are trimmed and limited to 1-200 characters, `statusText` to 0-1000 characters, and `status` must be a known status. All other fields are rejected. Usage fields such as `tokensInput`, `inputTokens`, `cachedTokens`, `cost`, `currency`, and `latencyMs` cannot be patched. Report usage through `POST /api/v1/events` with an `llm.usage` event or the SDK `usage()` helper.
+
+For example, a usage field returns HTTP 400:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.",
+  "issues": [{ "path": "cost", "code": "usage_not_patchable", "message": "Report cost with an llm.usage event." }]
+}
+```
 
 <details>
 <summary><b>🧾 Validation, idempotency and batch responses</b></summary>
@@ -582,22 +624,64 @@ Invalid events get HTTP 400 with the exact paths that failed:
 }
 ```
 
-An event id that was already ingested returns HTTP 200 instead of a second copy:
+The event id is the idempotency key, and the content decides what a repeated id means. The server compares a `fingerprint` (`sha256:` over the event as validated, keys sorted, defaults filled in) with the one it stored:
+
+| Stored | Incoming | Answer | Effect |
+|---|---|---|---|
+| no event with this id | any | `202` accepted | Stored, aggregated and streamed. |
+| same id, same content | | `200` duplicate | Nothing changes. This is a true retry. |
+| same id, different content | | `409 conflicting_duplicate` | Not stored, not aggregated, not streamed. The stored event stays as it was. |
+
+The first send returns `202` with the fingerprint, and a true retry returns HTTP 200 with the same fingerprint instead of a second copy:
 
 ```json
-{ "accepted": true, "duplicate": true, "id": "evt_req_9921" }
+{ "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
 ```
 
-A batch reports each event:
+The same id with any different stored field (a token count, the cost, a cost that was `0` and is now missing, or the `timestamp`) is rejected with HTTP 409:
 
 ```json
 {
-  "accepted": 2,
-  "duplicates": 0,
-  "total": 2,
-  "results": [{ "id": "evt_b1", "duplicate": false }, { "id": "evt_b2", "duplicate": false }]
+  "error": "conflicting_duplicate",
+  "message": "An event with id \"evt_req_9921\" was already stored with different content. The new event was not applied.",
+  "id": "evt_req_9921",
+  "fingerprint": "sha256:9b0e...",
+  "storedFingerprint": "sha256:3f1c..."
 }
 ```
+
+A retry must resend the identical event, `timestamp` included; rebuilding the body with a new `Date.now()` is a different event. Give every distinct event its own id. A type alias that validation resolves to the canonical type is the same event, so it is a duplicate.
+
+When both the `Idempotency-Key` header and a non-empty body `id` are sent and they differ, nothing is stored and the answer is HTTP 400. A header with no body `id` becomes the id, as before:
+
+```json
+{ "error": "idempotency_key_mismatch", "message": "Idempotency-Key \"a\" does not match the event id \"b\"." }
+```
+
+A batch answers `202` whenever validation passes, even if no item was applied, so read `conflicts` and each item's `status` (in input order). Items are compared with the store and with earlier items of the same batch:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 1,
+  "conflicts": 1,
+  "total": 3,
+  "results": [
+    { "id": "evt_b1", "status": "accepted",  "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b2", "status": "duplicate", "duplicate": true,  "fingerprint": "sha256:bb..." },
+    { "id": "evt_b3", "status": "conflict",  "duplicate": false, "fingerprint": "sha256:cc...",
+      "error": "conflicting_duplicate", "storedFingerprint": "sha256:3f1c..." }
+  ]
+}
+```
+
+Each conflict also writes one `warn` log line with the id, type, source, agent and both fingerprints (never the payload), and `GET /ready` counts them since the process started:
+
+```json
+{ "ok": true, "ready": true, "storage": "sqlite", "ingestion": { "conflicts": 1, "legacyUnverifiedDuplicates": 0 } }
+```
+
+`legacyUnverifiedDuplicates` counts repeated ids that matched SQLite rows written before 0.2.0 (or with unreadable `event_json`): their content cannot be compared, so they are treated as duplicates. The counters reset on restart.
 
 </details>
 
@@ -625,7 +709,9 @@ The signature is compared in constant time. Expired timestamps and bad signature
 
 </details>
 
-**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer. `sqlite` uses Node's built-in `node:sqlite` and persists events, runtimes, sessions and agents to `./data/agent-viewer.db`.
+**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer. `sqlite` uses Node's built-in `node:sqlite` and persists events to `./data/agent-viewer.db`; runtime, session and agent state remains in memory.
+
+SQLite schema migrations run automatically at startup. Before upgrading an existing database, the default `AGENT_VIEWER_SQLITE_BACKUP=auto` writes a `.bak` file beside it. Backups contain the same event data, are never pruned automatically, and can make the first startup take longer for large files. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if you manage backups yourself. A server refuses a database with a newer schema; to roll back, stop the server and restore the `.bak` file before starting an older version. `/ready` reports `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt` in SQLite mode. These are database migration details; `/health`'s `schemaVersion` is the event contract version (`1.0`).
 
 ---
 
@@ -636,10 +722,11 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Server port. |
-| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development. `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
+| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development with `npm run server`; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
+| `AGENT_VIEWER_SQLITE_BACKUP` | `auto` | Back up an existing SQLite database before migration, or set to `off` when backups are managed separately. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Maximum events per batch request. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |

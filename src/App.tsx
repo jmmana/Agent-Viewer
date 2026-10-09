@@ -32,6 +32,7 @@ import { createOfficeTranslator } from './content/officeMessages';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
+import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './integrations/liveConnection';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
 import { Upload, AlertCircle, X } from 'lucide-react';
@@ -213,39 +214,52 @@ export default function App() {
   }, [ambientSocialEnabled, politicsChatterEnabled, locale]);
 
   useEffect(() => {
-    const apiBase = (import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined) || (isLiveMode ? 'http://localhost:8787' : undefined);
+    const { apiBase } = resolveLiveConnection(
+      window.location,
+      import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined,
+      isLiveMode,
+    );
     if (!apiBase) {
+      // Not streaming, but a token in the address still leaves the address bar and the history entry.
+      takeLiveCredentials(window);
       setIsLiveConnected(false);
       return;
     }
 
-    const connection = connectEventStream(apiBase, (incoming) => {
-      setIsLiveConnected(true);
-      setSimState((prevState) => {
-        const nextState: SimulationState = {
-          ...prevState,
-          agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
-          tasks: prevState.tasks.map((task) => ({ ...task, artifacts: [...task.artifacts], toolsUsed: [...task.toolsUsed], collaboratorIds: [...task.collaboratorIds] })),
-          meetings: prevState.meetings.map((meeting) => ({
-            ...meeting,
-            participants: [...meeting.participants],
-            agenda: [...meeting.agenda],
-            decisions: [...meeting.decisions],
-            tasksCreated: [...meeting.tasksCreated],
-            messages: [...meeting.messages],
-          })),
-          events: [...prevState.events],
-          totalTokens: { ...prevState.totalTokens },
-          roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
-          socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
-        };
-        applyExternalEvent(nextState, incoming, { locale: localeRef.current });
-        return nextState;
-      });
+    // The token leaves the address bar as soon as it is read (see liveConnection.ts).
+    let cancelled = false;
+    let connection: ReturnType<typeof connectEventStream> | undefined;
+    void loadLiveToken(window, apiBase).then((token) => {
+      if (cancelled) return;
+      connection = connectEventStream(apiBase, (incoming) => {
+        setIsLiveConnected(true);
+        setSimState((prevState) => {
+          const nextState: SimulationState = {
+            ...prevState,
+            agents: prevState.agents.map((a) => ({ ...a, speechBubble: a.speechBubble ? { ...a.speechBubble } : null })),
+            tasks: prevState.tasks.map((task) => ({ ...task, artifacts: [...task.artifacts], toolsUsed: [...task.toolsUsed], collaboratorIds: [...task.collaboratorIds] })),
+            meetings: prevState.meetings.map((meeting) => ({
+              ...meeting,
+              participants: [...meeting.participants],
+              agenda: [...meeting.agenda],
+              decisions: [...meeting.decisions],
+              tasksCreated: [...meeting.tasksCreated],
+              messages: [...meeting.messages],
+            })),
+            events: [...prevState.events],
+            totalTokens: { ...prevState.totalTokens },
+            roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
+            socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
+          };
+          applyExternalEvent(nextState, incoming, { locale: localeRef.current });
+          return nextState;
+        });
+      }, undefined, { token });
     });
 
     return () => {
-      connection.close();
+      cancelled = true;
+      connection?.close();
       setIsLiveConnected(false);
     };
   }, [isLiveMode]);

@@ -1,0 +1,25 @@
+{
+  "fixtures": [
+    {
+      "file": "agent-viewer-0.1.x-2b00789.db",
+      "gitRef": "2b00789",
+      "generatorCommand": "node scripts/sqlite-fixtures/generate.mjs 2b00789 tests/fixtures/sqlite/agent-viewer-0.1.x-2b00789.db",
+      "sha256": "9b6e955751b8a0d245aea916a9ad4cbf73dcd46df6832a9cabcd621cc2026492",
+      "rowCount": 3
+    },
+    {
+      "file": "agent-viewer-0.2.0.db",
+      "gitRef": "40e92cc",
+      "generatorCommand": "node scripts/sqlite-fixtures/generate.mjs 40e92cc tests/fixtures/sqlite/agent-viewer-0.2.0.db",
+      "sha256": "6ba7615269be940b47772c870040ded94c5e56354d845cb65159c01c36d11e70",
+      "rowCount": 3
+    },
+    {
+      "file": "agent-viewer-0.2.1.db",
+      "gitRef": "03b4b5c",
+      "generatorCommand": "node scripts/sqlite-fixtures/generate.mjs 03b4b5c tests/fixtures/sqlite/agent-viewer-0.2.1.db",
+      "sha256": "da19dac848729ce8e5d82ec0fd035fe8c750bd4ff0f5d42eef5f4a6f032f9264",
+      "rowCount": 3
+    }
+  ]
+}

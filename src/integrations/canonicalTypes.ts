@@ -27,6 +27,7 @@ export const CANONICAL_EVENT_TYPES = [
   'meeting.ended',
   'meeting.cancelled',
   'llm.usage',
+  'llm.failed',
   'runtime.connected',
   'runtime.disconnected',
   'runtime.heartbeat',
@@ -81,6 +82,27 @@ export function isMessageKind(value: unknown): value is MessageKind {
   return typeof value === 'string' && (MESSAGE_KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * Why a model call failed, carried by `llm.failed`. A label, not a figure. Senders map errors they do not
+ * recognize to `unknown` and may put the provider's own code in `providerErrorCode`.
+ */
+export const LLM_ERROR_KINDS = [
+  'rate_limited',
+  'overloaded',
+  'timeout',
+  'invalid_request',
+  'auth',
+  'server_error',
+  'cancelled',
+  'unknown',
+] as const;
+
+export type LlmErrorKind = (typeof LLM_ERROR_KINDS)[number];
+
+export function isLlmErrorKind(value: unknown): value is LlmErrorKind {
+  return typeof value === 'string' && (LLM_ERROR_KINDS as readonly string[]).includes(value);
+}
+
 export type EventSeverity = 'low' | 'normal' | 'high' | 'critical';
 
 export interface ValidationIssue {
@@ -132,13 +154,25 @@ export interface CanonicalEventInput<T = Record<string, unknown>> {
 }
 
 /**
+ * Id for an event that arrived without one: `crypto.randomUUID()` when the platform has it, and the older
+ * clock plus `Math.random` form otherwise, so the library still runs in browsers without `randomUUID`.
+ */
+function generatedEventId(now: number): string {
+  const cryptoApi = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    return `evt_${cryptoApi.randomUUID()}`;
+  }
+  return `evt_${now}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
  * Normalizes any loose input into a valid CanonicalEvent V1, generating missing IDs or timestamps if needed.
  */
 export function normalizeCanonicalEvent(input: any): CanonicalEvent {
   const now = Date.now();
   const id = input?.id && typeof input.id === 'string' && input.id.length > 0
     ? input.id
-    : `evt_${now}_${Math.random().toString(36).slice(2, 9)}`;
+    : generatedEventId(now);
 
   const rawType = typeof input?.type === 'string' ? input.type : 'agent.status.changed';
   const type: CanonicalEventType = EVENT_TYPE_ALIASES[rawType] ?? (
@@ -170,12 +204,21 @@ export function normalizeCanonicalEvent(input: any): CanonicalEvent {
 
   const payload = input?.payload && typeof input.payload === 'object' ? { ...input.payload } : {};
 
-  // Normalize usage payload if type is llm.usage
-  if (type === 'llm.usage') {
+  // Usage and failure payloads: unknown figures stay unknown. Token counts are never invented here.
+  if (type === 'llm.usage' || type === 'llm.failed') {
     if (payload.cost === undefined) payload.cost = null;
     if (!payload.costSource) payload.costSource = 'unknown';
-    if (typeof payload.inputTokens !== 'number') payload.inputTokens = 0;
-    if (typeof payload.outputTokens !== 'number') payload.outputTokens = 0;
+  }
+  if (
+    type === 'llm.usage'
+    && payload.cacheReadTokens === undefined
+    && (typeof payload.cachedTokens === 'number' || payload.cachedTokens === null)
+  ) {
+    // Deprecated alias, copied as the strict validator does. The normalizer never rejects a conflict.
+    payload.cacheReadTokens = payload.cachedTokens;
+  }
+  if (type === 'llm.failed' && !isLlmErrorKind(payload.errorKind)) {
+    payload.errorKind = 'unknown';
   }
 
   return {

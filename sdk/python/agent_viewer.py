@@ -17,14 +17,38 @@ from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger("agent_viewer")
 
+COST_SOURCES = ("provider-reported", "estimated", "unknown")
+
+_UNSTATED_COST_SOURCE_WARNING = (
+    'Agent Viewer: a cost was reported without cost_source, so it is sent as costSource="unknown". '
+    'Pass cost_source="provider-reported" or "estimated" to state where the cost comes from.'
+)
+
 
 class AgentViewerError(Exception):
-    """Exception raised by Agent Viewer API client."""
+    """Exception raised by Agent Viewer API client.
 
-    def __init__(self, message: str, status_code: Optional[int] = None, issues: Optional[List[Dict[str, Any]]] = None) -> None:
+    ``code`` is the ``error`` field of the response body when there is one. ``"conflicting_duplicate"``
+    (``status_code`` 409) means an event with the same id was already stored with different content: the
+    new event was not applied, and resending it will never succeed. The client never retries a 409.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        issues: Optional[List[Dict[str, Any]]] = None,
+        code: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.issues = issues
+        self.code = code
+
+
+def _default_event_id() -> str:
+    """Full 128-bit random id. Two distinct events never share an id by chance."""
+    return f"evt_{uuid.uuid4().hex}"
 
 
 class AgentHandle:
@@ -179,25 +203,43 @@ class AgentHandle:
         model: str,
         input_tokens: int,
         output_tokens: int,
-        cached_tokens: int = 0,
-        reasoning_tokens: int = 0,
+        cached_tokens: Optional[int] = None,
+        reasoning_tokens: Optional[int] = None,
         cost: Optional[float] = None,
         cost_source: Optional[str] = None,
         latency_ms: Optional[int] = None,
         request_id: Optional[str] = None,
+        *,
+        cache_read_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        currency: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> None:
-        """Report token and cost usage."""
+        """Report the token and cost usage of one model call, exactly as the caller knows it.
+
+        A figure that is not given stays unknown: it is left out of the payload, never sent as 0.
+        ``cost_source`` is never inferred. A cost given without it is sent as ``"unknown"`` and
+        the client logs one warning. ``task_id`` goes to the envelope ``taskId``.
+        """
+        if cost_source is not None and cost_source not in COST_SOURCES:
+            raise ValueError(
+                f'costSource must be one of {", ".join(COST_SOURCES)} (got "{cost_source}")'
+            )
+        if cost is not None and cost_source is None:
+            self.viewer._warn_unstated_cost_source()
         self._ensure_registered()
-        resolved_cost_source = cost_source or ("provider-reported" if cost is not None else "unknown")
         payload = {
             "provider": provider,
             "model": model,
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
             "cachedTokens": cached_tokens,
+            "cacheReadTokens": cache_read_tokens,
+            "cacheWriteTokens": cache_write_tokens,
             "reasoningTokens": reasoning_tokens,
             "cost": cost,
-            "costSource": resolved_cost_source,
+            "costSource": cost_source if cost_source is not None else "unknown",
+            "currency": currency,
             "latencyMs": latency_ms,
             "requestId": request_id,
         }
@@ -207,6 +249,7 @@ class AgentHandle:
             {k: v for k, v in payload.items() if v is not None},
             agent_id=self.id,
             source=f"agent:{self.id}",
+            task_id=task_id,
         )
 
 
@@ -238,6 +281,13 @@ class AgentViewer:
         self.auto_register = auto_register
         self.debug = debug
         self._agents: Dict[str, AgentHandle] = {}
+        self._warned_unstated_cost_source = False
+
+    def _warn_unstated_cost_source(self) -> None:
+        """Log, once per client, that a cost was sent without a stated source."""
+        if not self._warned_unstated_cost_source:
+            self._warned_unstated_cost_source = True
+            logger.warning(_UNSTATED_COST_SOURCE_WARNING)
 
     def agent(
         self,
@@ -279,7 +329,7 @@ class AgentViewer:
         """Emit a single canonical event to the Agent Viewer API."""
         raw_event = {
             "schemaVersion": "1.0",
-            "id": event_id or f"evt_{uuid.uuid4().hex[:12]}",
+            "id": event_id or _default_event_id(),
             "type": event_type,
             "timestamp": int(time.time() * 1000),
             "runtimeId": self.runtime_id,
@@ -296,12 +346,17 @@ class AgentViewer:
         return self._post_with_retry("/api/v1/events", event, idempotency_key=event["id"])
 
     def emit_batch(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Emit a batch of canonical events."""
+        """Emit a batch of canonical events.
+
+        Returns the server response. The server answers 202 even when some items were not applied, so
+        read ``conflicts`` and each item's ``status`` in ``results``: ``"conflict"`` means the id was
+        already stored with different content (``error == "conflicting_duplicate"``) and the item was dropped.
+        """
         normalized_events = []
         for raw in events:
             evt = {
                 "schemaVersion": "1.0",
-                "id": raw.get("id") or f"evt_{uuid.uuid4().hex[:12]}",
+                "id": raw.get("id") or _default_event_id(),
                 "type": raw["type"],
                 "timestamp": raw.get("timestamp") or int(time.time() * 1000),
                 "runtimeId": raw.get("runtimeId") or self.runtime_id,
@@ -340,6 +395,18 @@ class AgentViewer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def usage_summary(self) -> Dict[str, Any]:
+        """Fetch the usage aggregates from ``GET /api/v1/usage``.
+
+        The summary groups every ``llm.usage`` call by agent and by ``(provider, model)``, with failed calls
+        (``llm.failed``) kept under ``failed``. A token ``sum`` may be ``None``: it means no call reported that
+        kind, never zero; ``unreportedCount`` says how many calls left it out. Amounts are listed per currency
+        and cost source in ``byCurrency`` and are never summed across them.
+        """
+        req = urllib.request.Request(f"{self.url}/api/v1/usage", headers=self._build_headers(), method="GET")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     # Legacy method compatibility
     def register_agent(
         self,
@@ -368,21 +435,34 @@ class AgentViewer:
         model: str,
         input_tokens: int,
         output_tokens: int,
-        cached_tokens: int = 0,
+        cached_tokens: Optional[int] = None,
         cost: Optional[float] = None,
-        cost_source: str = "unknown",
+        cost_source: Optional[str] = None,
         latency_ms: Optional[int] = None,
+        *,
+        reasoning_tokens: Optional[int] = None,
+        cache_read_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        request_id: Optional[str] = None,
+        currency: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> None:
-        """Report LLM usage (legacy helper)."""
+        """Report LLM usage (legacy helper). Same rules as ``AgentHandle.usage()``."""
         self.agent(agent_id).usage(
             provider=provider,
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_tokens=cached_tokens,
+            reasoning_tokens=reasoning_tokens,
             cost=cost,
             cost_source=cost_source,
             latency_ms=latency_ms,
+            request_id=request_id,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            currency=currency,
+            task_id=task_id,
         )
 
     def _build_headers(self, idempotency_key: Optional[str] = None) -> Dict[str, str]:
@@ -418,19 +498,22 @@ class AgentViewer:
             except urllib.error.HTTPError as err:
                 error_body = err.read().decode("utf-8")
                 issues = None
+                code = None
                 try:
                     parsed = json.loads(error_body)
                     issues = parsed.get("issues") or parsed.get("errors")
+                    if isinstance(parsed.get("error"), str):
+                        code = parsed["error"]
                 except Exception:
                     pass
 
-                # Client errors (4xx except 429) should fail immediately
+                # Client errors (4xx except 429) should fail immediately. A 409 conflicting_duplicate is final.
                 if 400 <= err.code < 500 and err.code != 429:
-                    raise AgentViewerError(f"Agent Viewer rejected event: {err.code} {error_body}", err.code, issues)
+                    raise AgentViewerError(f"Agent Viewer rejected event: {err.code} {error_body}", err.code, issues, code)
 
                 attempt += 1
                 if attempt > self.max_retries:
-                    raise AgentViewerError(f"Agent Viewer request failed: {err.code} {error_body}", err.code, issues)
+                    raise AgentViewerError(f"Agent Viewer request failed: {err.code} {error_body}", err.code, issues, code)
 
                 time.sleep(delay + random.uniform(0, 0.1))
                 delay = min(delay * 2, 5.0)

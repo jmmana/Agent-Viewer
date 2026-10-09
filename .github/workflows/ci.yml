@@ -11,7 +11,8 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Two image builds, two container smoke tests and the CLI end-to-end tests.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -56,14 +57,102 @@ jobs:
       - name: Build library
         run: npm run build:lib
 
+      - name: Build CLI (bundled server and prebuilt office)
+        run: npm run build:cli
+
+      - name: CLI smoke test from the packed tarball
+        run: |
+          npm pack --ignore-scripts
+          mkdir -p /tmp/cli-smoke && cd /tmp/cli-smoke
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE"/warlockcode-agent-viewer-*.tgz
+          AGENT_VIEWER_HOME=/tmp/cli-smoke/home npx agent-viewer --no-open --port 4871 --token ci-token > cli.log 2>&1 &
+          CLI_PID=$!
+          for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:4871/health && break; sleep 0.2; done
+          curl -fsS http://127.0.0.1:4871/ | grep -q '<div id="root">'
+          AGENT_VIEWER_HOME=/tmp/cli-smoke/home npx agent-viewer send --agent ci --status working --message "hello from CI"
+          curl -fsS -H "Authorization: Bearer ci-token" "http://127.0.0.1:4871/api/v1/events?agentId=ci" | grep -q '"agentId":"ci"'
+          kill "$CLI_PID"
+          rm -f "$GITHUB_WORKSPACE"/warlockcode-agent-viewer-*.tgz
+
       - name: Check package (publint + attw)
         run: npm run check:package
 
-      - name: Docker Build
-        run: docker build -f docker/Dockerfile .
+      - name: Docker Build (office + API image, the published default)
+        run: docker build -f docker/Dockerfile -t agent-viewer-app:ci .
+
+      - name: Docker Build (API image)
+        run: docker build -f docker/Dockerfile --target api -t agent-viewer-api:ci .
 
       - name: Docker Build (viewer image)
         run: docker build -f docker/Dockerfile --target viewer --build-arg VITE_AGENT_VIEWER_API_URL=http://localhost:8787 .
+
+      # Each image answers /health, refuses /api/v1 without the token, accepts an event with it and reads it back.
+      - name: Container smoke tests (app and API images)
+        run: |
+          event='{"schemaVersion":"1.0","id":"evt_ci_container","type":"agent.status.changed","timestamp":1767225600000,"source":"agent:ci","agentId":"ci","summary":"ci","payload":{"status":"THINKING"}}'
+          smoke() {
+            name=$1; image=$2; port=$3
+            docker run -d --name "$name" -e AGENT_VIEWER_API_TOKEN=ci-token -p "$port:8787" "$image"
+            for _ in $(seq 1 60); do curl -fsS "http://127.0.0.1:$port/health" >/dev/null && break; sleep 0.5; done
+            curl -fsS "http://127.0.0.1:$port/health"
+            test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/v1/events")" = 401
+            test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'Authorization: Bearer ci-token' -d "$event" "http://127.0.0.1:$port/api/v1/events")" = 202
+            curl -fsS -H 'Authorization: Bearer ci-token' "http://127.0.0.1:$port/api/v1/events?agentId=ci" | grep -q '"evt_ci_container"'
+            docker rm -f "$name"
+          }
+          smoke av-app agent-viewer-app:ci 18787
+          smoke av-api agent-viewer-api:ci 18788
+
+      # Without a token the API image generates one, keeps it owner-only in the data folder and never runs open.
+      - name: Container smoke test (API image without a token)
+        run: |
+          docker run -d --name av-api-open -p 18789:8787 agent-viewer-api:ci
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:18789/health >/dev/null && break; sleep 0.5; done
+          test "$(docker exec av-api-open stat -c '%a' /app/data/api-token)" = 600
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18789/api/v1/snapshot)" = 401
+          docker rm -f av-api-open
+
+  # The package declares engines.node >=22.13: run the packed CLI on that exact version.
+  cli-node-22:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use Node.js 24 to build
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Build and pack
+        run: |
+          npm ci
+          npm run build:lib
+          npm run build:cli
+          npm pack --ignore-scripts
+          mv warlockcode-agent-viewer-*.tgz /tmp/agent-viewer.tgz
+
+      - name: Use Node.js 22.13
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.13.0'
+
+      - name: CLI smoke test from the packed tarball on Node 22.13
+        run: |
+          node --version
+          mkdir -p /tmp/cli-smoke && cd /tmp/cli-smoke
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund /tmp/agent-viewer.tgz
+          AGENT_VIEWER_HOME=/tmp/cli-smoke/home npx agent-viewer --no-open --port 4871 --token ci-token > cli.log 2>&1 &
+          CLI_PID=$!
+          for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:4871/health && break; sleep 0.2; done
+          curl -fsS http://127.0.0.1:4871/ | grep -q '<div id="root">'
+          AGENT_VIEWER_HOME=/tmp/cli-smoke/home npx agent-viewer send --agent ci --status working --message "hello from Node 22"
+          curl -fsS -H "Authorization: Bearer ci-token" "http://127.0.0.1:4871/api/v1/events?agentId=ci" | grep -q '"agentId":"ci"'
+          kill "$CLI_PID"
+          cat cli.log
 
   crew-browser:
     runs-on: ubuntu-latest

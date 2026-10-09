@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { MemoryEventStore, SQLiteEventStore } from '../server/store.ts';
+import { MemoryEventStore, SQLiteEventStore, parseMaxEvents, createEventStore } from '../server/store.ts';
 import { eventFingerprint } from '../server/eventFingerprint.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
 
@@ -1078,15 +1078,16 @@ for (const [label, create] of STORE_FACTORIES) {
   });
 }
 
-test('MemoryEventStore: a report with the same key is still a duplicate, and totals do not change, after the original falls off the ring', async () => {
+test('MemoryEventStore: a report with the same key is still a duplicate, and totals do not change, after the original falls off the retained window', async () => {
   const store = new MemoryEventStore(3);
   const original = usageEvent('evt_rk_evict_original', { provider: 'evictp', requestId: 'req-evict' });
   await store.append(original);
   await store.append(usageEvent('evt_rk_evict_filler_1'));
   await store.append(usageEvent('evt_rk_evict_filler_2'));
   await store.append(usageEvent('evt_rk_evict_filler_3'));
-  // The ring holds only maxEvents (3): the original has been evicted.
-  assert.equal(await store.exists('evt_rk_evict_original'), false);
+  // The retained window holds only maxEvents (3), so the original is no longer listed, but the dedup index
+  // never forgets an accepted id (issue #53): exists() and a retry of the id itself must both still see it.
+  assert.equal(await store.exists('evt_rk_evict_original'), true);
 
   const before = await store.usageSummary();
   const late = usageEvent('evt_rk_evict_late', { provider: 'evictp', requestId: 'req-evict', inputTokens: 99999 });
@@ -1219,4 +1220,392 @@ test('SQLiteEventStore: a UNIQUE violation on the request key is classified as a
     await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// -------------------------------------------------------------
+// Issue #53: no silent loss, no double counting after eviction, configurable cap
+// -------------------------------------------------------------
+
+test('MemoryEventStore: constructor options are backward compatible with a bare number, and reject an invalid maxEvents', async () => {
+  const legacy = new MemoryEventStore(50);
+  assert.equal((await legacy.retention()).maxEvents, 50);
+
+  const viaOptions = new MemoryEventStore({ maxEvents: 7 });
+  assert.equal((await viaOptions.retention()).maxEvents, 7);
+
+  const defaulted = new MemoryEventStore();
+  assert.equal((await defaulted.retention()).maxEvents, 10000);
+
+  for (const bad of [0, -1, 1.5, NaN]) {
+    assert.throws(() => new MemoryEventStore({ maxEvents: bad }));
+  }
+});
+
+test('MemoryEventStore: retrying an evicted event id via append() is a duplicate; totals, runtimes, sessions and agents do not change', async () => {
+  const store = new MemoryEventStore(3);
+  const original = usageEvent('evt_evict_retry', { inputTokens: 1000 }, { runtimeId: 'rt_evict', sessionId: 'ses_evict' });
+  await store.append(original);
+  await store.append(usageEvent('evt_evict_filler_1'));
+  await store.append(usageEvent('evt_evict_filler_2'));
+  await store.append(usageEvent('evt_evict_filler_3'));
+
+  assert.equal(await store.exists('evt_evict_retry'), true);
+  const before = await store.snapshot();
+
+  const retry = await store.append(original);
+  assert.equal(retry.outcome, 'duplicate');
+  assert.equal(retry.accepted, true);
+  assert.equal(retry.duplicate, true);
+
+  const after = await store.snapshot();
+  assert.deepStrictEqual(after.usage, before.usage);
+  assert.deepStrictEqual(after.totalTokens, before.totalTokens);
+  assert.equal(after.totalCost, before.totalCost);
+  assert.deepStrictEqual(after.runtimes, before.runtimes);
+  assert.deepStrictEqual(after.sessions, before.sessions);
+  assert.deepStrictEqual(after.agents, before.agents);
+  assert.deepStrictEqual(after.retention, before.retention, 'a duplicate never moves a retention counter');
+});
+
+test('MemoryEventStore: appendBatch retries an evicted id, mixes it with new ids, and repeats a new id twice in one batch', async () => {
+  const store = new MemoryEventStore(3);
+  const original = usageEvent('evt_evict_batch_retry', { inputTokens: 500 });
+  await store.append(original);
+  await store.appendBatch([usageEvent('evt_evict_batch_f1'), usageEvent('evt_evict_batch_f2'), usageEvent('evt_evict_batch_f3')]);
+  assert.equal(await store.exists('evt_evict_batch_retry'), true);
+
+  const before = await store.usageSummary();
+  const newEvent = usageEvent('evt_evict_batch_new', { inputTokens: 7 });
+  const batch = await store.appendBatch([original, newEvent, { ...newEvent }]);
+  assert.equal(batch.results[0].outcome, 'duplicate');
+  assert.equal(batch.results[1].outcome, 'accepted');
+  assert.equal(batch.results[2].outcome, 'duplicate');
+  assert.equal(batch.accepted, 1);
+  assert.equal(batch.duplicates, 2);
+
+  const after = await store.usageSummary();
+  assert.equal(after.total.calls - before.total.calls, 1, 'only the genuinely new event is counted, once');
+});
+
+test('MemoryEventStore: exists() stays true for a plain event id (no request key) after it falls off the retained window', async () => {
+  const store = new MemoryEventStore(2);
+  await store.append(storeEvent('evt_plain_evict', 1));
+  await store.append(storeEvent('evt_plain_filler_1', 2));
+  await store.append(storeEvent('evt_plain_filler_2', 3));
+  assert.equal(await store.exists('evt_plain_evict'), true);
+  assert.deepEqual((await store.list()).map((e) => e.id), ['evt_plain_filler_2', 'evt_plain_filler_1']);
+});
+
+test('MemoryEventStore: retention counters and since follow the injected clock, and since is null before any eviction', async () => {
+  let clock = 1_000;
+  const store = new MemoryEventStore({ maxEvents: 2, now: () => clock });
+
+  await store.append(storeEvent('evt_ret_1', 1));
+  let retention = await store.retention();
+  assert.deepEqual(retention, {
+    storage: 'memory',
+    maxEvents: 2,
+    retainedEvents: 1,
+    acceptedEvents: 1,
+    droppedEvents: 0,
+    since: null,
+    totalsSince: 1_000,
+  });
+
+  clock = 2_000;
+  await store.append(storeEvent('evt_ret_2', 2));
+  retention = await store.retention();
+  assert.equal(retention.droppedEvents, 0);
+  assert.equal(retention.since, null);
+
+  clock = 3_000;
+  await store.append(storeEvent('evt_ret_3', 3)); // evicts evt_ret_1, received at clock 1000
+  retention = await store.retention();
+  assert.equal(retention.retainedEvents, 2);
+  assert.equal(retention.acceptedEvents, 3);
+  assert.equal(retention.droppedEvents, 1);
+  assert.equal(retention.since, 2_000, 'oldest retained event (evt_ret_2) was received at clock 2000');
+  assert.equal(retention.totalsSince, 1_000);
+
+  // A retry of the evicted id is a duplicate: it must not move any retention counter.
+  const before = retention;
+  const retry = await store.append(storeEvent('evt_ret_1', 1));
+  assert.equal(retry.duplicate, true);
+  assert.deepEqual(await store.retention(), before);
+});
+
+test('MemoryEventStore: a single batch larger than maxEvents is fully counted in totals and acceptedEvents, and retains exactly the newest maxEvents', async () => {
+  const store = new MemoryEventStore(5);
+  const events = Array.from({ length: 12 }, (_, i) => usageEvent(`evt_bigbatch_${i}`, { inputTokens: 1 }));
+  const batch = await store.appendBatch(events);
+  assert.equal(batch.accepted, 12);
+
+  const retention = await store.retention();
+  assert.equal(retention.acceptedEvents, 12);
+  assert.equal(retention.retainedEvents, 5);
+  assert.equal(retention.droppedEvents, 7);
+
+  const retainedIds = (await store.list({ limit: 100 })).map((e) => e.id);
+  assert.deepEqual(retainedIds, ['evt_bigbatch_11', 'evt_bigbatch_10', 'evt_bigbatch_9', 'evt_bigbatch_8', 'evt_bigbatch_7']);
+
+  const summary = await store.usageSummary();
+  assert.equal(summary.total.calls, 12, 'every accepted event counts toward totals, evicted or not');
+});
+
+/** Reference (non-ring) implementation of `list()`, mirroring the array semantics this store replaced. */
+function referenceList(acceptedNewestFirst, options = {}) {
+  let result = acceptedNewestFirst;
+  if (options.runtimeId) result = result.filter((e) => e.runtimeId === options.runtimeId);
+  if (options.sessionId) result = result.filter((e) => e.sessionId === options.sessionId);
+  if (options.agentId) result = result.filter((e) => e.agentId === options.agentId);
+  if (options.type) result = result.filter((e) => e.type === options.type);
+  if (options.since !== undefined) result = result.filter((e) => e.timestamp >= options.since);
+  if (options.afterId) {
+    const index = result.findIndex((e) => e.id === options.afterId);
+    if (index >= 0) result = result.slice(0, index);
+  }
+  const limit = options.limit && options.limit > 0 ? options.limit : 100;
+  return result.slice(0, limit).map((e) => e.id);
+}
+
+/** Deterministic seeded PRNG (mulberry32), so the differential and invariant tests below are reproducible. */
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return function () {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test('MemoryEventStore: list() matches a reference array implementation across random filters (seeded differential test)', async () => {
+  const rand = mulberry32(53);
+  const maxEvents = 15;
+  const store = new MemoryEventStore(maxEvents);
+  const runtimes = ['rt_a', 'rt_b', undefined];
+  const sessions = ['ses_a', 'ses_b', undefined];
+  const agents = ['agent_a', 'agent_b', undefined];
+  const types = ['agent.message.sent', 'llm.usage'];
+  const acceptedNewestFirst = [];
+
+  const totalEvents = 60;
+  for (let i = 0; i < totalEvents; i++) {
+    const type = types[Math.floor(rand() * types.length)];
+    const candidate = {
+      id: `evt_diff_${i}`,
+      type,
+      timestamp: 1000 + i,
+      runtimeId: runtimes[Math.floor(rand() * runtimes.length)],
+      sessionId: sessions[Math.floor(rand() * sessions.length)],
+      agentId: agents[Math.floor(rand() * agents.length)],
+      source: 'agent:diff',
+      summary: `Event ${i}`,
+      payload: type === 'llm.usage' ? { provider: 'p', model: 'm', inputTokens: 1, outputTokens: 1 } : { text: 'x' },
+    };
+    const validated = validateCanonicalEvent(candidate);
+    assert.equal(validated.success, true, JSON.stringify(validated.issues));
+    await store.append(validated.data);
+    acceptedNewestFirst.unshift(validated.data);
+  }
+  // The store only retains the newest maxEvents; slicing the full newest-first reference the same way lets the
+  // rest of the comparison reuse the exact filter order of the previous array implementation.
+  const retained = acceptedNewestFirst.slice(0, maxEvents);
+
+  const scenarios = [
+    {},
+    { limit: 5 },
+    { runtimeId: 'rt_a' },
+    { sessionId: 'ses_b', limit: 3 },
+    { agentId: 'agent_a' },
+    { type: 'llm.usage' },
+    { since: 1000 + totalEvents - maxEvents + 2 },
+    { afterId: retained[5]?.id },
+    { afterId: 'evt_unknown' },
+    { runtimeId: 'rt_b', type: 'llm.usage', limit: 2 },
+  ];
+
+  for (const options of scenarios) {
+    const actual = (await store.list(options)).map((e) => e.id);
+    const expected = referenceList(retained, options);
+    assert.deepEqual(actual, expected, `scenario ${JSON.stringify(options)}`);
+  }
+});
+
+test('MemoryEventStore: seeded randomized sequence keeps acceptedEvents == retainedEvents + droppedEvents, and totals equal the sum over unique accepted ids', async () => {
+  const rand = mulberry32(9311);
+  const maxEvents = 6;
+  const store = new MemoryEventStore(maxEvents);
+  const allIds = [];
+  const expectedInputById = new Map();
+
+  const operations = 300;
+  for (let i = 0; i < operations; i++) {
+    const retryExisting = allIds.length > 0 && rand() < 0.4;
+    let id;
+    let inputTokens;
+    if (retryExisting) {
+      id = allIds[Math.floor(rand() * allIds.length)];
+      inputTokens = expectedInputById.get(id); // same content as the original: a duplicate, never a conflict
+    } else {
+      id = `evt_rand_${i}`;
+      inputTokens = Math.floor(rand() * 1000);
+      allIds.push(id);
+      expectedInputById.set(id, inputTokens);
+    }
+    const result = await store.append(usageEvent(id, { inputTokens }));
+    assert.notEqual(result.outcome, 'conflict', `unexpected conflict for ${id} at operation ${i}`);
+
+    const retention = await store.retention();
+    assert.equal(retention.acceptedEvents, retention.retainedEvents + retention.droppedEvents, `invariant broken at operation ${i}`);
+  }
+
+  const expectedTotal = Array.from(expectedInputById.values()).reduce((sum, value) => sum + value, 0);
+  const snapshot = await store.snapshot();
+  assert.equal(snapshot.totalTokens.input, expectedTotal);
+  assert.equal((await store.retention()).acceptedEvents, allIds.length);
+});
+
+test('MemoryEventStore: 200,000 appends with maxEvents=100000 finish well under 5s, and a huge cap does not preallocate', async () => {
+  const store = new MemoryEventStore(100_000);
+  const start = Date.now();
+  for (let i = 0; i < 200_000; i++) {
+    await store.append(storeEvent(`evt_perf_${i}`, i));
+  }
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 5000, `expected under 5000ms, took ${elapsed}ms`);
+  assert.equal((await store.retention()).retainedEvents, 100_000);
+  assert.equal((await store.retention()).droppedEvents, 100_000);
+
+  // A cap of 1e9 must not allocate a proportional array up front.
+  const before = process.memoryUsage().heapUsed;
+  const huge = new MemoryEventStore(1_000_000_000);
+  const after = process.memoryUsage().heapUsed;
+  assert.ok(after - before < 10 * 1024 * 1024, `constructing a store with a 1e9 cap used ${after - before} bytes`);
+  assert.equal((await huge.retention()).retainedEvents, 0);
+});
+
+test('MemoryEventStore: logs the known-ids memory warning once when crossing 1,000,000 ids, not per event', { timeout: 60_000 }, async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const store = new MemoryEventStore(1);
+  for (let i = 0; i < 1_000_001; i++) {
+    await store.append(storeEvent(`evt_warn_${i}`, i));
+  }
+  const matches = warn.mock.calls.filter((call) => String(call.arguments[0]).includes('memory store has seen'));
+  assert.equal(matches.length, 1);
+  assert.match(String(matches[0].arguments[0]), /has seen 1000000 event ids/);
+});
+
+test('SQLiteEventStore: retention() reports the sqlite shape, eventsCount is the true row count, and the fallback forgets evicted ids', async () => {
+  const { dir, file } = tempDbPath('retention-sqlite');
+  const store = new SQLiteEventStore(file, { maxEvents: 2 });
+  try {
+    await store.append(usageEvent('evt_sqlite_ret_1'));
+    await store.append(storeEvent('evt_sqlite_ret_2', 2));
+    await store.append(storeEvent('evt_sqlite_ret_3', 3)); // evicts evt_sqlite_ret_1 from the fallback only
+
+    const retention = await store.retention();
+    assert.equal(retention.storage, 'sqlite');
+    assert.equal(retention.maxEvents, null);
+    assert.equal(retention.droppedEvents, 0);
+    assert.equal(retention.since, null);
+    assert.equal(retention.retainedEvents, 3, 'every row counts, not just the fallback window');
+    assert.equal(retention.acceptedEvents, 3);
+
+    // SQLite itself still knows the id (dedup source of truth is the table), unaffected by the fallback's cap.
+    assert.equal(await store.exists('evt_sqlite_ret_1'), true);
+    const retry = await store.append(usageEvent('evt_sqlite_ret_1'));
+    assert.equal(retry.outcome, 'duplicate');
+
+    const snapshot = await store.snapshot();
+    assert.equal(snapshot.eventsCount, 3);
+    assert.equal(snapshot.retention.storage, 'sqlite');
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: retention() never runs a per-call COUNT(*) (the SSE heartbeat polls it every 15s)', async () => {
+  const { dir, file } = tempDbPath('retention-no-count');
+  const store = new SQLiteEventStore(file);
+  try {
+    await store.append(usageEvent('evt_no_count_1'));
+    const originalPrepare = store.db.prepare.bind(store.db);
+    let countCalls = 0;
+    store.db.prepare = (sql, ...rest) => {
+      if (/COUNT\(/i.test(sql)) countCalls++;
+      return originalPrepare(sql, ...rest);
+    };
+    await store.retention();
+    await store.retention();
+    await store.append(usageEvent('evt_no_count_2'));
+    await store.retention();
+    assert.equal(countCalls, 0);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('parseMaxEvents: valid values, defaults, and the documented invalid cases all throw', () => {
+  assert.equal(parseMaxEvents('5'), 5);
+  assert.equal(parseMaxEvents(undefined), 10000);
+  assert.equal(parseMaxEvents(''), 10000);
+  assert.equal(parseMaxEvents('   '), 10000);
+  assert.equal(parseMaxEvents(' 25 '), 25);
+  assert.equal(parseMaxEvents(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
+
+  const invalid = ['0', '-1', 'abc', '1e3', '10.5', '007', `${Number.MAX_SAFE_INTEGER}0`, '99999999999999999999'];
+  for (const raw of invalid) {
+    assert.throws(
+      () => parseMaxEvents(raw),
+      /AGENT_VIEWER_MAX_EVENTS must be a positive integer/,
+      `expected "${raw}" to throw`
+    );
+  }
+});
+
+test('createEventStore: AGENT_VIEWER_MAX_EVENTS caps the memory store, and an invalid value throws at startup', (t) => {
+  const previousStorage = process.env.AGENT_VIEWER_STORAGE;
+  const previousMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
+  t.after(() => {
+    if (previousStorage === undefined) delete process.env.AGENT_VIEWER_STORAGE;
+    else process.env.AGENT_VIEWER_STORAGE = previousStorage;
+    if (previousMaxEvents === undefined) delete process.env.AGENT_VIEWER_MAX_EVENTS;
+    else process.env.AGENT_VIEWER_MAX_EVENTS = previousMaxEvents;
+  });
+
+  delete process.env.AGENT_VIEWER_STORAGE;
+  process.env.AGENT_VIEWER_MAX_EVENTS = '5';
+  const store = createEventStore();
+  assert.ok(store instanceof MemoryEventStore);
+
+  process.env.AGENT_VIEWER_MAX_EVENTS = 'not-a-number';
+  assert.throws(() => createEventStore(), /AGENT_VIEWER_MAX_EVENTS must be a positive integer/);
+});
+
+test('createEventStore: in SQLite mode, AGENT_VIEWER_MAX_EVENTS has no effect and logs once that it is ignored', (t) => {
+  const log = t.mock.method(console, 'log', () => {});
+  const previousStorage = process.env.AGENT_VIEWER_STORAGE;
+  const previousMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
+  const previousPath = process.env.AGENT_VIEWER_SQLITE_PATH;
+  const { dir, file } = tempDbPath('create-event-store-sqlite');
+  t.after(() => {
+    if (previousStorage === undefined) delete process.env.AGENT_VIEWER_STORAGE;
+    else process.env.AGENT_VIEWER_STORAGE = previousStorage;
+    if (previousMaxEvents === undefined) delete process.env.AGENT_VIEWER_MAX_EVENTS;
+    else process.env.AGENT_VIEWER_MAX_EVENTS = previousMaxEvents;
+    if (previousPath === undefined) delete process.env.AGENT_VIEWER_SQLITE_PATH;
+    else process.env.AGENT_VIEWER_SQLITE_PATH = previousPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  process.env.AGENT_VIEWER_STORAGE = 'sqlite';
+  process.env.AGENT_VIEWER_SQLITE_PATH = file;
+  process.env.AGENT_VIEWER_MAX_EVENTS = '7';
+  const store = createEventStore();
+  assert.ok(store instanceof SQLiteEventStore);
+  const notice = log.mock.calls.find((call) => String(call.arguments[0]).includes('AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode'));
+  assert.ok(notice, 'expected a one-time notice that AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode');
 });

@@ -65,6 +65,55 @@ test('SSE: client receives real-time events on SSE stream without token', async 
   }
 });
 
+test('SSE: a streamed llm.usage event carries the correlation fields (issue #64)', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/events/stream`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    const initial = await reader.read();
+    assert.ok(decoder.decode(initial.value).includes('connected'));
+
+    const postRes = await fetch(`${baseUrl}/api/v1/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        schemaVersion: '1.0',
+        id: 'evt_sse_correlation',
+        type: 'llm.usage',
+        timestamp: Date.now(),
+        source: 'agent:tester',
+        summary: 'SSE usage with correlation',
+        payload: {
+          provider: 'OpenAI',
+          model: 'gpt-4.1',
+          inputTokens: 100,
+          outputTokens: 20,
+          traceId: 'trace_sse',
+          toolCallId: 'call_sse',
+          tags: ['env:prod', 'env:prod'],
+        },
+      }),
+    });
+    assert.equal(postRes.status, 202);
+
+    const chunk = await reader.read();
+    const text = decoder.decode(chunk.value);
+    assert.ok(text.includes('id: evt_sse_correlation'));
+    const dataLine = text.split('\n').find((line) => line.startsWith('data: '));
+    const streamed = JSON.parse(dataLine.slice('data: '.length));
+    assert.equal(streamed.payload.traceId, 'trace_sse');
+    assert.equal(streamed.payload.toolCallId, 'call_sse');
+    assert.deepEqual(streamed.payload.tags, ['env:prod']);
+
+    await reader.cancel();
+  } finally {
+    server.close();
+  }
+});
+
 test('SSE: a token or api_key query parameter never authenticates the stream (issue #71)', async () => {
   const secretToken = 'test-sse-secure-token-123';
   process.env.AGENT_VIEWER_API_TOKEN = secretToken;

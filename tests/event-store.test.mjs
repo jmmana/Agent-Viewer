@@ -230,6 +230,62 @@ test('MemoryEventStore: llm.usage without cache fields is stored without invente
   }
 });
 
+function validatedUsageWithCorrelation(id) {
+  const result = validateCanonicalEvent({
+    id,
+    type: 'llm.usage',
+    timestamp: 5000,
+    runtimeId: 'rt_usage_correlation',
+    source: 'agent:gemini',
+    agentId: 'gemini',
+    summary: 'Usage with correlation fields',
+    payload: {
+      provider: 'Google',
+      model: 'gemini-2.5-pro',
+      inputTokens: 5000,
+      outputTokens: 1000,
+      traceId: 'trace_store_roundtrip',
+      parentId: 'span_store_roundtrip',
+      toolCallId: 'call_store_roundtrip',
+      meetingId: 'meeting_store_roundtrip',
+      userId: 'usr_store_roundtrip',
+      tags: ['env:prod', 'env:prod', 'tier:pro'],
+    },
+  });
+  assert.equal(result.success, true);
+  return result.data;
+}
+
+test('SQLiteEventStore: llm.usage correlation fields survive a store reopen (issue #64)', async () => {
+  const { dir, file } = tempDbPath('usage-correlation');
+  let store = new SQLiteEventStore(file);
+  try {
+    await store.append(validatedUsageWithCorrelation('evt_usage_correlation_sql'));
+    await store.close();
+
+    // A fresh instance reads from disk only, confirming the fields were persisted, not kept in memory.
+    store = new SQLiteEventStore(file);
+    const [listed] = await store.list({ runtimeId: 'rt_usage_correlation' });
+    assert.equal(listed.payload.traceId, 'trace_store_roundtrip');
+    assert.equal(listed.payload.parentId, 'span_store_roundtrip');
+    assert.equal(listed.payload.toolCallId, 'call_store_roundtrip');
+    assert.equal(listed.payload.meetingId, 'meeting_store_roundtrip');
+    assert.equal(listed.payload.userId, 'usr_store_roundtrip');
+    assert.deepEqual(listed.payload.tags, ['env:prod', 'tier:pro']);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MemoryEventStore: llm.usage correlation fields are stored as validated (issue #64)', async () => {
+  const store = new MemoryEventStore();
+  await store.append(validatedUsageWithCorrelation('evt_usage_correlation_mem'));
+  const [listed] = await store.list({ runtimeId: 'rt_usage_correlation' });
+  assert.equal(listed.payload.traceId, 'trace_store_roundtrip');
+  assert.deepEqual(listed.payload.tags, ['env:prod', 'tier:pro']);
+});
+
 test('SQLiteEventStore: migrates databases created before the event_json column and keeps legacy rows readable', async () => {
   const { dir, file } = tempDbPath('legacy');
   const legacy = new DatabaseSync(file);

@@ -1,4 +1,5 @@
 import http.server
+import importlib.util
 import json
 import logging
 import os
@@ -13,6 +14,38 @@ import urllib.request
 sys.path.insert(0, ".")
 
 from sdk.python.agent_viewer import AgentViewer, AgentHandle, AgentViewerError
+
+_VECTORS_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "usage-correlation-vectors.json")
+with open(_VECTORS_PATH, "r", encoding="utf-8") as _f:
+    USAGE_CORRELATION_VECTORS = json.load(_f)
+
+_EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+
+
+def _load_example_module(filename):
+    """Loads an example adapter module by file path. The example files have hyphens in their names
+    (``autogen-adapter.py``, ``crewai-adapter.py``), so they cannot be imported with a normal ``import``.
+    """
+    path = os.path.join(_EXAMPLES_DIR, filename)
+    module_name = filename.replace("-", "_").replace(".py", "")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _capture_adapter_viewer(adapter):
+    """Patches the adapter's internal AgentViewer so emitted events are captured instead of sent over the
+    network. Returns the list that each emitted event body is appended to, in order.
+    """
+    captured = []
+
+    def fake_post_with_retry(endpoint, body, idempotency_key=None):
+        captured.append(body)
+        return {"accepted": True, "duplicate": False}
+
+    adapter.viewer._post_with_retry = fake_post_with_retry
+    return captured
 
 
 def get_free_port():
@@ -314,6 +347,142 @@ class TestPythonSDK(unittest.TestCase):
         viewer.agent("a").usage("OpenAI", "gpt-4o", 10, 5)
         self.assertEqual(viewer.usage_events()[-1]["payload"]["inputTokens"], 10)
 
+    # -------------------------------------------------------------
+    # Usage correlation block (issue #64)
+    # -------------------------------------------------------------
+
+    def test_usage_correlation_fields_forwarded_and_omitted(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        agent.usage(
+            "OpenAI", "gpt-4o", 10, 5,
+            trace_id="trace_1", parent_id="span_1", tool_call_id="call_1",
+            meeting_id="meeting_1", user_id="usr_1", tags=["env:prod", "feature:x"],
+        )
+        agent.usage("OpenAI", "gpt-4o", 10, 5)
+        with_correlation, without = [e["payload"] for e in viewer.usage_events()]
+        self.assertEqual(with_correlation["traceId"], "trace_1")
+        self.assertEqual(with_correlation["parentId"], "span_1")
+        self.assertEqual(with_correlation["toolCallId"], "call_1")
+        self.assertEqual(with_correlation["meetingId"], "meeting_1")
+        self.assertEqual(with_correlation["userId"], "usr_1")
+        self.assertEqual(with_correlation["tags"], ["env:prod", "feature:x"])
+        for key in ("traceId", "parentId", "toolCallId", "meetingId", "userId", "tags"):
+            self.assertNotIn(key, without)
+
+    def test_tool_helpers_forward_tool_call_id(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        agent.tool_started("git.commit", tool_call_id="call_started")
+        agent.tool_completed("git.commit", tool_call_id="call_completed")
+        agent.tool_failed("git.commit", tool_call_id="call_failed")
+        agent.tool_started("git.push")
+        tool_events = [e for e in viewer.captured if e["type"].startswith("tool.")]
+        started, completed, failed, plain = tool_events
+        self.assertEqual(started["payload"]["toolCallId"], "call_started")
+        self.assertEqual(completed["payload"]["toolCallId"], "call_completed")
+        self.assertEqual(failed["payload"]["toolCallId"], "call_failed")
+        self.assertNotIn("toolCallId", plain["payload"])
+
+    def test_usage_correlation_id_vectors_match_the_shared_fixture(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        for field in USAGE_CORRELATION_VECTORS["idFields"]:
+            kwarg = {
+                "traceId": "trace_id", "parentId": "parent_id", "toolCallId": "tool_call_id",
+                "meetingId": "meeting_id", "userId": "user_id",
+            }[field]
+            for vector in USAGE_CORRELATION_VECTORS["idCases"]:
+                with self.subTest(field=field, case=vector["name"]):
+                    if vector["valid"]:
+                        agent.usage("OpenAI", "gpt-4o", 10, 5, **{kwarg: vector["value"]})
+                    else:
+                        with self.assertRaises(ValueError):
+                            agent.usage("OpenAI", "gpt-4o", 10, 5, **{kwarg: vector["value"]})
+
+    def test_usage_tags_vectors_match_the_shared_fixture(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        for vector in USAGE_CORRELATION_VECTORS["tagCases"]:
+            with self.subTest(case=vector["name"]):
+                if vector["valid"]:
+                    agent.usage("OpenAI", "gpt-4o", 10, 5, tags=vector["tags"])
+                else:
+                    with self.assertRaises(ValueError):
+                        agent.usage("OpenAI", "gpt-4o", 10, 5, tags=vector["tags"])
+
+    def test_tags_as_str_raises_type_error(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        with self.assertRaises(TypeError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, tags="env:prod")
+        with self.assertRaises(TypeError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, tags=b"env:prod")
+        self.assertEqual(viewer.captured, [])
+
+    def test_non_string_correlation_id_raises_type_error(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        with self.assertRaises(TypeError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id=12345)
+        self.assertEqual(viewer.captured, [])
+
+    def test_utf16_length_parity_with_astral_characters(self):
+        from sdk.python.agent_viewer import _utf16_length, CORRELATION_ID_MAX_LENGTH
+
+        emoji = "\U0001F600"  # one astral character, 2 UTF-16 code units
+        exactly_at_limit = emoji * (CORRELATION_ID_MAX_LENGTH // 2)
+        self.assertEqual(_utf16_length(exactly_at_limit), CORRELATION_ID_MAX_LENGTH)
+
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        # Exactly at the limit (128 UTF-16 code units) must validate.
+        agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id=exactly_at_limit)
+        # One more astral character pushes it to 130 UTF-16 units: rejected.
+        with self.assertRaises(ValueError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id=exactly_at_limit + emoji)
+
+    def test_whitespace_set_parity_u0085_and_ufeff(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        # U+0085 (NEL) is stripped by Python's str.strip() but is NOT in the JavaScript trim set used by the
+        # contract, so a leading or trailing U+0085 must be accepted, not rejected.
+        agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="\u0085leading")
+        agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="trailing\u0085")
+        # U+FEFF (BOM) IS in the JavaScript trim set, so it must be rejected at the edges.
+        with self.assertRaises(ValueError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="﻿leading")
+        with self.assertRaises(ValueError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="trailing﻿")
+
+    def test_llm_failed_helper(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        agent.llm_failed(
+            "OpenAI", "gpt-4.1", "rate_limited",
+            http_status=429, retryable=True,
+            trace_id="trace_failed", tags=["env:prod"], task_id="task_1",
+        )
+        failed = [e for e in viewer.captured if e["type"] == "llm.failed"][-1]
+        self.assertEqual(failed["taskId"], "task_1")
+        self.assertNotIn("taskId", failed["payload"])
+        self.assertEqual(failed["severity"], "high")
+        self.assertEqual(failed["payload"]["provider"], "OpenAI")
+        self.assertEqual(failed["payload"]["model"], "gpt-4.1")
+        self.assertEqual(failed["payload"]["errorKind"], "rate_limited")
+        self.assertEqual(failed["payload"]["httpStatus"], 429)
+        self.assertEqual(failed["payload"]["retryable"], True)
+        self.assertEqual(failed["payload"]["traceId"], "trace_failed")
+        self.assertEqual(failed["payload"]["tags"], ["env:prod"])
+
+        agent.llm_failed("OpenAI")
+        bare = [e for e in viewer.captured if e["type"] == "llm.failed"][-1]
+        self.assertNotIn("model", bare["payload"])
+        self.assertNotIn("errorKind", bare["payload"])
+
+        with self.assertRaises(ValueError):
+            agent.llm_failed("OpenAI", trace_id="")
+
     def test_live_server_integration(self):
         port = get_free_port()
         env = os.environ.copy()
@@ -448,6 +617,72 @@ class TestPythonSDK(unittest.TestCase):
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+class TestExampleAdapters(unittest.TestCase):
+    """One test per Python example adapter (issue #64): checks the trace/parent/tool-call-id mapping
+    table and the "omitted when not exposed" cases, with a fake viewer that captures emitted payloads.
+    """
+
+    def test_autogen_adapter_forwards_call_id_and_trace_id_only_when_given(self):
+        autogen_adapter = _load_example_module("autogen-adapter.py")
+        adapter = autogen_adapter.AutoGenViewerAdapter()
+        captured = _capture_adapter_viewer(adapter)
+
+        adapter.on_function_call("researcher", "web_search", "query", call_id="call_abc")
+        adapter.on_function_return("researcher", "web_search", "done", call_id="call_abc")
+        adapter.on_function_call("researcher", "web_search")  # AutoGen gave no call id this time
+        adapter.on_llm_response(
+            "researcher", "OpenAI", "gpt-4.1", 100, 20,
+            trace_id="trace_autogen", tool_call_id="call_abc", tags=["env:prod"],
+        )
+        adapter.on_llm_response("researcher", "OpenAI", "gpt-4.1", 10, 2)
+
+        tool_started = [e for e in captured if e["type"] == "tool.started"]
+        tool_completed = [e for e in captured if e["type"] == "tool.completed"]
+        self.assertEqual(tool_started[0]["payload"]["toolCallId"], "call_abc")
+        self.assertEqual(tool_completed[0]["payload"]["toolCallId"], "call_abc")
+        self.assertNotIn("toolCallId", tool_started[1]["payload"])
+
+        usage_events = [e for e in captured if e["type"] == "llm.usage"]
+        with_correlation, without = usage_events
+        self.assertEqual(with_correlation["payload"]["traceId"], "trace_autogen")
+        self.assertEqual(with_correlation["payload"]["toolCallId"], "call_abc")
+        self.assertEqual(with_correlation["payload"]["tags"], ["env:prod"])
+        # AutoGen exposes no parent span id at this layer: the adapter never sends one.
+        self.assertNotIn("parentId", with_correlation["payload"])
+        for field in ("traceId", "parentId", "toolCallId", "tags"):
+            self.assertNotIn(field, without["payload"])
+
+    def test_crewai_adapter_omits_tool_call_id_unless_the_caller_passes_one(self):
+        crewai_adapter = _load_example_module("crewai-adapter.py")
+        adapter = crewai_adapter.CrewAIViewerAdapter()
+        captured = _capture_adapter_viewer(adapter)
+
+        adapter.register_crew_agent("writer", "Writer", "Write the report")
+        adapter.on_tool_start("writer", "file.read", "report.md")  # CrewAI gives no tool call id
+        adapter.on_tool_start("writer", "file.read", "report.md", tool_call_id="explicit_1")
+        adapter.on_tool_end("writer", "file.read", "contents", tool_call_id="explicit_1")
+        adapter.on_token_usage(
+            "writer", "OpenAI", "gpt-4.1", 100, 20,
+            trace_id="trace_crewai", tool_call_id="explicit_1", tags=["tier:pro"],
+        )
+        adapter.on_token_usage("writer", "OpenAI", "gpt-4.1", 10, 2)
+
+        tool_started = [e for e in captured if e["type"] == "tool.started"]
+        tool_completed = [e for e in captured if e["type"] == "tool.completed"]
+        self.assertNotIn("toolCallId", tool_started[0]["payload"])
+        self.assertEqual(tool_started[1]["payload"]["toolCallId"], "explicit_1")
+        self.assertEqual(tool_completed[0]["payload"]["toolCallId"], "explicit_1")
+
+        usage_events = [e for e in captured if e["type"] == "llm.usage"]
+        with_correlation, without = usage_events
+        self.assertEqual(with_correlation["payload"]["traceId"], "trace_crewai")
+        self.assertEqual(with_correlation["payload"]["toolCallId"], "explicit_1")
+        self.assertEqual(with_correlation["payload"]["tags"], ["tier:pro"])
+        self.assertNotIn("parentId", with_correlation["payload"])
+        for field in ("traceId", "parentId", "toolCallId", "tags"):
+            self.assertNotIn(field, without["payload"])
 
 
 if __name__ == "__main__":

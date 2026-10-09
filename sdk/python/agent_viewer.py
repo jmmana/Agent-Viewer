@@ -13,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 logger = logging.getLogger("agent_viewer")
 
@@ -23,6 +23,128 @@ _UNSTATED_COST_SOURCE_WARNING = (
     'Agent Viewer: a cost was reported without cost_source, so it is sent as costSource="unknown". '
     'Pass cost_source="provider-reported" or "estimated" to state where the cost comes from.'
 )
+
+# -------------------------------------------------------------
+# Usage correlation block (issue #64): traceId, parentId, toolCallId, meetingId, userId, tags.
+#
+# This SDK ships standalone and does not import the server contract, so the three limits and the
+# whitespace rule are kept here as an explicit copy. tests/fixtures/usage-correlation-vectors.json is the
+# shared test-vector file that keeps this copy, the server contract and the TypeScript SDK from drifting.
+# -------------------------------------------------------------
+
+CORRELATION_ID_MAX_LENGTH = 128
+USAGE_TAGS_MAX = 20
+USAGE_TAG_MAX_LENGTH = 64
+
+# Same exact whitespace set as ECMAScript's String.prototype.trim (value !== value.trim()). Deliberately NOT
+# str.strip(): Python's default whitespace set differs (for example it strips U+001C-U+001F and U+0085,
+# which are not in this set) and does not include U+00A0 or U+FEFF, which are.
+_TRIMMABLE_WHITESPACE = (
+    "\u0009\u000a\u000b\u000c\u000d   "
+    "           "
+    "    　﻿"
+)
+
+
+def _utf16_length(value: str) -> int:
+    """Counts UTF-16 code units, matching JavaScript's String.length for astral characters."""
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _has_control_character(value: str) -> bool:
+    return any(ord(ch) <= 0x1F or ord(ch) == 0x7F for ch in value)
+
+
+def _has_leading_or_trailing_whitespace(value: str) -> bool:
+    return bool(value) and (value[0] in _TRIMMABLE_WHITESPACE or value[-1] in _TRIMMABLE_WHITESPACE)
+
+
+def _validate_correlation_id(name: str, value: Any) -> None:
+    """Validates one correlation id field with the server's exact rules. Raises ``TypeError`` for a
+    non-string value and ``ValueError`` naming the argument for anything else that is invalid. ``None``
+    means "not reported" and is always accepted; never truncates.
+    """
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string (got {type(value).__name__})")
+    length = _utf16_length(value)
+    if length < 1:
+        raise ValueError(f"{name} must not be empty")
+    if length > CORRELATION_ID_MAX_LENGTH:
+        raise ValueError(f"{name} must be at most {CORRELATION_ID_MAX_LENGTH} characters")
+    if _has_control_character(value):
+        raise ValueError(f"{name} must not contain control characters")
+    if _has_leading_or_trailing_whitespace(value):
+        raise ValueError(f"{name} must not have leading or trailing whitespace")
+
+
+def _validate_tags(tags: Any) -> None:
+    """Validates ``tags`` with the server's exact rules. A ``str`` or ``bytes`` raises ``TypeError`` (a
+    ``str`` is itself a ``Sequence`` and would otherwise be split into one tag per character).
+    """
+    if tags is None:
+        return
+    if isinstance(tags, (str, bytes)):
+        raise TypeError("tags must be a sequence of strings, not a single str or bytes")
+    if not isinstance(tags, Sequence):
+        raise TypeError("tags must be a sequence of strings")
+    tags_list = list(tags)
+    if len(tags_list) > USAGE_TAGS_MAX:
+        raise ValueError(f"At most {USAGE_TAGS_MAX} tags are allowed")
+    for index, tag in enumerate(tags_list):
+        if not isinstance(tag, str):
+            raise TypeError(f"tags[{index}] must be a string")
+        length = _utf16_length(tag)
+        if length < 1:
+            raise ValueError(f"tags[{index}] must not be empty")
+        if length > USAGE_TAG_MAX_LENGTH:
+            raise ValueError(f"tags[{index}] must be at most {USAGE_TAG_MAX_LENGTH} characters")
+        if _has_control_character(tag):
+            raise ValueError(f"tags[{index}] must not contain control characters")
+        if _has_leading_or_trailing_whitespace(tag):
+            raise ValueError(f"tags[{index}] must not have leading or trailing whitespace")
+
+
+def _validate_usage_correlation(
+    trace_id: Optional[str],
+    parent_id: Optional[str],
+    tool_call_id: Optional[str],
+    meeting_id: Optional[str],
+    user_id: Optional[str],
+    tags: Optional[Sequence[str]],
+) -> None:
+    _validate_correlation_id("trace_id", trace_id)
+    _validate_correlation_id("parent_id", parent_id)
+    _validate_correlation_id("tool_call_id", tool_call_id)
+    _validate_correlation_id("meeting_id", meeting_id)
+    _validate_correlation_id("user_id", user_id)
+    _validate_tags(tags)
+
+
+def _correlation_payload(
+    trace_id: Optional[str],
+    parent_id: Optional[str],
+    tool_call_id: Optional[str],
+    meeting_id: Optional[str],
+    user_id: Optional[str],
+    tags: Optional[Sequence[str]],
+) -> Dict[str, Any]:
+    """Builds the payload keys for the six correlation fields, only when given (never ``None`` on the wire)."""
+    payload: Dict[str, Any] = {}
+    if trace_id is not None:
+        payload["traceId"] = trace_id
+    if parent_id is not None:
+        payload["parentId"] = parent_id
+    if tool_call_id is not None:
+        payload["toolCallId"] = tool_call_id
+    if meeting_id is not None:
+        payload["meetingId"] = meeting_id
+    if user_id is not None:
+        payload["userId"] = user_id
+    if tags is not None:
+        payload["tags"] = list(tags)
+    return payload
 
 
 class AgentViewerError(Exception):
@@ -158,12 +280,16 @@ class AgentHandle:
             source=f"agent:{self.id}",
         )
 
-    def tool_started(self, tool: str, input_summary: Optional[str] = None) -> None:
+    def tool_started(
+        self, tool: str, input_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+    ) -> None:
         """Report tool call start."""
         self._ensure_registered()
         payload = {"tool": tool}
         if input_summary is not None:
             payload["inputSummary"] = input_summary
+        if tool_call_id is not None:
+            payload["toolCallId"] = tool_call_id
         self.viewer.emit(
             "tool.started",
             f"Started {tool}: {input_summary}" if input_summary else f"Started tool {tool}",
@@ -172,12 +298,16 @@ class AgentHandle:
             source=f"agent:{self.id}",
         )
 
-    def tool_completed(self, tool: str, output_summary: Optional[str] = None) -> None:
+    def tool_completed(
+        self, tool: str, output_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+    ) -> None:
         """Report tool call completion."""
         self._ensure_registered()
         payload = {"tool": tool}
         if output_summary is not None:
             payload["outputSummary"] = output_summary
+        if tool_call_id is not None:
+            payload["toolCallId"] = tool_call_id
         self.viewer.emit(
             "tool.completed",
             f"Completed {tool}: {output_summary}" if output_summary else f"Completed tool {tool}",
@@ -186,13 +316,18 @@ class AgentHandle:
             source=f"agent:{self.id}",
         )
 
-    def tool_failed(self, tool: str, error_summary: Optional[str] = None) -> None:
+    def tool_failed(
+        self, tool: str, error_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+    ) -> None:
         """Report tool call failure."""
         self._ensure_registered()
+        payload = {"tool": tool, "error": error_summary}
+        if tool_call_id is not None:
+            payload["toolCallId"] = tool_call_id
         self.viewer.emit(
             "tool.failed",
             f"Failed {tool}: {error_summary}" if error_summary else f"Failed tool {tool}",
-            {"tool": tool, "error": error_summary},
+            payload,
             agent_id=self.id,
             source=f"agent:{self.id}",
         )
@@ -214,17 +349,27 @@ class AgentHandle:
         cache_write_tokens: Optional[int] = None,
         currency: Optional[str] = None,
         task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        meeting_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[Sequence[str]] = None,
     ) -> None:
         """Report the token and cost usage of one model call, exactly as the caller knows it.
 
         A figure that is not given stays unknown: it is left out of the payload, never sent as 0.
         ``cost_source`` is never inferred. A cost given without it is sent as ``"unknown"`` and
-        the client logs one warning. ``task_id`` goes to the envelope ``taskId``.
+        the client logs one warning. ``task_id`` goes to the envelope ``taskId``. ``trace_id``,
+        ``parent_id``, ``tool_call_id``, ``meeting_id``, ``user_id`` and ``tags`` (issue #64) are validated
+        locally with the same limits as the server and raise ``ValueError`` (or ``TypeError`` for a wrong
+        type) naming the argument before anything is sent.
         """
         if cost_source is not None and cost_source not in COST_SOURCES:
             raise ValueError(
                 f'costSource must be one of {", ".join(COST_SOURCES)} (got "{cost_source}")'
             )
+        _validate_usage_correlation(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags)
         if cost is not None and cost_source is None:
             self.viewer._warn_unstated_cost_source()
         self._ensure_registered()
@@ -243,6 +388,7 @@ class AgentHandle:
             "latencyMs": latency_ms,
             "requestId": request_id,
         }
+        payload.update(_correlation_payload(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags))
         self.viewer.emit(
             "llm.usage",
             f"{provider}/{model} tokens ({input_tokens}+{output_tokens})",
@@ -250,6 +396,77 @@ class AgentHandle:
             agent_id=self.id,
             source=f"agent:{self.id}",
             task_id=task_id,
+        )
+
+    def llm_failed(
+        self,
+        provider: str,
+        model: Optional[str] = None,
+        error_kind: Optional[str] = None,
+        *,
+        http_status: Optional[int] = None,
+        retryable: Optional[bool] = None,
+        request_id: Optional[str] = None,
+        provider_error_code: Optional[str] = None,
+        attempts: Optional[int] = None,
+        latency_ms: Optional[int] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        cache_read_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        reasoning_tokens: Optional[int] = None,
+        cost: Optional[float] = None,
+        cost_source: Optional[str] = None,
+        currency: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        meeting_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[Sequence[str]] = None,
+    ) -> None:
+        """Report one failed model call attempt (issue #64). A figure that is not given stays unknown and
+        is left out, never sent as 0. There is no free-text error field on purpose: provider messages can
+        echo prompts or credentials. A retry that succeeds is reported as a separate ``usage()`` call.
+        """
+        if cost_source is not None and cost_source not in COST_SOURCES:
+            raise ValueError(
+                f'costSource must be one of {", ".join(COST_SOURCES)} (got "{cost_source}")'
+            )
+        _validate_usage_correlation(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags)
+        if cost is not None and cost_source is None:
+            self.viewer._warn_unstated_cost_source()
+        self._ensure_registered()
+        payload = {
+            "provider": provider,
+            "model": model,
+            "errorKind": error_kind,
+            "httpStatus": http_status,
+            "retryable": retryable,
+            "requestId": request_id,
+            "providerErrorCode": provider_error_code,
+            "attempts": attempts,
+            "latencyMs": latency_ms,
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "cacheReadTokens": cache_read_tokens,
+            "cacheWriteTokens": cache_write_tokens,
+            "reasoningTokens": reasoning_tokens,
+            "cost": cost,
+            "costSource": cost_source if cost_source is not None else "unknown",
+            "currency": currency,
+        }
+        payload.update(_correlation_payload(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags))
+        summary = f"{provider}/{model} call failed" if model else f"{provider} call failed"
+        self.viewer.emit(
+            "llm.failed",
+            summary,
+            {k: v for k, v in payload.items() if v is not None},
+            agent_id=self.id,
+            source=f"agent:{self.id}",
+            task_id=task_id,
+            severity="high",
         )
 
 
@@ -446,6 +663,12 @@ class AgentViewer:
         request_id: Optional[str] = None,
         currency: Optional[str] = None,
         task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        meeting_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[Sequence[str]] = None,
     ) -> None:
         """Report LLM usage (legacy helper). Same rules as ``AgentHandle.usage()``."""
         self.agent(agent_id).usage(
@@ -463,6 +686,12 @@ class AgentViewer:
             cache_write_tokens=cache_write_tokens,
             currency=currency,
             task_id=task_id,
+            trace_id=trace_id,
+            parent_id=parent_id,
+            tool_call_id=tool_call_id,
+            meeting_id=meeting_id,
+            user_id=user_id,
+            tags=tags,
         )
 
     def _build_headers(self, idempotency_key: Optional[str] = None) -> Dict[str, str]:

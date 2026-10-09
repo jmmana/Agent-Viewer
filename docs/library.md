@@ -602,6 +602,8 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 - The same rules apply to each agent in `byAgent`, using only that agent's events: when one agent lacks a figure, only that agent and the run total become unknown.
 - Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}`.
 
+**Usage correlation fields (issue #64).** `llm.usage` and `llm.failed` payloads may carry `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` and `tags` (see [docs/integration.md](integration.md#correlation-and-attribution-fields-issue-64) for the validation rules). `summarizeUsage` does not read them: its output is identical whether or not an event carries these fields, and it never groups by them. No library component renders `userId` or `tags`, since `userId` is pseudonymous attribution and `tags` can be used for internal labels, neither meant for the embedded display. The library exports the matching limits and type as values and a type only, with no new behavior: `CORRELATION_ID_MAX_LENGTH` (128), `USAGE_TAGS_MAX` (20), `USAGE_TAG_MAX_LENGTH` (64) and the type `UsageCorrelation`.
+
 ### Figures from the Agent Viewer server
 
 When your app is connected to the Agent Viewer server, read `GET /api/v1/usage` (`usageSummary()` in the TypeScript SDK) and pass its figures through. The library still does no math: the host maps each bucket, and only figures that are fully known become numbers.

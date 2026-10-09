@@ -313,6 +313,132 @@ test('REST API: llm.usage without cache fields round trips without invented zero
   }
 });
 
+test('REST API: llm.usage correlation fields round trip through POST and batch, tags deduplicated', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const postRes = await postEvent(baseUrl, {
+      id: 'evt_usage_correlation_single',
+      type: 'llm.usage',
+      timestamp: Date.now(),
+      source: 'agent:correlation-tester',
+      agentId: 'correlation-tester',
+      summary: 'Usage with correlation',
+      payload: {
+        provider: 'OpenAI',
+        model: 'gpt-4.1',
+        inputTokens: 1200,
+        outputTokens: 400,
+        traceId: 'trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4',
+        parentId: 'span_7c1d2e3f4a5b6c7d8e9f0a1b',
+        toolCallId: 'call_Ab12Cd34',
+        meetingId: 'meeting-pricing-review',
+        userId: 'usr_5e1b',
+        tags: ['env:prod', 'feature:quote-builder', 'env:prod'],
+      },
+    });
+    assert.equal(postRes.status, 202);
+
+    const batchRes = await fetch(`${baseUrl}/api/v1/events/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        events: [{
+          schemaVersion: '1.0',
+          id: 'evt_usage_correlation_batch',
+          type: 'llm.usage',
+          timestamp: Date.now(),
+          source: 'agent:correlation-tester',
+          agentId: 'correlation-tester',
+          summary: 'Usage with correlation (batch)',
+          payload: {
+            provider: 'OpenAI',
+            model: 'gpt-4.1',
+            inputTokens: 50,
+            outputTokens: 10,
+            traceId: 'trace_batch',
+            tags: ['tier:pro'],
+          },
+        }],
+      }),
+    });
+    assert.equal(batchRes.status, 202);
+
+    const events = await listEvents(baseUrl, 'agentId=correlation-tester&type=llm.usage');
+    const single = events.find((event) => event.id === 'evt_usage_correlation_single');
+    assert.ok(single, 'Expected the single usage event');
+    assert.equal(single.payload.traceId, 'trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4');
+    assert.equal(single.payload.parentId, 'span_7c1d2e3f4a5b6c7d8e9f0a1b');
+    assert.equal(single.payload.toolCallId, 'call_Ab12Cd34');
+    assert.equal(single.payload.meetingId, 'meeting-pricing-review');
+    assert.equal(single.payload.userId, 'usr_5e1b');
+    assert.deepEqual(single.payload.tags, ['env:prod', 'feature:quote-builder']);
+
+    const batched = events.find((event) => event.id === 'evt_usage_correlation_batch');
+    assert.ok(batched, 'Expected the batch usage event');
+    assert.equal(batched.payload.traceId, 'trace_batch');
+    assert.deepEqual(batched.payload.tags, ['tier:pro']);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: an llm.usage with 21 tags, the fifth 70 characters, is rejected with both issue paths', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const tags = Array.from({ length: 21 }, (_, i) => `tag-${i}`);
+    tags[4] = 'x'.repeat(70);
+    const postRes = await postEvent(baseUrl, {
+      id: 'evt_usage_too_many_tags',
+      type: 'llm.usage',
+      timestamp: Date.now(),
+      source: 'agent:correlation-tester',
+      agentId: 'correlation-tester',
+      summary: 'Usage with too many tags',
+      payload: { provider: 'OpenAI', model: 'gpt-4.1', inputTokens: 10, outputTokens: 1, tags },
+    });
+    assert.equal(postRes.status, 400);
+    const json = await postRes.json();
+    assert.equal(json.error, 'validation_failed');
+    const paths = json.issues.map((issue) => issue.path).sort();
+    assert.deepEqual(paths, ['payload.tags', 'payload.tags.4']);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: generic webhook usage accepts the correlation fields', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'webhook-correlation-agent',
+        usage: {
+          provider: 'openai',
+          model: 'gpt-4',
+          inputTokens: 42,
+          outputTokens: 7,
+          traceId: 'trace_webhook',
+          tags: ['env:prod', 'env:prod'],
+        },
+      }),
+    });
+    assert.equal(res.status, 202);
+
+    const events = await listEvents(baseUrl, 'agentId=webhook-correlation-agent&type=llm.usage');
+    assert.ok(events.length >= 1, 'Expected a stored llm.usage event from the webhook');
+    const stored = events[events.length - 1];
+    assert.equal(stored.payload.traceId, 'trace_webhook');
+    assert.deepEqual(stored.payload.tags, ['env:prod']);
+  } finally {
+    server.close();
+  }
+});
+
 test('REST API: llm.usage without cache fields round trips without invented zeros on the SQLite store', () => {
   // The store is chosen when the server module loads, so the SQLite case runs in its own process.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-api-sqlite-'));

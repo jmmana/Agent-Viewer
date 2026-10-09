@@ -2,6 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
+import {
+  createUsageReducer,
+  resolveEventAgentId,
+  type LegacyUsageFields,
+  type UsageReducer,
+  type UsageSummary,
+} from './usageAggregates';
 
 let _DatabaseSync: any = null;
 function getDatabaseSync(): any {
@@ -45,13 +52,30 @@ export interface AgentRecord {
   status: string;
   statusText?: string;
   workspace?: string;
+  /** @deprecated Use the usage summary. Sum of reported input tokens only; a lower bound when some call did not report them. */
   tokensInput: number;
+  /** @deprecated Use the usage summary. Sum of reported output tokens only; a lower bound when some call did not report them. */
   tokensOutput: number;
+  /** @deprecated Use the usage summary. Sum of reported cache-read tokens only; a lower bound when some call did not report them. */
   cachedTokens: number;
+  /** @deprecated Use the usage summary. Sum of reported reasoning tokens only; a lower bound when some call did not report them. */
   reasoningTokens: number;
+  /**
+   * @deprecated Use the usage summary (`byAgent[].byCurrency`). Null unless every successful call of the agent
+   * reported a cost in one single currency with one single costSource, and null for an agent without calls.
+   */
   cost: number | null;
   lastSeenAt: number;
 }
+
+/** Usage figures of `AgentRecord`. They are projected from the usage reducer and never stored or written directly. */
+export type LegacyUsageKeys = 'tokensInput' | 'tokensOutput' | 'cachedTokens' | 'reasoningTokens' | 'cost';
+
+/** What the store keeps for an agent: its profile and status, never usage figures. */
+type StoredAgent = Omit<AgentRecord, LegacyUsageKeys>;
+
+/** Input of `upsertAgent`. Usage figures are not part of it: they only come from stored `llm.usage` events. */
+export type AgentProfileInput = Partial<Omit<AgentRecord, LegacyUsageKeys>> & { id: string };
 
 export interface ViewerSnapshot {
   schemaVersion: '1.0';
@@ -62,13 +86,17 @@ export interface ViewerSnapshot {
   agents: AgentRecord[];
   activeTasks: any[];
   activeMeetings: any[];
+  /** Canonical usage figures, aggregated call by call. Same object as `GET /api/v1/usage`. */
+  usage: UsageSummary;
+  /** @deprecated Use usage.total.tokens. Sum of reported values only; a lower bound when unreportedCount > 0. */
   totalTokens: {
     input: number;
     output: number;
     cached: number;
     reasoning: number;
   };
-  totalCost: number;
+  /** @deprecated Use usage.total.byCurrency. Null unless every call reported a cost in one single currency with one single costSource. */
+  totalCost: number | null;
   eventsCount: number;
   events: CanonicalEvent[];
 }
@@ -89,6 +117,8 @@ export interface EventStore {
   exists(eventId: string): Promise<boolean>;
   list(options?: ListEventsOptions): Promise<CanonicalEvent[]>;
   snapshot(): Promise<ViewerSnapshot>;
+  /** Usage aggregates of every accepted `llm.usage` and `llm.failed` event. */
+  usageSummary(): Promise<UsageSummary>;
 
   upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord>;
   listRuntimes(): Promise<RuntimeRecord[]>;
@@ -97,11 +127,22 @@ export interface EventStore {
   listSessions(): Promise<SessionRecord[]>;
   getSession(sessionId: string): Promise<SessionRecord | null>;
 
-  upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord>;
+  /** Creates or updates an agent profile. Usage fields passed by a caller are ignored. */
+  upsertAgent(agent: AgentProfileInput): Promise<AgentRecord>;
   getAgent(agentId: string): Promise<AgentRecord | null>;
   listAgents(): Promise<AgentRecord[]>;
 
   close(): Promise<void>;
+}
+
+function toLegacyKeys(fields: LegacyUsageFields): Pick<AgentRecord, LegacyUsageKeys> {
+  return {
+    tokensInput: fields.tokens.input,
+    tokensOutput: fields.tokens.output,
+    cachedTokens: fields.tokens.cached,
+    reasoningTokens: fields.tokens.reasoning,
+    cost: fields.cost,
+  };
 }
 
 // -------------------------------------------------------------
@@ -112,11 +153,11 @@ export class MemoryEventStore implements EventStore {
   private eventIds = new Set<string>();
   private runtimes = new Map<string, RuntimeRecord>();
   private sessions = new Map<string, SessionRecord>();
-  private agents = new Map<string, AgentRecord>();
+  private agents = new Map<string, StoredAgent>();
   private tasks = new Map<string, any>();
   private meetings = new Map<string, any>();
-  private totalTokens = { input: 0, output: 0, cached: 0, reasoning: 0 };
-  private totalCost = 0;
+  /** The only place that turns usage events into figures. Fed once per accepted event, never decremented. */
+  private usage: UsageReducer = createUsageReducer();
   private maxEvents: number;
 
   constructor(maxEvents = 10000) {
@@ -198,20 +239,31 @@ export class MemoryEventStore implements EventStore {
   }
 
   async snapshot(): Promise<ViewerSnapshot> {
+    const legacy = this.usage.legacyTotals();
     return {
       schemaVersion: '1.0',
       timestamp: Date.now(),
       lastEventId: this.events[0]?.id ?? null,
       runtimes: Array.from(this.runtimes.values()),
       sessions: Array.from(this.sessions.values()),
-      agents: Array.from(this.agents.values()),
+      agents: Array.from(this.agents.values(), (agent) => this.toAgentRecord(agent)),
       activeTasks: Array.from(this.tasks.values()).filter((t) => t.status !== 'COMPLETED' && t.status !== 'FAILED'),
       activeMeetings: Array.from(this.meetings.values()).filter((m) => m.status !== 'CONCLUDED'),
-      totalTokens: { ...this.totalTokens },
-      totalCost: this.totalCost,
+      usage: this.usage.summary(),
+      totalTokens: legacy.tokens,
+      totalCost: legacy.cost,
       eventsCount: this.events.length,
       events: this.events.slice(0, 100),
     };
+  }
+
+  async usageSummary(): Promise<UsageSummary> {
+    return this.usage.summary();
+  }
+
+  /** Public view of a stored agent: its profile plus the deprecated usage fields projected from the reducer. */
+  private toAgentRecord(agent: StoredAgent): AgentRecord {
+    return { ...agent, ...toLegacyKeys(this.usage.legacyAgent(agent.id)) };
   }
 
   async upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord> {
@@ -258,9 +310,10 @@ export class MemoryEventStore implements EventStore {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  async upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord> {
+  async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
     const existing = this.agents.get(agent.id);
-    const updated: AgentRecord = {
+    // Built field by field, so usage fields that a caller still passes are never read.
+    const updated: StoredAgent = {
       id: agent.id,
       name: agent.name ?? existing?.name ?? agent.id,
       roleTitle: agent.roleTitle ?? existing?.roleTitle ?? 'AI Agent',
@@ -270,23 +323,19 @@ export class MemoryEventStore implements EventStore {
       status: agent.status ?? existing?.status ?? 'IDLE',
       statusText: agent.statusText ?? existing?.statusText ?? 'Active',
       workspace: agent.workspace ?? existing?.workspace ?? 'development',
-      tokensInput: (existing?.tokensInput ?? 0) + (agent.tokensInput ?? 0),
-      tokensOutput: (existing?.tokensOutput ?? 0) + (agent.tokensOutput ?? 0),
-      cachedTokens: (existing?.cachedTokens ?? 0) + (agent.cachedTokens ?? 0),
-      reasoningTokens: (existing?.reasoningTokens ?? 0) + (agent.reasoningTokens ?? 0),
-      cost: (existing?.cost ?? 0) + (agent.cost ?? 0),
       lastSeenAt: Date.now(),
     };
     this.agents.set(agent.id, updated);
-    return updated;
+    return this.toAgentRecord(updated);
   }
 
   async getAgent(agentId: string): Promise<AgentRecord | null> {
-    return this.agents.get(agentId) ?? null;
+    const agent = this.agents.get(agentId);
+    return agent ? this.toAgentRecord(agent) : null;
   }
 
   async listAgents(): Promise<AgentRecord[]> {
-    return Array.from(this.agents.values());
+    return Array.from(this.agents.values(), (agent) => this.toAgentRecord(agent));
   }
 
   async close(): Promise<void> {
@@ -295,6 +344,9 @@ export class MemoryEventStore implements EventStore {
 
   private processEventSideEffects(event: CanonicalEvent): void {
     const now = event.timestamp || Date.now();
+
+    // Usage figures: every accepted llm.usage and llm.failed event, with or without an agent.
+    this.usage.apply(event);
 
     // Runtimes side effect
     if (event.runtimeId) {
@@ -335,8 +387,8 @@ export class MemoryEventStore implements EventStore {
     }
 
     // Agent side effect & auto-registration
-    const agentId = event.agentId || (event.source.startsWith('agent:') ? event.source.replace(/^agent:/, '') : undefined);
-    if (agentId && agentId !== 'external-runtime' && agentId !== 'system' && !agentId.startsWith('runtime:')) {
+    const agentId = resolveEventAgentId(event);
+    if (agentId !== null) {
       let ag = this.agents.get(agentId);
       if (!ag) {
         ag = {
@@ -349,11 +401,6 @@ export class MemoryEventStore implements EventStore {
           status: 'IDLE',
           statusText: 'Registered',
           workspace: 'development',
-          tokensInput: 0,
-          tokensOutput: 0,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-          cost: 0,
           lastSeenAt: now,
         };
         this.agents.set(agentId, ag);
@@ -381,26 +428,9 @@ export class MemoryEventStore implements EventStore {
         ag.status = 'ERROR';
         ag.statusText = 'Tool failed';
       } else if (event.type === 'llm.usage') {
-        const inTok = Number(event.payload?.inputTokens ?? 0);
-        const outTok = Number(event.payload?.outputTokens ?? 0);
-        const cacheTok = Number(event.payload?.cachedTokens ?? 0);
-        const reasonTok = Number(event.payload?.reasoningTokens ?? 0);
-        const cost = typeof event.payload?.cost === 'number' ? event.payload.cost : 0;
-
-        ag.tokensInput += inTok;
-        ag.tokensOutput += outTok;
-        ag.cachedTokens += cacheTok;
-        ag.reasoningTokens += reasonTok;
-        ag.cost = (ag.cost ?? 0) + cost;
-
+        // Display only: the office shows the model the agent uses now. No usage figure ever reads these fields.
         if (typeof event.payload?.provider === 'string') ag.provider = event.payload.provider;
         if (typeof event.payload?.model === 'string') ag.model = event.payload.model;
-
-        this.totalTokens.input += inTok;
-        this.totalTokens.output += outTok;
-        this.totalTokens.cached += cacheTok;
-        this.totalTokens.reasoning += reasonTok;
-        this.totalCost += cost;
       }
     }
 
@@ -684,6 +714,10 @@ export class SQLiteEventStore implements EventStore {
     return this.memoryFallback.snapshot();
   }
 
+  async usageSummary(): Promise<UsageSummary> {
+    return this.memoryFallback.usageSummary();
+  }
+
   async upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord> {
     return this.memoryFallback.upsertRuntime(runtime);
   }
@@ -704,7 +738,7 @@ export class SQLiteEventStore implements EventStore {
     return this.memoryFallback.getSession(sessionId);
   }
 
-  async upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord> {
+  async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
     return this.memoryFallback.upsertAgent(agent);
   }
 

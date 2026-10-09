@@ -71,6 +71,26 @@ test('Auth: API tokens are compared with crypto.timingSafeEqual and wrong length
   });
 });
 
+test('Auth: GET /api/v1/usage needs the same token as the other /api/v1 routes', async () => {
+  await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_API_TOKEN: 'usage-route-token' }, async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      const unauth = await fetch(`${baseUrl}/api/v1/usage`);
+      assert.equal(unauth.status, 401);
+      assert.equal((await unauth.json()).error, 'unauthorized');
+
+      const wrong = await fetch(`${baseUrl}/api/v1/usage`, { headers: { Authorization: 'Bearer wrong-token' } });
+      assert.equal(wrong.status, 401);
+
+      const auth = await fetch(`${baseUrl}/api/v1/usage`, { headers: { Authorization: 'Bearer usage-route-token' } });
+      assert.equal(auth.status, 200);
+      assert.equal((await auth.json()).schemaVersion, '1.0');
+    } finally {
+      server.close();
+    }
+  });
+});
+
 test('Auth: AGENT_VIEWER_API_KEY is accepted as a deprecated alias of AGENT_VIEWER_API_TOKEN', async () => {
   await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_API_KEY: 'legacy-alias-token' }, async () => {
     const { server, baseUrl } = await startTestServer();

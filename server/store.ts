@@ -14,6 +14,28 @@ import {
   requestKeyString,
   type UsageFingerprintFields,
 } from './requestKey';
+import { type UsageSummary } from './usageAggregates';
+import {
+  applyEvent,
+  createServerState,
+  toAgentRecord,
+  upsertAgentProfile,
+  upsertRuntimeDirect,
+  upsertSessionDirect,
+  type AgentProfileInput,
+  type AgentRecord,
+  type RuntimeRecord,
+  type ServerState,
+  type SessionRecord,
+} from './serverState';
+
+export type {
+  AgentProfileInput,
+  AgentRecord,
+  LegacyUsageKeys,
+  RuntimeRecord,
+  SessionRecord,
+} from './serverState';
 
 function sqliteBackupMode(value: string | undefined): 'auto' | 'off' {
   const backup = value ?? 'auto';
@@ -22,13 +44,6 @@ function sqliteBackupMode(value: string | undefined): 'auto' | 'off' {
   }
   return backup;
 }
-import {
-  createUsageReducer,
-  resolveEventAgentId,
-  type LegacyUsageFields,
-  type UsageReducer,
-  type UsageSummary,
-} from './usageAggregates';
 
 let _DatabaseSync: any = null;
 function getDatabaseSync(): any {
@@ -39,65 +54,6 @@ function getDatabaseSync(): any {
   }
   return _DatabaseSync;
 }
-
-export interface RuntimeRecord {
-  id: string;
-  name?: string;
-  framework?: string;
-  version?: string;
-  metadata?: Record<string, any>;
-  status: 'active' | 'idle' | 'disconnected';
-  firstSeenAt: number;
-  lastSeenAt: number;
-  eventsCount: number;
-}
-
-export interface SessionRecord {
-  id: string;
-  runtimeId?: string;
-  name?: string;
-  createdAt: number;
-  lastActiveAt: number;
-  status: 'active' | 'completed' | 'archived';
-  eventsCount: number;
-}
-
-export interface AgentRecord {
-  id: string;
-  name: string;
-  roleTitle?: string;
-  role?: string;
-  provider?: string;
-  model?: string;
-  status: string;
-  statusText?: string;
-  workspace?: string;
-  /** @deprecated Use the usage summary. Sum of reported input tokens only; a lower bound when some call did not report them. */
-  tokensInput: number;
-  /** @deprecated Use the usage summary. Sum of reported output tokens only; a lower bound when some call did not report them. */
-  tokensOutput: number;
-  /** @deprecated Use the usage summary. Sum of reported cache-read tokens only; a lower bound when some call did not report them. */
-  cachedTokens: number;
-  /** @deprecated Use the usage summary. Sum of reported reasoning tokens only; a lower bound when some call did not report them. */
-  reasoningTokens: number;
-  /**
-   * @deprecated Use the usage summary (`byAgent[].byCurrency`). Null unless every successful call of the agent
-   * reported a cost in one single currency with one single costSource, and null for an agent without calls.
-   */
-  cost: number | null;
-  lastSeenAt: number;
-}
-
-/** Usage figures of `AgentRecord`. They are projected from the usage reducer and never stored or written directly. */
-export type LegacyUsageKeys = 'tokensInput' | 'tokensOutput' | 'cachedTokens' | 'reasoningTokens' | 'cost';
-
-/** What the store keeps for an agent: its profile and status, never usage figures. */
-type StoredAgent = Omit<AgentRecord, LegacyUsageKeys>;
-
-/** Input of `upsertAgent`: profile fields only. Usage figures only come from stored `llm.usage` events. */
-export type AgentProfileInput = { id: string } & Partial<
-  Pick<AgentRecord, 'name' | 'roleTitle' | 'role' | 'provider' | 'model' | 'status' | 'statusText' | 'workspace'>
->;
 
 export interface ViewerSnapshot {
   schemaVersion: '1.0';
@@ -333,17 +289,56 @@ export interface EventStore {
   getAgent(agentId: string): Promise<AgentRecord | null>;
   listAgents(): Promise<AgentRecord[]>;
 
+  /**
+   * Runs once: for `MemoryEventStore` resolves at once (there is nothing to replay); for `SQLiteEventStore`
+   * replays every stored event through `applyEvent` in `seq` order (issue #52). Safe to call more than once;
+   * later calls return the same promise. `server/index.ts` calls this right after `createEventStore()` without
+   * awaiting it, so the server can start listening and report progress through `/ready` while it runs.
+   */
+  init(): Promise<void>;
+  /** Current readiness, read by `GET /ready` and by the `requireReady` guard on routes that need derived state. */
+  readiness(): StoreReadiness;
+
   close(): Promise<void>;
 }
 
-function toLegacyKeys(fields: LegacyUsageFields): Pick<AgentRecord, LegacyUsageKeys> {
-  return {
-    tokensInput: fields.tokens.input,
-    tokensOutput: fields.tokens.output,
-    cachedTokens: fields.tokens.cached,
-    reasoningTokens: fields.tokens.reasoning,
-    cost: fields.cost,
-  };
+/** Progress of a `SQLiteEventStore` startup rebuild. `'idle'` only exists before `init()` has run at all. */
+export type RebuildState = 'idle' | 'running' | 'done' | 'failed';
+
+export interface RebuildProgress {
+  state: RebuildState;
+  /** `COUNT(*)` of the `events` table taken when the rebuild started. Informational: more rows can arrive while it runs. */
+  totalEvents: number;
+  /** Rows applied to state so far (an intentionally-skipped duplicate reference still counts as processed). */
+  processedEvents: number;
+  /** Rows that could not be parsed, or whose `applyEvent` step threw. Never applied. */
+  skippedEvents: number;
+  /** The first 20 ids of `skippedEvents`, for `/ready` and the log. */
+  skippedEventIds: string[];
+  startedAt: number | null;
+  finishedAt: number | null;
+  durationMs: number | null;
+  /** Only set when `state === 'failed'`. */
+  error?: string;
+}
+
+export interface StoreReadiness {
+  ready: boolean;
+  storage: 'memory' | 'sqlite';
+  rebuild: RebuildProgress;
+}
+
+export interface SQLiteStoreOptions {
+  backup?: 'auto' | 'off';
+  appVersion?: string;
+  migrations?: readonly Migration[];
+  /** Rows replayed per page of the startup rebuild. Default 2000, env `AGENT_VIEWER_REBUILD_PAGE_SIZE`. */
+  rebuildPageSize?: number;
+  /** Extra delay awaited after each page, for tests and diagnostics. Default 0, env `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS`. */
+  rebuildPageDelayMs?: number;
+  /** Test hook: awaited after each page, after `rebuildPageDelayMs`. */
+  yieldBetweenPages?: (progress: { processedEvents: number; totalEvents: number }) => Promise<void> | void;
+  logger?: { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
 }
 
 // -------------------------------------------------------------
@@ -366,17 +361,35 @@ export class MemoryEventStore implements EventStore {
    */
   private duplicateRefs = new Map<string, DuplicateReference>();
   private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
-  private runtimes = new Map<string, RuntimeRecord>();
-  private sessions = new Map<string, SessionRecord>();
-  private agents = new Map<string, StoredAgent>();
-  private tasks = new Map<string, any>();
-  private meetings = new Map<string, any>();
-  /** The only place that turns usage events into figures. Fed once per accepted event, never decremented. */
-  private usage: UsageReducer = createUsageReducer();
+  /** Agents, runtimes, sessions, tasks, meetings and usage: everything `applyEvent` (`serverState.ts`) owns. */
+  private state: ServerState = createServerState();
   private maxEvents: number;
+  private readonly createdAt = Date.now();
 
   constructor(maxEvents = 10000) {
     this.maxEvents = maxEvents;
+  }
+
+  /** Nothing to replay: a `MemoryEventStore` starts empty and is ready as soon as it is constructed. */
+  async init(): Promise<void> {
+    return;
+  }
+
+  readiness(): StoreReadiness {
+    return {
+      ready: true,
+      storage: 'memory',
+      rebuild: {
+        state: 'done',
+        totalEvents: 0,
+        processedEvents: 0,
+        skippedEvents: 0,
+        skippedEventIds: [],
+        startedAt: this.createdAt,
+        finishedAt: this.createdAt,
+        durationMs: 0,
+      },
+    };
   }
 
   /**
@@ -576,17 +589,17 @@ export class MemoryEventStore implements EventStore {
   }
 
   async snapshot(): Promise<ViewerSnapshot> {
-    const legacy = this.usage.legacyTotals();
+    const legacy = this.state.usage.legacyTotals();
     return {
       schemaVersion: '1.0',
       timestamp: Date.now(),
       lastEventId: this.events[0]?.id ?? null,
-      runtimes: Array.from(this.runtimes.values()),
-      sessions: Array.from(this.sessions.values()),
-      agents: Array.from(this.agents.values(), (agent) => this.toAgentRecord(agent)),
-      activeTasks: Array.from(this.tasks.values()).filter((t) => t.status !== 'COMPLETED' && t.status !== 'FAILED'),
-      activeMeetings: Array.from(this.meetings.values()).filter((m) => m.status !== 'CONCLUDED'),
-      usage: this.usage.summary(),
+      runtimes: Array.from(this.state.runtimes.values()),
+      sessions: Array.from(this.state.sessions.values()),
+      agents: Array.from(this.state.agents.values(), (agent) => toAgentRecord(this.state, agent)),
+      activeTasks: Array.from(this.state.tasks.values()).filter((t) => t.status !== 'COMPLETED' && t.status !== 'FAILED'),
+      activeMeetings: Array.from(this.state.meetings.values()).filter((m) => m.status !== 'CONCLUDED'),
+      usage: this.state.usage.summary(),
       usageDuplicates: this.usageDuplicateStats(),
       totalTokens: legacy.tokens,
       totalCost: legacy.cost,
@@ -596,225 +609,50 @@ export class MemoryEventStore implements EventStore {
   }
 
   async usageSummary(): Promise<UsageSummary> {
-    return this.usage.summary();
-  }
-
-  /** Public view of a stored agent: its profile plus the deprecated usage fields projected from the reducer. */
-  private toAgentRecord(agent: StoredAgent): AgentRecord {
-    return { ...agent, ...toLegacyKeys(this.usage.legacyAgent(agent.id)) };
+    return this.state.usage.summary();
   }
 
   async upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord> {
-    const existing = this.runtimes.get(runtime.id);
-    const updated: RuntimeRecord = {
-      id: runtime.id,
-      name: runtime.name ?? existing?.name ?? runtime.id,
-      framework: runtime.framework ?? existing?.framework ?? 'custom',
-      version: runtime.version ?? existing?.version,
-      metadata: runtime.metadata ?? existing?.metadata ?? {},
-      status: runtime.status ?? existing?.status ?? 'active',
-      firstSeenAt: existing?.firstSeenAt ?? Date.now(),
-      lastSeenAt: Date.now(),
-      eventsCount: existing?.eventsCount ?? 0,
-    };
-    this.runtimes.set(runtime.id, updated);
-    return updated;
+    return upsertRuntimeDirect(this.state, runtime);
   }
 
   async listRuntimes(): Promise<RuntimeRecord[]> {
-    return Array.from(this.runtimes.values());
+    return Array.from(this.state.runtimes.values());
   }
 
   async upsertSession(session: Partial<SessionRecord> & { id: string }): Promise<SessionRecord> {
-    const existing = this.sessions.get(session.id);
-    const updated: SessionRecord = {
-      id: session.id,
-      runtimeId: session.runtimeId ?? existing?.runtimeId,
-      name: session.name ?? existing?.name ?? session.id,
-      createdAt: existing?.createdAt ?? Date.now(),
-      lastActiveAt: Date.now(),
-      status: session.status ?? existing?.status ?? 'active',
-      eventsCount: existing?.eventsCount ?? 0,
-    };
-    this.sessions.set(session.id, updated);
-    return updated;
+    return upsertSessionDirect(this.state, session);
   }
 
   async listSessions(): Promise<SessionRecord[]> {
-    return Array.from(this.sessions.values());
+    return Array.from(this.state.sessions.values());
   }
 
   async getSession(sessionId: string): Promise<SessionRecord | null> {
-    return this.sessions.get(sessionId) ?? null;
+    return this.state.sessions.get(sessionId) ?? null;
   }
 
   async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
-    const existing = this.agents.get(agent.id);
-    // Built field by field, so usage fields that a caller still passes are never read.
-    const updated: StoredAgent = {
-      id: agent.id,
-      name: agent.name ?? existing?.name ?? agent.id,
-      roleTitle: agent.roleTitle ?? existing?.roleTitle ?? 'AI Agent',
-      role: agent.role ?? existing?.role ?? 'custom',
-      provider: agent.provider ?? existing?.provider ?? 'Custom',
-      model: agent.model ?? existing?.model ?? 'Custom',
-      status: agent.status ?? existing?.status ?? 'IDLE',
-      statusText: agent.statusText ?? existing?.statusText ?? 'Active',
-      workspace: agent.workspace ?? existing?.workspace ?? 'development',
-      lastSeenAt: Date.now(),
-    };
-    this.agents.set(agent.id, updated);
-    return this.toAgentRecord(updated);
+    return upsertAgentProfile(this.state, agent);
   }
 
   async getAgent(agentId: string): Promise<AgentRecord | null> {
-    const agent = this.agents.get(agentId);
-    return agent ? this.toAgentRecord(agent) : null;
+    const agent = this.state.agents.get(agentId);
+    return agent ? toAgentRecord(this.state, agent) : null;
   }
 
   async listAgents(): Promise<AgentRecord[]> {
-    return Array.from(this.agents.values(), (agent) => this.toAgentRecord(agent));
+    return Array.from(this.state.agents.values(), (agent) => toAgentRecord(this.state, agent));
   }
 
   async close(): Promise<void> {
     // In-memory does not require cleanup
   }
 
+  /** Applies one accepted event's side effects. The reducer itself lives in `serverState.ts` (issue #52), shared
+   * with `SQLiteEventStore` so the live path and a rebuild from storage reach the same state. */
   private processEventSideEffects(event: CanonicalEvent): void {
-    const now = event.timestamp || Date.now();
-
-    // Usage figures: every accepted llm.usage and llm.failed event, with or without an agent.
-    this.usage.apply(event);
-
-    // Runtimes side effect
-    if (event.runtimeId) {
-      const rt = this.runtimes.get(event.runtimeId);
-      if (rt) {
-        rt.lastSeenAt = Math.max(rt.lastSeenAt, now);
-        rt.eventsCount++;
-      } else {
-        this.runtimes.set(event.runtimeId, {
-          id: event.runtimeId,
-          name: event.runtimeId,
-          framework: typeof event.payload?.framework === 'string' ? event.payload.framework : 'external',
-          status: 'active',
-          firstSeenAt: now,
-          lastSeenAt: now,
-          eventsCount: 1,
-        });
-      }
-    }
-
-    // Sessions side effect
-    if (event.sessionId) {
-      const ses = this.sessions.get(event.sessionId);
-      if (ses) {
-        ses.lastActiveAt = Math.max(ses.lastActiveAt, now);
-        ses.eventsCount++;
-      } else {
-        this.sessions.set(event.sessionId, {
-          id: event.sessionId,
-          runtimeId: event.runtimeId,
-          name: event.sessionId,
-          createdAt: now,
-          lastActiveAt: now,
-          status: 'active',
-          eventsCount: 1,
-        });
-      }
-    }
-
-    // Agent side effect & auto-registration
-    const agentId = resolveEventAgentId(event);
-    if (agentId !== null) {
-      let ag = this.agents.get(agentId);
-      if (!ag) {
-        ag = {
-          id: agentId,
-          name: typeof event.payload?.name === 'string' ? event.payload.name : agentId,
-          roleTitle: typeof event.payload?.roleTitle === 'string' ? event.payload.roleTitle : 'AI Agent',
-          role: 'custom',
-          provider: typeof event.payload?.provider === 'string' ? event.payload.provider : 'External',
-          model: typeof event.payload?.model === 'string' ? event.payload.model : 'model',
-          status: 'IDLE',
-          statusText: 'Registered',
-          workspace: 'development',
-          lastSeenAt: now,
-        };
-        this.agents.set(agentId, ag);
-      }
-
-      ag.lastSeenAt = Math.max(ag.lastSeenAt, now);
-
-      if (event.type === 'agent.registered' || event.type === 'agent.updated') {
-        if (typeof event.payload?.name === 'string') ag.name = event.payload.name;
-        if (typeof event.payload?.roleTitle === 'string') ag.roleTitle = event.payload.roleTitle;
-        if (typeof event.payload?.provider === 'string') ag.provider = event.payload.provider;
-        if (typeof event.payload?.model === 'string') ag.model = event.payload.model;
-        if (typeof event.payload?.workspace === 'string') ag.workspace = event.payload.workspace;
-        if (event.type === 'agent.updated' && typeof event.payload?.statusText === 'string') {
-          ag.statusText = event.payload.statusText;
-        }
-      } else if (event.type === 'agent.status.changed') {
-        if (typeof event.payload?.status === 'string') ag.status = event.payload.status.toUpperCase();
-        if (typeof event.payload?.statusText === 'string') ag.statusText = event.payload.statusText;
-        if (typeof event.payload?.workspace === 'string') ag.workspace = event.payload.workspace;
-      } else if (event.type === 'tool.started') {
-        ag.status = 'USING_TOOL';
-        ag.statusText = `Using ${event.payload?.tool ?? 'tool'}`;
-      } else if (event.type === 'tool.completed') {
-        ag.status = 'IDLE';
-        ag.statusText = 'Tool finished';
-      } else if (event.type === 'tool.failed') {
-        ag.status = 'ERROR';
-        ag.statusText = 'Tool failed';
-      } else if (event.type === 'llm.usage') {
-        // Display only: the office shows the model the agent uses now. No usage figure ever reads these fields.
-        if (typeof event.payload?.provider === 'string') ag.provider = event.payload.provider;
-        if (typeof event.payload?.model === 'string') ag.model = event.payload.model;
-      }
-    }
-
-    // Task side effect
-    if (event.taskId || event.type.startsWith('task.')) {
-      const taskId = event.taskId || event.payload?.taskId || event.payload?.id;
-      if (taskId) {
-        const task = this.tasks.get(taskId) || {
-          id: taskId,
-          title: event.payload?.title || event.summary,
-          status: 'PENDING',
-          assignedAgentId: event.payload?.assignedAgentId || event.agentId,
-          progress: 0,
-        };
-        if (event.type === 'task.progress') {
-          task.status = 'IN_PROGRESS';
-          if (typeof event.payload?.progress === 'number') task.progress = event.payload.progress;
-        } else if (event.type === 'task.completed') {
-          task.status = 'COMPLETED';
-          task.progress = 100;
-        } else if (event.type === 'task.failed') {
-          task.status = 'FAILED';
-        } else if (event.type === 'task.blocked') {
-          task.status = 'BLOCKED';
-        }
-        this.tasks.set(taskId, task);
-      }
-    }
-
-    // Meeting side effect
-    if (event.type.startsWith('meeting.')) {
-      const meetingId = event.payload?.meetingId || event.id;
-      const meeting = this.meetings.get(meetingId) || {
-        id: meetingId,
-        title: event.payload?.title || event.summary,
-        status: 'ACTIVE',
-        participants: event.payload?.participantIds || [],
-      };
-      if (event.type === 'meeting.ended' || event.type === 'meeting.cancelled') {
-        meeting.status = 'CONCLUDED';
-      }
-      this.meetings.set(meetingId, meeting);
-    }
+    applyEvent(this.state, event);
   }
 }
 
@@ -849,17 +687,50 @@ interface PendingOutcome {
   requestKeyMismatch?: { originalId: string; duplicateId: string; provider: string; requestId: string };
 }
 
+const DEFAULT_REBUILD_PAGE_SIZE = 2000;
+
+function envInt(value: string | undefined, fallback: number): number {
+  const parsed = value !== undefined ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
+}
+
+const consoleLogger = { info: console.log, warn: console.warn, error: console.error };
+
 export class SQLiteEventStore implements EventStore {
   private db: any;
-  private memoryFallback: MemoryEventStore;
   private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
   readonly migration: MigrationResult;
   private migrations: readonly Migration[];
 
-  constructor(
-    filePath = './data/agent-viewer.db',
-    options: { backup?: 'auto' | 'off'; appVersion?: string; migrations?: readonly Migration[] } = {}
-  ) {
+  /** All derived state (agents, runtimes, sessions, tasks, meetings, usage). Owned directly: issue #52 removed
+   * the `MemoryEventStore` fallback this store used to forward every accepted event to. */
+  private readonly state: ServerState = createServerState();
+  /** `seq` to give the next inserted row. Seeded from `MAX(seq)` after migrations run. */
+  private nextSeq = 1;
+  /** Count of stored rows with `duplicate_of IS NULL`, kept so `snapshot().eventsCount` never scans the table. */
+  private eventsCountCache = 0;
+  private readonly rebuildOptions: {
+    pageSize: number;
+    pageDelayMs: number;
+    yieldBetweenPages?: (progress: { processedEvents: number; totalEvents: number }) => Promise<void> | void;
+    logger: { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
+  };
+  private rebuild: RebuildProgress = {
+    state: 'idle',
+    totalEvents: 0,
+    processedEvents: 0,
+    skippedEvents: 0,
+    skippedEventIds: [],
+    startedAt: null,
+    finishedAt: null,
+    durationMs: null,
+  };
+  /** Memoized so `init()` is safe to call more than once (`server/index.ts` and the constructor both call it). */
+  private initPromise: Promise<void> | null = null;
+  /** Set by `close()`. The rebuild loop checks it before every SQL statement after an `await`, so a close mid-rebuild never throws on a closed connection. */
+  private closed = false;
+
+  constructor(filePath = './data/agent-viewer.db', options: SQLiteStoreOptions = {}) {
     const backup = sqliteBackupMode(options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP);
 
     const dir = path.dirname(filePath);
@@ -867,9 +738,15 @@ export class SQLiteEventStore implements EventStore {
       fs.mkdirSync(dir, { recursive: true });
     }
 
+    this.rebuildOptions = {
+      pageSize: options.rebuildPageSize ?? envInt(process.env.AGENT_VIEWER_REBUILD_PAGE_SIZE, DEFAULT_REBUILD_PAGE_SIZE),
+      pageDelayMs: options.rebuildPageDelayMs ?? envInt(process.env.AGENT_VIEWER_REBUILD_PAGE_DELAY_MS, 0),
+      yieldBetweenPages: options.yieldBetweenPages,
+      logger: options.logger ?? consoleLogger,
+    };
+
     const DBSync = getDatabaseSync();
     this.db = new DBSync(filePath);
-    this.memoryFallback = new MemoryEventStore();
     this.migrations = options.migrations ?? MIGRATIONS;
     try {
       this.migration = runMigrations(this.db, {
@@ -893,6 +770,139 @@ export class SQLiteEventStore implements EventStore {
       }
       throw error;
     }
+
+    this.backfillNullSeq();
+    const maxSeqRow = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM events').get() as { maxSeq: number };
+    this.nextSeq = maxSeqRow.maxSeq + 1;
+    const countRow = this.db.prepare('SELECT COUNT(*) AS count FROM events WHERE duplicate_of IS NULL').get() as { count: number };
+    this.eventsCountCache = countRow.count;
+
+    // Kicked off here (not only from `server/index.ts`) so a store built directly, as many tests do, never needs
+    // an explicit `init()` call: for a file with no backlog beyond one page, every row is applied synchronously
+    // below, before this constructor returns (see `init()`).
+    this.initPromise = this.init();
+  }
+
+  /**
+   * Assigns `seq` to any row still missing it: normally none (migration 4 backfills from `rowid` once), except
+   * when an older server appended rows to a file already migrated by a newer one. Ordered by `rowid`, which is
+   * still meaningful for these specific rows (nothing else writes seq-less rows after migration 4 exists).
+   */
+  private backfillNullSeq(): void {
+    const nullRows = this.db.prepare('SELECT rowid AS rid FROM events WHERE seq IS NULL ORDER BY rowid').all() as Array<{ rid: number }>;
+    if (nullRows.length === 0) return;
+    const maxSeqRow = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM events').get() as { maxSeq: number };
+    const update = this.db.prepare('UPDATE events SET seq = ? WHERE rowid = ?');
+    let next = maxSeqRow.maxSeq + 1;
+    for (const { rid } of nullRows) update.run(next++, rid);
+  }
+
+  /**
+   * Replays every stored event through `applyEvent`, in `seq` order, rebuilding `this.state` from scratch.
+   * Pages through the table so `/health` and `/ready` keep answering while it runs; yields after every non-empty
+   * page (`rebuildPageDelayMs`, then the `yieldBetweenPages` test hook, then one `setImmediate`). A file with no
+   * backlog beyond one page never reaches any of those `await`s, so this resolves synchronously in that case:
+   * `readiness().ready` is already `true` by the time the constructor returns.
+   */
+  async init(): Promise<void> {
+    if (this.initPromise) return this.initPromise;
+    return this.runRebuild();
+  }
+
+  private async runRebuild(): Promise<void> {
+    const startedAt = Date.now();
+    const totalRow = this.db.prepare('SELECT COUNT(*) AS count FROM events').get() as { count: number };
+    this.rebuild = {
+      state: 'running',
+      totalEvents: totalRow.count,
+      processedEvents: 0,
+      skippedEvents: 0,
+      skippedEventIds: [],
+      startedAt,
+      finishedAt: null,
+      durationMs: null,
+    };
+    this.rebuildOptions.logger.info(`[agent-viewer] Rebuilding state from SQLite: ${totalRow.count} events`);
+
+    try {
+      const pageStmt = this.db.prepare('SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?');
+      let lastSeq = 0;
+      while (true) {
+        if (this.closed) return;
+        const rows = pageStmt.all(lastSeq, this.rebuildOptions.pageSize) as any[];
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          lastSeq = row.seq;
+          this.applyStoredRow(row);
+        }
+        if (this.rebuildOptions.pageDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.rebuildOptions.pageDelayMs));
+        }
+        if (this.rebuildOptions.yieldBetweenPages) {
+          await this.rebuildOptions.yieldBetweenPages({
+            processedEvents: this.rebuild.processedEvents,
+            totalEvents: this.rebuild.totalEvents,
+          });
+        }
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      const finishedAt = Date.now();
+      this.rebuild = { ...this.rebuild, state: 'done', finishedAt, durationMs: finishedAt - startedAt };
+      const agents = this.state.agents.size;
+      const sessions = this.state.sessions.size;
+      const runtimes = this.state.runtimes.size;
+      const tasks = this.state.tasks.size;
+      const meetings = this.state.meetings.size;
+      this.rebuildOptions.logger.info(
+        `[agent-viewer] State rebuilt from SQLite in ${this.rebuild.durationMs} ms: ${this.rebuild.processedEvents} events, ` +
+          `${agents} agents, ${sessions} sessions, ${runtimes} runtimes, ${tasks} tasks, ${meetings} meetings, ${this.rebuild.skippedEvents} skipped`
+      );
+    } catch (error) {
+      const finishedAt = Date.now();
+      const message = error instanceof Error ? error.message : String(error);
+      this.rebuild = { ...this.rebuild, state: 'failed', finishedAt, durationMs: finishedAt - startedAt, error: message };
+      this.rebuildOptions.logger.error(`[agent-viewer] State rebuild from SQLite failed: ${message}`);
+    }
+  }
+
+  /** One row of the rebuild: a duplicate reference is counted as processed but never applied, matching the live
+   * path (only an 'accepted' outcome ever reaches `applyEvent`). A row that cannot be parsed, or whose
+   * `applyEvent` throws, is skipped and logged; the rest of the rebuild continues. */
+  private applyStoredRow(row: any): void {
+    let event: CanonicalEvent;
+    try {
+      event = this.rowToEvent(row);
+      if (typeof event?.id !== 'string' || typeof event?.type !== 'string' || typeof event?.timestamp !== 'number') {
+        throw new Error('parsed event is missing a string id, a string type or a numeric timestamp');
+      }
+    } catch (error) {
+      this.recordSkippedRow(row.id, error);
+      return;
+    }
+
+    if (row.duplicate_of) {
+      this.rebuild.processedEvents++;
+      return;
+    }
+
+    try {
+      applyEvent(this.state, event);
+      this.rebuild.processedEvents++;
+    } catch (error) {
+      this.recordSkippedRow(row.id, error);
+    }
+  }
+
+  private recordSkippedRow(id: string, error: unknown): void {
+    this.rebuild.skippedEvents++;
+    if (this.rebuild.skippedEventIds.length < 20) this.rebuild.skippedEventIds.push(id);
+    const message = error instanceof Error ? error.message : String(error);
+    this.rebuildOptions.logger.warn(`[agent-viewer] Skipped unreadable event during rebuild: ${JSON.stringify({ id, reason: message })}`);
+  }
+
+  readiness(): StoreReadiness {
+    return { ready: this.rebuild.state === 'done', storage: 'sqlite', rebuild: { ...this.rebuild, skippedEventIds: [...this.rebuild.skippedEventIds] } };
   }
 
   getSchemaInfo(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } {
@@ -931,7 +941,8 @@ export class SQLiteEventStore implements EventStore {
       requestKey ? requestKey.provider : null,
       requestKey ? requestKey.requestId : null,
       duplicateOf,
-      matchesOriginal === null ? null : matchesOriginal ? 1 : 0
+      matchesOriginal === null ? null : matchesOriginal ? 1 : 0,
+      this.nextSeq++
     );
   }
 
@@ -939,9 +950,9 @@ export class SQLiteEventStore implements EventStore {
     return this.db.prepare(`
       INSERT INTO events (
         id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, event_json,
-        created_at, content_hash, request_provider, request_id, duplicate_of, matches_original
+        created_at, content_hash, request_provider, request_id, duplicate_of, matches_original, seq
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
   }
 
@@ -1107,8 +1118,10 @@ export class SQLiteEventStore implements EventStore {
     const pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event);
     this.recordOutcome(pending);
     if (pending.result.outcome === 'accepted') {
-      // SQLite is the source of truth for ids; the memory side store only feeds snapshots and aggregates.
-      await this.memoryFallback.append(event);
+      this.eventsCountCache++;
+      // While a startup rebuild is running (or failed), the event is persisted only: the rebuild loop (or a
+      // restart) is the one that applies it, so it is never applied twice (issue #52).
+      if (this.rebuild.state === 'done') applyEvent(this.state, event);
     }
     return pending.result;
   }
@@ -1170,7 +1183,10 @@ export class SQLiteEventStore implements EventStore {
 
     for (const entry of pending) this.recordOutcome(entry);
     const summary = summarizeBatch(pending.map(({ result }) => result), events);
-    await this.memoryFallback.appendBatch(summary.acceptedEvents, options);
+    this.eventsCountCache += summary.acceptedEvents.length;
+    if (this.rebuild.state === 'done') {
+      for (const accepted of summary.acceptedEvents) applyEvent(this.state, accepted);
+    }
     return summary;
   }
 
@@ -1210,12 +1226,13 @@ export class SQLiteEventStore implements EventStore {
     }
     if (options.afterId) {
       // Same semantics as the memory store: only events stored after the cursor event.
-      // An unknown cursor applies no filter. rowid grows with insertion order.
-      const cursor = this.db.prepare('SELECT rowid AS seq FROM events WHERE id = ?').get(options.afterId) as
+      // An unknown cursor applies no filter. `seq` is the durable insertion order (issue #52); unlike `rowid`
+      // (not an alias of an INTEGER PRIMARY KEY here), it survives a VACUUM.
+      const cursor = this.db.prepare('SELECT seq FROM events WHERE id = ?').get(options.afterId) as
         | { seq: number }
         | undefined;
       if (cursor) {
-        conditions.push('rowid > ?');
+        conditions.push('seq > ?');
         params.push(cursor.seq);
       }
     }
@@ -1224,7 +1241,7 @@ export class SQLiteEventStore implements EventStore {
     const limit = options.limit && options.limit > 0 ? options.limit : 100;
     params.push(limit);
 
-    const sql = `SELECT * FROM events ${whereClause} ORDER BY timestamp DESC, created_at DESC, rowid DESC LIMIT ?`;
+    const sql = `SELECT * FROM events ${whereClause} ORDER BY timestamp DESC, created_at DESC, seq DESC LIMIT ?`;
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as any[];
 
@@ -1287,50 +1304,87 @@ export class SQLiteEventStore implements EventStore {
     return { count: row.count, mismatched: row.mismatched ?? 0, unverified: row.unverified ?? 0 };
   }
 
+  /**
+   * `lastEventId`, `eventsCount` and `events` come from SQLite (issue #52): they must be correct for the whole
+   * stored history, not only for whatever a ring buffer happened to keep. Every other field comes from
+   * `this.state`, built by `applyEvent` on the live path and by the startup rebuild.
+   */
   async snapshot(): Promise<ViewerSnapshot> {
-    const snapshot = await this.memoryFallback.snapshot();
-    // The fallback never sees a duplicate (only originals are forwarded to it), so its own count would be 0.
-    // SQL counts survive a restart, unlike the totals, which the fallback still cannot rebuild (issue #52).
-    return { ...snapshot, usageDuplicates: this.usageDuplicateStatsFromDb() };
+    const lastRow = this.db.prepare('SELECT id FROM events WHERE duplicate_of IS NULL ORDER BY seq DESC LIMIT 1').get() as
+      | { id: string }
+      | undefined;
+    const recentRows = this.db
+      .prepare('SELECT * FROM events WHERE duplicate_of IS NULL ORDER BY seq DESC LIMIT 100')
+      .all() as any[];
+    const legacy = this.state.usage.legacyTotals();
+    return {
+      schemaVersion: '1.0',
+      timestamp: Date.now(),
+      lastEventId: lastRow?.id ?? null,
+      runtimes: Array.from(this.state.runtimes.values()),
+      sessions: Array.from(this.state.sessions.values()),
+      agents: Array.from(this.state.agents.values(), (agent) => toAgentRecord(this.state, agent)),
+      activeTasks: Array.from(this.state.tasks.values()).filter((t) => t.status !== 'COMPLETED' && t.status !== 'FAILED'),
+      activeMeetings: Array.from(this.state.meetings.values()).filter((m) => m.status !== 'CONCLUDED'),
+      usage: this.state.usage.summary(),
+      usageDuplicates: this.usageDuplicateStatsFromDb(),
+      totalTokens: legacy.tokens,
+      totalCost: legacy.cost,
+      eventsCount: this.eventsCountCache,
+      events: recentRows.map((r) => this.rowToEvent(r)),
+    };
   }
 
   async usageSummary(): Promise<UsageSummary> {
-    return this.memoryFallback.usageSummary();
+    return this.state.usage.summary();
   }
 
+  /**
+   * Deprecated direct-write affordance (issue #52): nothing in `server/index.ts` calls this any more (`POST
+   * /api/v1/runtimes` now appends a `runtime.connected` event and reads the record back), and a call made this
+   * way does not survive a restart, because the rebuild only replays stored events.
+   */
   async upsertRuntime(runtime: Partial<RuntimeRecord> & { id: string }): Promise<RuntimeRecord> {
-    return this.memoryFallback.upsertRuntime(runtime);
+    return upsertRuntimeDirect(this.state, runtime);
   }
 
   async listRuntimes(): Promise<RuntimeRecord[]> {
-    return this.memoryFallback.listRuntimes();
+    return Array.from(this.state.runtimes.values());
   }
 
+  /** Deprecated direct-write affordance, see `upsertRuntime`. Nothing in `server/index.ts` calls it. */
   async upsertSession(session: Partial<SessionRecord> & { id: string }): Promise<SessionRecord> {
-    return this.memoryFallback.upsertSession(session);
+    return upsertSessionDirect(this.state, session);
   }
 
   async listSessions(): Promise<SessionRecord[]> {
-    return this.memoryFallback.listSessions();
+    return Array.from(this.state.sessions.values());
   }
 
   async getSession(sessionId: string): Promise<SessionRecord | null> {
-    return this.memoryFallback.getSession(sessionId);
+    return this.state.sessions.get(sessionId) ?? null;
   }
 
+  /**
+   * Deprecated direct-write affordance (issue #52): nothing in `server/index.ts` calls this any more (`POST
+   * /api/v1/agents` now appends an `agent.registered` event and reads the record back), and a call made this way
+   * does not survive a restart, because the rebuild only replays stored events.
+   */
   async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
-    return this.memoryFallback.upsertAgent(agent);
+    return upsertAgentProfile(this.state, agent);
   }
 
   async getAgent(agentId: string): Promise<AgentRecord | null> {
-    return this.memoryFallback.getAgent(agentId);
+    const agent = this.state.agents.get(agentId);
+    return agent ? toAgentRecord(this.state, agent) : null;
   }
 
   async listAgents(): Promise<AgentRecord[]> {
-    return this.memoryFallback.listAgents();
+    return Array.from(this.state.agents.values(), (agent) => toAgentRecord(this.state, agent));
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     try {
       this.db.close();
     } catch {

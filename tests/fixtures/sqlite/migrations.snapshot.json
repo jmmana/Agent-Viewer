@@ -1,5 +1,6 @@
 [
   [1, "baseline"],
   [2, "content-hash"],
-  [3, "request-key-dedup"]
+  [3, "request-key-dedup"],
+  [4, "events-seq"]
 ]

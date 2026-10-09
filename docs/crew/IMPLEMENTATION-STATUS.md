@@ -1,12 +1,13 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #156, foco de objetos y límites de paneo Crew. Epic: #114.
+Último issue trabajado: #159, QA de continuidad de dominio y lifecycle Crew. Epic: #114.
 
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-camera-focus-156`, basada en `1e1e591` de #183.
+- Rama actual: `test/crew-domain-continuity-159`, basada en `0832cfa` de #185.
+- Foco: `feat/crew-camera-focus-156`, basada en `1e1e591` de #183.
 - Persistencia: `feat/crew-navigation-persistence-171`, basada en `0b513ea` de #182.
 - Rama anterior: `feat/crew-camera-gestures-156`, basada en `3e18d2a` de #177.
 - PR #175 y #177: abiertos, borrador, checks anteriores verdes. No fusionados.
@@ -82,7 +83,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#156](https://github.com/jmmana/Agent-Viewer/issues/156) | Gestos, rueda y teclado en #182; foco de escritorios/monitores y pan acotado en esta rama. Foco de actores y arte final pendientes. |
 | [#157](https://github.com/jmmana/Agent-Viewer/issues/157) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#158](https://github.com/jmmana/Agent-Viewer/issues/158) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
-| [#159](https://github.com/jmmana/Agent-Viewer/issues/159) | Dos E2E de cámara y regresión básica de cambio de modo en esta rama. |
+| [#159](https://github.com/jmmana/Agent-Viewer/issues/159) | Nueve E2E: cámara, persistencia, SSE, importación de log, vacío LIVE, lifecycle y cuatro tamaños. QA final de arte y dispositivos pendiente. |
 | [#160](https://github.com/jmmana/Agent-Viewer/issues/160) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#161](https://github.com/jmmana/Agent-Viewer/issues/161) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#166](https://github.com/jmmana/Agent-Viewer/issues/166) | Contrato y selector en PR #175, borrador. |
@@ -117,4 +118,16 @@ Validación: typecheck; 61 pruebas node y 446 Vitest; 4 E2E Chrome aprobados, in
 
 Selector de escritorios/monitores de la sala actual, con foco basado en la misma proyección y escala de encuadre del renderer. Un ID de otra sala no cambia la cámara. El paneo conserva el centro de la geometría local dentro del viewport con 32 píxeles de margen; esto prioriza poder recuperar la sala sobre un paneo ilimitado. ResizeObserver corrige también la cámara persistida al reducir la ventana. El zoom por botones conserva el centro de vista.
 
-Validación local: typecheck; 61 pruebas node y 449 Vitest; 5 E2E Chrome aprobados; build app aprobado. Nuevas pruebas verifican foco en cuatro vistas, aislamiento de IDs, paneo extremo y resize 1920→320. [Captura de foco CEO](evidence/camera-156/ceo-desk-focus.png). Foco de agentes pendiente hasta disponer de anclajes visuales reales en Crew. Implementación `e337f33`, [PR #185](https://github.com/jmmana/Agent-Viewer/pull/185), abierto sobre #183; CI en curso al publicar.
+Validación local: typecheck; 61 pruebas node y 449 Vitest; 5 E2E Chrome aprobados; build app aprobado. Nuevas pruebas verifican foco en cuatro vistas, aislamiento de IDs, paneo extremo y resize 1920→320. [Captura de foco CEO](evidence/camera-156/ceo-desk-focus.png). Foco de agentes pendiente hasta disponer de anclajes visuales reales en Crew. Implementación `e337f33`, [PR #185](https://github.com/jmmana/Agent-Viewer/pull/185), abierto sobre #183; [CI](https://github.com/jmmana/Agent-Viewer/actions/runs/37869312615) aprobado en el último commit.
+
+## Continuación #159: dominio, lifecycle y evidencia de runtime
+
+Nueve E2E aprobados en Chrome headless. Datos sintéticos de prueba recibidos por la ruta SSE interceptada en el navegador o por importación JSONL mantienen presencia, estado CODING, 1.500 tokens y coste 0,250 al cambiar salas y modos. No se contacta ningún proveedor ni se envían estos datos a un servidor. LIVE sin eventos permanece vacío en las once salas. ResizeObserver de Crew pasa de uno a cero al salir. Cuatro anchos emulados (320, 390, 768 y 1920) con controles ES y canvas dentro del viewport.
+
+Limitaciones precisas: el test SSE prueba cliente, ingestión y UI mediante interceptación de red, no reconexión contra servidor real. Importación JSONL prueba el estado resultante, no un reproductor temporal completo. La prueba de lifecycle cubre observadores, no un perfil completo de memoria. No son cuatro dispositivos físicos.
+
+Playwright conserva vídeos WebM de las pruebas en test-results, publicados por CI. [MP4 del runtime](evidence/camera-156/runtime-navigation.mp4): navegación por CEO/Development, cuatro vistas, foco, regreso a Caricatura y recarga. Es una demostración de geometría prototipo, no de arte o animaciones finales.
+
+Reproducción: ejecutar `npm run dev` y, en otra terminal, `PLAYWRIGHT_CHANNEL=chrome npm run crew:capture` (o instalar Chromium con `npx playwright install chromium` y omitir la variable). Genera `test-results/crew-demo/runtime.webm`. Conversión opcional con ffmpeg: `ffmpeg -i test-results/crew-demo/runtime.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart runtime-navigation.mp4`.
+
+Validación de esta continuación: `npm run lint` y nueve E2E; código de producción sin cambios respecto a #185, cuyas 61 pruebas node, 449 Vitest y builds están aprobados. PR/SHA de esta continuación pendientes de publicación.

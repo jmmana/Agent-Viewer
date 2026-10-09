@@ -6,6 +6,7 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:3000',
     channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
     screenshot: 'only-on-failure',
+    video: 'on',
     trace: 'retain-on-failure',
   },
   webServer: {

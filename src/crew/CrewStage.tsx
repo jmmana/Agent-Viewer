@@ -13,7 +13,6 @@ import { defaultCrewPreferences, validateCrewPreferences, type CrewPreferences }
 import { CrewGestures } from './crewGestures';
 import type { Agent } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
-import { mountCrewScene, type CrewSceneHandle } from './crewSceneLifecycle';
 
 /**
  * Escena Crew independiente con arte incremental y geometría provisional.
@@ -42,7 +41,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   };
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gestures = useRef(new CrewGestures());
-  const sceneRef = useRef<CrewSceneHandle | null>(null);
+  const frameRef = useRef<number>(0);
   const [localRoomId, setLocalRoomId] = useState(CREW_ROOMS[0].id);
   const requestedRoom = selectedRoomId ?? localRoomId;
   const roomId = CREW_ROOMS.some(room => room.id === requestedRoom) ? requestedRoom : CREW_ROOMS[0].id;
@@ -137,18 +136,17 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, locale });
   }, [room, camera, locale, presence, sprite.images, blink]);
 
-  // Ciclo de vida de la escena (montar/actualizar/desmontar) vive en crewSceneLifecycle,
-  // independiente de React, para poder probarlo sin un canvas ni un navegador real.
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
-    sceneRef.current = mountCrewScene(el, render, () => updateCamera(current => current));
-    return () => { sceneRef.current?.unmount(); sceneRef.current = null; };
-    // Se monta solo al aparecer el canvas; cambios de render/updateCamera llegan por update().
-  }, []);
-  useEffect(() => {
-    sceneRef.current?.update(render);
-  }, [render]);
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      updateCamera(current => current);
+      render();
+    }) : null;
+    observer?.observe(el);
+    frameRef.current = requestAnimationFrame(render);
+    return () => { observer?.disconnect(); cancelAnimationFrame(frameRef.current); };
+  }, [render, updateCamera]);
 
   return <section aria-label={isEs ? 'Modo Crew: oficina independiente' : 'Crew mode: independent office'}
     style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0, overflowY: 'auto', background: '#101a2b', color: '#f1f5f9' }}>

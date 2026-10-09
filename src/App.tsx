@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Agent, AgentStatus, PricingConfig, ViewerEvent } from './types/agent';
 import { DEFAULT_PRICING, INITIAL_AGENTS } from './engine/officeModel';
 import {
+  createDemoSteps,
   createInitialSimulationState,
   createLiveSimulationState,
-  DEMO_STEPS,
   SimulationState,
   triggerCustomTaskSimulation,
 } from './engine/simulationEngine';
+import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { AgentInspector } from './components/AgentInspector';
@@ -22,16 +23,15 @@ import { ModelOpsModal } from './components/ModelOpsModal';
 import { AgentDetailModal } from './components/AgentDetailModal';
 import { SimulatedTokenBurst } from './engine/modelOps';
 import { DoorOpen } from 'lucide-react';
-import { t } from './i18n';
+import { applyDocumentLocale, detectLocale, Locale, persistLocale, t, type TranslationKey } from './i18n';
 import { createOfficeTranslator } from './content/officeMessages';
-import { detectLocale, Locale, persistLocale } from './i18n';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
 import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './integrations/liveConnection';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
-import { Upload, AlertCircle } from 'lucide-react';
+import { Upload, AlertCircle, X } from 'lucide-react';
 
 export default function App() {
   const isLiveMode = typeof window !== 'undefined' && (
@@ -53,7 +53,7 @@ export default function App() {
       return createLiveSimulationState();
     }
     const restored = typeof window !== 'undefined' ? loadSession(window.localStorage) : null;
-    return restored ?? createInitialSimulationState(INITIAL_AGENTS);
+    return restored ?? createInitialSimulationState(INITIAL_AGENTS, detectLocale());
   });
 
   // Active navigation tab
@@ -84,12 +84,20 @@ export default function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [locale, setLocale] = useState<Locale>(() => detectLocale());
   const officeTranslate = useMemo(() => createOfficeTranslator({ locale }), [locale]);
+  // The demo script is written in the current language; steps already played keep their texts, and the views
+  // show the built-in demo texts in the current language through `localizeDemoText`.
+  const demoSteps = useMemo(() => createDemoSteps(locale), [locale]);
+  const statusLabel = (status: AgentStatus) => t(locale, `status.${status}` as TranslationKey);
+  const agentName = (agents: Agent[], agentId: string) => agents.find((agent) => agent.id === agentId)?.name ?? agentId;
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
   const [ambientSocialEnabled, setAmbientSocialEnabled] = useState(true);
   const [politicsChatterEnabled, setPoliticsChatterEnabled] = useState(false);
   const [currentFloor, setCurrentFloor] = useState<1 | 2>(1);
 
   useEffect(() => {
     persistLocale(locale);
+    applyDocumentLocale(locale);
   }, [locale]);
 
   const sessionWriterRef = useRef<ReturnType<typeof createThrottledSessionWriter> | null>(null);
@@ -109,7 +117,8 @@ export default function App() {
 
   // Execute a specific demo step
   const executeStep = (stepIdx: number) => {
-    if (stepIdx < 0 || stepIdx >= DEMO_STEPS.length) return;
+    if (stepIdx < 0 || stepIdx >= demoSteps.length) return;
+    const step = demoSteps[stepIdx];
 
     setSimState((prevState) => {
       // Deep clone to update reactively
@@ -124,7 +133,7 @@ export default function App() {
         socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
       };
 
-      DEMO_STEPS[stepIdx].execute(nextState);
+      step.execute(nextState);
       return nextState;
     });
 
@@ -152,7 +161,7 @@ export default function App() {
           socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
           coffeeSeatAssignments: prevState.coffeeSeatAssignments ? [...prevState.coffeeSeatAssignments] : [],
         };
-        advanceLivingOffice(nextState, Date.now());
+        advanceLivingOffice(nextState, Date.now(), localeRef.current);
         return nextState;
       });
     }, 750);
@@ -226,7 +235,7 @@ export default function App() {
             roomReservations: prevState.roomReservations.map((r) => ({ ...r, participantIds: [...r.participantIds] })),
             socialActivities: prevState.socialActivities.map((a) => ({ ...a, participantIds: [...a.participantIds] })),
           };
-          applyExternalEvent(nextState, incoming);
+          applyExternalEvent(nextState, incoming, { locale: localeRef.current });
           return nextState;
         });
       }, undefined, { token });
@@ -243,11 +252,11 @@ export default function App() {
   useEffect(() => {
     if (!isPlayingDemo) return;
 
-    const currentStep = DEMO_STEPS[demoStepIndex];
+    const currentStep = demoSteps[demoStepIndex];
     const duration = (currentStep ? currentStep.durationMs : 4000) / playbackSpeed;
 
     const timer = setTimeout(() => {
-      if (demoStepIndex < DEMO_STEPS.length - 1) {
+      if (demoStepIndex < demoSteps.length - 1) {
         executeStep(demoStepIndex + 1);
       } else {
         setIsPlayingDemo(false);
@@ -258,7 +267,7 @@ export default function App() {
   }, [isPlayingDemo, demoStepIndex, playbackSpeed]);
 
   const handleTogglePlayDemo = () => {
-    if (!isPlayingDemo && demoStepIndex >= DEMO_STEPS.length - 1) {
+    if (!isPlayingDemo && demoStepIndex >= demoSteps.length - 1) {
       // Loop from beginning if at the end
       executeStep(0);
       setIsPlayingDemo(true);
@@ -273,7 +282,7 @@ export default function App() {
   };
 
   const handleStepForward = () => {
-    if (demoStepIndex < DEMO_STEPS.length - 1) {
+    if (demoStepIndex < demoSteps.length - 1) {
       executeStep(demoStepIndex + 1);
     }
   };
@@ -282,7 +291,7 @@ export default function App() {
     setIsPlayingDemo(false);
     setDemoStepIndex(0);
     clearSession(window.localStorage);
-    setSimState(createInitialSimulationState(INITIAL_AGENTS));
+    setSimState(createInitialSimulationState(INITIAL_AGENTS, locale));
     setSelectedAgentId(null);
   };
 
@@ -310,7 +319,7 @@ export default function App() {
           source: 'operator',
           target: agentId,
           severity: 'normal',
-          summary: `Operator instruction dispatched to ${agentId}: "${message}"`,
+          summary: t(locale, 'operator.messageEvent', { agent: agentName(prev.agents, agentId), message }),
           payload: { text: message },
         },
         ...prev.events,
@@ -331,7 +340,7 @@ export default function App() {
           return {
             ...a,
             status,
-            statusText: `Operator forced status to ${status}`,
+            statusText: t(locale, 'operator.statusText', { status: statusLabel(status) }),
           };
         }
         return a;
@@ -345,7 +354,7 @@ export default function App() {
           source: 'operator',
           target: agentId,
           severity: 'normal',
-          summary: `Operator changed ${agentId} status to ${status}.`,
+          summary: t(locale, 'operator.statusEvent', { agent: agentName(prev.agents, agentId), status: statusLabel(status) }),
           payload: { status },
         },
         ...prev.events,
@@ -388,7 +397,10 @@ export default function App() {
             cachedTokens: a.cachedTokens + (burst.cachedTokens || 0),
             cost: a.cost + burst.cost,
             speechBubble: {
-              text: `⚡ Inferencia: +${(burst.inputTokens + burst.outputTokens).toLocaleString()} tokens en ${burst.model}`,
+              text: t(locale, 'operator.burstBubble', {
+                tokens: (burst.inputTokens + burst.outputTokens).toLocaleString(locale),
+                model: burst.model,
+              }),
               expiresAt: Date.now() + 4000,
             },
           };
@@ -410,7 +422,13 @@ export default function App() {
         source: targetAgent.id,
         target: 'server_room',
         severity: 'normal',
-        summary: `Inferencia ejecutada en ${burst.provider} (${burst.model}): +${(burst.inputTokens + burst.outputTokens).toLocaleString()} tokens (${burst.latencyMs}ms, $${burst.cost.toFixed(4)})`,
+        summary: t(locale, 'operator.burstEvent', {
+          provider: burst.provider,
+          model: burst.model,
+          tokens: (burst.inputTokens + burst.outputTokens).toLocaleString(locale),
+          latency: burst.latencyMs,
+          cost: `$${burst.cost.toFixed(4)}`,
+        }),
         payload: burst,
       };
 
@@ -433,9 +451,9 @@ export default function App() {
             ...a,
             provider: newProvider,
             model: newModel,
-            statusText: `Modelo cambiado a ${newModel} (${newProvider})`,
+            statusText: t(locale, 'operator.modelStatusText', { model: newModel, provider: newProvider }),
             speechBubble: {
-              text: `Cambié mi motor a ${newModel} (${newProvider})`,
+              text: t(locale, 'operator.modelBubble', { model: newModel, provider: newProvider }),
               expiresAt: Date.now() + 4500,
             },
           };
@@ -450,7 +468,7 @@ export default function App() {
         source: 'operator',
         target: agentId,
         severity: 'normal',
-        summary: `Agente reasignado: ${newModel} (${newProvider})`,
+        summary: t(locale, 'operator.modelEvent', { model: newModel, provider: newProvider }),
         payload: { agentId, newProvider, newModel },
       };
 
@@ -476,7 +494,7 @@ export default function App() {
         events: [...prev.events],
         totalTokens: { ...prev.totalTokens },
       };
-      triggerCustomTaskSimulation(nextState, title, description, assignedRole);
+      triggerCustomTaskSimulation(nextState, title, description, assignedRole, locale);
       return nextState;
     });
   };
@@ -527,6 +545,11 @@ export default function App() {
   const activeMeetingCount = simState.meetings.filter((m) => m.status === 'ACTIVE').length;
   const overflowReservations = simState.roomReservations.filter((reservation) => reservation.floor === 2);
   const mainFloorAgents = simState.agents.filter((agent) => (agent.floor ?? 1) === 1);
+  // The canvas draws the role title of agents without a built-in role: show the demo ones in the current language.
+  const canvasAgents = mainFloorAgents.map((agent) => {
+    const roleTitle = localizeDemoText(agent.roleTitle, locale);
+    return roleTitle === agent.roleTitle ? agent : { ...agent, roleTitle };
+  });
 
   const handleFileDrop = async (e: React.DragEvent) => {
     e.preventDefault();
@@ -539,17 +562,17 @@ export default function App() {
     try {
       const parsed = await parseEventLog(file);
       if (parsed.events.length === 0) {
-        setDropError('File contains 0 valid canonical events');
+        setDropError(t(locale, 'drop.noEvents'));
         return;
       }
       // Replay all events into a fresh state
       const nextState = createLiveSimulationState();
       for (const evt of parsed.events) {
-        applyExternalEvent(nextState, evt);
+        applyExternalEvent(nextState, evt, { locale });
       }
       setSimState(nextState);
     } catch (err: any) {
-      setDropError(err?.message || 'Failed to read event log file');
+      setDropError(err?.message || t(locale, 'drop.readFailed'));
     }
   };
 
@@ -566,19 +589,25 @@ export default function App() {
       {/* Drag & drop overlay */}
       {isDragOver && (
         <div className="absolute inset-0 z-50 bg-slate-950/85 backdrop-blur-sm border-2 border-dashed border-sky-400 flex flex-col items-center justify-center text-sky-200">
-          <Upload className="w-12 h-12 mb-3 animate-bounce text-sky-400" />
-          <p className="text-lg font-bold">Drop JSONL / OTLP log to Replay</p>
-          <p className="text-sm text-slate-400 mt-1">Replay past agent sessions without a server</p>
+          <Upload className="w-12 h-12 mb-3 animate-bounce text-sky-400" aria-hidden="true" />
+          <p className="text-lg font-bold">{t(locale, 'drop.title')}</p>
+          <p className="text-sm text-slate-300 mt-1">{t(locale, 'drop.subtitle')}</p>
         </div>
       )}
 
       {/* File error toast */}
       {dropError && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs px-4 py-2.5 rounded-xl shadow-2xl">
-          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+        <div role="alert" className="absolute top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-rose-950/90 border border-rose-700 text-rose-200 text-xs px-4 py-2.5 rounded-xl shadow-2xl">
+          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" aria-hidden="true" />
           <span>{dropError}</span>
-          <button onClick={() => setDropError(null)} className="ml-3 text-rose-400 hover:text-white font-bold">
-            ×
+          <button
+            type="button"
+            onClick={() => setDropError(null)}
+            aria-label={t(locale, 'drop.dismiss')}
+            title={t(locale, 'drop.dismiss')}
+            className="ml-3 text-rose-300 hover:text-white font-bold"
+          >
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -589,7 +618,7 @@ export default function App() {
         onTabChange={(tab) => setCurrentTab(tab)}
         isPlayingDemo={isPlayingDemo}
         demoStepIndex={demoStepIndex}
-        totalDemoSteps={DEMO_STEPS.length}
+        totalDemoSteps={demoSteps.length}
         playbackSpeed={playbackSpeed}
         onTogglePlayDemo={handleTogglePlayDemo}
         onStepForward={handleStepForward}
@@ -613,7 +642,7 @@ export default function App() {
       />
 
       {/* Main View Area */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <main className="flex-1 flex overflow-hidden relative">
         {/* Office View with Collapsible Vertical Live Timeline Sidebar */}
         {currentTab === 'office' && (
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
@@ -621,7 +650,7 @@ export default function App() {
               {currentFloor === 1 ? (
                 <>
                   <OfficeCanvas
-                    agents={mainFloorAgents}
+                    agents={canvasAgents}
                     selectedAgentId={selectedAgentId}
                     onSelectAgent={(id) => {
                       setSelectedAgentId(id);
@@ -644,7 +673,7 @@ export default function App() {
                       className="absolute bottom-5 right-5 z-30 flex items-center gap-2 rounded-xl border border-violet-700/60 bg-slate-950/95 px-3 py-2 text-xs font-semibold text-violet-200 shadow-xl hover:bg-violet-950/70"
                       title={t(locale, 'floor.secret')}
                     >
-                      <DoorOpen className="w-4 h-4" />
+                      <DoorOpen className="w-4 h-4" aria-hidden="true" />
                       <span>{t(locale, 'floor.enterSecret')}</span>
                       <span className="rounded-full bg-violet-600 px-1.5 py-0.5 text-[10px] text-white">
                         {overflowReservations.length}
@@ -679,6 +708,7 @@ export default function App() {
               onUpdateStatus={handleUpdateAgentStatus}
               onOpenAgentDetailModal={(id) => setDetailModalAgentId(id)}
               theme={theme}
+              locale={locale}
             />
           </div>
         )}
@@ -735,9 +765,10 @@ export default function App() {
             onUpdateStatus={handleUpdateAgentStatus}
             onOpenDetailModal={(id) => setDetailModalAgentId(id)}
             events={simState.events}
+            locale={locale}
           />
         )}
-      </div>
+      </main>
 
       {/* Settings & Pricing Modal */}
       <SettingsModal
@@ -773,6 +804,7 @@ export default function App() {
         onChangeAgentModel={handleChangeAgentModel}
         initialProviderFilter={modelOpsInitialProvider}
         events={simState.events}
+        locale={locale}
       />
 
       {/* Comprehensive Agent Detail Modal (Double click on agent) */}
@@ -788,6 +820,7 @@ export default function App() {
         onFocusAgent={handleFocusAgent}
         onSendMessage={handleSendMessageToAgent}
         onUpdateStatus={handleUpdateAgentStatus}
+        locale={locale}
       />
     </div>
   );

@@ -18,7 +18,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `express` is now a runtime dependency (the CLI runs the server from the installed package). `dotenv` stays a development dependency: the server loads `.env` only when run directly.
 - `startServer(port, host?)` accepts the interface to bind, and `onEventAccepted(listener)` reports every accepted event.
+- `connectEventStream` (library export) sends `token` in an `Authorization: Bearer` header over a streamed `fetch`, with the `token` query parameter only as a fallback, and accepts a `fetch` option.
+- The package declares `engines.node >=22.13`.
 - CI builds the CLI, runs it from the packed tarball and builds both Docker targets.
+
+## [0.2.1] - 2026-10-08
+
+### Changed
+- Demo app: every visible text comes from the English and Spanish catalogs (`src/i18n.ts` and `src/content/app/*.ts`), including the live timeline sidebar, the top bar, Model Ops, settings, tasks, meetings, the new task dialog, the agent inspector and the agent profile. Statuses show their names (`In a meeting`), never raw values (`IN_MEETING`).
+- Demo scenario: the 12 steps, the demo team role titles and status texts, tasks, artifacts, meetings and event summaries have English and Spanish versions (`src/content/demoScript.ts`). Texts already stored in the state follow the current language.
+- Living office engine: room labels, status texts, narrated call lines and event summaries follow the locale (`locale` in `MeetingOptions` and `ApplyEventOptions`; English by default). `<AgentOffice>` passes its `locale`.
+- Speech bubbles: long names in the header are shortened fairly (both to their first two words, then both with an ellipsis), and a leaving bubble shrinks toward its agent while the card and the text stay opaque.
+- Dark theme: `--av-accent-contrast` is now `#0f172a`, so the play button and the selected replay speed reach 6.4:1 (white on `#0ea5e9` was 2.8:1).
+
+### Fixed
+- Server: migrated to Express 5 (wildcard routes, empty bodies, query parser and listen errors handled; same responses as before).
+- Dependencies: lucide-react 1.52, dotenv 18, @types/node 26 and current GitHub Actions.
+- Simulated small talk never uses agents in a meeting, called to one or walking to one, or with a current task; their ambient bubbles are cleared when they join a meeting, together with the partner's. Two conversations at the same time never use the same exchange, and the last ones wait before repeating.
+- Demo script: agents shown "In a meeting" sit inside Meeting Room A, Meeting Room B or a reserved room of the secret floor, meetings end when their participants leave, and the finale walks everyone back to their desk.
+- Accessibility of the demo app: names for icon buttons, labels for the pricing inputs and selects, `aria-labelledby` on dialogs, a `main` landmark and a page heading, contrast of small text of at least 4.5:1, and `lang` on the document (demo app) and on the `<AgentOffice>` root.
 
 ## [0.2.0] - 2026-10-08
 

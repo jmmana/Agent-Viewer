@@ -1,45 +1,38 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import type { Agent, ViewerEvent } from '../types/agent';
 import {
   aggregateModelUsage,
   compactTokens,
   getProviderMeta,
-  ProviderUsageAggregate,
-  ModelUsageAggregate,
   MODEL_CATALOG,
   calculateModelCost,
   InferenceLogItem,
   SimulatedTokenBurst,
 } from '../engine/modelOps';
+import { t, type Locale, type TranslationKey } from '../i18n';
+import { localizeDemoText } from '../content/demoScript';
 import {
   X,
   Cpu,
   Zap,
   Server,
-  Terminal,
   Activity,
   DollarSign,
   Layers,
   Sparkles,
-  TrendingUp,
-  RefreshCw,
   Sliders,
   Filter,
   Users,
-  Eye,
   CheckCircle2,
-  Clock,
   Radio,
   Play,
   ArrowUpRight,
-  ShieldCheck,
   Search,
   BarChart3,
   Database,
   Gauge,
-  SlidersHorizontal,
   Flame,
-  ArrowRight,
+  type LucideIcon,
 } from 'lucide-react';
 
 interface ModelOpsModalProps {
@@ -51,7 +44,77 @@ interface ModelOpsModalProps {
   onChangeAgentModel?: (agentId: string, newProvider: string, newModel: string) => void;
   initialProviderFilter?: string | null;
   events?: ViewerEvent[];
+  locale: Locale;
 }
+
+type MessageParams = Record<string, string | number>;
+
+type ModelOpsTab = 'matrix' | 'simulator' | 'agents' | 'feed';
+
+const TABS: readonly ModelOpsTab[] = ['matrix', 'simulator', 'agents', 'feed'];
+
+const TITLE_ID = 'av-modelops-title';
+const PANEL_ID = 'av-modelops-panel';
+const tabId = (tab: ModelOpsTab) => `av-modelops-tab-${tab}`;
+
+/**
+ * Feed entries keep the endpoint and a catalog key for the description, so the text follows the
+ * current locale even for entries created before a language switch.
+ */
+type FeedItem = Omit<InferenceLogItem, 'promptSnippet' | 'agentName'> & {
+  agentName: string | null;
+  endpoint: string;
+  snippetKey: TranslationKey;
+  snippetParams?: MessageParams;
+};
+
+interface BurstNotice {
+  provider: string;
+  model: string;
+  tokens: number;
+  cost: number;
+}
+
+// Provider descriptions in the engine are English only; the modal shows the catalog text instead.
+const PROVIDER_DESC_KEYS: Record<string, TranslationKey> = {
+  OpenAI: 'ops.provider.desc.openai',
+  Anthropic: 'ops.provider.desc.anthropic',
+  'Google Gemini': 'ops.provider.desc.gemini',
+  'Local (Ollama)': 'ops.provider.desc.ollama',
+};
+
+// Same for model descriptions, keyed by the model id of MODEL_CATALOG.
+const MODEL_DESC_KEYS: Record<string, TranslationKey> = {
+  'gpt-4o': 'ops.model.desc.gpt-4o',
+  'o1-mini': 'ops.model.desc.o1-mini',
+  'gpt-4o-mini': 'ops.model.desc.gpt-4o-mini',
+  'claude-3-5-sonnet': 'ops.model.desc.claude-3-5-sonnet',
+  'claude-3-5-haiku': 'ops.model.desc.claude-3-5-haiku',
+  'gemini-2.5-pro': 'ops.model.desc.gemini-2.5-pro',
+  'gemini-2.5-flash': 'ops.model.desc.gemini-2.5-flash',
+  'llama-3.3-70b': 'ops.model.desc.llama-3.3-70b',
+  'deepseek-r1-distill': 'ops.model.desc.deepseek-r1-distill',
+};
+
+const STATUS_KEYS: Record<InferenceLogItem['status'], TranslationKey> = {
+  '200 OK': 'ops.status.ok',
+  CACHED: 'ops.status.cached',
+  STREAMING: 'ops.status.streaming',
+};
+
+const TAB_KEYS: Record<ModelOpsTab, TranslationKey> = {
+  matrix: 'ops.tab.matrix',
+  simulator: 'ops.tab.simulator',
+  agents: 'ops.tab.agents',
+  feed: 'ops.tab.feed',
+};
+
+const TAB_ICONS: Record<ModelOpsTab, LucideIcon> = {
+  matrix: BarChart3,
+  simulator: Zap,
+  agents: Users,
+  feed: Activity,
+};
 
 export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
   isOpen,
@@ -62,21 +125,25 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
   onChangeAgentModel,
   initialProviderFilter = null,
   events = [],
+  locale,
 }) => {
+  const tr = (key: TranslationKey, params?: MessageParams) => t(locale, key, params);
+
   const [selectedProvider, setSelectedProvider] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState<'matrix' | 'simulator' | 'agents' | 'feed'>('matrix');
+  const [activeTab, setActiveTab] = useState<ModelOpsTab>('matrix');
   const [sortBy, setSortBy] = useState<'tokens' | 'cost' | 'output' | 'input'>('tokens');
   const [searchQuery, setSearchQuery] = useState('');
-  
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
   // Simulator State
   const [selectedSimulatorModel, setSelectedSimulatorModel] = useState<string>('gpt-4o');
   const [simInputTokens, setSimInputTokens] = useState<number>(1800);
   const [simOutputTokens, setSimOutputTokens] = useState<number>(450);
   const [simCacheHitRatio, setSimCacheHitRatio] = useState<number>(0.35); // 35% cache
-  const [lastBurstSuccess, setLastBurstSuccess] = useState<string | null>(null);
+  const [lastBurstSuccess, setLastBurstSuccess] = useState<BurstNotice | null>(null);
 
   // Local live inference feed
-  const [liveInferenceFeed, setLiveInferenceFeed] = useState<InferenceLogItem[]>([
+  const [liveInferenceFeed, setLiveInferenceFeed] = useState<FeedItem[]>([
     {
       id: 'inf-init-1',
       timestamp: Date.now() - 1000 * 22,
@@ -89,7 +156,8 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
       cost: 0.0173,
       latencyMs: 640,
       status: '200 OK',
-      promptSnippet: 'POST /v1/chat/completions - Fastify GraphQL gateway schema refactor',
+      endpoint: 'POST /v1/chat/completions',
+      snippetKey: 'ops.feed.snippet.gateway',
     },
     {
       id: 'inf-init-2',
@@ -103,7 +171,8 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
       cost: 0.0243,
       latencyMs: 820,
       status: '200 OK',
-      promptSnippet: 'POST /v1/messages - React Canvas 2.5D visual depth renderer',
+      endpoint: 'POST /v1/messages',
+      snippetKey: 'ops.feed.snippet.renderer',
     },
     {
       id: 'inf-init-3',
@@ -117,7 +186,8 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
       cost: 0.0341,
       latencyMs: 760,
       status: 'CACHED',
-      promptSnippet: 'POST /models/gemini-2.5-pro:generateContent - Cross-attention index',
+      endpoint: 'POST /models/gemini-2.5-pro:generateContent',
+      snippetKey: 'ops.feed.snippet.crossAttention',
     },
   ]);
 
@@ -130,6 +200,11 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  // Move keyboard focus into the dialog when it opens
+  useEffect(() => {
+    if (isOpen) closeButtonRef.current?.focus();
+  }, [isOpen]);
 
   useEffect(() => {
     if (initialProviderFilter) {
@@ -225,6 +300,14 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
     return Math.max(...displayedModels.map((m) => m.totalTokens), 1);
   }, [displayedModels]);
 
+  const providerDescription = (provider: string) =>
+    tr(PROVIDER_DESC_KEYS[provider] ?? 'ops.provider.desc.external');
+
+  const modelDescription = (modelId: string, fallback: string) => {
+    const key = MODEL_DESC_KEYS[modelId];
+    return key ? tr(key) : fallback;
+  };
+
   // Trigger simulated token request burst
   const handleTriggerBurst = (modelName: string, providerName: string, customIn?: number, customOut?: number) => {
     const spec = MODEL_CATALOG[modelName] || MODEL_CATALOG['gpt-4o'];
@@ -251,23 +334,26 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
     // Add to local live stream
     const targetAgent = agents.find((a) => a.provider === providerName && a.model === modelName) || agents[0];
-    const newLogItem: InferenceLogItem = {
+    const newLogItem: FeedItem = {
       id: `inf-${Date.now()}`,
       timestamp: Date.now(),
       provider: providerName,
       model: modelName,
-      agentName: targetAgent ? targetAgent.name : 'Simulador Operador',
+      // null means the simulator operator; its label is resolved at render time
+      agentName: targetAgent ? targetAgent.name : null,
       inputTokens: inTokens,
       outputTokens: outTokens,
       cachedTokens: cacheTokens,
       cost,
       latencyMs,
       status: cacheTokens > inTokens * 0.5 ? 'CACHED' : '200 OK',
-      promptSnippet: `POST /inference/v1/dispatch - [${modelName}] execution burst`,
+      endpoint: 'POST /inference/v1/dispatch',
+      snippetKey: 'ops.feed.snippet.burst',
+      snippetParams: { model: modelName },
     };
 
     setLiveInferenceFeed((prev) => [newLogItem, ...prev.slice(0, 24)]);
-    setLastBurstSuccess(`¡Inferencia inyectada en ${providerName} · ${modelName}! +${(inTokens + outTokens).toLocaleString()} tokens ($${cost.toFixed(4)})`);
+    setLastBurstSuccess({ provider: providerName, model: modelName, tokens: inTokens + outTokens, cost });
     setTimeout(() => setLastBurstSuccess(null), 3500);
   };
 
@@ -292,6 +378,20 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
     }
   };
 
+  // Arrow, Home and End keys move between tabs (WAI-ARIA tabs pattern)
+  const handleTabKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const index = TABS.indexOf(activeTab);
+    let next: ModelOpsTab | null = null;
+    if (e.key === 'ArrowRight') next = TABS[(index + 1) % TABS.length];
+    else if (e.key === 'ArrowLeft') next = TABS[(index - 1 + TABS.length) % TABS.length];
+    else if (e.key === 'Home') next = TABS[0];
+    else if (e.key === 'End') next = TABS[TABS.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    setActiveTab(next);
+    document.getElementById(tabId(next))?.focus();
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -300,41 +400,47 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
-      role="dialog"
-      aria-modal="true"
     >
-      <div className="relative w-full max-w-6xl max-h-[94vh] bg-slate-900 border border-cyan-500/40 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-slate-100">
-        
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={TITLE_ID}
+        className="relative w-full max-w-6xl max-h-[94vh] bg-slate-900 border border-cyan-500/40 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-slate-100"
+      >
+
         {/* HEADER BAR */}
         <div className="px-6 py-4 border-b border-slate-800 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950/50 flex items-center justify-between gap-4 shrink-0">
           <div className="flex items-center gap-3.5">
             <div className="w-12 h-12 rounded-xl bg-cyan-950/90 border border-cyan-500/50 flex items-center justify-center text-cyan-400 shadow-lg shadow-cyan-950/60">
-              <Server className="w-6 h-6 animate-pulse" />
+              <Server className="w-6 h-6 animate-pulse" aria-hidden="true" />
             </div>
 
             <div>
               <div className="flex items-center gap-2.5">
-                <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-                  <span>Model Ops & Token Operations Center</span>
+                <h2 id={TITLE_ID} className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                  <span>{tr('ops.title')}</span>
                 </h2>
                 <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                  <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
-                  <span>4 Nodos Activos</span>
+                  <Radio className="w-3 h-3 text-emerald-400 animate-pulse" aria-hidden="true" />
+                  <span>{tr('ops.header.activeNodes', { count: 4 })}</span>
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Consumo interactivo en tiempo real de tokens, inferencias y costos por proveedor y modelo
+                {tr('ops.subtitle')}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              ref={closeButtonRef}
+              type="button"
               onClick={onClose}
-              title="Cerrar modal (ESC)"
+              aria-label={tr('ops.close.aria')}
+              title={tr('ops.close.aria')}
               className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700/60 transition-colors"
             >
-              <X className="w-5 h-5" />
+              <X className="w-5 h-5" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -343,14 +449,14 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 px-6 py-3.5 bg-slate-950/70 border-b border-slate-800 shrink-0 text-xs">
           <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
             <span className="text-slate-400 text-[11px] block font-medium flex items-center gap-1">
-              <Database className="w-3 h-3 text-cyan-400" />
-              <span>Tokens Totales</span>
+              <Database className="w-3 h-3 text-cyan-400" aria-hidden="true" />
+              <span>{tr('ops.stats.totalTokens')}</span>
             </span>
             <div className="flex items-baseline gap-2">
               <span className="text-xl font-bold font-mono text-cyan-400">
                 {compactTokens(totalOfficeTokens)}
               </span>
-              <span className="text-[10px] text-slate-500 font-mono">
+              <span className="text-[10px] text-slate-400 font-mono">
                 ({totalOfficeTokens.toLocaleString()})
               </span>
             </div>
@@ -358,52 +464,56 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
           <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
             <span className="text-slate-400 text-[11px] block font-medium flex items-center gap-1">
-              <DollarSign className="w-3 h-3 text-emerald-400" />
-              <span>Gasto Estimado</span>
+              <DollarSign className="w-3 h-3 text-emerald-400" aria-hidden="true" />
+              <span>{tr('ops.stats.estimatedSpend')}</span>
             </span>
             <div className="flex items-baseline gap-2">
               <span className="text-xl font-bold font-mono text-emerald-400">
                 ${totalOfficeCost.toFixed(4)}
               </span>
-              <span className="text-[10px] text-slate-500 font-mono">USD</span>
+              <span className="text-[10px] text-slate-400 font-mono">{tr('ops.unit.usd')}</span>
             </div>
           </div>
 
           <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
             <span className="text-slate-400 text-[11px] block font-medium flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-purple-400" />
-              <span>Entrada / Salida</span>
+              <Sparkles className="w-3 h-3 text-purple-400" aria-hidden="true" />
+              <span>{tr('ops.stats.inputOutput')}</span>
             </span>
             <div className="flex items-center gap-2 font-mono text-[11px] mt-1">
-              <span className="text-sky-400" title="Tokens Entrada">{compactTokens(totalInputTokens)} in</span>
-              <span className="text-slate-600">/</span>
-              <span className="text-emerald-400" title="Tokens Salida">{compactTokens(totalOutputTokens)} out</span>
+              <span className="text-sky-400" title={tr('ops.stats.inputTitle')}>
+                {tr('ops.tokens.inValue', { value: compactTokens(totalInputTokens) })}
+              </span>
+              <span className="text-slate-400" aria-hidden="true">/</span>
+              <span className="text-emerald-400" title={tr('ops.stats.outputTitle')}>
+                {tr('ops.tokens.outValue', { value: compactTokens(totalOutputTokens) })}
+              </span>
             </div>
           </div>
 
           <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1">
             <span className="text-slate-400 text-[11px] block font-medium flex items-center gap-1">
-              <Flame className="w-3 h-3 text-amber-400" />
-              <span>Caché / Razonamiento</span>
+              <Flame className="w-3 h-3 text-amber-400" aria-hidden="true" />
+              <span>{tr('ops.stats.cacheReasoning')}</span>
             </span>
             <div className="flex items-center gap-2 font-mono text-[11px] mt-1">
-              <span className="text-purple-400" title="Tokens en Caché">{compactTokens(totalCachedTokens)}</span>
-              <span className="text-slate-600">/</span>
-              <span className="text-amber-400" title="Razonamiento CoT">{compactTokens(totalReasoningTokens)}</span>
+              <span className="text-purple-400" title={tr('ops.stats.cachedTitle')}>{compactTokens(totalCachedTokens)}</span>
+              <span className="text-slate-400" aria-hidden="true">/</span>
+              <span className="text-amber-400" title={tr('ops.stats.reasoningTitle')}>{compactTokens(totalReasoningTokens)}</span>
             </div>
           </div>
 
           <div className="bg-slate-900/80 p-3 rounded-xl border border-slate-800 space-y-1 col-span-2 sm:col-span-1">
             <span className="text-slate-400 text-[11px] block font-medium flex items-center gap-1">
-              <Gauge className="w-3 h-3 text-cyan-400" />
-              <span>Proveedores / Modelos</span>
+              <Gauge className="w-3 h-3 text-cyan-400" aria-hidden="true" />
+              <span>{tr('ops.stats.providersModels')}</span>
             </span>
             <div className="flex items-baseline gap-2">
               <span className="text-xl font-bold font-mono text-white">
                 {providerData.length}
               </span>
               <span className="text-[11px] text-slate-400">
-                proveedores ({allModels.length} modelos)
+                {tr('ops.stats.providersCount', { models: allModels.length })}
               </span>
             </div>
           </div>
@@ -411,81 +521,80 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
         {/* INTERACTIVE NAVIGATION TABS */}
         <div className="px-6 py-2.5 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0">
-          <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
-            <button
-              onClick={() => setActiveTab('matrix')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5 ${
-                activeTab === 'matrix'
-                  ? 'bg-cyan-500 text-white font-bold shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>Consumo por Proveedor y Modelo</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('simulator')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5 ${
-                activeTab === 'simulator'
-                  ? 'bg-cyan-500 text-white font-bold shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Zap className="w-3.5 h-3.5" />
-              <span>Simulador de Tráfico LLM</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('agents')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5 ${
-                activeTab === 'agents'
-                  ? 'bg-cyan-500 text-white font-bold shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" />
-              <span>Asignación a Agentes ({agents.length})</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('feed')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5 ${
-                activeTab === 'feed'
-                  ? 'bg-cyan-500 text-white font-bold shadow-md shadow-cyan-500/20'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Activity className="w-3.5 h-3.5" />
-              <span>Feed de Inferencia en Vivo</span>
-            </button>
+          <div
+            role="tablist"
+            aria-label={tr('ops.tabs.label')}
+            onKeyDown={handleTabKeyDown}
+            className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800"
+          >
+            {TABS.map((tab) => {
+              const Icon = TAB_ICONS[tab];
+              const isActive = activeTab === tab;
+              return (
+                <button
+                  key={tab}
+                  id={tabId(tab)}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-controls={PANEL_ID}
+                  tabIndex={isActive ? 0 : -1}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1.5 ${
+                    isActive
+                      ? 'bg-cyan-700 text-white font-bold shadow-md shadow-cyan-500/20'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{tr(TAB_KEYS[tab], { count: agents.length })}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Quick simulator shortcut button */}
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => handleTriggerBurst('gpt-4o', 'OpenAI', 1500, 400)}
-              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-950 transition-colors"
+              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-950 transition-colors"
             >
-              <Flame className="w-3.5 h-3.5 fill-current" />
-              <span>Inyectar Petición Rápida (+1.9K t)</span>
+              <Flame className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
+              <span>{tr('ops.quickBurst')}</span>
             </button>
           </div>
         </div>
 
         {/* NOTIFICATION OF LAST BURST */}
         {lastBurstSuccess && (
-          <div className="mx-6 mt-3 p-3 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 duration-200">
+          <div
+            role="status"
+            className="mx-6 mt-3 p-3 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-1 duration-200"
+          >
             <div className="flex items-center gap-2 font-medium text-xs">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>{lastBurstSuccess}</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
+              <span>
+                {tr('ops.toast.burst', {
+                  provider: lastBurstSuccess.provider,
+                  model: lastBurstSuccess.model,
+                  tokens: lastBurstSuccess.tokens.toLocaleString(),
+                  cost: `$${lastBurstSuccess.cost.toFixed(4)}`,
+                })}
+              </span>
             </div>
-            <span className="text-[10px] text-emerald-400 font-mono">Actualizado en el mapa y telemetría</span>
+            <span className="text-[10px] text-emerald-400 font-mono">{tr('ops.toast.updated')}</span>
           </div>
         )}
 
         {/* MAIN SCROLLABLE CONTENT */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 text-xs">
+        <div
+          id={PANEL_ID}
+          role="tabpanel"
+          aria-labelledby={tabId(activeTab)}
+          tabIndex={0}
+          className="flex-1 overflow-y-auto p-6 space-y-6 text-xs"
+        >
 
           {/* ============================================================== */}
           {/* TAB 1: CONSUMPTION BY PROVIDER & MODEL MATRIX                  */}
@@ -495,21 +604,27 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
               {/* FILTERS & SEARCH ROW */}
               <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-slate-950/80 border border-slate-800">
                 {/* Provider Filter Tabs */}
-                <div className="flex items-center gap-1.5 flex-wrap">
+                <div
+                  role="group"
+                  aria-label={tr('ops.filter.providerGroup')}
+                  className="flex items-center gap-1.5 flex-wrap"
+                >
                   <span className="text-slate-400 font-medium mr-1 flex items-center gap-1">
-                    <Filter className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Proveedor:</span>
+                    <Filter className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
+                    <span>{tr('ops.filter.provider')}</span>
                   </span>
 
                   <button
+                    type="button"
+                    aria-pressed={selectedProvider === 'all'}
                     onClick={() => setSelectedProvider('all')}
                     className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
                       selectedProvider === 'all'
-                        ? 'bg-cyan-500 text-white font-bold shadow-md shadow-cyan-500/20'
+                        ? 'bg-cyan-700 text-white font-bold shadow-md shadow-cyan-500/20'
                         : 'bg-slate-900 hover:bg-slate-800 text-slate-300'
                     }`}
                   >
-                    Todos ({providerData.length})
+                    {tr('ops.filter.all', { count: providerData.length })}
                   </button>
 
                   {providerData.map((prov) => {
@@ -518,6 +633,8 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                     return (
                       <button
                         key={prov.provider}
+                        type="button"
+                        aria-pressed={isSelected}
                         onClick={() => setSelectedProvider(prov.provider)}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-colors border ${
                           isSelected
@@ -528,6 +645,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         <span
                           className="w-2 h-2 rounded-full shrink-0"
                           style={{ backgroundColor: meta.color }}
+                          aria-hidden="true"
                         />
                         <span>{prov.provider}</span>
                         <span className="text-[10px] text-slate-400 font-mono">
@@ -541,41 +659,54 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                 {/* Sort and search */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" aria-hidden="true" />
                     <input
                       type="text"
-                      placeholder="Buscar modelo o proveedor..."
+                      aria-label={tr('ops.search.label')}
+                      placeholder={tr('ops.search.placeholder')}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-48 font-mono"
+                      className="bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-cyan-500 w-48 font-mono"
                     />
                   </div>
 
-                  <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800">
-                    <span className="text-[10px] text-slate-400 px-1.5 font-medium">Ordenar:</span>
+                  <div
+                    role="group"
+                    aria-labelledby="av-modelops-sort-label"
+                    className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-800"
+                  >
+                    <span id="av-modelops-sort-label" className="text-[10px] text-slate-400 px-1.5 font-medium">
+                      {tr('ops.sort.label')}
+                    </span>
                     <button
+                      type="button"
+                      aria-pressed={sortBy === 'tokens'}
                       onClick={() => setSortBy('tokens')}
                       className={`px-2 py-1 rounded text-[11px] ${
                         sortBy === 'tokens' ? 'bg-cyan-500/20 text-cyan-300 font-bold' : 'text-slate-400 hover:text-white'
                       }`}
                     >
-                      Tokens
+                      {tr('ops.sort.tokens')}
                     </button>
                     <button
+                      type="button"
+                      aria-pressed={sortBy === 'cost'}
                       onClick={() => setSortBy('cost')}
                       className={`px-2 py-1 rounded text-[11px] ${
                         sortBy === 'cost' ? 'bg-emerald-500/20 text-emerald-300 font-bold' : 'text-slate-400 hover:text-white'
                       }`}
                     >
-                      Costo ($)
+                      {tr('ops.sort.cost')}
                     </button>
                     <button
+                      type="button"
+                      aria-pressed={sortBy === 'output'}
                       onClick={() => setSortBy('output')}
                       className={`px-2 py-1 rounded text-[11px] ${
                         sortBy === 'output' ? 'bg-purple-500/20 text-purple-300 font-bold' : 'text-slate-400 hover:text-white'
                       }`}
                     >
-                      Salida
+                      {tr('ops.sort.output')}
                     </button>
                   </div>
                 </div>
@@ -585,11 +716,11 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-cyan-400" />
-                    <span>Consumo Agregado por Proveedor</span>
+                    <Layers className="w-4 h-4 text-cyan-400" aria-hidden="true" />
+                    <span>{tr('ops.providers.heading')}</span>
                   </h3>
                   <span className="text-slate-400 text-[11px]">
-                    {displayedProviders.length} proveedores monitorizados
+                    {tr('ops.providers.monitored', { count: displayedProviders.length })}
                   </span>
                 </div>
 
@@ -610,6 +741,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         <div
                           className="absolute top-0 left-0 right-0 h-1"
                           style={{ backgroundColor: meta.color }}
+                          aria-hidden="true"
                         />
 
                         <div className="space-y-2 pt-1">
@@ -619,25 +751,31 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                                 <span
                                   className="w-2.5 h-2.5 rounded-full shrink-0"
                                   style={{ backgroundColor: meta.color }}
+                                  aria-hidden="true"
                                 />
                                 <h4 className="text-sm font-bold text-white">{provider.provider}</h4>
                               </div>
-                              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{meta.description}</p>
+                              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                                {providerDescription(provider.provider)}
+                              </p>
                             </div>
                             <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-300">
-                              {provider.models.length} modelos
+                              {tr('ops.provider.modelsCount', { count: provider.models.length })}
                             </span>
                           </div>
 
                           {/* Share Progress Bar */}
                           <div className="space-y-1">
                             <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-slate-400">Cuota de Oficina:</span>
+                              <span className="text-slate-400">{tr('ops.provider.share')}</span>
                               <span className="font-mono font-bold text-white">
                                 {provider.percentageShare.toFixed(1)}%
                               </span>
                             </div>
-                            <div className="w-full h-2 rounded-full bg-slate-900 overflow-hidden border border-slate-800">
+                            <div
+                              className="w-full h-2 rounded-full bg-slate-900 overflow-hidden border border-slate-800"
+                              aria-hidden="true"
+                            >
                               <div
                                 className="h-full transition-all duration-500"
                                 style={{
@@ -651,27 +789,27 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                           {/* Metric Grid */}
                           <div className="grid grid-cols-2 gap-2 text-[11px] font-mono bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/80">
                             <div>
-                              <span className="text-slate-500 block text-[10px]">TOKENS TOTALES</span>
+                              <span className="text-slate-400 block text-[10px]">{tr('ops.metric.totalTokens')}</span>
                               <span className="font-bold text-white">
                                 {compactTokens(provider.totalTokens)}
                               </span>
                             </div>
                             <div>
-                              <span className="text-slate-500 block text-[10px]">COSTO USD</span>
+                              <span className="text-slate-400 block text-[10px]">{tr('ops.metric.costUsd')}</span>
                               <span className="font-bold text-emerald-400">
                                 ${provider.cost.toFixed(4)}
                               </span>
                             </div>
                             <div>
-                              <span className="text-slate-500 block text-[10px]">IN / OUT</span>
+                              <span className="text-slate-400 block text-[10px]">{tr('ops.metric.inOut')}</span>
                               <span className="text-slate-300">
                                 {compactTokens(provider.inputTokens)} / {compactTokens(provider.outputTokens)}
                               </span>
                             </div>
                             <div>
-                              <span className="text-slate-500 block text-[10px]">AGENTES</span>
+                              <span className="text-slate-400 block text-[10px]">{tr('ops.metric.agents')}</span>
                               <span className="text-cyan-400 font-semibold">
-                                {provider.activeAgents} activos
+                                {tr('ops.provider.activeAgents', { count: provider.activeAgents })}
                               </span>
                             </div>
                           </div>
@@ -680,21 +818,23 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         {/* Card Footer Actions */}
                         <div className="flex items-center justify-between pt-2 border-t border-slate-900">
                           <button
+                            type="button"
                             onClick={() => setSelectedProvider(isSelected ? 'all' : provider.provider)}
                             className="text-[11px] text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1 transition-colors"
                           >
-                            <span>{isSelected ? 'Ver todos' : 'Filtrar'}</span>
-                            <ArrowUpRight className="w-3 h-3" />
+                            <span>{isSelected ? tr('ops.provider.showAll') : tr('ops.provider.filter')}</span>
+                            <ArrowUpRight className="w-3 h-3" aria-hidden="true" />
                           </button>
 
                           {provider.models[0] && (
                             <button
+                              type="button"
                               onClick={() => handleTriggerBurst(provider.models[0].model, provider.provider, 1200, 350)}
-                              title={`Inyectar petición rápida en ${provider.models[0].model}`}
+                              title={tr('ops.provider.quickBurstTitle', { model: provider.models[0].model })}
                               className="px-2 py-1 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800/60 text-[10px] font-semibold flex items-center gap-1 transition-colors"
                             >
-                              <Zap className="w-3 h-3" />
-                              <span>Petición Rápida</span>
+                              <Zap className="w-3 h-3" aria-hidden="true" />
+                              <span>{tr('ops.provider.quickBurst')}</span>
                             </button>
                           )}
                         </div>
@@ -709,20 +849,25 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                      <Cpu className="w-4 h-4 text-emerald-400" />
-                      <span>Matriz Detallada de Consumo por Modelo</span>
+                      <Cpu className="w-4 h-4 text-emerald-400" aria-hidden="true" />
+                      <span>{tr('ops.models.heading')}</span>
                     </h3>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      Visualización comparativa de consumo de tokens, entradas/salidas, caché y tarifas de inferencia
+                      {tr('ops.models.subtitle')}
                     </p>
                   </div>
 
                   <span className="text-slate-400 text-[11px] font-mono">
-                    Mostrando {displayedModels.length} modelo(s)
+                    {tr('ops.models.showing', { count: displayedModels.length })}
                   </span>
                 </div>
 
                 <div className="space-y-3">
+                  {displayedModels.length === 0 && (
+                    <p className="text-slate-400 text-[11px] italic p-4 rounded-xl bg-slate-950 border border-slate-800">
+                      {tr('ops.models.empty')}
+                    </p>
+                  )}
                   {displayedModels.map((model) => {
                     const meta = getProviderMeta(model.provider);
                     const spec = MODEL_CATALOG[model.model] || MODEL_CATALOG['gpt-4o'];
@@ -742,6 +887,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                             <span
                               className="w-3.5 h-3.5 rounded-full shrink-0"
                               style={{ backgroundColor: meta.color }}
+                              aria-hidden="true"
                             />
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
@@ -754,14 +900,14 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                                   {model.provider}
                                 </span>
                                 <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
-                                  Contexto: {spec.contextWindow}
+                                  {tr('ops.models.context', { value: spec.contextWindow })}
                                 </span>
                                 <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
-                                  Latencia: ~{spec.latencyMs}ms
+                                  {tr('ops.models.latency', { ms: spec.latencyMs })}
                                 </span>
                               </div>
                               <span className="text-[11px] text-slate-400 block mt-0.5">
-                                {spec.description}
+                                {modelDescription(spec.id, spec.description)}
                               </span>
                             </div>
                           </div>
@@ -769,22 +915,24 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                           {/* Quick Actions */}
                           <div className="flex items-center gap-2 self-end sm:self-center">
                             <button
+                              type="button"
                               onClick={() => {
                                 setSelectedSimulatorModel(model.model);
                                 setActiveTab('simulator');
                               }}
                               className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-medium flex items-center gap-1 border border-slate-800 transition-colors"
                             >
-                              <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-                              <span>Configurar Simulación</span>
+                              <Sliders className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
+                              <span>{tr('ops.models.configure')}</span>
                             </button>
 
                             <button
+                              type="button"
                               onClick={() => handleTriggerBurst(model.model, model.provider)}
-                              className="px-3 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-md shadow-cyan-950"
+                              className="px-3 py-1.5 rounded-xl bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-md shadow-cyan-950"
                             >
-                              <Zap className="w-3.5 h-3.5" />
-                              <span>Simular Inferencia</span>
+                              <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>{tr('ops.models.simulate')}</span>
                             </button>
                           </div>
                         </div>
@@ -792,12 +940,18 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         {/* Relative Consumption Bar */}
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-[11px] font-mono">
-                            <span className="text-slate-400">Volumen relativo en oficina:</span>
+                            <span className="text-slate-400">{tr('ops.models.relativeVolume')}</span>
                             <span className="text-white font-bold">
-                              {model.totalTokens.toLocaleString()} tokens ({model.percentageShare.toFixed(1)}%)
+                              {tr('ops.models.volumeValue', {
+                                tokens: model.totalTokens.toLocaleString(),
+                                share: model.percentageShare.toFixed(1),
+                              })}
                             </span>
                           </div>
-                          <div className="w-full h-2.5 rounded-full bg-slate-900 overflow-hidden border border-slate-800">
+                          <div
+                            className="w-full h-2.5 rounded-full bg-slate-900 overflow-hidden border border-slate-800"
+                            aria-hidden="true"
+                          >
                             <div
                               className="h-full transition-all duration-500 rounded-full"
                               style={{
@@ -811,59 +965,59 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         {/* Detailed Metrics Grid */}
                         <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 font-mono text-[11px] bg-slate-900/80 p-3 rounded-lg border border-slate-800/80">
                           <div>
-                            <span className="text-slate-500 block text-[10px]">TOTAL TOKENS</span>
+                            <span className="text-slate-400 block text-[10px]">{tr('ops.metric.totalTokens')}</span>
                             <span className="font-bold text-white text-xs">
                               {compactTokens(model.totalTokens)}
                             </span>
-                            <span className="text-[10px] text-slate-500 block">
+                            <span className="text-[10px] text-slate-400 block">
                               ({model.totalTokens.toLocaleString()})
                             </span>
                           </div>
 
                           <div>
-                            <span className="text-slate-500 block text-[10px]">ENTRADA (PROMPT)</span>
+                            <span className="text-slate-400 block text-[10px]">{tr('ops.metric.input')}</span>
                             <span className="text-sky-300 font-semibold">
                               {compactTokens(model.inputTokens)}
                             </span>
-                            <span className="text-[10px] text-slate-500 block">
+                            <span className="text-[10px] text-slate-400 block">
                               ${spec.inputPer1M.toFixed(2)}/1M
                             </span>
                           </div>
 
                           <div>
-                            <span className="text-slate-500 block text-[10px]">SALIDA (COMPLETION)</span>
+                            <span className="text-slate-400 block text-[10px]">{tr('ops.metric.output')}</span>
                             <span className="text-emerald-300 font-semibold">
                               {compactTokens(model.outputTokens)}
                             </span>
-                            <span className="text-[10px] text-slate-500 block">
+                            <span className="text-[10px] text-slate-400 block">
                               ${spec.outputPer1M.toFixed(2)}/1M
                             </span>
                           </div>
 
                           <div>
-                            <span className="text-slate-500 block text-[10px]">CACHÉ DE CONTEXTO</span>
+                            <span className="text-slate-400 block text-[10px]">{tr('ops.metric.cache')}</span>
                             <span className="text-purple-300 font-semibold">
                               {compactTokens(model.cachedTokens)}
                             </span>
-                            <span className="text-[10px] text-slate-500 block">
+                            <span className="text-[10px] text-slate-400 block">
                               ${spec.cachePer1M.toFixed(2)}/1M
                             </span>
                           </div>
 
                           <div>
-                            <span className="text-slate-500 block text-[10px]">RAZONAMIENTO (COT)</span>
+                            <span className="text-slate-400 block text-[10px]">{tr('ops.metric.reasoning')}</span>
                             <span className="text-amber-300 font-semibold">
                               {compactTokens(model.reasoningTokens)}
                             </span>
-                            <span className="text-[10px] text-slate-500 block">pensamiento</span>
+                            <span className="text-[10px] text-slate-400 block">{tr('ops.metric.reasoningHint')}</span>
                           </div>
 
                           <div>
-                            <span className="text-slate-500 block text-[10px]">COSTO ESTIMADO</span>
+                            <span className="text-slate-400 block text-[10px]">{tr('ops.metric.estimatedCost')}</span>
                             <span className="font-bold text-emerald-400 text-xs">
                               ${model.cost.toFixed(4)}
                             </span>
-                            <span className="text-[10px] text-slate-500 block">USD</span>
+                            <span className="text-[10px] text-slate-400 block">{tr('ops.unit.usd')}</span>
                           </div>
                         </div>
 
@@ -871,32 +1025,36 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-slate-400 text-[11px] font-medium flex items-center gap-1">
-                              <Users className="w-3 h-3 text-slate-400" />
-                              <span>Agentes Asignados ({assignedAgents.length}):</span>
+                              <Users className="w-3 h-3 text-slate-400" aria-hidden="true" />
+                              <span>{tr('ops.models.assignedAgents', { count: assignedAgents.length })}</span>
                             </span>
 
                             {assignedAgents.length > 0 ? (
                               assignedAgents.map((ag) => (
                                 <button
                                   key={ag.id}
+                                  type="button"
                                   onClick={() => {
                                     onFocusAgent(ag);
                                     onClose();
                                   }}
-                                  title={`Centrar cámara en ${ag.name} en la oficina`}
+                                  title={tr('ops.models.focusAgentTitle', { name: ag.name })}
                                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-200 transition-colors"
                                 >
                                   <span
                                     className="w-2 h-2 rounded-full"
                                     style={{ backgroundColor: ag.clothingColor }}
+                                    aria-hidden="true"
                                   />
                                   <span className="font-medium">{ag.name}</span>
-                                  <span className="text-[10px] text-slate-500">({ag.roleTitle.split(' ')[0]})</span>
+                                  <span className="text-[10px] text-slate-400">
+                                    ({localizeDemoText(ag.roleTitle, locale)})
+                                  </span>
                                 </button>
                               ))
                             ) : (
-                              <span className="text-slate-500 text-[11px] italic">
-                                Disponible en el clúster sin agentes asignados en este momento
+                              <span className="text-slate-400 text-[11px] italic">
+                                {tr('ops.models.noAgents')}
                               </span>
                             )}
                           </div>
@@ -917,54 +1075,78 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
               <div className="bg-gradient-to-br from-slate-950 to-cyan-950/40 p-6 rounded-2xl border border-cyan-500/40 space-y-6">
                 <div>
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Zap className="w-5 h-5 text-cyan-400" />
-                    <span>Consola de Simulación de Inferencia y Carga LLM</span>
+                    <Zap className="w-5 h-5 text-cyan-400" aria-hidden="true" />
+                    <span>{tr('ops.sim.heading')}</span>
                   </h3>
                   <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    Genera peticiones sintéticas en tiempo real a cualquiera de los modelos de IA del clúster.
-                    Podrás observar cómo se actualiza la telemetría al instante, parpadean los racks de servidores
-                    en la sala Model Ops y se calculan los costos y cuotas de caché.
+                    {tr('ops.sim.intro')}
                   </p>
                 </div>
 
                 {/* Preset Payloads */}
                 <div className="space-y-2">
-                  <span className="text-xs text-slate-300 font-medium block">1. Carga Predefinida:</span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <span id="av-modelops-presets-label" className="text-xs text-slate-300 font-medium block">
+                    {tr('ops.sim.presets')}
+                  </span>
+                  <div
+                    role="group"
+                    aria-labelledby="av-modelops-presets-label"
+                    className="grid grid-cols-2 sm:grid-cols-4 gap-3"
+                  >
                     <button
+                      type="button"
                       onClick={() => applyPresetPayload('chat')}
                       className="p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors"
                     >
-                      <span className="text-white font-bold block text-xs">Consulta Rápida</span>
-                      <span className="text-[11px] text-slate-400 block mt-0.5">450 in / 180 out</span>
-                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">~630 tokens</span>
+                      <span className="text-white font-bold block text-xs">{tr('ops.sim.preset.chat')}</span>
+                      <span className="text-[11px] text-slate-400 block mt-0.5">
+                        {tr('ops.sim.presetSplit', { input: '450', output: '180' })}
+                      </span>
+                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">
+                        {tr('ops.sim.presetTotal', { tokens: '630' })}
+                      </span>
                     </button>
 
                     <button
+                      type="button"
                       onClick={() => applyPresetPayload('code')}
                       className="p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors"
                     >
-                      <span className="text-white font-bold block text-xs">Generación de Código</span>
-                      <span className="text-[11px] text-slate-400 block mt-0.5">2.4K in / 850 out</span>
-                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">~3.25K tokens (35% caché)</span>
+                      <span className="text-white font-bold block text-xs">{tr('ops.sim.preset.code')}</span>
+                      <span className="text-[11px] text-slate-400 block mt-0.5">
+                        {tr('ops.sim.presetSplit', { input: '2.4K', output: '850' })}
+                      </span>
+                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">
+                        {tr('ops.sim.presetTotalCache', { tokens: '3.25K', ratio: 35 })}
+                      </span>
                     </button>
 
                     <button
+                      type="button"
                       onClick={() => applyPresetPayload('rag')}
                       className="p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors"
                     >
-                      <span className="text-white font-bold block text-xs">Análisis RAG Documental</span>
-                      <span className="text-[11px] text-slate-400 block mt-0.5">9.8K in / 1.4K out</span>
-                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">~11.2K tokens (55% caché)</span>
+                      <span className="text-white font-bold block text-xs">{tr('ops.sim.preset.rag')}</span>
+                      <span className="text-[11px] text-slate-400 block mt-0.5">
+                        {tr('ops.sim.presetSplit', { input: '9.8K', output: '1.4K' })}
+                      </span>
+                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">
+                        {tr('ops.sim.presetTotalCache', { tokens: '11.2K', ratio: 55 })}
+                      </span>
                     </button>
 
                     <button
+                      type="button"
                       onClick={() => applyPresetPayload('batch')}
                       className="p-3 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/50 text-left transition-colors"
                     >
-                      <span className="text-white font-bold block text-xs">Procesamiento Masivo</span>
-                      <span className="text-[11px] text-slate-400 block mt-0.5">32K in / 4.8K out</span>
-                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">~36.8K tokens (70% caché)</span>
+                      <span className="text-white font-bold block text-xs">{tr('ops.sim.preset.batch')}</span>
+                      <span className="text-[11px] text-slate-400 block mt-0.5">
+                        {tr('ops.sim.presetSplit', { input: '32K', output: '4.8K' })}
+                      </span>
+                      <span className="text-[10px] text-cyan-400 font-mono mt-1 block">
+                        {tr('ops.sim.presetTotalCache', { tokens: '36.8K', ratio: 70 })}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -973,10 +1155,14 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 p-4 rounded-xl bg-slate-900/80 border border-slate-800">
                   {/* Model Selector */}
                   <div>
-                    <label className="text-[11px] text-slate-300 font-medium block mb-1.5">
-                      Modelo LLM Destino:
+                    <label
+                      htmlFor="av-modelops-sim-model"
+                      className="text-[11px] text-slate-300 font-medium block mb-1.5"
+                    >
+                      {tr('ops.sim.targetModel')}
                     </label>
                     <select
+                      id="av-modelops-sim-model"
                       value={selectedSimulatorModel}
                       onChange={(e) => setSelectedSimulatorModel(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono"
@@ -991,7 +1177,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                       const spec = MODEL_CATALOG[selectedSimulatorModel] || MODEL_CATALOG['gpt-4o'];
                       return (
                         <p className="text-[10px] text-slate-400 mt-1 font-mono">
-                          Tarifa: ${spec.inputPer1M}/1M in · ${spec.outputPer1M}/1M out
+                          {tr('ops.sim.rate', { input: spec.inputPer1M, output: spec.outputPer1M })}
                         </p>
                       );
                     })()}
@@ -1000,10 +1186,13 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                   {/* Input Tokens Slider */}
                   <div>
                     <div className="flex items-center justify-between text-[11px] mb-1">
-                      <span className="text-slate-300 font-medium">Tokens de Entrada (Prompt):</span>
+                      <label htmlFor="av-modelops-sim-input" className="text-slate-300 font-medium">
+                        {tr('ops.sim.inputTokens')}
+                      </label>
                       <span className="text-sky-300 font-mono font-bold">{simInputTokens.toLocaleString()} t</span>
                     </div>
                     <input
+                      id="av-modelops-sim-input"
                       type="range"
                       min={100}
                       max={40000}
@@ -1012,7 +1201,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                       onChange={(e) => setSimInputTokens(Number(e.target.value))}
                       className="w-full accent-cyan-500"
                     />
-                    <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <div className="flex justify-between text-[9px] text-slate-400 font-mono" aria-hidden="true">
                       <span>100</span>
                       <span>10K</span>
                       <span>25K</span>
@@ -1023,10 +1212,13 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                   {/* Output Tokens Slider */}
                   <div>
                     <div className="flex items-center justify-between text-[11px] mb-1">
-                      <span className="text-slate-300 font-medium">Tokens de Salida (Completion):</span>
+                      <label htmlFor="av-modelops-sim-output" className="text-slate-300 font-medium">
+                        {tr('ops.sim.outputTokens')}
+                      </label>
                       <span className="text-emerald-300 font-mono font-bold">{simOutputTokens.toLocaleString()} t</span>
                     </div>
                     <input
+                      id="av-modelops-sim-output"
                       type="range"
                       min={50}
                       max={8000}
@@ -1035,7 +1227,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                       onChange={(e) => setSimOutputTokens(Number(e.target.value))}
                       className="w-full accent-emerald-500"
                     />
-                    <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                    <div className="flex justify-between text-[9px] text-slate-400 font-mono" aria-hidden="true">
                       <span>50</span>
                       <span>2K</span>
                       <span>4K</span>
@@ -1047,7 +1239,6 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                 {/* Live Cost & Impact Preview */}
                 {(() => {
                   const targetModelObj = allModels.find((m) => m.model === selectedSimulatorModel) || allModels[0];
-                  const spec = MODEL_CATALOG[selectedSimulatorModel] || MODEL_CATALOG['gpt-4o'];
                   const cachedTokens = Math.round(simInputTokens * simCacheHitRatio);
                   const estimatedCost = calculateModelCost(selectedSimulatorModel, simInputTokens, simOutputTokens, cachedTokens);
                   const totalTokensInBurst = simInputTokens + simOutputTokens;
@@ -1055,26 +1246,37 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                   return (
                     <div className="p-4 rounded-xl bg-slate-900 border border-cyan-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="space-y-1">
-                        <span className="text-xs text-slate-400 font-medium block">Resumen de Inyección:</span>
+                        <span className="text-xs text-slate-400 font-medium block">{tr('ops.sim.summary')}</span>
                         <div className="flex items-center gap-3 font-mono text-xs flex-wrap">
-                          <span className="text-white font-bold">{totalTokensInBurst.toLocaleString()} tokens totales</span>
-                          <span className="text-slate-600">·</span>
-                          <span className="text-sky-400">{simInputTokens.toLocaleString()} in</span>
-                          <span className="text-slate-600">·</span>
-                          <span className="text-emerald-400">{simOutputTokens.toLocaleString()} out</span>
-                          <span className="text-slate-600">·</span>
-                          <span className="text-purple-400">{cachedTokens.toLocaleString()} en caché</span>
-                          <span className="text-slate-600">·</span>
-                          <span className="text-emerald-300 font-bold">${estimatedCost.toFixed(5)} USD</span>
+                          <span className="text-white font-bold">
+                            {tr('ops.sim.totalTokens', { value: totalTokensInBurst.toLocaleString() })}
+                          </span>
+                          <span className="text-slate-400" aria-hidden="true">·</span>
+                          <span className="text-sky-400">
+                            {tr('ops.tokens.inValue', { value: simInputTokens.toLocaleString() })}
+                          </span>
+                          <span className="text-slate-400" aria-hidden="true">·</span>
+                          <span className="text-emerald-400">
+                            {tr('ops.tokens.outValue', { value: simOutputTokens.toLocaleString() })}
+                          </span>
+                          <span className="text-slate-400" aria-hidden="true">·</span>
+                          <span className="text-purple-400">
+                            {tr('ops.sim.cachedValue', { value: cachedTokens.toLocaleString() })}
+                          </span>
+                          <span className="text-slate-400" aria-hidden="true">·</span>
+                          <span className="text-emerald-300 font-bold">
+                            {tr('ops.sim.costValue', { value: estimatedCost.toFixed(5) })}
+                          </span>
                         </div>
                       </div>
 
                       <button
+                        type="button"
                         onClick={() => handleTriggerBurst(targetModelObj.model, targetModelObj.provider)}
-                        className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 via-sky-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-xl shadow-cyan-950 transition-all active:scale-95 shrink-0"
+                        className="px-6 py-2.5 bg-gradient-to-r from-cyan-700 via-sky-700 to-indigo-600 hover:from-cyan-600 hover:to-indigo-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-xl shadow-cyan-950 transition-all active:scale-95 shrink-0"
                       >
-                        <Play className="w-4 h-4 fill-current" />
-                        <span>Disparar Inferencia en Vivo</span>
+                        <Play className="w-4 h-4 fill-current" aria-hidden="true" />
+                        <span>{tr('ops.sim.fire')}</span>
                       </button>
                     </div>
                   );
@@ -1090,11 +1292,11 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
             <div className="space-y-4">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <Users className="w-4 h-4 text-cyan-400" />
-                  <span>Reasignación Interactiva de Modelos a Agentes</span>
+                  <Users className="w-4 h-4 text-cyan-400" aria-hidden="true" />
+                  <span>{tr('ops.agents.heading')}</span>
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Cambia el modelo o proveedor asignado a cada agente en tiempo real. Sus futuras inferencias se contabilizarán en el nodo correspondiente.
+                  {tr('ops.agents.subtitle')}
                 </p>
               </div>
 
@@ -1102,12 +1304,12 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 font-mono">
                     <tr>
-                      <th className="px-4 py-3">AGENTE</th>
-                      <th className="px-4 py-3">ROL</th>
-                      <th className="px-4 py-3">PROVEEDOR ACTUAL</th>
-                      <th className="px-4 py-3">MODELO ASIGNADO</th>
-                      <th className="px-4 py-3">TOKENS ACUMULADOS</th>
-                      <th className="px-4 py-3 text-right">ACCIÓN</th>
+                      <th scope="col" className="px-4 py-3">{tr('ops.agents.col.agent')}</th>
+                      <th scope="col" className="px-4 py-3">{tr('ops.agents.col.role')}</th>
+                      <th scope="col" className="px-4 py-3">{tr('ops.agents.col.provider')}</th>
+                      <th scope="col" className="px-4 py-3">{tr('ops.agents.col.model')}</th>
+                      <th scope="col" className="px-4 py-3">{tr('ops.agents.col.tokens')}</th>
+                      <th scope="col" className="px-4 py-3 text-right">{tr('ops.agents.col.action')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/80">
@@ -1122,13 +1324,14 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                               <span
                                 className="w-3 h-3 rounded-full shrink-0"
                                 style={{ backgroundColor: agent.clothingColor }}
+                                aria-hidden="true"
                               />
                               <span className="font-bold text-white">{agent.name}</span>
                             </div>
                           </td>
 
                           <td className="px-4 py-3 text-slate-400">
-                            {agent.roleTitle}
+                            {localizeDemoText(agent.roleTitle, locale)}
                           </td>
 
                           <td className="px-4 py-3">
@@ -1141,6 +1344,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
                           <td className="px-4 py-3">
                             <select
+                              aria-label={tr('ops.agents.modelSelect', { name: agent.name })}
                               value={`${agent.provider}::${agent.model}`}
                               onChange={(e) => {
                                 const [newProv, newMod] = e.target.value.split('::');
@@ -1160,18 +1364,20 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
                           <td className="px-4 py-3 font-mono text-[11px]">
                             <span className="text-white font-bold">{compactTokens(totalTokens)}</span>
-                            <span className="text-slate-500 ml-1">(${agent.cost.toFixed(3)})</span>
+                            <span className="text-slate-400 ml-1">(${agent.cost.toFixed(3)})</span>
                           </td>
 
                           <td className="px-4 py-3 text-right">
                             <button
+                              type="button"
                               onClick={() => {
                                 onFocusAgent(agent);
                                 onClose();
                               }}
+                              aria-label={tr('ops.agents.focusAria', { name: agent.name })}
                               className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-sky-400 hover:text-white border border-slate-800 text-[11px] font-medium transition-colors"
                             >
-                              Centrar Cámara
+                              {tr('ops.agents.focus')}
                             </button>
                           </td>
                         </tr>
@@ -1191,20 +1397,21 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-cyan-400" />
-                    <span>Registro de Inferencia en Tiempo Real</span>
+                    <Activity className="w-4 h-4 text-cyan-400" aria-hidden="true" />
+                    <span>{tr('ops.feed.heading')}</span>
                   </h3>
                   <p className="text-[11px] text-slate-400 mt-0.5">
-                    Stream cronológico de peticiones, tokens in/out, latencias y códigos de estado
+                    {tr('ops.feed.subtitle')}
                   </p>
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => handleTriggerBurst('claude-3-5-sonnet', 'Anthropic', 2100, 600)}
                   className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-800/60 text-xs font-semibold flex items-center gap-1.5 transition-colors"
                 >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Emitir Petición</span>
+                  <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
+                  <span>{tr('ops.feed.emit')}</span>
                 </button>
               </div>
 
@@ -1220,6 +1427,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         <span
                           className="w-2.5 h-2.5 rounded-full shrink-0"
                           style={{ backgroundColor: meta.color }}
+                          aria-hidden="true"
                         />
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
@@ -1228,31 +1436,36 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                               {item.provider}
                             </span>
                             <span className="text-slate-400 font-sans text-[11px]">
-                              por <strong className="text-slate-200">{item.agentName}</strong>
+                              {tr('ops.feed.by')}{' '}
+                              <strong className="text-slate-200">{item.agentName ?? tr('ops.feed.operator')}</strong>
                             </span>
                             <span className="text-[10px] text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                              {item.status}
+                              {tr(STATUS_KEYS[item.status])}
                             </span>
                           </div>
-                          <span className="text-[11px] text-slate-500 mt-0.5 block line-clamp-1">
-                            {item.promptSnippet}
+                          <span className="text-[11px] text-slate-400 mt-0.5 block line-clamp-1">
+                            {item.endpoint} - {tr(item.snippetKey, item.snippetParams)}
                           </span>
                         </div>
                       </div>
 
                       <div className="flex items-center gap-4 text-[11px] self-end sm:self-center shrink-0">
                         <div>
-                          <span className="text-slate-500 block text-[9px]">TOKENS</span>
-                          <span className="text-sky-300 font-semibold">{item.inputTokens} in</span>
-                          <span className="text-slate-600"> / </span>
-                          <span className="text-emerald-300 font-semibold">{item.outputTokens} out</span>
+                          <span className="text-slate-400 block text-[9px]">{tr('ops.feed.col.tokens')}</span>
+                          <span className="text-sky-300 font-semibold">
+                            {tr('ops.tokens.inValue', { value: item.inputTokens })}
+                          </span>
+                          <span className="text-slate-400" aria-hidden="true"> / </span>
+                          <span className="text-emerald-300 font-semibold">
+                            {tr('ops.tokens.outValue', { value: item.outputTokens })}
+                          </span>
                         </div>
                         <div>
-                          <span className="text-slate-500 block text-[9px]">LATENCIA</span>
+                          <span className="text-slate-400 block text-[9px]">{tr('ops.feed.col.latency')}</span>
                           <span className="text-amber-300 font-semibold">{item.latencyMs}ms</span>
                         </div>
                         <div>
-                          <span className="text-slate-500 block text-[9px]">COSTO</span>
+                          <span className="text-slate-400 block text-[9px]">{tr('ops.feed.col.cost')}</span>
                           <span className="text-emerald-400 font-bold">${item.cost.toFixed(4)}</span>
                         </div>
                       </div>
@@ -1268,16 +1481,17 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
         {/* MODAL FOOTER */}
         <div className="px-6 py-3.5 bg-slate-950/90 border-t border-slate-800 flex items-center justify-between text-xs shrink-0">
           <div className="flex items-center gap-2 text-slate-400">
-            <span className="font-mono text-[11px] text-cyan-400 font-bold">Tip:</span>
-            <span>Haz clic directamente sobre los racks de servidores o la pantalla NOC en la sala Model Ops de la oficina para abrir este panel.</span>
+            <span className="font-mono text-[11px] text-cyan-400 font-bold">{tr('ops.footer.tip')}</span>
+            <span>{tr('ops.footer.tipText')}</span>
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={onClose}
               className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors border border-slate-700/60"
             >
-              Cerrar
+              {tr('ops.footer.close')}
             </button>
           </div>
         </div>

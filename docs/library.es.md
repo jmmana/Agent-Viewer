@@ -40,7 +40,7 @@ Las dependencias de ejecución son `lucide-react` (iconos) y `zod` (validación 
 La publicación en npm llegará pronto. Mientras tanto, instala el paquete desde el archivo de la release de GitHub:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.0/warlockcode-agent-viewer-0.2.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
 ```
 
 El nombre del paquete es `@warlockcode/agent-viewer` en ambos casos, así que tus importaciones no cambian cuando pases al registro de npm.
@@ -502,7 +502,7 @@ Variables del tema:
 | `--av-text-muted` | `#94a3b8` | `#475569` | Texto secundario e iconos de la barra. |
 | `--av-accent` | `#38bdf8` | `#0284c7` | Botón de ajustar, barra de posición, anillo de foco. |
 | `--av-accent-strong` | `#0ea5e9` | `#0369a1` | Botón de reproducir y velocidad elegida. |
-| `--av-accent-contrast` | `#ffffff` | `#ffffff` | Texto e iconos sobre `--av-accent-strong`. |
+| `--av-accent-contrast` | `#0f172a` | `#ffffff` | Texto e iconos sobre `--av-accent-strong`. |
 | `--av-telemetry` | `#22d3ee` | `#0e7490` | Botón y tooltip de telemetría de la app de demostración. |
 | `--av-live` | `#34d399` | `#059669` | Indicador en vivo de la app de demostración. |
 | `--av-active` | `#4f46e5` | `#4f46e5` | Botón presionado de la barra. |

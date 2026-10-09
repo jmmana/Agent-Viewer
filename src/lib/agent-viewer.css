@@ -16,7 +16,8 @@
   --av-text-muted: #94a3b8;
   --av-accent: #38bdf8;
   --av-accent-strong: #0ea5e9;
-  --av-accent-contrast: #ffffff;
+  /* Text on --av-accent-strong: dark text keeps 6.4:1 (white on this sky blue is only 2.8:1). */
+  --av-accent-contrast: #0f172a;
   --av-telemetry: #22d3ee;
   --av-live: #34d399;
   --av-active: #4f46e5;

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ViewerEvent, Agent } from '../types/agent';
 import type { Locale } from '../i18n';
 import { t } from '../i18n';
+import { localizeDemoText } from '../content/demoScript';
 import {
   Search,
   Filter,
@@ -76,12 +77,12 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
   };
 
   const getEventIcon = (type: string, severity: string) => {
-    if (severity === 'critical') return <AlertCircle className="w-4 h-4 text-rose-400" />;
-    if (type.startsWith('task')) return <Layers className="w-4 h-4 text-indigo-400" />;
-    if (type.startsWith('meeting')) return <Users className="w-4 h-4 text-emerald-400" />;
-    if (type.startsWith('tool')) return <Terminal className="w-4 h-4 text-sky-400" />;
-    if (type.startsWith('message')) return <MessageSquare className="w-4 h-4 text-amber-400" />;
-    return <CheckCircle2 className="w-4 h-4 text-slate-400" />;
+    if (severity === 'critical') return <AlertCircle className="w-4 h-4 text-rose-400" aria-hidden="true" />;
+    if (type.startsWith('task')) return <Layers className="w-4 h-4 text-indigo-400" aria-hidden="true" />;
+    if (type.startsWith('meeting')) return <Users className="w-4 h-4 text-emerald-400" aria-hidden="true" />;
+    if (type.startsWith('tool')) return <Terminal className="w-4 h-4 text-sky-400" aria-hidden="true" />;
+    if (type.startsWith('message')) return <MessageSquare className="w-4 h-4 text-amber-400" aria-hidden="true" />;
+    return <CheckCircle2 className="w-4 h-4 text-slate-400" aria-hidden="true" />;
   };
 
   return (
@@ -90,19 +91,20 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
       <div className="px-6 py-4 border-b border-slate-800 bg-slate-900/60 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-1 max-w-md">
           <div className="relative w-full">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" aria-hidden="true" />
             <input
-              type="text"
+              type="search"
+              aria-label={t(locale, 'timeline.searchLabel')}
               placeholder={t(locale, 'timeline.search')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-sky-500"
             />
           </div>
         </div>
 
         {/* Category Filters (Interactive buttons, not pills) */}
-        <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
+        <div role="group" aria-label={t(locale, 'timeline.categories')} className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
           {[
             { id: 'all', label: t(locale, 'timeline.allEvents') },
             { id: 'task', label: t(locale, 'timeline.tasks') },
@@ -111,7 +113,9 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
             { id: 'message', label: t(locale, 'timeline.messages') },
           ].map((cat) => (
             <button
+              type="button"
               key={cat.id}
+              aria-pressed={selectedCategory === cat.id}
               onClick={() => setSelectedCategory(cat.id as any)}
               className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
                 selectedCategory === cat.id
@@ -127,6 +131,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
         {/* Agent Filter & Export */}
         <div className="flex items-center gap-2">
           <select
+            aria-label={t(locale, 'timeline.agentFilter')}
             value={selectedAgentFilter}
             onChange={(e) => setSelectedAgentFilter(e.target.value)}
             className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none"
@@ -140,10 +145,11 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
           </select>
 
           <button
+            type="button"
             onClick={handleExportJSON}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors border border-slate-700/60"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download className="w-3.5 h-3.5" aria-hidden="true" />
             <span>{t(locale, 'timeline.export')}</span>
           </button>
         </div>
@@ -152,7 +158,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
       {/* Events Feed Container */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-2">
         {filteredEvents.length === 0 ? (
-          <div className="text-center py-16 text-slate-500 text-xs">
+          <div className="text-center py-16 text-slate-400 text-xs">
             {t(locale, 'timeline.empty')}
           </div>
         ) : (
@@ -175,7 +181,7 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
 
                     <div className="space-y-1">
                       <div className="flex items-center gap-2 text-xs">
-                        <span className="font-semibold text-slate-200">{ev.summary}</span>
+                        <span className="font-semibold text-slate-200">{localizeDemoText(ev.summary, locale)}</span>
                         {ev.taskId && (
                           <span className="font-mono text-[11px] text-sky-400 bg-sky-950/60 px-1.5 py-0.5 rounded border border-sky-800/40">
                             {ev.taskId}
@@ -184,16 +190,16 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
                       </div>
 
                       {/* Clean metadata without pills */}
-                      <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono tabular-nums">
-                        <span>{new Date(ev.timestamp).toLocaleTimeString()}</span>
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 font-mono tabular-nums">
+                        <span>{new Date(ev.timestamp).toLocaleTimeString(locale)}</span>
                         <span aria-hidden="true">·</span>
                         <span className="uppercase text-slate-400">{ev.type}</span>
                         <span aria-hidden="true">·</span>
-                        <span>{t(locale, 'timeline.source')}: <button onClick={() => onSelectAgent(ev.source)} className="text-sky-400 hover:underline">{ev.source}</button></span>
+                        <span>{t(locale, 'timeline.source')}: <button type="button" onClick={() => onSelectAgent(ev.source)} className="text-sky-400 hover:underline">{ev.source}</button></span>
                         {ev.target && (
                           <>
                             <span aria-hidden="true">·</span>
-                            <span>{t(locale, 'timeline.target')}: <button onClick={() => onSelectAgent(ev.target!)} className="text-indigo-400 hover:underline">{ev.target}</button></span>
+                            <span>{t(locale, 'timeline.target')}: <button type="button" onClick={() => onSelectAgent(ev.target!)} className="text-indigo-300 hover:underline">{ev.target}</button></span>
                           </>
                         )}
                       </div>
@@ -201,17 +207,21 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
                   </div>
 
                   <button
+                    type="button"
                     onClick={() => setExpandedEventId(isExpanded ? null : ev.id)}
-                    className="p-1 text-slate-500 hover:text-slate-300 transition-colors"
+                    aria-expanded={isExpanded}
+                    aria-label={t(locale, isExpanded ? 'timeline.collapse' : 'timeline.expand')}
+                    title={t(locale, isExpanded ? 'timeline.collapse' : 'timeline.expand')}
+                    className="p-1 text-slate-400 hover:text-slate-200 transition-colors"
                   >
-                    {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    {isExpanded ? <ChevronUp className="w-4 h-4" aria-hidden="true" /> : <ChevronDown className="w-4 h-4" aria-hidden="true" />}
                   </button>
                 </div>
 
                 {/* Expanded Payload Inspector */}
                 {isExpanded && ev.payload && Object.keys(ev.payload).length > 0 && (
                   <div className="mt-3 pt-3 border-t border-slate-800">
-                    <span className="text-[10px] text-slate-500 uppercase font-mono block mb-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-mono block mb-1">
                       {t(locale, 'timeline.payload')}
                     </span>
                     <pre className="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80 font-mono text-[11px] text-emerald-400 overflow-x-auto">

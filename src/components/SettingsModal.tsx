@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { PricingConfig } from '../types/agent';
 import { isSoundEnabled, setSoundEnabled } from '../engine/soundEffects';
 import { X, DollarSign, Shield, Volume2, RotateCcw, Download, Coffee } from 'lucide-react';
@@ -35,6 +35,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localPricing, setLocalPricing] = useState<PricingConfig[]>(pricing);
   const [maskSecrets, setMaskSecrets] = useState(true);
   const [soundActive, setSoundActive] = useState(isSoundEnabled());
+  const titleId = useId();
 
   if (!isOpen) return null;
 
@@ -52,18 +53,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
-      <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col text-slate-100 max-h-[90vh]">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col text-slate-100 max-h-[90vh]"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/60">
           <div>
-            <h3 className="text-sm font-bold text-white">{t(locale, 'settings.title')}</h3>
+            <h2 id={titleId} className="text-sm font-bold text-white">{t(locale, 'settings.title')}</h2>
             <p className="text-xs text-slate-400">{t(locale, 'settings.subtitle')}</p>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label={t(locale, 'settings.close')}
+            title={t(locale, 'settings.close')}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -72,21 +81,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Pricing Catalog */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-emerald-400" />
-              <h4 className="font-semibold text-slate-200">LLM Model Pricing Catalog ($ / 1M Tokens)</h4>
+              <DollarSign className="w-4 h-4 text-emerald-400" aria-hidden="true" />
+              <h3 className="font-semibold text-slate-200">{t(locale, 'settings.pricingTitle')}</h3>
             </div>
             <p className="text-slate-400 text-[11px]">
-              Set custom token rates to calculate real-time cost observability. Set to $0 for local Ollama/LM Studio models.
+              {t(locale, 'settings.pricingHelp')}
             </p>
 
             <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-950">
               <table className="w-full text-left text-xs font-mono tabular-nums">
                 <thead>
                   <tr className="border-b border-slate-800 text-[11px] text-slate-400 bg-slate-900/40">
-                    <th className="py-2.5 px-3">Provider</th>
-                    <th className="py-2.5 px-3">Model</th>
-                    <th className="py-2.5 px-3 text-right">Input ($/M)</th>
-                    <th className="py-2.5 px-3 text-right">Output ($/M)</th>
+                    <th scope="col" className="py-2.5 px-3">{t(locale, 'settings.provider')}</th>
+                    <th scope="col" className="py-2.5 px-3">{t(locale, 'settings.model')}</th>
+                    <th scope="col" className="py-2.5 px-3 text-right">{t(locale, 'settings.inputPrice')}</th>
+                    <th scope="col" className="py-2.5 px-3 text-right">{t(locale, 'settings.outputPrice')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 text-slate-300">
@@ -99,6 +108,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           type="number"
                           step="0.01"
                           value={item.inputPerMillion}
+                          aria-label={t(locale, 'settings.inputPriceFor', { model: item.model })}
                           onChange={(e) => handlePriceChange(idx, 'inputPerMillion', parseFloat(e.target.value) || 0)}
                           className="w-20 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-right text-emerald-400 text-xs focus:outline-none"
                         />
@@ -108,6 +118,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           type="number"
                           step="0.01"
                           value={item.outputPerMillion}
+                          aria-label={t(locale, 'settings.outputPriceFor', { model: item.model })}
                           onChange={(e) => handlePriceChange(idx, 'outputPerMillion', parseFloat(e.target.value) || 0)}
                           className="w-20 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-right text-emerald-400 text-xs focus:outline-none"
                         />
@@ -122,8 +133,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Privacy & Security Filter */}
           <div className="space-y-3 pt-3 border-t border-slate-800">
             <div className="flex items-center gap-2">
-              <Shield className="w-4 h-4 text-sky-400" />
-              <h4 className="font-semibold text-slate-200">Privacy & Secret Sanitization</h4>
+              <Shield className="w-4 h-4 text-sky-400" aria-hidden="true" />
+              <h3 className="font-semibold text-slate-200">{t(locale, 'settings.privacyTitle')}</h3>
             </div>
             <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
               <input
@@ -133,9 +144,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4"
               />
               <div>
-                <span className="font-semibold text-slate-200 block">Sanitize Passwords, Tokens & Tool Arguments</span>
+                <span className="font-semibold text-slate-200 block">{t(locale, 'settings.privacyLabel')}</span>
                 <span className="text-[11px] text-slate-400">
-                  Automatically masks bearer tokens, AWS credentials, and database secrets in the UI.
+                  {t(locale, 'settings.privacyHelp')}
                 </span>
               </div>
             </label>
@@ -144,8 +155,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Audio Feedback */}
           <div className="space-y-3 pt-3 border-t border-slate-800">
             <div className="flex items-center gap-2">
-              <Volume2 className="w-4 h-4 text-amber-400" />
-              <h4 className="font-semibold text-slate-200">Synthesized Web Audio</h4>
+              <Volume2 className="w-4 h-4 text-amber-400" aria-hidden="true" />
+              <h3 className="font-semibold text-slate-200">{t(locale, 'settings.audioTitle')}</h3>
             </div>
             <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
               <input
@@ -155,9 +166,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4"
               />
               <div>
-                <span className="font-semibold text-slate-200 block">Play Subtle Sonic Cues</span>
+                <span className="font-semibold text-slate-200 block">{t(locale, 'settings.audioLabel')}</span>
                 <span className="text-[11px] text-slate-400">
-                  Unobtrusive Web Audio oscillator chimes for task completions, meetings, and blocker warnings.
+                  {t(locale, 'settings.audioHelp')}
                 </span>
               </div>
             </label>
@@ -166,8 +177,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* Section: Living Office */}
           <div className="space-y-3 pt-3 border-t border-slate-800">
             <div className="flex items-center gap-2">
-              <Coffee className="w-4 h-4 text-amber-400" />
-              <h4 className="font-semibold text-slate-200">{t(locale, 'settings.livingOffice')}</h4>
+              <Coffee className="w-4 h-4 text-amber-400" aria-hidden="true" />
+              <h3 className="font-semibold text-slate-200">{t(locale, 'settings.livingOffice')}</h3>
             </div>
             <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
               <input
@@ -179,7 +190,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div>
                 <span className="font-semibold text-slate-200 block">{t(locale, 'settings.ambient')}</span>
                 <span className="text-[11px] text-slate-400">
-                  Idle agents may walk to the espresso bar, tell jokes, chat and show lightweight moods.
+                  {t(locale, 'settings.ambientHelp')}
                 </span>
               </div>
             </label>
@@ -194,7 +205,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div>
                 <span className="font-semibold text-slate-200 block">{t(locale, 'settings.politics')}</span>
                 <span className="text-[11px] text-slate-400">
-                  Off by default. Built-in dialogue stays generic; future live news must carry source and timestamp metadata.
+                  {t(locale, 'settings.politicsHelp')}
                 </span>
               </div>
             </label>
@@ -202,14 +213,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* Section: Session Management */}
           <div className="space-y-3 pt-3 border-t border-slate-800">
-            <h4 className="font-semibold text-slate-200">{t(locale, 'settings.session')}</h4>
+            <h3 className="font-semibold text-slate-200">{t(locale, 'settings.session')}</h3>
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={onExportSession}
                 className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors"
               >
-                <Download className="w-3.5 h-3.5" />
+                <Download className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{t(locale, 'settings.export')}</span>
               </button>
 
@@ -221,7 +232,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 }}
                 className="flex items-center gap-1.5 px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded-lg border border-rose-900/40 transition-colors"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{t(locale, 'settings.reset')}</span>
               </button>
             </div>
@@ -231,16 +242,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-800 bg-slate-900/60 flex justify-end gap-2">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white rounded-lg transition-colors"
+            className="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white rounded-lg transition-colors"
           >
-            Cancel
+            {t(locale, 'settings.cancel')}
           </button>
           <button
+            type="button"
             onClick={handleSave}
             className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors shadow-sm"
           >
-            Save Changes
+            {t(locale, 'settings.save')}
           </button>
         </div>
       </div>

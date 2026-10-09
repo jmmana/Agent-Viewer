@@ -95,18 +95,32 @@ test('embedded mode never listens on its own, even when run as the server entry'
   }
 });
 
-test('startServer binds the given host, and every interface without one', async () => {
+test('startServer binds the given host, and loopback by default (issue #71)', async () => {
   const local = await listen('127.0.0.1');
   try {
     assert.equal(local.address().address, '127.0.0.1');
   } finally {
     await new Promise((resolve) => local.close(resolve));
   }
-  const any = await listen(undefined);
+  const byDefault = await listen(undefined);
   try {
-    assert.ok(['::', '0.0.0.0'].includes(any.address().address), any.address().address);
+    assert.equal(byDefault.address().address, '127.0.0.1');
   } finally {
-    await new Promise((resolve) => any.close(resolve));
+    await new Promise((resolve) => byDefault.close(resolve));
+  }
+});
+
+test('startServer reads AGENT_VIEWER_HOST for the default host when no host argument is given', async () => {
+  process.env.AGENT_VIEWER_HOST = '0.0.0.0';
+  try {
+    const server = await listen(undefined);
+    try {
+      assert.ok(['::', '0.0.0.0'].includes(server.address().address), server.address().address);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    delete process.env.AGENT_VIEWER_HOST;
   }
 });
 

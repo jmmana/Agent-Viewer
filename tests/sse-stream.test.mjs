@@ -65,30 +65,58 @@ test('SSE: client receives real-time events on SSE stream without token', async 
   }
 });
 
-test('SSE: token authentication works via query parameter for EventSource compatibility', async () => {
+test('SSE: a token or api_key query parameter never authenticates the stream (issue #71)', async () => {
   const secretToken = 'test-sse-secure-token-123';
   process.env.AGENT_VIEWER_API_TOKEN = secretToken;
 
   const { server, baseUrl } = await startTestServer();
 
   try {
-    // 1. Connection without token fails with 401
     const unauthRes = await fetch(`${baseUrl}/api/v1/events/stream`);
     assert.equal(unauthRes.status, 401);
-    const unauthJson = await unauthRes.json();
-    assert.equal(unauthJson.error, 'unauthorized');
+    assert.equal((await unauthRes.json()).error, 'unauthorized');
 
-    // 2. Connection with token in query param succeeds
-    const authRes = await fetch(`${baseUrl}/api/v1/events/stream?token=${secretToken}`);
+    const queryRes = await fetch(`${baseUrl}/api/v1/events/stream?token=${secretToken}`);
+    assert.equal(queryRes.status, 401);
+    const queryBody = await queryRes.json();
+    assert.equal(queryBody.error, 'query_token_not_supported');
+    assert.doesNotMatch(JSON.stringify(queryBody), new RegExp(secretToken));
+
+    const apiKeyRes = await fetch(`${baseUrl}/api/v1/events/stream?api_key=${secretToken}`);
+    assert.equal(apiKeyRes.status, 401);
+    assert.equal((await apiKeyRes.json()).error, 'query_token_not_supported');
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('SSE: a stream ticket from POST /api/v1/stream-tickets opens the stream exactly once (issue #71)', async () => {
+  const secretToken = 'test-sse-ticket-token-123';
+  process.env.AGENT_VIEWER_API_TOKEN = secretToken;
+
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const mintRes = await fetch(`${baseUrl}/api/v1/stream-tickets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secretToken}` },
+      body: '{}',
+    });
+    assert.equal(mintRes.status, 201);
+    assert.equal(mintRes.headers.get('cache-control'), 'no-store');
+    const minted = await mintRes.json();
+    assert.match(minted.ticket, /^avst_[A-Za-z0-9_-]{43}$/);
+    assert.doesNotMatch(JSON.stringify(minted), new RegExp(secretToken));
+
+    const authRes = await fetch(`${baseUrl}/api/v1/events/stream?ticket=${minted.ticket}`);
     assert.equal(authRes.status, 200);
 
     const reader = authRes.body.getReader();
     const decoder = new TextDecoder();
-
     const initial = await reader.read();
     assert.ok(decoder.decode(initial.value).includes('connected'));
 
-    // Emit event with token in header
     const postRes = await fetch(`${baseUrl}/api/v1/events`, {
       method: 'POST',
       headers: {
@@ -111,7 +139,52 @@ test('SSE: token authentication works via query parameter for EventSource compat
     const text = decoder.decode(chunk.value);
     assert.ok(text.includes('id: evt_sse_test_auth'));
     assert.ok(text.includes('WORKING'));
+    await reader.cancel();
 
+    // The same ticket is single-use: a second stream connection with it is rejected.
+    const reusedRes = await fetch(`${baseUrl}/api/v1/events/stream?ticket=${minted.ticket}`);
+    assert.equal(reusedRes.status, 401);
+    assert.equal((await reusedRes.json()).error, 'invalid_stream_ticket');
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('SSE: a ticket plus lastEventId still replays missed events (issue #71)', async () => {
+  const secretToken = 'test-sse-ticket-replay-token';
+  process.env.AGENT_VIEWER_API_TOKEN = secretToken;
+  const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${secretToken}` };
+
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const first = await fetch(`${baseUrl}/api/v1/events`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        schemaVersion: '1.0',
+        id: 'evt_sse_ticket_replay_1',
+        type: 'agent.status.changed',
+        timestamp: Date.now(),
+        source: 'agent:ticket-replay',
+        summary: 'before reconnect',
+        payload: { status: 'WORKING' },
+      }),
+    });
+    assert.equal(first.status, 202);
+
+    const mintRes = await fetch(`${baseUrl}/api/v1/stream-tickets`, { method: 'POST', headers: authHeaders, body: '{}' });
+    const { ticket } = await mintRes.json();
+
+    const replayRes = await fetch(
+      `${baseUrl}/api/v1/events/stream?ticket=${ticket}&lastEventId=evt_sse_ticket_replay_1`
+    );
+    assert.equal(replayRes.status, 200);
+    const reader = replayRes.body.getReader();
+    const decoder = new TextDecoder();
+    const chunk = await reader.read();
+    const text = decoder.decode(chunk.value);
+    assert.ok(text.includes('event: replayed'));
     await reader.cancel();
   } finally {
     delete process.env.AGENT_VIEWER_API_TOKEN;

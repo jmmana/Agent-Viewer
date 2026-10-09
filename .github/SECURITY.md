@@ -21,10 +21,10 @@ Agent Viewer is configured by default for zero-friction local development. In pr
 
 | Area | Default (Development) | Production Recommendation |
 |---|---|---|
-| **API Ingestion Token** | Unset (unauthenticated `/api/v1/*`) | Set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. Clients must supply `Authorization: Bearer <token>` or `?token=<token>`. |
+| **API Ingestion Token** | Unset (unauthenticated `/api/v1/*`) | Set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. Clients must supply `Authorization: Bearer <token>`. A `token` or `api_key` query parameter never authenticates, on any route; `EventSource` clients mint a short-lived, single-use ticket with `POST /api/v1/stream-tickets` instead. |
 | **Webhook Ingestion** | Unauthenticated if secret unset | Set `AGENT_VIEWER_WEBHOOK_SECRET` to enforce HMAC-SHA256 signature verification (`X-Agent-Viewer-Signature`). |
-| **CORS Policy** | `*` (All origins permitted) | Set `AGENT_VIEWER_CORS_ORIGIN` to your explicit frontend domain (e.g. `https://office.example.com`). |
-| **Network Binding** | Bound to `0.0.0.0` | Bind behind a reverse proxy (e.g. Nginx, Caddy, Cloudflare) with TLS terminated and rate limiting. |
+| **CORS Policy** | `*` (All origins permitted) | Set `AGENT_VIEWER_CORS_ORIGIN` to your explicit frontend domain (e.g. `https://office.example.com`). A `*` value does not count as an explicit origin for the open-mode request guard below. |
+| **Network Binding** | Bound to `127.0.0.1` (`AGENT_VIEWER_HOST`) | A non-loopback `AGENT_VIEWER_HOST` with no token refuses to start (`OpenApiRefusedError`, exit code 1); set `AGENT_VIEWER_API_TOKEN` first, or `AGENT_VIEWER_ALLOW_OPEN=1` to accept an open API. Even on a loopback bind, while no token is set, a request from a non-loopback remote address, `Host` or `Origin` gets `403`. Still put the server behind a reverse proxy (e.g. Nginx, Caddy, Cloudflare) with TLS terminated and rate limiting; a reverse proxy on the same host makes every request look local, so it still needs a token. |
 | **Storage Engine** | In-memory | Set `AGENT_VIEWER_STORAGE=sqlite` with a secured persistent volume path `AGENT_VIEWER_SQLITE_PATH`. |
 
 ## Secret Handling

@@ -601,7 +601,8 @@ flowchart LR
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
-| `GET` | `/api/v1/events/stream` | Server-Sent Events. On reconnect, replays every event missed since `Last-Event-ID` in full, up to `AGENT_VIEWER_SSE_REPLAY_MAX` (default 10,000), or sends an explicit `resync` frame instead, never a partial replay; the connection stays open either way. Heartbeat every 15 s. |
+| `POST` | `/api/v1/stream-tickets` | Issues a short-lived, single-use ticket for `EventSource` clients, which cannot send an `Authorization` header. Requires the Bearer token; a ticket cannot mint tickets. |
+| `GET` | `/api/v1/events/stream` | Server-Sent Events. Authenticates with `Authorization: Bearer <token>` or a `?ticket=` from `POST /api/v1/stream-tickets`; a `token` query parameter never authenticates. On reconnect, replays every event missed since `Last-Event-ID` in full, up to `AGENT_VIEWER_SSE_REPLAY_MAX` (default 10,000), or sends an explicit `resync` frame instead, never a partial replay; the connection stays open either way. Heartbeat every 15 s. |
 | `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
 | `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
@@ -771,8 +772,12 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Server port. |
-| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open: the server warns at startup, `/health` reports `auth: "open"` and the live portal shows a banner; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
-| `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
+| `AGENT_VIEWER_HOST` | `127.0.0.1` | Interface `npm run server` (and a direct `startServer()` call) binds. A non-loopback value with no token refuses to start; see the Security table. A blank value counts as unset. |
+| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`; `EventSource` clients trade it for a ticket from `POST /api/v1/stream-tickets` first, since it cannot send a header. A `token` or `api_key` query parameter never authenticates, on any route. Empty means open: the server warns at startup, `/health` reports `auth: "open"` and the live portal shows a banner; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
+| `AGENT_VIEWER_ALLOW_OPEN` | unset | Set to exactly `1` to let the server bind a non-loopback interface with no token anyway, and to silence the open-mode request guard (403s on a non-loopback remote address, `Host` or `Origin`). Any other value is ignored. |
+| `AGENT_VIEWER_STREAM_TICKET_TTL_MS` | `30000` | Lifetime of a stream ticket from `POST /api/v1/stream-tickets`, clamped to `[1000, 300000]`. |
+| `AGENT_VIEWER_STREAM_TICKET_MAX` | `1000` | Outstanding (unused, unexpired) stream tickets allowed at once; past it, minting answers `429`. |
+| `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. A `*` value does not count as an explicit origin for the open-mode request guard. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_MAX_EVENTS` | `10000` | Positive integer. Cap on the retained event window in memory mode (dedup is never capped). Has no effect in `sqlite` mode, which stores and rebuilds every event. An invalid value stops the server at startup. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
@@ -819,7 +824,7 @@ The defaults favor local development. Before you expose the server:
 | API token | unset, `/api/v1/*` open | Check with `curl -s localhost:8787/health \| jq .auth`; set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. |
 | Webhooks | unsigned when no secret | Set `AGENT_VIEWER_WEBHOOK_SECRET` to require HMAC signatures. |
 | CORS | `*` | Set `AGENT_VIEWER_CORS_ORIGIN` to your exact frontend origin. |
-| Network | server binds `0.0.0.0`; Docker Compose ports bind `127.0.0.1` | To expose Compose remotely, restore `"8787:8787"` / `"3000:3000"` and put it behind a reverse proxy with TLS. |
+| Network | `npm run server` binds `127.0.0.1` by default; a non-loopback `AGENT_VIEWER_HOST` with no token refuses to start (`AGENT_VIEWER_ALLOW_OPEN=1` overrides this); with no token, a request from a non-loopback address, `Host` or `Origin` gets `403` even on a loopback bind. Docker Compose ports bind `127.0.0.1`. | Set `AGENT_VIEWER_API_TOKEN` before binding a non-loopback `AGENT_VIEWER_HOST`. To expose Compose remotely, restore `"8787:8787"` / `"3000:3000"` and put it behind a reverse proxy with TLS; a reverse proxy on the same host makes every request look local, so it still needs a token. |
 | Storage | in memory | `AGENT_VIEWER_STORAGE=sqlite` on a protected volume. |
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).

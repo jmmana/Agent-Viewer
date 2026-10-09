@@ -187,11 +187,35 @@ test('Auth: API tokens are compared with crypto.timingSafeEqual and wrong length
 
       const shortRes = await fetch(`${baseUrl}/api/v1/snapshot`, { headers: { Authorization: 'Bearer x' } });
       assert.equal(shortRes.status, 401);
-      const longRes = await fetch(`${baseUrl}/api/v1/snapshot?token=${'y'.repeat(200)}`);
+      const longRes = await fetch(`${baseUrl}/api/v1/snapshot`, {
+        headers: { Authorization: `Bearer ${'y'.repeat(200)}` },
+      });
       assert.equal(longRes.status, 401);
       assert.equal((await longRes.json()).error, 'unauthorized');
     } finally {
       spy.mock.restore();
+      server.close();
+    }
+  });
+});
+
+test('Auth: a token or api_key query parameter never authenticates, even with the correct value (issue #71)', async () => {
+  await withEnv({ ...NO_AUTH_ENV, AGENT_VIEWER_API_TOKEN: 'query-token-rejected' }, async () => {
+    const { server, baseUrl } = await startTestServer();
+    try {
+      for (const query of [
+        'token=query-token-rejected',
+        'api_key=query-token-rejected',
+        'token[]=query-token-rejected',
+        'token=a&token=b',
+      ]) {
+        const res = await fetch(`${baseUrl}/api/v1/snapshot?${query}`);
+        assert.equal(res.status, 401, query);
+        const body = await res.json();
+        assert.equal(body.error, 'query_token_not_supported');
+        assert.doesNotMatch(JSON.stringify(body), /query-token-rejected/);
+      }
+    } finally {
       server.close();
     }
   });
@@ -394,12 +418,15 @@ test('Webhook: requires the API token when only AGENT_VIEWER_API_TOKEN is config
       });
       assert.equal(bearer.status, 202);
 
+      // Breaking change (issue #71): a token in the query string never authenticates, even for a webhook URL
+      // that cannot set headers. Such senders must sign with AGENT_VIEWER_WEBHOOK_SECRET instead.
       const query = await fetch(`${baseUrl}/api/v1/webhooks/generic?token=webhook-api-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
       });
-      assert.equal(query.status, 202);
+      assert.equal(query.status, 401);
+      assert.equal((await query.json()).error, 'query_token_not_supported');
     } finally {
       server.close();
     }

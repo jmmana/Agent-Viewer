@@ -72,6 +72,133 @@ describe('connectEventStream with a token', () => {
   });
 });
 
+// Issue #71: where fetch cannot stream a response body, EventSource is the only transport, and it cannot send
+// an Authorization header. The client must mint a short-lived ticket instead of ever putting the token in the
+// stream URL.
+describe('connectEventStream ticket fallback when fetch cannot stream (issue #71)', () => {
+  class RecordingEventSource {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onmessage: ((msg: { data: string; lastEventId?: string }) => void) | null = null;
+    private listeners: Record<string, Array<(msg: any) => void>> = {};
+    constructor(public url: string) {}
+    addEventListener(type: string, cb: (msg: any) => void) {
+      (this.listeners[type] ??= []).push(cb);
+    }
+    close() {}
+  }
+
+  function stubNoReadableStream() {
+    // canStreamWithHeaders requires ReadableStream and TextDecoder; hiding TextDecoder forces the
+    // EventSource-based transports even though a global fetch exists. (Hiding ReadableStream itself would also
+    // break the test's own `new Response(...)` helper, since undici's Response needs it internally.)
+    vi.stubGlobal('TextDecoder', undefined);
+  }
+
+  it('mints a ticket over fetch (Authorization header, empty JSON body) and opens EventSource with it, never the token', async () => {
+    stubNoReadableStream();
+    const instances: RecordingEventSource[] = [];
+    vi.stubGlobal('EventSource', class extends RecordingEventSource {
+      constructor(url: string) { super(url); instances.push(this); }
+    });
+    const mintCalls: Array<[string, RequestInit]> = [];
+    let ticketSeq = 0;
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      mintCalls.push([url, init]);
+      ticketSeq += 1;
+      return new Response(
+        JSON.stringify({ ticket: `avst_${'a'.repeat(42)}${ticketSeq}`, ttlMs: 30000, expiresAt: new Date().toISOString() }),
+        { status: 201 }
+      );
+    });
+
+    const connection = connectEventStream('http://127.0.0.1:8787', () => {}, undefined, {
+      token: 'super-secret',
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    await vi.waitFor(() => expect(instances).toHaveLength(1));
+    const [mintUrl, mintInit] = mintCalls[0];
+    expect(mintUrl).toBe('http://127.0.0.1:8787/api/v1/stream-tickets');
+    expect((mintInit.headers as Record<string, string>).Authorization).toBe('Bearer super-secret');
+    expect(mintInit.body).toBe('{}');
+    expect(instances[0].url).toBe(`http://127.0.0.1:8787/api/v1/events/stream?ticket=avst_${'a'.repeat(42)}1`);
+    expect(instances[0].url).not.toContain('super-secret');
+    connection.close();
+  });
+
+  it('requests a fresh ticket on every reconnect, never reusing one in the URL', async () => {
+    stubNoReadableStream();
+    const instances: RecordingEventSource[] = [];
+    vi.stubGlobal('EventSource', class extends RecordingEventSource {
+      constructor(url: string) { super(url); instances.push(this); }
+    });
+    let ticketSeq = 0;
+    const fetchImpl = vi.fn(async () => {
+      ticketSeq += 1;
+      return new Response(
+        JSON.stringify({ ticket: `avst_${'b'.repeat(42)}${ticketSeq}`, ttlMs: 30000, expiresAt: new Date().toISOString() }),
+        { status: 201 }
+      );
+    });
+
+    const connection = connectEventStream('http://127.0.0.1:8787', () => {}, undefined, {
+      token: 'secret',
+      fetch: fetchImpl as unknown as typeof fetch,
+      initialBackoffMs: 1,
+      maxBackoffMs: 1,
+    });
+
+    await vi.waitFor(() => expect(instances).toHaveLength(1));
+    expect(instances[0].url).toContain('1');
+    instances[0].onerror?.();
+
+    await vi.waitFor(() => expect(instances).toHaveLength(2));
+    expect(instances[1].url).toContain('2');
+    expect(instances[1].url).not.toBe(instances[0].url);
+    connection.close();
+  });
+
+  it('with a token but no fetch at all: status error, no network call, and no ?token= URL is ever built', () => {
+    stubNoReadableStream();
+    vi.stubGlobal('fetch', undefined);
+    const instances: RecordingEventSource[] = [];
+    vi.stubGlobal('EventSource', class extends RecordingEventSource {
+      constructor(url: string) { super(url); instances.push(this); }
+    });
+    const statuses: string[] = [];
+
+    const connection = connectEventStream('http://127.0.0.1:8787', () => {}, (s) => statuses.push(s), {
+      token: 'secret',
+    });
+
+    expect(instances).toHaveLength(0);
+    expect(statuses).toContain('error');
+    connection.close();
+  });
+
+  it('a mint failure (401) stops that attempt and reconnects with backoff, without ever using a query token', async () => {
+    stubNoReadableStream();
+    const instances: RecordingEventSource[] = [];
+    vi.stubGlobal('EventSource', class extends RecordingEventSource {
+      constructor(url: string) { super(url); instances.push(this); }
+    });
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 }));
+
+    const statuses: string[] = [];
+    const connection = connectEventStream('http://127.0.0.1:8787', () => {}, (s) => statuses.push(s), {
+      token: 'bad-secret',
+      fetch: fetchImpl as unknown as typeof fetch,
+      maxReconnectAttempts: 0,
+    });
+
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    expect(instances).toHaveLength(0);
+    await vi.waitFor(() => expect(statuses).toContain('error'));
+    connection.close();
+  });
+});
+
 // Reconnect replay and resync (issue #54): a reconnect either replays every missed event or the server tells the
 // client plainly that it must resync, never a silent partial replay. These tests exercise the fetch/header
 // transport, the one a token host (including the demo app) actually uses.

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **The server refuses to bind a non-loopback interface with no token (#71).** `npm run server` and a direct `startServer()` call now default to `127.0.0.1` (`AGENT_VIEWER_HOST`), not every interface. Setting `AGENT_VIEWER_HOST` to anything else (for example `0.0.0.0`) with no `AGENT_VIEWER_API_TOKEN` configured makes the process print one line to stderr and exit with code 1 (`OpenApiRefusedError`, `code: 'open_api_refused'`). Set a token, bind loopback, or set `AGENT_VIEWER_ALLOW_OPEN=1` to accept an open API anyway. The `agent-viewer` CLI and the Docker images are unaffected: they always run with a token.
+- **A `token` or `api_key` query parameter never authenticates `/api/v1` or `/v1/logs`, in any mode, even when the value is correct (#71).** Such a request now gets `401 query_token_not_supported`. This also applies to webhook URLs that relied on it: a sender that can only set a URL (no headers) must sign with `AGENT_VIEWER_WEBHOOK_SECRET` instead. `EventSource` clients (which cannot send an `Authorization` header) now call the new `POST /api/v1/stream-tickets` first and open the stream with the single-use ticket it returns (`?ticket=`); `connectEventStream` in `@warlockcode/agent-viewer` does this automatically wherever `fetch` cannot stream a response body.
+- **With no token configured and no `AGENT_VIEWER_ALLOW_OPEN=1`, `/api/v1` now rejects requests that do not look local (#71).** A request from a non-loopback remote address gets `403 open_api_loopback_only`; a non-loopback `Host` header gets `403 open_api_host_not_allowed`; an `Origin` header whose host is neither loopback nor listed in an explicit `AGENT_VIEWER_CORS_ORIGIN` gets `403 open_api_origin_not_allowed` (a bare `*` does not count as a list). A request with no `Origin` header (curl, the SDKs, the CLI) is unaffected, and an HMAC-signed webhook still works regardless of where it comes from. A reverse proxy in front of the server makes every request look local, so a proxied deployment still needs a token.
+
+### Added
+
+- **`POST /api/v1/stream-tickets` (#71)**: issues a short-lived (`AGENT_VIEWER_STREAM_TICKET_TTL_MS`, default 30 s, clamped to `[1000, 300000]`), single-use ticket for `EventSource` clients, capped at `AGENT_VIEWER_STREAM_TICKET_MAX` (default 1000) outstanding tickets at once (`429 stream_ticket_limit` past the cap). Requires the Bearer token; a ticket cannot mint tickets, and it only authenticates `GET /api/v1/events/stream`. A ticket minted under a token that is later rotated stops working, giving the operator a revocation path.
+- `server/network.ts`: `isLoopbackHost`, `isLoopbackAddress`, `assertSafeBind` and `OpenApiRefusedError`, the single definition of "loopback" the server's bind guard and open-mode request guard both use.
+- `server/stream-tickets.ts`: `createStreamTicketStore`, the in-memory, single-use ticket store behind `POST /api/v1/stream-tickets`.
+
 ### Fixed
 
 - **Release pipeline hardening**, a direct follow-up to the 0.3.0 release gate (#63): `.github/workflows/release.yml` no longer lets a tag "succeed" with nothing published.

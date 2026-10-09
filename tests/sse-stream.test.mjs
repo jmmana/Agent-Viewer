@@ -398,6 +398,62 @@ test('SSE: a live event stored while a reconnect replay is in flight is delivere
   }
 });
 
+test('SSE: more than SSE_REPLAY_BUFFER_MAX live events during a stalled replay gets resync buffer_overflow, with no partial flush of the buffer', async () => {
+  const { server, baseUrl } = await startTestServer();
+  const realListBetween = store.listBetween.bind(store);
+  try {
+    assert.equal((await postEvent(baseUrl, messageEvent('evt_overflow_seed'))).status, 202);
+    assert.equal((await postEvent(baseUrl, messageEvent('evt_overflow_missed'))).status, 202);
+
+    // Gated while the flood of live events below arrives, so the connection's live buffer is still filling
+    // (not yet flushed by a finished replay) when the overflow threshold (5000) is crossed.
+    let releaseReplay;
+    const gate = new Promise((resolve) => { releaseReplay = resolve; });
+    let gated = false;
+    store.listBetween = async (...args) => {
+      if (!gated) {
+        gated = true;
+        await gate;
+      }
+      return realListBetween(...args);
+    };
+
+    const responsePromise = fetch(`${baseUrl}/api/v1/events/stream`, { headers: { 'Last-Event-ID': 'evt_overflow_seed' } });
+    // Give the reconnect time to reach the gated listBetween call before the flood of live events arrives.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    // Past SSE_REPLAY_BUFFER_MAX (5000) live events, in batches of the default max batch size (100).
+    const overflowCount = 5001;
+    const batchSize = 100;
+    for (let i = 0; i < overflowCount; i += batchSize) {
+      const batch = Array.from({ length: Math.min(batchSize, overflowCount - i) }, (_, j) => messageEvent(`evt_overflow_flood_${i + j}`));
+      const res = await fetch(`${baseUrl}/api/v1/events/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(batch),
+      });
+      assert.equal(res.status, 202);
+    }
+    releaseReplay();
+
+    const response = await responsePromise;
+    const reader = response.body.getReader();
+    try {
+      const text = await readUntil(reader, (t) => t.includes('event: resync'));
+      assert.ok(!text.includes('event: replayed'), 'an overflowed replay never sends a replayed frame');
+      const payload = JSON.parse(text.slice(text.indexOf('event: resync')).split('\n')[1].slice('data: '.length));
+      assert.equal(payload.reason, 'buffer_overflow');
+      assert.equal(typeof payload.missed, 'number');
+      assert.ok(payload.missed >= overflowCount, 'missed counts at least every flooded event, computed at the moment of the overflow');
+    } finally {
+      await reader.cancel();
+    }
+  } finally {
+    store.listBetween = realListBetween;
+    server.close();
+  }
+});
+
 test('SSE: a client that disconnects during a replay is removed from clients (clientsConnected returns to its previous value)', async () => {
   const { server, baseUrl } = await startTestServer();
   const realListBetween = store.listBetween.bind(store);

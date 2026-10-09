@@ -208,6 +208,7 @@ The agent of an event is `agentId`, then `payload.agentId`, then `payload.id` fo
 | `task.failed` | `taskId`, `error` | Status `ERROR` if it was the agent's current task. |
 | `task.blocked` | `taskId`, `reason` | Status `BLOCKED`. |
 | `llm.usage` | `provider`, `model` | Stores the agent's provider and model. Tokens and cost are not added up (see [Usage figures](#usage-figures)). |
+| `llm.failed` | `provider`, `model` | Stores the agent's provider and model. No status change; tokens and cost are never added up. |
 | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | none | No visible change. |
 
 More details:
@@ -744,12 +745,16 @@ The office accepts `OfficeEventInput`: a full `CanonicalEvent`, a `CanonicalEven
 - `validateCanonicalEvent(input)` checks an event strictly against the V1 contract and returns `{ success, data, issues }`.
 - `normalizeCanonicalEvent(input)` completes a loose event without validating it.
 - `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS` and `isMessageKind` describe the contract.
+- `LLM_ERROR_KINDS` lists the `errorKind` values of `llm.failed` (`rate_limited`, `overloaded`, `timeout`, `invalid_request`, `auth`, `server_error`, `cancelled`, `unknown`), and `isLlmErrorKind(value)` checks one. The type is `LlmErrorKind`.
 
 Contract fields used by the office in this version:
 
 - `agent.message.sent` accepts an optional `kind`, one of `MESSAGE_KINDS`.
 - `meeting.message` `type` is one of `MESSAGE_KINDS` (default `statement`).
 - `llm.usage` accepts an optional `currency`, an ISO 4217 code of three uppercase letters such as `USD`.
+- `llm.usage` reports cache tokens in `cacheReadTokens` (served from the prompt cache) and `cacheWriteTokens` (written to it). Both are part of `inputTokens`. `cachedTokens` is deprecated: it is still accepted and copied into `cacheReadTokens`.
+- A counter that was not reported (`cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `cachedTokens`) stays absent or `null` after validation, never `0`. `normalizeCanonicalEvent` does not invent `inputTokens` or `outputTokens` either.
+- `llm.failed` reports one failed model call attempt with `provider`, `model` and `errorKind`. The office only stores the provider and model from it.
 
 The full contract is in [integration.md](integration.md) and [`canonicalContract.ts`](../src/integrations/canonicalContract.ts).
 
@@ -765,7 +770,7 @@ Everything is exported from `@warlockcode/agent-viewer`. The stylesheet is `@war
 | Usage | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Core types | none | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
-| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `ValidationIssue`, `ValidationResult` |
+| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
 | Live stream | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions` |
 | Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |

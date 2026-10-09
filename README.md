@@ -317,7 +317,7 @@ Every visible text comes from a catalog of 116 keys. Rename a room with `message
 | Replay | `useEventReplay`, `ReplayControls` |
 | Usage (display only) | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` |
-| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
+| Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
 | Live stream | `connectEventStream` |
 | Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` |
@@ -544,7 +544,8 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | | `meeting.started` | Starts at once. |
 | | `meeting.message` | Bubble headed by its kind; a `decision` is added to the meeting decisions. |
 | | `meeting.ended`, `meeting.cancelled` | Frees the room; participants walk back to their workspace. |
-| Telemetry | `llm.usage` | Provider, model, input, output, cached and reasoning tokens, latency, cost, cost source and currency. |
+| Telemetry | `llm.usage` | Provider, model, input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost, cost source and currency. A figure that was not reported stays unknown, never 0. |
+| | `llm.failed` | One failed model call attempt: provider, model, error kind, HTTP status and whether it can be retried. Tokens and cost only when the provider billed the attempt. No status change. |
 | Runtime | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | Runtime health; no visible change. |
 
 Aliases such as `message.sent`, `meeting.decision` or `approval.requested` are mapped to their canonical type. The complete effect table is in the [library guide](docs/library.md#how-events-change-the-office), and the schema in [`canonicalContract.ts`](src/integrations/canonicalContract.ts).

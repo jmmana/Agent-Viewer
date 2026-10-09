@@ -232,6 +232,7 @@ export type EventType =
   | 'tool.completed'
   | 'tool.failed'
   | 'llm.usage'
+  | 'llm.failed'
   | 'runtime.connected'
   | 'runtime.disconnected'
   | 'runtime.heartbeat'

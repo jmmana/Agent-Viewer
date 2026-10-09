@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker image on GitHub Container Registry, published by the release workflow on every `v*` tag: `ghcr.io/jmmana/agent-viewer` (office and API in one container, new default `app` target of `docker/Dockerfile`) and the `-api` tags (API only). Multi-architecture (amd64, arm64), non-root, with a health check. Flags passed to `docker run IMAGE ...` are added to the defaults instead of replacing them, and `PORT` sets the port. The `-api` image never runs open: without `AGENT_VIEWER_API_TOKEN` it generates a token on first start, saves it in `/app/data/api-token` and prints it. GHCR creates the package as private: after the first publish, the owner makes it public once (Package settings > Danger Zone > Change visibility); the release summary shows the visibility and warns while it is not public.
 - The demo app reads the API token from the URL fragment (`#token=...`) or the `token` query parameter, removes it from the address bar and the history entry right away, and keeps it in the tab's `sessionStorage`. `VITE_AGENT_VIEWER_API_URL=same-origin` streams from the server that serves the page.
 - The live stream sends the token in an `Authorization: Bearer` header over a streamed `fetch`; `EventSource` with `?token=` is only the fallback for browsers that cannot stream with `fetch`.
+- Canonical event `llm.failed` for one failed model call attempt: `provider`, `model`, `errorKind` (one of `LLM_ERROR_KINDS`, default `unknown`), `httpStatus`, `retryable`, `requestId`, `providerErrorCode` and `latencyMs`, plus tokens and cost only when the provider billed the attempt (none defaults to 0). It has no free-text error field on purpose. The server stores, lists and streams it and registers an unseen agent from it, but it never changes token or cost totals; the office only stores the agent's provider and model and never changes its status. Mapping guide in [docs/integration.md](docs/integration.md).
+- `llm.usage` fields `cacheReadTokens` (tokens served from the prompt cache) and `cacheWriteTokens` (tokens written to it), both part of `inputTokens`. Validation keeps them and rejects a `cacheReadTokens` + `cacheWriteTokens` sum above `inputTokens`.
+- Library exports `LLM_ERROR_KINDS`, `isLlmErrorKind` and the type `LlmErrorKind`. `CanonicalEventType` includes `'llm.failed'`.
 
 ### Changed
 - `express` is now a runtime dependency (the CLI runs the server from the installed package). `dotenv` stays a development dependency: the server loads `.env` only when run directly.
@@ -22,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `connectEventStream` (library export) sends `token` in an `Authorization: Bearer` header over a streamed `fetch`, with the `token` query parameter only as a fallback, and accepts a `fetch` option.
 - The package declares `engines.node >=22.13`.
 - CI builds the CLI, runs it from the packed tarball and builds both Docker targets.
+- **Contract behavior change:** `llm.usage` validation no longer writes `0` for a missing `cachedTokens` or `reasoningTokens`. A counter that was not reported stays absent, and an explicit `null` is now accepted and kept. Consumers that expected a number get `undefined` or `null`. `schemaVersion` stays `"1.0"` and every event that validated before still validates. Events stored by 0.2.x keep the zeros the old validator wrote, so `cachedTokens: 0` or `reasoningTokens: 0` in them may mean "not reported".
+- `normalizeCanonicalEvent` (used by the library and the generic webhook) no longer invents `inputTokens: 0` or `outputTokens: 0` for `llm.usage`, keeps `llm.failed` instead of rewriting it to `agent.status.changed`, and sets an unlisted `llm.failed` `errorKind` to `unknown`.
+- Exhaustive `switch` statements over `CanonicalEventType` in host TypeScript code must handle `'llm.failed'`.
+- A 0.3.0 SDK needs a 0.3.0 server: a 0.2.x server rejects `llm.failed` and drops `cacheReadTokens` and `cacheWriteTokens`.
+
+### Deprecated
+- `llm.usage` `cachedTokens`: send `cacheReadTokens` instead. It is still accepted, kept as sent and copied into `cacheReadTokens` when that field is absent; a different number in both fields is rejected at `payload.cachedTokens`.
 
 ### Breaking changes
 - `PATCH /api/v1/agents/:agentId` now accepts only descriptive profile fields (`name`, `roleTitle`, `provider`, `model`, `status`, `statusText`, `workspace`). Usage and cost fields are rejected; report each model call with an `llm.usage` event through `POST /api/v1/events`, or use the TypeScript `usage()` or Python `agent.usage(...)` helper. Arbitrary profile keys, empty values, and non-string values are also rejected.

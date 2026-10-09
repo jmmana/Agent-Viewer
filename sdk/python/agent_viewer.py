@@ -26,12 +26,29 @@ _UNSTATED_COST_SOURCE_WARNING = (
 
 
 class AgentViewerError(Exception):
-    """Exception raised by Agent Viewer API client."""
+    """Exception raised by Agent Viewer API client.
 
-    def __init__(self, message: str, status_code: Optional[int] = None, issues: Optional[List[Dict[str, Any]]] = None) -> None:
+    ``code`` is the ``error`` field of the response body when there is one. ``"conflicting_duplicate"``
+    (``status_code`` 409) means an event with the same id was already stored with different content: the
+    new event was not applied, and resending it will never succeed. The client never retries a 409.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        issues: Optional[List[Dict[str, Any]]] = None,
+        code: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.issues = issues
+        self.code = code
+
+
+def _default_event_id() -> str:
+    """Full 128-bit random id. Two distinct events never share an id by chance."""
+    return f"evt_{uuid.uuid4().hex}"
 
 
 class AgentHandle:
@@ -312,7 +329,7 @@ class AgentViewer:
         """Emit a single canonical event to the Agent Viewer API."""
         raw_event = {
             "schemaVersion": "1.0",
-            "id": event_id or f"evt_{uuid.uuid4().hex[:12]}",
+            "id": event_id or _default_event_id(),
             "type": event_type,
             "timestamp": int(time.time() * 1000),
             "runtimeId": self.runtime_id,
@@ -329,12 +346,17 @@ class AgentViewer:
         return self._post_with_retry("/api/v1/events", event, idempotency_key=event["id"])
 
     def emit_batch(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Emit a batch of canonical events."""
+        """Emit a batch of canonical events.
+
+        Returns the server response. The server answers 202 even when some items were not applied, so
+        read ``conflicts`` and each item's ``status`` in ``results``: ``"conflict"`` means the id was
+        already stored with different content (``error == "conflicting_duplicate"``) and the item was dropped.
+        """
         normalized_events = []
         for raw in events:
             evt = {
                 "schemaVersion": "1.0",
-                "id": raw.get("id") or f"evt_{uuid.uuid4().hex[:12]}",
+                "id": raw.get("id") or _default_event_id(),
                 "type": raw["type"],
                 "timestamp": raw.get("timestamp") or int(time.time() * 1000),
                 "runtimeId": raw.get("runtimeId") or self.runtime_id,
@@ -476,19 +498,22 @@ class AgentViewer:
             except urllib.error.HTTPError as err:
                 error_body = err.read().decode("utf-8")
                 issues = None
+                code = None
                 try:
                     parsed = json.loads(error_body)
                     issues = parsed.get("issues") or parsed.get("errors")
+                    if isinstance(parsed.get("error"), str):
+                        code = parsed["error"]
                 except Exception:
                     pass
 
-                # Client errors (4xx except 429) should fail immediately
+                # Client errors (4xx except 429) should fail immediately. A 409 conflicting_duplicate is final.
                 if 400 <= err.code < 500 and err.code != 429:
-                    raise AgentViewerError(f"Agent Viewer rejected event: {err.code} {error_body}", err.code, issues)
+                    raise AgentViewerError(f"Agent Viewer rejected event: {err.code} {error_body}", err.code, issues, code)
 
                 attempt += 1
                 if attempt > self.max_retries:
-                    raise AgentViewerError(f"Agent Viewer request failed: {err.code} {error_body}", err.code, issues)
+                    raise AgentViewerError(f"Agent Viewer request failed: {err.code} {error_body}", err.code, issues, code)
 
                 time.sleep(delay + random.uniform(0, 0.1))
                 delay = min(delay * 2, 5.0)

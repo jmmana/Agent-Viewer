@@ -136,3 +136,43 @@ test('Webhook stability: invalid payload {"message": 123} returns 400, /health s
     server.close();
   }
 });
+
+test('Webhook: generated ids are random UUIDs and the response counts duplicates and conflicts', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const send = () =>
+      fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent: 'uuid-hook',
+          status: 'coding',
+          message: 'Working',
+          tool: 'grep',
+          usage: { provider: 'p', model: 'm', inputTokens: 3, outputTokens: 1 },
+        }),
+      });
+    const first = await send();
+    assert.equal(first.status, 202);
+    const json = await first.json();
+    assert.equal(json.accepted, true);
+    assert.equal(json.eventsGenerated, 4);
+    assert.equal(json.acceptedCount, 4);
+    assert.equal(json.duplicateCount, 0);
+    assert.equal(json.conflictCount, 0);
+    const prefixes = json.eventIds.map((id) => id.replace(/_[0-9a-f-]{36}$/, ''));
+    assert.deepEqual(prefixes, ['evt_wh_status', 'evt_wh_msg', 'evt_wh_tool', 'evt_wh_usage']);
+    for (const id of json.eventIds) {
+      assert.match(id, /^evt_[a-z_]+_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    }
+
+    // The same delivery again generates new ids, so nothing collides.
+    const second = await (await send()).json();
+    assert.equal(second.acceptedCount, 4);
+    assert.equal(second.duplicateCount, 0);
+    assert.equal(second.conflictCount, 0);
+    assert.equal(new Set([...json.eventIds, ...second.eventIds]).size, 8);
+  } finally {
+    server.close();
+  }
+});

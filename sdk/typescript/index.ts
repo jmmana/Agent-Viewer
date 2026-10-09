@@ -92,16 +92,55 @@ export interface UsageOptions {
   taskId?: string;
 }
 
+/**
+ * Error raised when the server refuses a request or cannot be reached.
+ *
+ * `code` is the `error` field of the response body when there is one. `'conflicting_duplicate'` (status 409) means
+ * an event with the same id was already stored with different content: the new event was not applied, and
+ * resending it will never succeed. Give each distinct event its own id, and resend the identical event (same
+ * `timestamp`) only to retry. The client never retries a 409.
+ */
 export class AgentViewerError extends Error {
   public readonly status?: number;
   public readonly issues?: Array<{ path: string; message: string }>;
+  public readonly code?: string;
 
-  constructor(message: string, status?: number, issues?: Array<{ path: string; message: string }>) {
+  constructor(message: string, status?: number, issues?: Array<{ path: string; message: string }>, code?: string) {
     super(message);
     this.name = 'AgentViewerError';
     this.status = status;
     this.issues = issues;
+    this.code = code;
   }
+}
+
+/** What the server did with one item of a batch. */
+export type EmitBatchItemStatus = 'accepted' | 'duplicate' | 'conflict';
+
+export interface EmitBatchItemResult {
+  id: string;
+  status: EmitBatchItemStatus;
+  duplicate: boolean;
+  /** `sha256:<hex>` of the event as the server validated it. */
+  fingerprint?: string;
+  /** `'conflicting_duplicate'` for a conflict. */
+  error?: string;
+  /** Fingerprint of the event already stored under this id, for a conflict. */
+  storedFingerprint?: string;
+}
+
+export interface EmitBatchResult {
+  accepted: number;
+  duplicates: number;
+  /** Items whose id was already stored with different content; they were not applied. */
+  conflicts: number;
+  /** One entry per event, in input order. */
+  results: EmitBatchItemResult[];
+}
+
+/** 128 random bits from the platform CSPRNG (`crypto.randomUUID`), never the clock. */
+function defaultEventId(): string {
+  return `evt_${globalThis.crypto.randomUUID()}`;
 }
 
 export class AgentHandle {
@@ -354,7 +393,7 @@ export class AgentViewer {
   async emit(input: EmitEventInput): Promise<void> {
     const event: CanonicalEvent = {
       schemaVersion: '1.0',
-      id: input.id ?? `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      id: input.id ?? defaultEventId(),
       type: input.type as CanonicalEventType,
       timestamp: input.timestamp ?? Date.now(),
       runtimeId: this.runtimeId,
@@ -370,10 +409,16 @@ export class AgentViewer {
     await this.postWithRetry('/api/v1/events', event, event.id);
   }
 
-  async emitBatch(inputs: EmitEventInput[]): Promise<{ accepted: number; duplicates: number }> {
+  /**
+   * Sends up to the server's batch limit in one request. The server answers 202 even when some items were not
+   * applied, so read `conflicts` and each item's `status`: `'conflict'` means the id was already stored with
+   * different content (`error: 'conflicting_duplicate'`), and that item was dropped. A 0.2.x server sends no
+   * `conflicts` (reported here as 0) and no per-item `status`; its `results` are passed through as received.
+   */
+  async emitBatch(inputs: EmitEventInput[]): Promise<EmitBatchResult> {
     const events: CanonicalEvent[] = inputs.map((input) => ({
       schemaVersion: '1.0',
-      id: input.id ?? `evt_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      id: input.id ?? defaultEventId(),
       type: input.type as CanonicalEventType,
       timestamp: input.timestamp ?? Date.now(),
       runtimeId: this.runtimeId,
@@ -387,7 +432,12 @@ export class AgentViewer {
     }));
 
     const result = await this.postWithRetry('/api/v1/events/batch', { events });
-    return result;
+    return {
+      accepted: result?.accepted ?? 0,
+      duplicates: result?.duplicates ?? 0,
+      conflicts: result?.conflicts ?? 0,
+      results: Array.isArray(result?.results) ? result.results : [],
+    };
   }
 
   async registerAgent(agent: {
@@ -488,19 +538,27 @@ export class AgentViewer {
           // not json
         }
 
-        // 4xx errors (client errors) should not be retried except 429
+        const code = typeof parsedJson?.error === 'string' ? parsedJson.error : undefined;
+
+        // 4xx errors (client errors) should not be retried except 429. A 409 conflicting_duplicate is final.
         if (response.status < 500 && response.status !== 429) {
           throw new AgentViewerError(
             parsedJson?.message || `Agent Viewer rejected request: ${response.status} ${responseText}`,
             response.status,
-            parsedJson?.issues || parsedJson?.errors
+            parsedJson?.issues || parsedJson?.errors,
+            code
           );
         }
 
         // Retryable server error or 429
         attempt++;
         if (attempt > this.maxRetries) {
-          throw new AgentViewerError(`Agent Viewer request failed after ${this.maxRetries} retries: ${response.status} ${responseText}`, response.status);
+          throw new AgentViewerError(
+            `Agent Viewer request failed after ${this.maxRetries} retries: ${response.status} ${responseText}`,
+            response.status,
+            undefined,
+            code
+          );
         }
 
         if (this.debug) {

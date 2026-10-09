@@ -345,7 +345,7 @@ test('CLI end to end: a too-new SQLite database prints one error line and exits'
       .split(/\r?\n/)
       .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /^agent-viewer: The database .* has schema version 3, but this server \(.+\) only knows up to version 1\./);
+    assert.match(lines[0], /^agent-viewer: The database .* has schema version 3, but this server \(.+\) only knows up to version 2\./);
     assert.doesNotMatch(result.stderr, /at .*server|MigrationFailedError/);
   } finally {
     rmSync(home, { recursive: true, force: true });

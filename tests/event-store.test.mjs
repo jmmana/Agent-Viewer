@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { MemoryEventStore, SQLiteEventStore } from '../server/store.ts';
+import { eventFingerprint } from '../server/eventFingerprint.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
 
 test('MemoryEventStore: appends events, detects duplicates, and maintains snapshot', async () => {
@@ -510,4 +511,370 @@ test('agent.updated applies statusText without changing agent.registered behavio
     payload: { statusText: 'Updated profile text' },
   }));
   assert.equal((await store.getAgent('updated-status-text')).statusText, 'Updated profile text');
+});
+
+// -------------------------------------------------------------
+// Ingestion integrity: duplicate vs conflict (issue #47)
+// -------------------------------------------------------------
+
+const sqliteFixtures = path.join(import.meta.dirname, 'fixtures/sqlite');
+
+/** A validated llm.usage event, exactly as the server would store it. */
+function usageEvent(id, payload = {}, envelope = {}) {
+  const result = validateCanonicalEvent({
+    id,
+    type: 'llm.usage',
+    timestamp: 1_700_000_000_000,
+    source: 'agent:auditor',
+    agentId: 'auditor',
+    summary: 'Audited call',
+    payload: { provider: 'p', model: 'm', inputTokens: 100, outputTokens: 10, cost: 0.01, currency: 'USD', costSource: 'provider-reported', ...payload },
+    ...envelope,
+  });
+  assert.equal(result.success, true, JSON.stringify(result.issues));
+  return result.data;
+}
+
+function withoutPayloadKey(event, key) {
+  const payload = { ...event.payload };
+  delete payload[key];
+  return { ...event, payload };
+}
+
+const STORE_FACTORIES = [
+  ['MemoryEventStore', () => ({ store: new MemoryEventStore(), cleanup: async () => {} })],
+  ['SQLiteEventStore', () => {
+    const { dir, file } = tempDbPath('integrity');
+    const store = new SQLiteEventStore(file);
+    return { store, file, cleanup: async () => { await store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  }],
+];
+
+for (const [label, create] of STORE_FACTORIES) {
+  test(`${label}: accepted, duplicate and conflict outcomes, and the stored event never changes`, async (t) => {
+    const warn = t.mock.method(console, 'warn', () => {});
+    const { store, cleanup } = create();
+    try {
+      const original = usageEvent('evt_int_1');
+      const first = await store.append(original);
+      assert.deepEqual(first, {
+        outcome: 'accepted',
+        id: 'evt_int_1',
+        fingerprint: eventFingerprint(original),
+        duplicate: false,
+        accepted: true,
+      });
+
+      const retry = await store.append(JSON.parse(JSON.stringify(original)));
+      assert.deepEqual(retry, { outcome: 'duplicate', id: 'evt_int_1', fingerprint: first.fingerprint, duplicate: true, accepted: true });
+
+      const before = await store.snapshot();
+      const variants = [
+        usageEvent('evt_int_1', { inputTokens: 101 }),
+        usageEvent('evt_int_1', { cost: 0.02 }),
+        usageEvent('evt_int_1', { cost: 0 }),
+        withoutPayloadKey(original, 'cost'),
+        { ...original, timestamp: original.timestamp + 1 },
+      ];
+      for (const variant of variants) {
+        const conflict = await store.append(variant);
+        assert.equal(conflict.outcome, 'conflict');
+        assert.equal(conflict.duplicate, false);
+        assert.equal(conflict.accepted, false);
+        assert.equal(conflict.fingerprint, eventFingerprint(variant));
+        assert.equal(conflict.storedFingerprint, first.fingerprint);
+        assert.notEqual(conflict.fingerprint, conflict.storedFingerprint);
+      }
+
+      const after = await store.snapshot();
+      assert.deepStrictEqual({ ...after, timestamp: 0 }, { ...before, timestamp: 0 }, 'totals unchanged after conflicts');
+      const listed = await store.list({ limit: 10 });
+      assert.equal(listed.length, 1);
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(listed[0])), JSON.parse(JSON.stringify(original)));
+      assert.deepEqual(store.ingestionCounters(), { conflicts: variants.length, legacyUnverifiedDuplicates: 0 });
+
+      const conflictLines = warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('conflicting duplicate'));
+      assert.equal(conflictLines.length, variants.length, 'one warn line per conflict');
+      for (const line of conflictLines) {
+        assert.ok(!line.includes('\n'), 'a single line');
+        const logged = JSON.parse(line.slice(line.indexOf('{')));
+        assert.deepEqual(Object.keys(logged).sort(), ['agentId', 'fingerprint', 'id', 'source', 'storedFingerprint', 'type']);
+        assert.equal(logged.id, 'evt_int_1');
+        assert.equal(logged.storedFingerprint, first.fingerprint);
+        assert.ok(!line.includes('inputTokens') && !line.includes('payload'), 'the payload is never logged');
+      }
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a batch [A, A, A', B] is accepted, duplicate, conflict, accepted, and A' never replaces A`, async (t) => {
+    t.mock.method(console, 'warn', () => {});
+    const { store, cleanup } = create();
+    try {
+      const a = usageEvent('evt_batch_a');
+      const aPrime = usageEvent('evt_batch_a', { outputTokens: 99 });
+      const b = usageEvent('evt_batch_b', { inputTokens: 7 });
+      const batch = await store.appendBatch([a, { ...a }, aPrime, b]);
+
+      assert.equal(batch.accepted, 2);
+      assert.equal(batch.duplicates, 1);
+      assert.equal(batch.conflicts, 1);
+      assert.deepEqual(batch.results.map(({ outcome }) => outcome), ['accepted', 'duplicate', 'conflict', 'accepted']);
+      assert.deepEqual(batch.results.map(({ id }) => id), ['evt_batch_a', 'evt_batch_a', 'evt_batch_a', 'evt_batch_b']);
+      assert.equal(batch.results[2].storedFingerprint, eventFingerprint(a));
+      assert.equal(batch.results[2].fingerprint, eventFingerprint(aPrime));
+      assert.deepEqual(batch.acceptedEvents.map(({ id }) => id), ['evt_batch_a', 'evt_batch_b']);
+      assert.strictEqual(batch.acceptedEvents[0], a);
+
+      const stored = await store.list({ limit: 10 });
+      assert.deepEqual(stored.map(({ id }) => id).sort(), ['evt_batch_a', 'evt_batch_b']);
+      assert.equal(stored.find(({ id }) => id === 'evt_batch_a').payload.outputTokens, 10, 'A is kept');
+      const summary = await store.usageSummary();
+      assert.equal(summary.total.calls, 2);
+      assert.equal(summary.total.tokens.output.sum, 20);
+      assert.deepEqual(store.ingestionCounters(), { conflicts: 1, legacyUnverifiedDuplicates: 0 });
+
+      // Across requests: the same rules, and the counters keep adding up.
+      const again = await store.appendBatch([b, aPrime]);
+      assert.deepEqual(again.results.map(({ outcome }) => outcome), ['duplicate', 'conflict']);
+      assert.deepEqual(again.acceptedEvents, []);
+      assert.deepEqual(store.ingestionCounters(), { conflicts: 2, legacyUnverifiedDuplicates: 0 });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a type alias resolved by validation is a duplicate, not a conflict`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const body = { id: 'evt_alias_store', timestamp: 9, source: 'agent:ana', summary: 'hi', payload: { text: 'hola' } };
+      const canonical = validateCanonicalEvent({ ...body, type: 'agent.message.sent' }).data;
+      const alias = validateCanonicalEvent({ ...body, type: 'message.sent' }).data;
+      assert.equal((await store.append(canonical)).outcome, 'accepted');
+      assert.equal((await store.append(alias)).outcome, 'duplicate');
+      assert.deepEqual(store.ingestionCounters(), { conflicts: 0, legacyUnverifiedDuplicates: 0 });
+    } finally {
+      await cleanup();
+    }
+  });
+}
+
+test('SQLiteEventStore: content_hash is written on every insert and equals the fingerprint', async () => {
+  const { dir, file } = tempDbPath('content-hash');
+  const store = new SQLiteEventStore(file);
+  try {
+    const single = usageEvent('evt_hash_single');
+    const batch = [usageEvent('evt_hash_b1'), storeEvent('evt_hash_b2', 10)];
+    await store.append(single);
+    await store.appendBatch(batch);
+    const db = new DatabaseSync(file);
+    const rows = db.prepare('SELECT id, content_hash, event_json FROM events ORDER BY rowid').all();
+    db.close();
+    assert.deepEqual(rows.map(({ id }) => id), ['evt_hash_single', 'evt_hash_b1', 'evt_hash_b2']);
+    for (const [index, event] of [single, ...batch].entries()) {
+      assert.equal(rows[index].content_hash, eventFingerprint(event));
+      assert.equal(rows[index].content_hash, eventFingerprint(JSON.parse(rows[index].event_json)));
+    }
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a batch where one insert fails leaves no rows and runs no memory side effects', async () => {
+  const { dir, file } = tempDbPath('batch-atomic');
+  const store = new SQLiteEventStore(file);
+  try {
+    await store.append(usageEvent('evt_atomic_seed', { inputTokens: 5 }));
+    const snapshotBefore = await store.snapshot();
+    const countersBefore = store.ingestionCounters();
+
+    // The insert statement throws on the second row of the batch.
+    const realPrepareInsert = store.prepareInsert.bind(store);
+    store.prepareInsert = () => {
+      const statement = realPrepareInsert();
+      let calls = 0;
+      return {
+        run: (...args) => {
+          calls++;
+          if (calls === 2) throw new Error('disk I/O error (test stub)');
+          return statement.run(...args);
+        },
+      };
+    };
+    await assert.rejects(
+      store.appendBatch([usageEvent('evt_atomic_1'), usageEvent('evt_atomic_2'), usageEvent('evt_atomic_3')]),
+      /disk I\/O error \(test stub\)/
+    );
+    store.prepareInsert = realPrepareInsert;
+
+    const db = new DatabaseSync(file);
+    assert.deepEqual(db.prepare('SELECT id FROM events ORDER BY rowid').all().map(({ id }) => id), ['evt_atomic_seed']);
+    db.close();
+    const snapshotAfter = await store.snapshot();
+    assert.deepStrictEqual({ ...snapshotAfter, timestamp: 0 }, { ...snapshotBefore, timestamp: 0 });
+    assert.deepEqual(store.ingestionCounters(), countersBefore);
+
+    // The store is usable afterwards: the transaction was rolled back, not left open.
+    const retry = await store.appendBatch([usageEvent('evt_atomic_1'), usageEvent('evt_atomic_2')]);
+    assert.deepEqual(retry.results.map(({ outcome }) => outcome), ['accepted', 'accepted']);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a UNIQUE violation on insert is classified, never surfaced as an error', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { dir, file } = tempDbPath('unique-backstop');
+  const store = new SQLiteEventStore(file);
+  try {
+    const original = usageEvent('evt_race');
+    await store.append(original);
+
+    // Simulate a lookup that missed the row (another writer inserted it in between): the insert then hits the key.
+    const realPrepareLookup = store.prepareLookup.bind(store);
+    store.prepareLookup = () => {
+      const statement = realPrepareLookup();
+      let calls = 0;
+      return { get: (...args) => (++calls === 1 ? undefined : statement.get(...args)) };
+    };
+    assert.equal((await store.append(original)).outcome, 'duplicate');
+    const conflict = await store.append(usageEvent('evt_race', { inputTokens: 1 }));
+    assert.equal(conflict.outcome, 'conflict');
+    assert.equal(conflict.storedFingerprint, eventFingerprint(original));
+    const batch = await store.appendBatch([usageEvent('evt_race', { inputTokens: 2 })]);
+    assert.deepEqual(batch.results.map(({ outcome }) => outcome), ['conflict']);
+    store.prepareLookup = realPrepareLookup;
+    assert.deepEqual(store.ingestionCounters(), { conflicts: 2, legacyUnverifiedDuplicates: 0 });
+    assert.equal((await store.usageSummary()).total.calls, 1);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and then rejects a conflict on a backfilled row', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'log', () => {});
+  const { dir, file } = tempDbPath('backfill-021');
+  fs.copyFileSync(path.join(sqliteFixtures, 'agent-viewer-0.2.1.db'), file);
+  const store = new SQLiteEventStore(file, { backup: 'off' });
+  try {
+    assert.deepEqual(store.migration.applied.map(({ name }) => name), ['baseline', 'content-hash']);
+    const db = new DatabaseSync(file);
+    const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();
+    db.close();
+    assert.equal(rows.length, 3);
+    for (const row of rows) {
+      assert.match(row.content_hash, /^sha256:[0-9a-f]{64}$/);
+      assert.equal(row.content_hash, eventFingerprint(JSON.parse(row.event_json)));
+    }
+
+    const stored = JSON.parse(rows[0].event_json);
+    const retry = await store.append(stored);
+    assert.equal(retry.outcome, 'duplicate');
+    const changed = { ...stored, payload: { ...stored.payload, inputTokens: stored.payload.inputTokens + 1 } };
+    const conflict = await store.append(changed);
+    assert.equal(conflict.outcome, 'conflict');
+    assert.equal(conflict.storedFingerprint, rows[0].content_hash);
+    assert.deepEqual(store.ingestionCounters(), { conflicts: 1, legacyUnverifiedDuplicates: 0 });
+    const listed = (await store.list({ limit: 100 })).find(({ id }) => id === stored.id);
+    assert.deepStrictEqual(listed, stored, 'the stored row is unchanged');
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: pre-0.2.0 rows keep a NULL hash, count as unverified duplicates and warn once per process', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'log', () => {});
+  const { dir, file } = tempDbPath('legacy-null-hash');
+  fs.copyFileSync(path.join(sqliteFixtures, 'agent-viewer-0.1.x-2b00789.db'), file);
+  const store = new SQLiteEventStore(file, { backup: 'off' });
+  try {
+    const db = new DatabaseSync(file);
+    const rows = db.prepare('SELECT id, content_hash, event_json FROM events ORDER BY rowid').all();
+    db.close();
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every(({ content_hash, event_json }) => content_hash === null && event_json === null));
+
+    const [legacy] = (await store.list({ limit: 100 })).filter(({ id }) => id === rows[0].id);
+    const before = await store.usageSummary();
+    // Whatever the content, a row that cannot be compared is a duplicate: never a conflict, never stored again.
+    const same = await store.append(legacy);
+    const different = await store.append({ ...legacy, timestamp: legacy.timestamp + 5, summary: 'other content' });
+    const batch = await store.appendBatch([{ ...legacy, summary: 'third' }]);
+    assert.equal(same.outcome, 'duplicate');
+    assert.equal(different.outcome, 'duplicate');
+    assert.equal(different.storedFingerprint, undefined);
+    assert.deepEqual(batch.results.map(({ outcome }) => outcome), ['duplicate']);
+    assert.deepEqual(store.ingestionCounters(), { conflicts: 0, legacyUnverifiedDuplicates: 3 });
+    assert.deepStrictEqual(await store.usageSummary(), before);
+
+    const legacyLines = warn.mock.calls.filter((call) => String(call.arguments[0]).includes('without content_hash'));
+    assert.equal(legacyLines.length, 1, 'one warn line per process');
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: rows with unparseable or empty event_json keep a NULL hash after the migration', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'log', () => {});
+  const { dir, file } = tempDbPath('unparseable');
+  const legacy = new DatabaseSync(file);
+  legacy.exec(`
+    CREATE TABLE events (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      runtime_id TEXT,
+      session_id TEXT,
+      agent_id TEXT,
+      task_id TEXT,
+      severity TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      event_json TEXT
+    );
+  `);
+  const insert = legacy.prepare(
+    'INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, created_at, event_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  const good = storeEvent('evt_good_json', 700);
+  insert.run('evt_good_json', good.type, 700, null, null, 'writer', null, 'normal', good.summary, JSON.stringify(good.payload), 1, JSON.stringify(good));
+  insert.run('evt_bad_json', 'agent.message.sent', 701, null, null, 'writer', null, 'normal', 'Bad', '{"text":"x"}', 2, '{not json');
+  insert.run('evt_empty_json', 'agent.message.sent', 702, null, null, 'writer', null, 'normal', 'Empty', '{"text":"y"}', 3, '');
+  legacy.close();
+
+  const store = new SQLiteEventStore(file, { backup: 'off' });
+  try {
+    const db = new DatabaseSync(file);
+    const hashes = Object.fromEntries(db.prepare('SELECT id, content_hash FROM events').all().map(({ id, content_hash }) => [id, content_hash]));
+    db.close();
+    assert.equal(hashes.evt_good_json, eventFingerprint(good));
+    assert.equal(hashes.evt_bad_json, null);
+    assert.equal(hashes.evt_empty_json, null);
+
+    assert.equal((await store.append(storeEvent('evt_bad_json', 999))).outcome, 'duplicate');
+    assert.equal((await store.append(storeEvent('evt_empty_json', 999))).outcome, 'duplicate');
+    assert.equal((await store.append({ ...good, timestamp: 999 })).outcome, 'conflict');
+    assert.deepEqual(store.ingestionCounters(), { conflicts: 1, legacyUnverifiedDuplicates: 2 });
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MemoryEventStore: ingestionCounters never reports legacy rows and exists() stays an id-only check', async () => {
+  const store = new MemoryEventStore();
+  await store.append(usageEvent('evt_exists'));
+  assert.equal(await store.exists('evt_exists'), true);
+  assert.equal(await store.exists('evt_missing'), false);
+  assert.deepEqual(store.ingestionCounters(), { conflicts: 0, legacyUnverifiedDuplicates: 0 });
 });

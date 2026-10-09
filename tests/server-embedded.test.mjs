@@ -124,8 +124,10 @@ test('onEventAccepted sees every accepted event of the six ingestion paths, neve
   try {
     const post = (route, body, method = 'POST') => fetch(`${base}${route}`, { method, headers: AUTH, body: JSON.stringify(body) });
 
-    assert.equal((await post('/api/v1/events', event('evt_embedded_single'))).status, 202);
-    assert.equal((await post('/api/v1/events', event('evt_embedded_single'))).status, 200, 'a duplicate is acknowledged');
+    // A true retry resends the identical event, timestamp included.
+    const single = event('evt_embedded_single');
+    assert.equal((await post('/api/v1/events', single)).status, 202);
+    assert.equal((await post('/api/v1/events', single)).status, 200, 'a duplicate is acknowledged');
     const batch = await post('/api/v1/events/batch', { events: [event('evt_embedded_b1'), event('evt_embedded_b2')] });
     assert.ok([200, 201, 202, 207].includes(batch.status), `batch status ${batch.status}`);
     assert.equal((await post('/api/v1/agents', { id: 'embedded-reg', name: 'Registered' })).status, 201);

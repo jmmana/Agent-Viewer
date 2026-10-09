@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The version-alignment check now also fails when `sdk/python/pyproject.toml` disagrees with the tag, not only `package.json`.
   - New `tests/release-versions.test.mjs` and `tests/release-workflow.test.mjs` cover this logic (`node:test`), importing the shared `scripts/release-rules.mjs` rather than re-implementing it, and asserting on the workflow's actual job structure and shell scripts.
 
+### Changed
+
+- **The release pipeline no longer treats npm and PyPI as required.** The GitHub release (with the packed `.tgz`) and the GHCR Docker images are the actual release; npm and PyPI publishing are optional extras. The "Publish to npm" and "Publish to PyPI" steps are now `continue-on-error: true`: a missing `NPM_TOKEN` or unconfigured PyPI trusted publisher still prints a clear error annotation and shows as a failed step in the run, but no longer fails the job or blocks the GitHub release / Docker images from being created. Publishing to npm and PyPI for real is tracked separately as a future enhancement, not a release blocker.
+
 ## [0.3.0] - 2026-10-09
 
 "Cifras ciertas" (true figures): the server, the portal, the CLI and the SDKs stop treating an unknown token count, cost or currency as zero, split cache reads from cache writes, add `llm.failed`, and Claude Code finally reports tokens through `install claude-code --telemetry`. First release published to npm, GHCR and (pending the owner's PyPI trusted-publisher setup) PyPI. The full semantics, field by field, are written down once in [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)); every section below links back to it instead of restating the rules. While the package is at 0.x, its API may still change between minor versions.

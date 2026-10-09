@@ -2,10 +2,14 @@ name: Release
 
 # Runs when a version tag such as v0.3.0 is pushed.
 # 1. Verifies and packs the package (library and CLI) and attaches the .tgz, the Python sdist and the
-#    wheel to the GitHub release, with notes extracted from the matching CHANGELOG.md section.
-# 2. Publishes to npm (trusted publishing with the NPM_TOKEN secret as a fallback) and to PyPI
-#    (trusted publishing) on a real release tag. Missing publish credentials fail the job instead of
-#    silently skipping.
+#    wheel to the GitHub release, with notes extracted from the matching CHANGELOG.md section. This
+#    GitHub release plus the Docker images below are the actual "release" - npm and PyPI are optional.
+# 2. Optionally publishes to npm (trusted publishing with the NPM_TOKEN secret as a fallback) and to
+#    PyPI (trusted publishing) on a real release tag, if those are configured. Each publish step is
+#    `continue-on-error: true`: a missing NPM_TOKEN or unconfigured PyPI trusted publisher prints a
+#    clear error annotation and is visible as a failed (orange) step in the run, but it does NOT fail
+#    the job or block the GitHub release / Docker images below. Configure them later and re-run this
+#    workflow (workflow_dispatch with the same tag) to publish retroactively.
 # 3. Builds the Docker images and pushes them to GitHub Container Registry on a real release tag:
 #    ghcr.io/jmmana/agent-viewer:<version>      office + API in one container (target app), also :latest
 #    ghcr.io/jmmana/agent-viewer:<version>-api  API only (target api), also :latest-api
@@ -109,6 +113,7 @@ jobs:
           fi
 
       - name: Publish to npm
+        continue-on-error: true
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           IS_PRERELEASE: ${{ steps.prerelease.outputs.is_prerelease }}
@@ -165,6 +170,7 @@ jobs:
 
       - name: Publish to PyPI
         if: needs.release.outputs.is_prerelease != 'true'
+        continue-on-error: true
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/

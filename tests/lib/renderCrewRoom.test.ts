@@ -3,6 +3,26 @@ import { CREW_ROOMS } from '../../src/crew/crewModel';
 import { crewGeometryBounds, crewIsoPoint, crewViewSize, renderCrewRoom } from '../../src/crew/renderCrewRoom';
 
 describe('Crew native 2.5D renderer', () => {
+  it('reproyecta el umbral de la puerta local al cambiar de cámara', () => {
+    let path: unknown[][] = [];
+    let fill = '';
+    const doors: unknown[][][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target,key) {
+        if (key === 'beginPath') return () => { path = []; };
+        if (key === 'moveTo' || key === 'lineTo') return (...args:unknown[]) => path.push(args);
+        if (key === 'fill') return () => { if (fill === '#263b4d') doors.push([...path]); };
+        return () => {};
+      },
+      set(_target,key,value) { if (key === 'fillStyle') fill = value; return true; },
+    });
+    for (const view of ['front','right'] as const) renderCrewRoom({ctx,width:900,height:600,room:CREW_ROOMS[0],
+      camera:{view,zoom:1,pan:{x:0,y:0}}});
+    expect(doors).toHaveLength(2);
+    expect(doors[0][0]).toEqual(Object.values(crewIsoPoint(.25,8)));
+    expect(doors[1][0]).toEqual(Object.values(crewIsoPoint(0,.25)));
+    expect(doors[0]).not.toEqual(doors[1]);
+  });
   it('selecciona imagen por actor y aplica parpadeo solo al rostro visible', () => {
     const drawn: unknown[][]=[];
     const ctx=new Proxy({} as CanvasRenderingContext2D,{

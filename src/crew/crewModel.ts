@@ -1,8 +1,10 @@
+import { crewPresenceSlots } from './crewSpatial';
+
 /** Crew is a presentation option, not an event/store mode. */
 export type VisualMode = 'cartoon' | 'crew';
 export type CrewView = 'front' | 'right' | 'back' | 'left';
 
-export interface CrewRoomDefinition {
+interface CrewRoomLayout {
   id: string;
   label: { en: string; es: string };
   width: number;
@@ -10,8 +12,17 @@ export interface CrewRoomDefinition {
   furniture: readonly { id: string; type: 'desk' | 'chair' | 'plant' | 'screen'; x: number; y: number }[];
 }
 
+export type CrewRoomType = 'office' | 'workroom' | 'meeting' | 'social' | 'reception' | 'infrastructure';
+export interface CrewRoomDefinition extends CrewRoomLayout {
+  type: CrewRoomType;
+  /** Capacidad de representación local, no límite de agentes del dominio. */
+  capacity: number;
+  doors: readonly { id: string; wall: 'south'; offset: number; width: number }[];
+  arrivalPoints: readonly { id: string; doorId: string; x: number; y: number }[];
+}
+
 /** Deliberately independent local rooms, not slices of the legacy global office map. */
-export const CREW_ROOMS: readonly CrewRoomDefinition[] = [
+const CREW_ROOM_LAYOUTS: readonly CrewRoomLayout[] = [
   { id: 'ceo', label: { en: 'CEO Office', es: 'Dirección' }, width: 11, depth: 8,
     furniture: [
       { id: 'ceo-desk', type: 'desk', x: 5, y: 3 },
@@ -92,6 +103,22 @@ export const CREW_ROOMS: readonly CrewRoomDefinition[] = [
       { id: 'reception-plant', type: 'plant', x: 10, y: 2 },
     ] },
 ] as const;
+
+const ROOM_TYPES: Readonly<Record<string, CrewRoomType>> = {
+  ceo: 'office', development: 'workroom', planning: 'workroom', research: 'workroom',
+  qa: 'workroom', finance: 'office', meeting: 'meeting', infrastructure: 'infrastructure',
+  coffee: 'social', lounge: 'social', reception: 'reception',
+};
+
+export const CREW_ROOMS: readonly CrewRoomDefinition[] = CREW_ROOM_LAYOUTS.map(layout => {
+  const doorId = `${layout.id}-entry`;
+  const room: CrewRoomDefinition = {
+    ...layout, type: ROOM_TYPES[layout.id], capacity: 0,
+    doors: [{ id: doorId, wall: 'south', offset: .75, width: 1 }],
+    arrivalPoints: [{ id: `${layout.id}-arrival`, doorId, x: .75, y: layout.depth - .75 }],
+  };
+  return { ...room, capacity: crewPresenceSlots(room).length };
+});
 
 export const CREW_VIEWS: readonly CrewView[] = ['front', 'right', 'back', 'left'];
 

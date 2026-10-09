@@ -2,7 +2,26 @@ import type { ExternalEventEnvelope } from './eventIngestion';
 import { validateExternalEvent } from './eventValidation';
 import { CANONICAL_EVENT_TYPES } from './canonicalContract';
 
-export type RealtimeStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error' | 'closed';
+export type RealtimeStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error' | 'closed' | 'resyncing';
+
+/**
+ * A server `resync` frame (issue #54): the server could not replay every event the client missed, so the host
+ * must reload its state, typically from `GET /api/v1/snapshot`. `missed` is `null`, never `0`, when the server
+ * cannot know how many events were missed (an unknown cursor). `reason` passes through unrecognized values so a
+ * newer server stays forward compatible with an older helper.
+ */
+export interface RealtimeResync {
+  reason: 'cursor_unknown' | 'gap_too_large' | 'buffer_overflow' | (string & {});
+  cursor: string | null;
+  missed: number | null;
+  replayMax: number | null;
+}
+
+/** A server `replayed` frame (issue #54): a reconnect replay finished, whether or not it replayed anything. */
+export interface RealtimeReplayed {
+  replayed: number;
+  lastEventId: string | null;
+}
 
 export interface RealtimeConnectionOptions {
   /**
@@ -17,12 +36,53 @@ export interface RealtimeConnectionOptions {
   initialBackoffMs?: number;
   maxBackoffMs?: number;
   heartbeatTimeoutMs?: number;
+  /** Start the stream from this cursor, typically `snapshot.lastEventId` (issue #54). */
+  lastEventId?: string;
+  /**
+   * Called when the server cannot replay what the client missed (issue #54). The host reloads its state (for
+   * example from `GET /api/v1/snapshot`) and returns the cursor to resume from. Returning `null` or `undefined`
+   * resumes live only, without a cursor. A throw or a rejection reconnects with the existing backoff and the
+   * cursor left unchanged; `onResync` is called again on the next resync.
+   */
+  onResync?: (info: RealtimeResync) => string | null | undefined | Promise<string | null | undefined>;
+  /** Called after a successful reconnect replay (issue #54), including one that replayed 0 events. */
+  onReplayed?: (info: RealtimeReplayed) => void;
 }
 
 export interface RealtimeConnection {
   close: () => void;
   status: () => RealtimeStatus;
   getLastEventId: () => string | null;
+  /** Number of resyncs this connection went through (issue #54). */
+  resyncCount: () => number;
+}
+
+/** Parses a `resync` frame's `data` line. Unparseable JSON is still a resync: every field stays `null`/`'unknown'`. */
+function parseResyncFrame(data: string): RealtimeResync {
+  try {
+    const parsed = JSON.parse(data);
+    return {
+      reason: typeof parsed?.reason === 'string' ? parsed.reason : 'unknown',
+      cursor: typeof parsed?.cursor === 'string' ? parsed.cursor : null,
+      missed: typeof parsed?.missed === 'number' ? parsed.missed : null,
+      replayMax: typeof parsed?.replayMax === 'number' ? parsed.replayMax : null,
+    };
+  } catch {
+    return { reason: 'unknown', cursor: null, missed: null, replayMax: null };
+  }
+}
+
+/** Parses a `replayed` frame's `data` line. Unparseable JSON reports 0 replayed and an unknown last id. */
+function parseReplayedFrame(data: string): RealtimeReplayed {
+  try {
+    const parsed = JSON.parse(data);
+    return {
+      replayed: typeof parsed?.replayed === 'number' ? parsed.replayed : 0,
+      lastEventId: typeof parsed?.lastEventId === 'string' ? parsed.lastEventId : null,
+    };
+  } catch {
+    return { replayed: 0, lastEventId: null };
+  }
 }
 
 export function connectEventStream(
@@ -37,9 +97,17 @@ export function connectEventStream(
   let reconnectAttempts = 0;
   let reconnectTimer: any = null;
   let heartbeatTimer: any = null;
-  let lastEventId: string | null = null;
+  let lastEventId: string | null = options.lastEventId ?? null;
   let activeEventSource: EventSource | null = null;
   let activeAbortController: AbortController | null = null;
+  /** Total resyncs this connection went through (issue #54), exposed through `resyncCount()`. Never reset. */
+  let totalResyncCount = 0;
+  /**
+   * Resyncs in a row with no event or `replayed` frame between them (issue #54). A lone resync reconnects right
+   * away; from the second one in a row, it waits for the existing backoff delay so a server that keeps answering
+   * `resync` cannot cause a tight loop. Reset by `handleIncomingEvent` and `handleReplayedFrame`.
+   */
+  let resyncStreak = 0;
 
   const maxAttempts = options.maxReconnectAttempts ?? Infinity;
   const initialBackoff = options.initialBackoffMs ?? 1000;
@@ -98,6 +166,7 @@ export function connectEventStream(
 
   function handleIncomingEvent(dataString: string, eventId?: string) {
     resetHeartbeatWatchdog();
+    resyncStreak = 0;
     if (!dataString || dataString.trim() === '') return;
 
     try {
@@ -112,19 +181,77 @@ export function connectEventStream(
     }
   }
 
+  /** A `replayed` frame (issue #54): tells the host a reconnect replay finished and resets the resync streak. */
+  function handleReplayedFrame(dataString: string) {
+    resetHeartbeatWatchdog();
+    resyncStreak = 0;
+    options.onReplayed?.(parseReplayedFrame(dataString));
+  }
+
+  /**
+   * A `resync` frame (issue #54): the server could not replay everything the client missed. Detaches the current
+   * source's listeners before awaiting `onResync`, so events still in flight on the old connection never reach
+   * `onEvent`, then reconnects with the cursor `onResync` returns (or live only, without one, when there is no
+   * `onResync` or it rejects).
+   */
+  async function handleResyncFrame(dataString: string) {
+    cleanupCurrent();
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    updateStatus('resyncing');
+    totalResyncCount++;
+    resyncStreak++;
+    const info = parseResyncFrame(dataString);
+
+    let nextCursor: string | null | undefined;
+    try {
+      nextCursor = options.onResync ? await options.onResync(info) : undefined;
+    } catch {
+      if (isClosedByUser) return;
+      updateStatus('error');
+      scheduleReconnect();
+      return;
+    }
+    if (isClosedByUser) return;
+
+    lastEventId = options.onResync ? (nextCursor ?? null) : null;
+
+    if (resyncStreak > 1) {
+      // A resync right after another one, with nothing in between: wait for the backoff delay instead of
+      // reconnecting immediately, so a server stuck answering `resync` cannot cause a tight loop.
+      const delay = Math.min(initialBackoff * Math.pow(1.5, resyncStreak - 2), maxBackoff);
+      reconnectTimer = setTimeout(() => {
+        if (!isClosedByUser) connect();
+      }, delay);
+    } else {
+      connect();
+    }
+  }
+
   const fetchImpl = options.fetch ?? (typeof fetch === 'function' ? fetch.bind(globalThis) : undefined);
   const canStreamWithHeaders = Boolean(options.token && fetchImpl && typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined');
 
-  /** Dispatches one server-sent event the way the EventSource path does. */
-  function dispatch(eventName: string, data: string, eventId: string | undefined) {
+  /** Dispatches one server-sent event the way the EventSource path does. Returns true when the caller must stop reading the current source: a `resync` frame hands reconnection to `handleResyncFrame` and any later frame already buffered from the same source must never reach `onEvent` (issue #54). */
+  function dispatch(eventName: string, data: string, eventId: string | undefined): boolean {
     if (eventId !== undefined) lastEventId = eventId;
     if (eventName === 'heartbeat') {
       resetHeartbeatWatchdog();
-      return;
+      return false;
+    }
+    if (eventName === 'resync') {
+      void handleResyncFrame(data);
+      return true;
+    }
+    if (eventName === 'replayed') {
+      handleReplayedFrame(data);
+      return false;
     }
     if (eventName === '' || eventName === 'message' || (CANONICAL_EVENT_TYPES as readonly string[]).includes(eventName)) {
       handleIncomingEvent(data, eventId);
     }
+    return false;
   }
 
   /** The stream over fetch, with the token in the Authorization header. Parses the event stream format. */
@@ -155,7 +282,12 @@ export function connectEventStream(
             buffer = buffer.slice(newline + 1);
             newline = buffer.indexOf('\n');
             if (line === '') {
-              if (data.length > 0 || eventName === 'heartbeat') dispatch(eventName, data.join('\n'), eventId);
+              if (data.length > 0 || eventName === 'heartbeat') {
+                // A `resync` frame hands reconnection to `handleResyncFrame`: stop reading this source right
+                // away, so a later frame already buffered from the same read never reaches `onEvent` (issue #54).
+                const stopReading = dispatch(eventName, data.join('\n'), eventId);
+                if (stopReading) return;
+              }
               eventName = '';
               data = [];
               eventId = undefined;
@@ -232,6 +364,14 @@ export function connectEventStream(
         resetHeartbeatWatchdog();
       });
 
+      source.addEventListener('resync', (msg: any) => {
+        void handleResyncFrame(msg.data);
+      });
+
+      source.addEventListener('replayed', (msg: any) => {
+        handleReplayedFrame(msg.data);
+      });
+
       source.onerror = () => {
         if (isClosedByUser) return;
         cleanupCurrent();
@@ -255,5 +395,6 @@ export function connectEventStream(
     },
     status: () => currentStatus,
     getLastEventId: () => lastEventId,
+    resyncCount: () => totalResyncCount,
   };
 }

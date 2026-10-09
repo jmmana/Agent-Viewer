@@ -61,9 +61,11 @@ function isAvatarColor(value: unknown): value is string {
 }
 
 /**
- * Creates default agent profile for an unregistered agent.
+ * Creates default agent profile for an unregistered agent. Exported so `snapshotRebuild.ts` (issue #54) can
+ * seed an agent that the snapshot's usage lists but whose `agent.registered` event fell outside the snapshot's
+ * 100 most recent events.
  */
-function createDefaultAgent(id: string, now: number, name?: string, roleTitle?: string): Agent {
+export function createDefaultAgent(id: string, now: number, name?: string, roleTitle?: string): Agent {
   const hash = id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const colors = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa'];
   const avatarColor = colors[hash % colors.length];

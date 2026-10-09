@@ -83,7 +83,13 @@ export type {
 
 // Realtime stream from an Agent Viewer server
 export { connectEventStream } from '../integrations/realtimeClient';
-export type { RealtimeConnection, RealtimeStatus, RealtimeConnectionOptions } from '../integrations/realtimeClient';
+export type {
+  RealtimeConnection,
+  RealtimeStatus,
+  RealtimeConnectionOptions,
+  RealtimeResync,
+  RealtimeReplayed,
+} from '../integrations/realtimeClient';
 
 // Event log files (JSONL V1)
 export { parseEventLog, MAX_EVENT_LOG_SIZE_BYTES } from '../integrations/eventLogParser';

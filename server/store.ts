@@ -130,6 +130,20 @@ export type AppendOutcome = 'accepted' | 'duplicate' | 'conflict';
  */
 export type DuplicateReason = 'event_id' | 'request_id';
 
+/**
+ * Monotonic insertion sequence used only for SSE reconnect replay (issue #54). SQLite: the existing `events.seq`
+ * column (issue #52), already a durable per-row counter independent of `rowid`. Memory: a per-process counter
+ * assigned alongside the retained window. Never reused, never renumbered, comparable only within one store
+ * instance.
+ */
+export type EventSeq = number;
+
+/** One stored original event paired with its insertion sequence. Never a duplicate reference. */
+export interface StoredEvent {
+  seq: EventSeq;
+  event: CanonicalEvent;
+}
+
 export interface AppendResult {
   outcome: AppendOutcome;
   /** The id the figure is held under: the original event id for a duplicate, the event's own id otherwise. */
@@ -142,6 +156,11 @@ export interface AppendResult {
   duplicate: boolean;
   /** Kept for existing callers: true for 'accepted' and 'duplicate', false for 'conflict'. */
   accepted: boolean;
+  /**
+   * Insertion sequence of the stored row, for SSE reconnect replay (issue #54). Set only when `outcome` is
+   * 'accepted'; `null` for a duplicate or a conflict, since neither one is broadcast on the live stream.
+   */
+  seq: EventSeq | null;
   /** Set when outcome === 'duplicate'. */
   duplicateReason?: DuplicateReason;
   /** The id the client actually sent. Present only when it differs from `id`. */
@@ -190,6 +209,12 @@ export interface AppendBatchResult {
   results: AppendResult[];
   /** Only outcome === 'accepted', in input order. */
   acceptedEvents: CanonicalEvent[];
+  /**
+   * Same order and length as `acceptedEvents`: the seq of each one, for SSE reconnect replay (issue #54). `null`
+   * only in the rare case where an accepted item's row was never actually written (not something either store
+   * implementation here does; kept so an alternate implementation never has to lie about a seq that does not exist).
+   */
+  acceptedSeqs: Array<EventSeq | null>;
 }
 
 /** Per-process ingestion counters, reset on restart. Exposed by `GET /ready`. */
@@ -204,6 +229,8 @@ interface AppendResultExtra {
   duplicateReason?: DuplicateReason;
   submittedId?: string;
   matchesOriginal?: boolean | null;
+  /** Insertion sequence of the stored row (issue #54). Only ever passed for outcome 'accepted'. */
+  seq?: EventSeq;
 }
 
 /**
@@ -226,6 +253,7 @@ function appendResult(
     ...(outcome === 'conflict' ? { storedFingerprint } : {}),
     duplicate: outcome === 'duplicate',
     accepted: outcome !== 'conflict',
+    seq: extra?.seq ?? null,
     ...(duplicateReason ? { duplicateReason } : {}),
     ...(extra?.submittedId !== undefined && extra.submittedId !== id ? { submittedId: extra.submittedId } : {}),
     ...(extra?.matchesOriginal !== undefined ? { matchesOriginal: extra.matchesOriginal } : {}),
@@ -263,17 +291,19 @@ function summarizeBatch(results: AppendResult[], events: CanonicalEvent[]): Appe
   let duplicates = 0;
   let conflicts = 0;
   const acceptedEvents: CanonicalEvent[] = [];
+  const acceptedSeqs: Array<EventSeq | null> = [];
   results.forEach((result, index) => {
     if (result.outcome === 'accepted') {
       accepted++;
       acceptedEvents.push(events[index]);
+      acceptedSeqs.push(result.seq);
     } else if (result.outcome === 'duplicate') {
       duplicates++;
     } else {
       conflicts++;
     }
   });
-  return { accepted, duplicates, conflicts, results, acceptedEvents };
+  return { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs };
 }
 
 export interface EventStore {
@@ -287,6 +317,19 @@ export interface EventStore {
   exists(eventId: string): Promise<boolean>;
   /** Never includes a duplicate reference: only originals and events with no request key. */
   list(options?: ListEventsOptions): Promise<CanonicalEvent[]>;
+
+  /**
+   * Seq of a stored original event, for SSE reconnect replay (issue #54). `null` when the id was never stored,
+   * is a duplicate reference's own id, or (memory store only) was evicted from the retained window.
+   */
+  resolveCursor(eventId: string): Promise<EventSeq | null>;
+  /** Seq of the newest stored original event, or `null` when the store holds no original event. */
+  headSeq(): Promise<EventSeq | null>;
+  /** Number of original events with `afterSeq < seq <= upToSeq`. */
+  countBetween(afterSeq: EventSeq, upToSeq: EventSeq): Promise<number>;
+  /** Up to `limit` original events with `afterSeq < seq <= upToSeq`, ascending by seq (oldest of the range first). */
+  listBetween(afterSeq: EventSeq, upToSeq: EventSeq, limit: number): Promise<StoredEvent[]>;
+
   snapshot(): Promise<ViewerSnapshot>;
   /** Retention and completeness state (issue #53), without building a full snapshot. */
   retention(): Promise<SnapshotRetention>;
@@ -375,6 +418,8 @@ export interface SQLiteStoreOptions {
 interface RetainedEntry {
   event: CanonicalEvent;
   receivedAt: number;
+  /** Insertion sequence, for SSE reconnect replay (issue #54). Strictly increasing with every push. */
+  seq: EventSeq;
 }
 
 /**
@@ -462,6 +507,15 @@ export class MemoryEventStore implements EventStore {
    * as a duplicate instead of being counted twice (issue #53).
    */
   private eventHashes = new Map<string, string>();
+  /**
+   * Id to insertion seq of every event currently in the retained window (issue #54), kept in lockstep with it:
+   * eviction always removes the entry here, independent of `rememberEvictedIds` (which only governs dedup
+   * memory). `resolveCursor` relies on this to turn an evicted id into an explicit resync instead of a reconnect
+   * replayed from the wrong point.
+   */
+  private eventSeqs = new Map<string, EventSeq>();
+  /** Next seq to assign (issue #54). Never reused or reset, even across eviction. */
+  private nextSeq: EventSeq = 1;
   /**
    * Original event id (plus its usage-relevant fields, for the fingerprint comparison) seen so far for each
    * `(provider, requestId)` key. On purpose never evicted when the original falls off the retained window: a late
@@ -582,9 +636,12 @@ export class MemoryEventStore implements EventStore {
     this.eventHashes.set(event.id, fingerprint);
     this.acceptedEvents++;
     const receivedAt = this.now();
-    const evicted = this.window.push({ event, receivedAt });
+    const seq = this.nextSeq++;
+    this.eventSeqs.set(event.id, seq);
+    const evicted = this.window.push({ event, receivedAt, seq });
     if (evicted) {
       this.droppedEvents++;
+      this.eventSeqs.delete(evicted.event.id);
       // Eviction never forgets a dedup id, except when `rememberEvictedIds` is false (not used by the default
       // constructor; kept for a future store that delegates its dedup authority elsewhere).
       if (!this.rememberEvictedIds) this.eventHashes.delete(evicted.event.id);
@@ -594,7 +651,7 @@ export class MemoryEventStore implements EventStore {
     if (requestKey) {
       this.requestIndex.set(requestKey.key, { id: event.id, fields: extractUsageFingerprintFields(event) });
     }
-    return appendResult('accepted', event.id, fingerprint);
+    return appendResult('accepted', event.id, fingerprint, undefined, { seq });
   }
 
   /** One warning, the first time the dedup index crosses the documented memory-cost threshold. */
@@ -737,6 +794,46 @@ export class MemoryEventStore implements EventStore {
       return result.length < limit;
     });
     return result;
+  }
+
+  /** `null` for an id never stored, or (issue #54) one evicted from the retained window since. */
+  async resolveCursor(eventId: string): Promise<EventSeq | null> {
+    return this.eventSeqs.get(eventId) ?? null;
+  }
+
+  /** The seq of the newest retained entry, or `null` when the window is empty (issue #54). */
+  async headSeq(): Promise<EventSeq | null> {
+    return this.window.newest()?.seq ?? null;
+  }
+
+  /**
+   * Walks the ring newest to oldest (issue #54), same traversal `list()` uses: skips entries newer than
+   * `upToSeq` (a live event accepted after the caller captured its head), then collects while `seq > afterSeq`,
+   * stopping as soon as it reaches the cursor. `fn` sees entries in that same newest-to-oldest order.
+   */
+  private walkBetween(afterSeq: EventSeq, upToSeq: EventSeq, fn: (entry: RetainedEntry) => void): void {
+    if (upToSeq <= afterSeq) return;
+    this.window.forEachNewestToOldest((entry) => {
+      if (entry.seq > upToSeq) return true;
+      if (entry.seq <= afterSeq) return false;
+      fn(entry);
+      return true;
+    });
+  }
+
+  async countBetween(afterSeq: EventSeq, upToSeq: EventSeq): Promise<number> {
+    let count = 0;
+    this.walkBetween(afterSeq, upToSeq, () => count++);
+    return count;
+  }
+
+  async listBetween(afterSeq: EventSeq, upToSeq: EventSeq, limit: number): Promise<StoredEvent[]> {
+    if (limit <= 0) return [];
+    const collected: StoredEvent[] = [];
+    this.walkBetween(afterSeq, upToSeq, (entry) => collected.push({ seq: entry.seq, event: entry.event }));
+    // Collected newest to oldest; ascending (oldest of the range first) is a single reverse away.
+    collected.reverse();
+    return collected.slice(0, limit);
   }
 
   async retention(): Promise<SnapshotRetention> {
@@ -1092,6 +1189,8 @@ export class SQLiteEventStore implements EventStore {
     };
   }
 
+  /** Inserts the row and returns the `seq` it was given (issue #54): the same durable counter #52 already uses
+   * to order the startup rebuild, reused here as the cursor SSE reconnect replay pages against. */
   private insertEvent(
     insertStmt: any,
     event: CanonicalEvent,
@@ -1099,7 +1198,8 @@ export class SQLiteEventStore implements EventStore {
     requestKey: { provider: string; requestId: string } | null,
     duplicateOf: string | null,
     matchesOriginal: boolean | null
-  ): void {
+  ): EventSeq {
+    const seq = this.nextSeq++;
     insertStmt.run(
       event.id,
       event.type,
@@ -1118,8 +1218,9 @@ export class SQLiteEventStore implements EventStore {
       requestKey ? requestKey.requestId : null,
       duplicateOf,
       matchesOriginal === null ? null : matchesOriginal ? 1 : 0,
-      this.nextSeq++
+      seq
     );
+    return seq;
   }
 
   private prepareInsert(): any {
@@ -1209,8 +1310,9 @@ export class SQLiteEventStore implements EventStore {
       };
     }
 
+    let seq: EventSeq;
     try {
-      this.insertEvent(insertStmt, event, fingerprint, requestKey, null, null);
+      seq = this.insertEvent(insertStmt, event, fingerprint, requestKey, null, null);
     } catch (error) {
       if (requestKey && isUniqueRequestKeyViolation(error)) {
         // Lost a race with another writer that claimed this request key first. Defensive only: several processes
@@ -1240,7 +1342,7 @@ export class SQLiteEventStore implements EventStore {
       if (!raced) throw error;
       return this.classifyStored(event, fingerprint, raced);
     }
-    return { result: appendResult('accepted', event.id, fingerprint), event, legacyUnverified: false };
+    return { result: appendResult('accepted', event.id, fingerprint, undefined, { seq }), event, legacyUnverified: false };
   }
 
   /** Counters and log lines, applied only once the outcome is final (after the commit for a batch). */
@@ -1426,6 +1528,42 @@ export class SQLiteEventStore implements EventStore {
     const rows = stmt.all(...params) as any[];
 
     return rows.map((r) => this.rowToEvent(r));
+  }
+
+  /**
+   * Seq methods for SSE reconnect replay (issue #54), run directly against `events.seq` (the durable counter
+   * issue #52 already added, never `rowid`: `events.id` is a `TEXT PRIMARY KEY`, so `rowid` is not an alias of an
+   * `INTEGER PRIMARY KEY` and SQLite is free to renumber it on `VACUUM`). `duplicate_of IS NULL` everywhere, same
+   * as `list()`: a duplicate reference is never a valid cursor and never counted or replayed.
+   */
+  async resolveCursor(eventId: string): Promise<EventSeq | null> {
+    const row = this.db.prepare('SELECT seq FROM events WHERE id = ? AND duplicate_of IS NULL').get(eventId) as
+      | { seq: number }
+      | undefined;
+    return row ? Number(row.seq) : null;
+  }
+
+  async headSeq(): Promise<EventSeq | null> {
+    const row = this.db.prepare('SELECT MAX(seq) AS seq FROM events WHERE duplicate_of IS NULL').get() as
+      | { seq: number | null }
+      | undefined;
+    return row?.seq === null || row?.seq === undefined ? null : Number(row.seq);
+  }
+
+  async countBetween(afterSeq: EventSeq, upToSeq: EventSeq): Promise<number> {
+    if (upToSeq <= afterSeq) return 0;
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS count FROM events WHERE duplicate_of IS NULL AND seq > ? AND seq <= ?')
+      .get(afterSeq, upToSeq) as { count: number };
+    return row.count;
+  }
+
+  async listBetween(afterSeq: EventSeq, upToSeq: EventSeq, limit: number): Promise<StoredEvent[]> {
+    if (upToSeq <= afterSeq || limit <= 0) return [];
+    const rows = this.db
+      .prepare('SELECT * FROM events WHERE duplicate_of IS NULL AND seq > ? AND seq <= ? ORDER BY seq ASC LIMIT ?')
+      .all(afterSeq, upToSeq, limit) as any[];
+    return rows.map((r) => ({ seq: Number(r.seq), event: this.rowToEvent(r) }));
   }
 
   async findByRequest(provider: string, requestId: string): Promise<{ id: string } | null> {

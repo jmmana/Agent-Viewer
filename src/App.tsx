@@ -11,6 +11,7 @@ import {
 import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
 import { OpenApiBanner } from './components/OpenApiBanner';
+import { ResyncNotice } from './components/ResyncNotice';
 import type { CameraState } from './engine/canvasRenderer';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { CrewStage } from './crew/CrewStage';
@@ -33,6 +34,7 @@ import { createOfficeTranslator } from './content/officeMessages';
 import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngine';
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
+import { rebuildFromSnapshot, type LiveSnapshot } from './integrations/snapshotRebuild';
 import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './integrations/liveConnection';
 import { useServerAuthState } from './integrations/serverHealth';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
@@ -57,6 +59,9 @@ export default function App() {
   const serverAuth = useServerAuthState(isLiveMode ? apiBase : undefined);
 
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  // Shown after the stream resyncs (issue #54): the server could not replay everything missed, so the office was
+  // reloaded from a fresh snapshot. `missed` is `null` when the server itself does not know the count.
+  const [resyncNotice, setResyncNotice] = useState<{ missed: number | null } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
 
@@ -268,13 +273,38 @@ export default function App() {
           applyExternalEvent(nextState, incoming, { locale: localeRef.current });
           return nextState;
         });
-      }, undefined, { token });
+      }, undefined, {
+        token,
+        // The server could not replay everything missed (issue #54): reload from `GET /api/v1/snapshot` instead
+        // of trusting the 100 events it carries. Usage figures come from the snapshot's own aggregates, never
+        // from re-adding those events, so a long gap never shows a silently lower total.
+        onResync: async (info) => {
+          try {
+            const response = await fetch(`${apiBase}/api/v1/snapshot`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+            });
+            if (!response.ok) throw new Error(`Snapshot reload failed with status ${response.status}`);
+            const snapshot = (await response.json()) as LiveSnapshot;
+            const nextState = rebuildFromSnapshot(snapshot, { locale: localeRef.current });
+            if (cancelled) return undefined;
+            setSimState(nextState);
+            setResyncNotice({ missed: info.missed });
+            return snapshot.lastEventId ?? null;
+          } catch (err) {
+            console.error('[agent-viewer] Resync snapshot reload failed:', err);
+            // Leaves the cursor unset: onResync is called again on the next resync, and the office keeps
+            // streaming live events in the meantime, with a notice already shown for the gap it does know about.
+            return undefined;
+          }
+        },
+      });
     });
 
     return () => {
       cancelled = true;
       connection?.close();
       setIsLiveConnected(false);
+      setResyncNotice(null);
     };
   }, [apiBase, isLiveMode]);
 
@@ -641,6 +671,9 @@ export default function App() {
         openApi={serverAuth === 'open'}
       />
       {isLiveMode && serverAuth === 'open' && <OpenApiBanner locale={locale} />}
+      {isLiveMode && resyncNotice && (
+        <ResyncNotice locale={locale} missed={resyncNotice.missed} onDismiss={() => setResyncNotice(null)} />
+      )}
 
       {currentTab === 'office' && <div role="group" aria-label={locale.startsWith('es') ? 'Modo visual' : 'Visual mode'}
         className="flex gap-2 items-center justify-center p-2 bg-slate-900 text-white">

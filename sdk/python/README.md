@@ -38,12 +38,14 @@ analyst = viewer.agent("analyst", name="Iris", role_title="Market analyst", work
 analyst.researching("Reading the quarterly filings")
 analyst.tool_started("filing_fetcher", input_summary="Form 10-K")
 analyst.tool_completed("filing_fetcher", output_summary="42 pages retrieved")
-analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
+analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024, cost_source="provider-reported", currency="USD")
 analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with exponential backoff on network errors, `429` and `5xx` responses; other `4xx` responses raise `AgentViewerError` right away. Calling `usage()` without a `cost` reports the cost as unknown instead of zero.
+The agent registers itself on its first call. Requests retry with exponential backoff on network errors, `429` and `5xx` responses; other `4xx` responses raise `AgentViewerError` right away.
+
+`usage()` sends only the figures you give it. A token count you leave out (or pass as `None`) is left out of the event, never sent as `0`; an explicit `0` is kept. Calling `usage()` without a `cost` reports the cost as unknown instead of zero. The SDK never decides where a cost comes from: pass `cost_source="provider-reported"` when the provider returned the cost, or `"estimated"` when you computed it. A cost passed without `cost_source` is sent as `costSource="unknown"`, and the client logs one warning on the `agent_viewer` logger (once per `AgentViewer` instance). Any other `cost_source` value raises `ValueError` before anything is sent. `currency` is forwarded as given, with no default, and `task_id` links the call to a task through the event's `taskId`.
 
 ## API overview
 
@@ -58,7 +60,8 @@ The agent registers itself on its first call. Requests retry with exponential ba
 - Status: `idle()`, `thinking()`, `researching()`, `coding()`, `testing()`, `waiting()`, `blocked()`, `done()`, or `status(status, status_text=None)`.
 - Messages: `message(text, target_agent_name=None)`.
 - Tools: `tool_started(tool, input_summary=None)`, `tool_completed(tool, output_summary=None)`, `tool_failed(tool, error_summary=None)`.
-- Usage: `usage(provider, model, input_tokens, output_tokens, cached_tokens=0, reasoning_tokens=0, cost=None, ...)`.
+- Usage: `usage(provider, model, input_tokens, output_tokens, cached_tokens=None, reasoning_tokens=None, cost=None, cost_source=None, latency_ms=None, request_id=None, *, cache_read_tokens=None, cache_write_tokens=None, currency=None, task_id=None)`. `cached_tokens` is deprecated: pass `cache_read_tokens` and `cache_write_tokens` instead.
+- `viewer.llm_usage(agent_id, provider, model, input_tokens, output_tokens, ...)` is the legacy helper. It takes the same arguments and follows the same rules.
 
 ## Privacy
 

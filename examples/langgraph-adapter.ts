@@ -5,7 +5,7 @@
  * into Agent Viewer without leaking chain-of-thought or internal scratchpads.
  */
 
-import { AgentViewer } from '../sdk/typescript/index';
+import { AgentViewer, type CostSource } from '../sdk/typescript/index';
 
 const viewer = new AgentViewer({
   url: process.env.AGENT_VIEWER_URL ?? 'http://localhost:8787',
@@ -73,6 +73,10 @@ export class LangGraphViewerAdapter {
 
   /**
    * Invoked on LLM model response to report token telemetry.
+   *
+   * `costSource` says where `cost` comes from and defaults to `unknown`: pass
+   * `provider-reported` only when the provider returned the cost, or `estimated` when the
+   * host app computed it. A missing cache count stays unknown, and a cost of 0 is kept.
    */
   async onModelUsage(
     nodeName: string,
@@ -84,6 +88,7 @@ export class LangGraphViewerAdapter {
       cachedTokens?: number;
       latencyMs?: number;
       cost?: number | null;
+      costSource?: CostSource;
     }
   ): Promise<void> {
     const agent = this.getAgent(nodeName);
@@ -95,7 +100,7 @@ export class LangGraphViewerAdapter {
       cachedTokens: usage.cachedTokens,
       latencyMs: usage.latencyMs,
       cost: usage.cost ?? null,
-      costSource: usage.cost !== undefined && usage.cost !== null ? 'provider-reported' : 'unknown',
+      costSource: usage.costSource ?? 'unknown',
     });
   }
 

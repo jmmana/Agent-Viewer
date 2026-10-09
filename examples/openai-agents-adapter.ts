@@ -5,7 +5,7 @@
  * to the Agent Viewer virtual office observability layer.
  */
 
-import { AgentViewer } from '../sdk/typescript/index';
+import { AgentViewer, type CostSource } from '../sdk/typescript/index';
 
 export class OpenAIAgentsViewerAdapter {
   private viewer: AgentViewer;
@@ -92,12 +92,17 @@ export class OpenAIAgentsViewerAdapter {
 
   /**
    * Called when usage tokens are reported by OpenAI API response.
+   *
+   * `costSource` says where `totalCost` comes from and defaults to `unknown`: pass
+   * `provider-reported` only when the provider returned the cost, or `estimated` when the
+   * host app computed it. A `totalCost` of 0 is a real cost and is kept.
    */
   async onUsage(usage: {
     promptTokens: number;
     completionTokens: number;
     model?: string;
-    totalCost?: number;
+    totalCost?: number | null;
+    costSource?: CostSource;
   }): Promise<void> {
     const agent = this.viewer.agent(this.currentAgentId);
     await agent.usage({
@@ -106,7 +111,7 @@ export class OpenAIAgentsViewerAdapter {
       inputTokens: usage.promptTokens,
       outputTokens: usage.completionTokens,
       cost: usage.totalCost ?? null,
-      costSource: usage.totalCost ? 'provider-reported' : 'unknown',
+      costSource: usage.costSource ?? 'unknown',
     });
   }
 

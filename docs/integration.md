@@ -215,7 +215,19 @@ Base URL: `http://localhost:8787`
 
 ### Agents
 - `POST /api/v1/agents`: Register or upsert an agent profile.
-- `PATCH /api/v1/agents/:agentId`: Update status or properties of an agent.
+- `PATCH /api/v1/agents/:agentId`: Update an agent's profile or status using descriptive fields only.
+
+The PATCH allow-list is `name`, `roleTitle`, `provider`, `model`, `status`, `statusText` and `workspace`. `name`, `roleTitle`, `provider` and `model` emit `agent.updated`. `status` emits `agent.status.changed`; `statusText` and `workspace` are included in that event when `status` is present, and otherwise emit `agent.updated`. String fields are trimmed; profile fields and `workspace` must contain 1-200 characters, `statusText` may contain 0-1000 characters, and `status` must be a known status. Body `id` is ignored. Every other field is rejected, including usage, cost, and server-managed fields. Error issue codes are `usage_not_patchable`, `read_only_field`, `unknown_field`, `invalid_type`, `invalid_status`, `empty_patch` and `reserved_agent_id`.
+
+Report token usage and cost as `llm.usage` events through `POST /api/v1/events`, or use the Python `agent.usage(...)` or TypeScript `usage()` SDK helper. For example:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.",
+  "issues": [{ "path": "cost", "code": "usage_not_patchable", "message": "Report cost with an llm.usage event." }]
+}
+```
 
 ### Runtimes & Sessions
 - `POST /api/v1/runtimes`: Register/heartbeat an external runtime.

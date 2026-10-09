@@ -208,6 +208,7 @@ El agente de un evento es `agentId`; si falta, `payload.agentId`; luego `payload
 | `task.failed` | `taskId`, `error` | Estado `ERROR` si era la tarea actual del agente. |
 | `task.blocked` | `taskId`, `reason` | Estado `BLOCKED`. |
 | `llm.usage` | `provider`, `model` | Guarda el proveedor y el modelo del agente. Los tokens y el costo no se suman (consulta [Cifras de consumo](#cifras-de-consumo)). |
+| `llm.failed` | `provider`, `model` | Guarda el proveedor y el modelo del agente. Sin cambio de estado; los tokens y el costo nunca se suman. |
 | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | ninguno | Sin cambio visible. |
 
 Más detalles:
@@ -744,12 +745,16 @@ La oficina acepta `OfficeEventInput`: un `CanonicalEvent` completo, un `Canonica
 - `validateCanonicalEvent(input)` valida un evento de forma estricta contra el contrato V1 y devuelve `{ success, data, issues }`.
 - `normalizeCanonicalEvent(input)` completa un evento flexible sin validarlo.
 - `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS` e `isMessageKind` describen el contrato.
+- `LLM_ERROR_KINDS` enumera los valores de `errorKind` de `llm.failed` (`rate_limited`, `overloaded`, `timeout`, `invalid_request`, `auth`, `server_error`, `cancelled`, `unknown`), e `isLlmErrorKind(value)` comprueba uno. El tipo es `LlmErrorKind`.
 
 Campos del contrato que usa la oficina en esta versión:
 
 - `agent.message.sent` acepta un `kind` opcional, uno de `MESSAGE_KINDS`.
 - `type` de `meeting.message` es uno de `MESSAGE_KINDS` (por defecto `statement`).
 - `llm.usage` acepta un `currency` opcional, un código ISO 4217 de tres letras mayúsculas como `USD`.
+- `llm.usage` reporta los tokens de caché en `cacheReadTokens` (leídos de la caché de prompts) y `cacheWriteTokens` (escritos en ella). Los dos forman parte de `inputTokens`. `cachedTokens` queda obsoleto: se sigue aceptando y se copia en `cacheReadTokens`.
+- Un contador que no se reportó (`cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `cachedTokens`) queda ausente o en `null` después de validar, nunca en `0`. `normalizeCanonicalEvent` tampoco inventa `inputTokens` ni `outputTokens`.
+- `llm.failed` reporta un intento fallido de llamada al modelo con `provider`, `model` y `errorKind`. La oficina solo guarda el proveedor y el modelo.
 
 El contrato completo está en [integration.md](integration.md) y en [`canonicalContract.ts`](../src/integrations/canonicalContract.ts).
 
@@ -765,7 +770,7 @@ Todo se exporta desde `@warlockcode/agent-viewer`. La hoja de estilos es `@warlo
 | Consumo | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem` |
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Tipos base | ninguno | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
-| Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `ValidationIssue`, `ValidationResult` |
+| Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
 | Stream en vivo | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions` |
 | Archivos de log | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |

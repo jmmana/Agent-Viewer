@@ -1,4 +1,4 @@
-# Agent Viewer — Integration Framework Guide
+# Agent Viewer: Integration Framework Guide
 
 Connect your AI agents to **Agent Viewer** in under 5 minutes.
 
@@ -161,7 +161,8 @@ All events follow the single official V1 envelope:
 | | `meeting.message` | Message spoken during a meeting. |
 | | `meeting.ended` | Meeting concludes. |
 | | `meeting.cancelled` | Meeting cancelled. |
-| **Telemetry** | `llm.usage` | Reports prompt/completion tokens, latency, cost. |
+| **Telemetry** | `llm.usage` | Reports one successful model call: input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost. |
+| | `llm.failed` | Reports one failed model call attempt: error kind, HTTP status, retryable flag, and tokens and cost only when the provider billed the attempt. |
 | **Runtime** | `runtime.connected` | External runtime connects. |
 | | `runtime.disconnected` | External runtime disconnects. |
 | | `runtime.heartbeat` | Periodic runtime health heartbeat. |
@@ -324,7 +325,79 @@ The server rejects requests if `|now - timestamp| > 300_000` (5 minutes) or if s
 
 ## 💰 7. Canonical LLM Usage Normalization
 
-Report token usage using the canonical schema:
+Every token count and cost enters Agent Viewer through `llm.usage` (a successful call) or `llm.failed` (a failed attempt). The server stores, replays and adds up exactly what the validator accepts, so the contract never invents a figure.
+
+**Missing means unknown, never 0.** A field that the runtime did not report is left out of the stored event (or kept as `null` when sent as `null`). The validator never turns it into `0`. A `0` in a stored event is always a zero that the sender reported.
+
+### Token semantics
+
+| Field | Meaning |
+|---|---|
+| `inputTokens` | All input tokens the provider processed for this call, **including** `cacheReadTokens` and `cacheWriteTokens`. |
+| `cacheReadTokens` | Part of `inputTokens` served from the prompt cache (cache hit). |
+| `cacheWriteTokens` | Part of `inputTokens` written to the prompt cache (cache creation). |
+| `outputTokens` | All generated tokens, **including** `reasoningTokens` when the provider bills them as output. |
+| `reasoningTokens` | Part of `outputTokens` spent on reasoning. |
+
+With these rules, "total tokens = `inputTokens` + `outputTokens`" stays correct, and the breakdown fields never cause double counting. `reasoningTokens <= outputTokens` is the documented meaning, but schema version `1.0` does not enforce it, because some existing clients send Gemini-style separate counts.
+
+### `llm.usage` payload
+
+```json
+{
+  "provider": "Anthropic",
+  "model": "claude-sonnet",
+  "inputTokens": 5000,
+  "outputTokens": 1000,
+  "cacheReadTokens": 3000,
+  "cacheWriteTokens": 500,
+  "reasoningTokens": 200,
+  "latencyMs": 940,
+  "requestId": "req_123",
+  "cost": 0.013,
+  "costSource": "provider-reported",
+  "currency": "USD"
+}
+```
+
+| Field | Required | Rule |
+|---|---|---|
+| `provider`, `model` | Yes | Non-empty strings. |
+| `inputTokens`, `outputTokens` | Yes | Non-negative integers. |
+| `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. No default. |
+| `cachedTokens` | No | **Deprecated**, see below. Non-negative integer or `null`. No default. |
+| `latencyMs` | No | Non-negative integer or `null`. |
+| `requestId` | No | String or `null`. |
+| `cost` | No | Non-negative number or `null`. Defaults to `null` (unknown). |
+| `costSource` | No | `provider-reported`, `estimated` or `unknown`. Defaults to `unknown`. |
+| `currency` | No | ISO 4217 code such as `USD`, or `null`. |
+
+Validation rules, in order:
+
+1. **Absent stays absent.** A field that is not sent has no key in the stored payload. An explicit `null` stays `null`. Both mean "unknown".
+2. **Deprecated alias.** When `cacheReadTokens` is absent and `cachedTokens` is sent (a number or `null`), the value is copied into `cacheReadTokens`. `cachedTokens` stays in the payload exactly as sent.
+3. **Conflict check.** When `cachedTokens` and `cacheReadTokens` are both numbers and differ, the event is rejected at `payload.cachedTokens`. Equal values are accepted.
+4. **Subset check.** When `cacheReadTokens` or `cacheWriteTokens` is sent, their sum must not exceed `inputTokens`, or the event is rejected at `payload.cacheReadTokens`. Values copied from the legacy `cachedTokens` are not part of this check, because older clients used both meanings of "cached".
+
+A conflicting alias gets this response:
+
+```json
+{
+  "error": "validation_failed",
+  "issues": [
+    {
+      "path": "payload.cachedTokens",
+      "message": "cachedTokens is deprecated and conflicts with cacheReadTokens; send only cacheReadTokens"
+    }
+  ]
+}
+```
+
+### `cachedTokens` is deprecated
+
+`cachedTokens` is still accepted and means `cacheReadTokens`. Send `cacheReadTokens` instead. A sender that has both values must send the same number in both, or only `cacheReadTokens`.
+
+### When cost or a counter is unknown
 
 ```json
 {
@@ -332,23 +405,92 @@ Report token usage using the canonical schema:
   "model": "gemini-2.5-pro",
   "inputTokens": 5000,
   "outputTokens": 1000,
-  "cachedTokens": 2500,
-  "reasoningTokens": 0,
-  "latencyMs": 940,
-  "requestId": "req_123",
-  "cost": 0.013,
-  "costSource": "provider-reported"
-}
-```
-
-### When Cost is Unknown:
-```json
-{
   "cost": null,
   "costSource": "unknown"
 }
 ```
-*Note: Unknown cost is preserved as `null`, never converted to zero.*
+
+This is also exactly what the server stores and returns for an `llm.usage` event sent without cache, reasoning or cost data: there is no `cachedTokens: 0` and no `reasoningTokens: 0`. Unknown cost is preserved as `null`, never converted to zero.
+
+### Mapping provider usage fields
+
+Adapters for providers that report cache counters separately must add them into `inputTokens`. Leave a field out when the provider does not report it.
+
+| Provider | `inputTokens` | `cacheReadTokens` | `cacheWriteTokens` | `outputTokens` | `reasoningTokens` |
+|---|---|---|---|---|---|
+| OpenAI (Chat Completions) | `prompt_tokens` (already includes cached tokens) | `prompt_tokens_details.cached_tokens` | Not reported, leave it out | `completion_tokens` (already includes reasoning) | `completion_tokens_details.reasoning_tokens` |
+| OpenAI (Responses) | `input_tokens` | `input_tokens_details.cached_tokens` | Not reported, leave it out | `output_tokens` | `output_tokens_details.reasoning_tokens` |
+| Anthropic (Messages) | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | `output_tokens` (already includes thinking) | Not reported separately, leave it out |
+| Google (Gemini) | `promptTokenCount` (already includes cached content) | `cachedContentTokenCount` | Not reported per call, leave it out | `candidatesTokenCount` + `thoughtsTokenCount` | `thoughtsTokenCount` |
+
+The Claude Code mapping from OpenTelemetry is specified separately, with the Claude Code receiver.
+
+### `llm.failed`: failed model calls
+
+Send one `llm.failed` event per failed **attempt**. A retry that succeeds is a separate `llm.usage` event. Give each attempt its own `requestId` when the provider returns one.
+
+```json
+{
+  "id": "evt_9f2c",
+  "type": "llm.failed",
+  "timestamp": 1791190800000,
+  "source": "agent:researcher",
+  "agentId": "researcher",
+  "summary": "Anthropic/claude-sonnet call failed (rate_limited)",
+  "payload": {
+    "provider": "Anthropic",
+    "model": "claude-sonnet",
+    "errorKind": "rate_limited",
+    "httpStatus": 429,
+    "retryable": true,
+    "requestId": "req_011CA",
+    "latencyMs": 212
+  }
+}
+```
+
+The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, "id": "evt_9f2c" }`, and `GET /api/v1/events?type=llm.failed` returns the payload as validated: no `inputTokens` key, `cost: null`, `costSource: "unknown"`.
+
+| Field | Required | Rule |
+|---|---|---|
+| `provider`, `model` | Yes | Non-empty strings. |
+| `errorKind` | No | One of the kinds below. Defaults to `unknown` when absent; `null` or an unlisted value is rejected with HTTP 400. |
+| `httpStatus` | No | Integer from 100 to 599, or `null`. |
+| `retryable` | No | Boolean or `null`. No default. |
+| `requestId` | No | String of up to 200 characters, or `null`. |
+| `providerErrorCode` | No | The provider's error code (for example `insufficient_quota`), up to 100 characters. A code, never a message. |
+| `latencyMs` | No | Non-negative integer or `null`. |
+| `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. Same meaning as in `llm.usage`. No default. |
+| `cost`, `costSource`, `currency` | No | Same rules as in `llm.usage`. |
+
+Token and cost fields are filled only when the provider actually billed the failed attempt (for example, a stream cut off after output started). Otherwise leave them out. Consumers must never read a missing value as `0`. The subset check of `llm.usage` applies only when `inputTokens` is sent.
+
+There is **no free-text error field on purpose**: provider error messages can echo prompt fragments or credentials. Build the envelope `summary` from `provider`, `model` and `errorKind` only.
+
+`llm.failed` events are stored, streamed over SSE and listed, and they register an agent the server has not seen yet, but they do not change any token or cost total. The embedded office stores the agent's provider and model from them and never changes the agent's status, because a failed attempt is often retried.
+
+#### Recommended `errorKind` mapping
+
+| Condition | `errorKind` |
+|---|---|
+| HTTP 429, including "quota exhausted" 429s (put the provider code in `providerErrorCode`) | `rate_limited` |
+| HTTP 529 or an "overloaded" provider error | `overloaded` |
+| Client timeout, HTTP 408 or 504 | `timeout` |
+| HTTP 400, 404, 413 or 422, context length exceeded, unknown model | `invalid_request` |
+| HTTP 401 or 403, account or billing holds | `auth` |
+| Any other HTTP 5xx | `server_error` |
+| The caller aborted the request | `cancelled` |
+| Anything else | `unknown` |
+
+The list is exported as `LLM_ERROR_KINDS` (with the `isLlmErrorKind` guard) from `@warlockcode/agent-viewer`.
+
+### Compatibility notes
+
+- `schemaVersion` stays `"1.0"`. Every event that validated before still validates.
+- Consumers that read `payload.cachedTokens` or `payload.reasoningTokens` and expected a number now get `undefined` or `null` when the sender did not report them.
+- `cachedTokens: 0` and `reasoningTokens: 0` in events stored by 0.2.x may mean "not reported": the 0.2.x validator wrote `0` when the field was missing. Stored rows are not rewritten.
+- Mixed versions: a 0.3.0 SDK needs a 0.3.0 server. A 0.2.x server rejects `llm.failed` with HTTP 400 and silently drops `cacheReadTokens` and `cacheWriteTokens`.
+- The loose normalizer used by the embedded library and the generic webhook no longer writes `0` for a missing `inputTokens` or `outputTokens`. A webhook `usage` object without them is stored as an `llm.usage` event without those keys, which means unknown.
 
 ---
 

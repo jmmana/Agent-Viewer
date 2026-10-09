@@ -1020,6 +1020,11 @@ export class MemoryEventStore implements EventStore {
     const ledgerRow = toLedgerRow(event, ctx);
     if (ledgerRow === null) return false;
 
+    // Defensive, same as the SQLite half's `ON CONFLICT(event_id) DO NOTHING` check: a resent event id whose
+    // *event* was purged independently of the ledger (issue #70) but whose ledger row was kept must never insert
+    // a second row by id, even without a request key to match on.
+    if (this.ledgerByEventId.has(ledgerRow.eventId)) return true;
+
     const key = ledgerRequestKey(ledgerRow);
     if (key !== null) {
       const existingIndex = this.ledgerByRequestKey.get(key);
@@ -2134,7 +2139,11 @@ export class SQLiteEventStore implements EventStore {
       }
     }
 
-    this.db
+    // No request key (or one that found nothing above): the only remaining way this could already hold a row is
+    // a resent event id whose *event* row was purged independently of the ledger (issue #70) while its ledger
+    // row was kept. `event_id` is UNIQUE, so that insert is a silent `ON CONFLICT ... DO NOTHING` no-op; `changes`
+    // tells the two cases apart, which the caller needs to decide whether to skip this event's usage figures.
+    const insertResult = this.db
       .prepare(
         `INSERT INTO usage_ledger (
           event_id, event_type, request_id, received_at, occurred_at, origin, legacy_contract, ingest_channel,
@@ -2177,7 +2186,7 @@ export class SQLiteEventStore implements EventStore {
         ledgerRow.userId,
         JSON.stringify(ledgerRow.tags)
       );
-    return false;
+    return Number((insertResult as { changes?: number | bigint }).changes ?? 0) === 0;
   }
 
   async usageLedgerStatus(): Promise<UsageLedgerStatus> {
@@ -2299,7 +2308,7 @@ export class SQLiteEventStore implements EventStore {
       this.ensureTotalsSinceCache();
       // While a startup rebuild is running (or failed), the event is persisted only: the rebuild loop (or a
       // restart) is the one that applies it, so it is never applied twice (issue #52).
-      if (this.rebuild.state === 'done') applyEvent(this.state, event);
+      if (this.rebuild.state === 'done') applyEvent(this.state, event, { skipUsage: pending.ledgerSkipped });
     }
     return pending.result;
   }
@@ -2373,7 +2382,12 @@ export class SQLiteEventStore implements EventStore {
       this.ensureTotalsSinceCache();
     }
     if (this.rebuild.state === 'done') {
-      for (const accepted of summary.acceptedEvents) applyEvent(this.state, accepted);
+      // issue #70: `ledgerSkipped` per accepted event, keyed by id (unique among accepted events), so each one
+      // gets `applyEvent`'s `skipUsage` exactly like the single-event `append` path above.
+      const ledgerSkippedById = new Map(pending.map((entry) => [entry.event.id, entry.ledgerSkipped ?? false]));
+      for (const accepted of summary.acceptedEvents) {
+        applyEvent(this.state, accepted, { skipUsage: ledgerSkippedById.get(accepted.id) ?? false });
+      }
     }
     return summary;
   }

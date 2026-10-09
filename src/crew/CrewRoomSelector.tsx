@@ -24,6 +24,7 @@ export function CrewRoomSelector({ roomId, onChange, agents, isEs, idPrefix }: {
     <label htmlFor={`${idPrefix}-room`}>{isEs ? 'Oficina' : 'Office'}</label>
     <select id={`${idPrefix}-room`} value={roomId} onChange={event => onChange(event.target.value)}
       onKeyDown={event => {
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
         if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
         const current = options.findIndex(room => room.id === roomId);

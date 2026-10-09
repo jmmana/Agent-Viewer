@@ -31,6 +31,11 @@ describe('Selector de catálogo Crew #168', () => {
     expect(change).toHaveBeenCalledExactlyOnceWith('development');
     fireEvent.keyDown(screen.getByRole('combobox'),{key:'End'});
     expect(change).toHaveBeenLastCalledWith('reception');
+    change.mockClear();
+    for (const modifier of ['altKey','ctrlKey','metaKey','shiftKey']) {
+      expect(fireEvent.keyDown(screen.getByRole('combobox'),{key:'ArrowDown',[modifier]:true})).toBe(true);
+    }
+    expect(change).not.toHaveBeenCalled();
     expect(agents[0].workspace).toBe('development');
   });
 });

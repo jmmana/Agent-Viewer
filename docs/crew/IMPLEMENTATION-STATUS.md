@@ -1,7 +1,7 @@
 # Estado de implementación de Crew
 
-Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #166/#171, conservación de la cámara Caricatura. Epic: #114.
+Actualizado: 2026-10-09 (America/Bogota).
+Último issue trabajado: #172/#115, banco de recursos originales. Epic: #114.
 
 ## Resumen de la ejecución
 
@@ -14,12 +14,13 @@ Actualizado: 2026-10-08 (America/Bogota).
 
 Ramas publicadas, commits conservados, PR sin fusionar. Dependencias #175/#177 continúan en borrador; main no se modificó. Epic #114 e issues #156/#171/#159 actualizados con evidencia. Ningún issue cerrado. Servidor local de validación detenido al terminar; no hay desarrollo autónomo ejecutándose fuera de esta sesión.
 
-Validación acumulada: 61 node, 449 Vitest, 9 E2E y 3 SDK Python; typecheck, app/lib/paquete, audit y Docker en CI. Capturas revisadas y MP4 de runtime de 10,16 segundos. No se certifica arte final, personajes, animaciones, dispositivos físicos ni cumplimiento total de G1.
+Validación acumulada: 71 node, 463 Vitest, 12 E2E y 3 SDK Python; typecheck, app/lib/paquete, audit y Docker en CI. Capturas revisadas y MP4 de runtime de 10,16 segundos. No se certifica arte final, personajes, animaciones, dispositivos físicos ni cumplimiento total de G1.
 
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `fix/crew-cartoon-camera-166`, basada en `cccc4bd` de #190.
+- Rama actual: `feat/crew-asset-bank-172`, basada en `5cb4643` de #191.
+- Cámara Caricatura: `fix/crew-cartoon-camera-166`, basada en `cccc4bd` de #190.
 - Presencia: `feat/crew-presence-focus-155`, basada en `2c7461d` de #189.
 - API embebida: `feat/crew-embedded-api-171`, basada en `b607d83` de #187.
 - Enlaces/reset: `feat/crew-navigation-links-reset-171`, basada en `dfdb060` de #186.
@@ -56,7 +57,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 | Issue | Estado verificable |
 | --- | --- |
-| [#115](https://github.com/jmmana/Agent-Viewer/issues/115) | Auditoría parcial de 53 assets en #176 y revisión local; migración pendiente. |
+| [#115](https://github.com/jmmana/Agent-Viewer/issues/115) | 53 originales recuperados con hashes y procedencia; banco aislado, revisión artística e integración pendientes. |
 | [#116](https://github.com/jmmana/Agent-Viewer/issues/116) | Guías históricas en #43 requieren adaptación al ADR Crew. |
 | [#117](https://github.com/jmmana/Agent-Viewer/issues/117) | Pipeline histórico en #162 sobre #43; adaptación independiente pendiente. |
 | [#118](https://github.com/jmmana/Agent-Viewer/issues/118) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
@@ -185,3 +186,11 @@ El contenedor conserva una memoria de cámara Caricatura por instancia y la rest
 Cambio compartido necesario: App y AgentOffice proveen la memoria; OfficeCanvas conserva el comportamiento anterior cuando no se le proporciona. Pruebas StrictMode verifican pan/zoom/orientación y memorias distintas. E2E nuevo compara el PNG del canvas antes/después de rotar, acercar, arrastrar, entrar a Crew y regresar; son idénticos bajo reduced-motion y LIVE vacío.
 
 Validación: typecheck, 61 node, 463 Vitest, doce E2E, builds app/lib y paquete aprobados. Corrige el hallazgo documentado en #190. La prueba de igualdad de píxeles cubre ese escenario determinista, no toda la paridad visual con agentes activos. Implementación `80ce444`, [PR #191](https://github.com/jmmana/Agent-Viewer/pull/191), abierto sobre #190. CI en curso al publicar.
+
+## Banco de recursos originales, #172/#115
+
+Recuperados 53 archivos y la referencia del CEO desde el commit `355e9194bd83d8b741bc65d5b58a897d320ee584` de #43. Se conservan bytes, licencia, procedencia y dimensiones. El manifiesto independiente clasifica todas las poses como estáticas y los recursos como prototipos; no se importa código del renderer anterior ni se aprueba arte automáticamente. Ver [banco y procedimiento](../../assets/crew/README.md).
+
+La validación offline corre en CI y detecta cambios de hash, rutas inválidas, duplicados, dimensiones inconsistentes, licencias desconocidas y clasificaciones inventadas de animación o perspectiva. Diez pruebas nuevas. Verificación local: 71 node y 463 Vitest, typecheck, builds de aplicación y biblioteca y comprobación del paquete aprobados. Los 12 E2E del estado anterior siguen pendientes de ejecutar en el CI de esta rama.
+
+El banco no se carga en runtime. Falta la revisión visual por recurso y la adaptación al contrato espacial Crew antes de utilizarlo en salas. G1 y los issues permanecen abiertos.

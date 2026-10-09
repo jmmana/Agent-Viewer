@@ -57,7 +57,9 @@
     "server": "tsx server/index.ts",
     "dev:full": "node scripts/dev-full.mjs",
     "test:e2e": "playwright test",
-    "crew:capture": "node scripts/capture-crew-runtime.mjs"
+    "crew:capture": "node scripts/capture-crew-runtime.mjs",
+    "crew:assets:check": "node scripts/crew-assets.mjs check",
+    "crew:assets:import": "node scripts/crew-assets.mjs import"
   },
   "peerDependencies": {
     "react": "^19.0.0",

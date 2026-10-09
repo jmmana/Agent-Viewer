@@ -32,6 +32,9 @@ jobs:
       - name: Security audit
         run: npm audit --omit=dev
 
+      - name: Crew asset bank integrity
+        run: npm run crew:assets:check
+
       - name: Typecheck
         run: npm run lint
 

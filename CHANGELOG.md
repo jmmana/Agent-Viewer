@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Webhook usage retries no longer double-count. The generic webhook now uses deterministic event IDs derived from idempotency keys, so identical retries are deduplicated inside the store. Same delivery with same `Idempotency-Key` header, body `idempotencyKey` field, or signature gets a `200` duplicate response instead of `202` new events. A sender that re-signs a retry needs to include `idempotencyKey` in the body for the same effect.
+- Webhook usage no longer drops `currency`, `costSource`, `requestId` and the cache fields. Validation now uses the same `LlmUsagePayloadSchema` as the events API, and these fields are kept exactly as sent.
+
+### Changed
+- **Breaking: webhook usage validation is now stricter.** `usage` blocks without required fields (`provider`, `model`, `inputTokens`, `outputTokens`) are rejected with `400 validation_failed`. Empty usage objects (`{}`) are now rejected, not accepted as zero-filled events. Usage with an unknown `costSource` is accepted as an `unknown` cost source, not silently mapped to an assumed value.
+- Webhook generic route now produces deterministic event IDs instead of random ones when an idempotency key is detected. IDs have format `evt_wh_<kind>_<32-char-hex>` (SHA-256 based, do not reveal the key or signature) and match the same collision-free guarantee as server ids. Deliveries with no idempotency key get server-generated random ids and are marked as `source: "none"` (not safe to retry).
+- Webhook responses add `duplicate` (true only when every event is a duplicate), `duplicates` (count of duplicate events), `idempotency` (object with `source`: `body`, `header`, `signature`, `requestId`, or `none`), and a `results` array with per-event `duplicate` flag.
+- Same delivery by signature now gets `200` with `duplicate: true` instead of `409 webhook_replay_detected`, because the signature cache now records the delivery after store success, not before validation.
+- Webhook responses change conflict handling: `409 event_id_conflict` is returned when any event conflicts (same id, different content), `200` when all are duplicates, `202` when at least one is new. Conflicting batches are stored atomically: all or nothing.
+
 ### Added
 - SQLite databases now carry a schema version and migrate automatically with a backup; servers refuse databases newer than themselves.
 - `agent-viewer` command, shipped in the npm package (`npx @warlockcode/agent-viewer`): starts the ingestion server and serves the prebuilt office in live mode from the same port. It listens on `127.0.0.1` by default (`--host` or `AGENT_VIEWER_HOST`; port from `--port` or `PORT`), generates a session token unless `--token` (or a non-blank `AGENT_VIEWER_API_TOKEN`, or the deprecated `AGENT_VIEWER_API_KEY`) is given, so it never runs without one, prints the office URL, the token and a ready `curl` command, and opens the browser. Options `--port`, `--host`, `--token`, `--demo`, `--no-open` and `--record <file.jsonl>` (canonical JSONL V1). The browser it opens gets a single-use launch code instead of the token, so the token never shows up in the browser's command line. Requires Node.js 22.13 or later, declared in `engines`. Guide: [docs/cli.md](docs/cli.md).

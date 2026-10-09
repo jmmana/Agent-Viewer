@@ -532,7 +532,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
 
   let appendResult: AppendBatchResult;
   try {
-    appendResult = await store.appendBatch(mapped.events);
+    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp' });
   } catch (error) {
     otlpStats.requestsRejected += 1;
     if (isProtobufRequest) res.status(503).type('application/x-protobuf').send(Buffer.from(encodeStatus(14, 'Storage unavailable, retry')));
@@ -1064,6 +1064,8 @@ app.post('/api/v1/events', async (req, res) => {
       ...(result.submittedId !== undefined ? { submittedId: result.submittedId } : {}),
       ...(result.matchesOriginal !== undefined ? { matchesOriginal: result.matchesOriginal } : {}),
       fingerprint: result.fingerprint,
+      // The original acceptance time, not the retry's (issue #65).
+      receivedAt: result.receivedAt,
     });
     return;
   }
@@ -1075,6 +1077,7 @@ app.post('/api/v1/events', async (req, res) => {
     duplicate: false,
     id: event.id,
     fingerprint: result.fingerprint,
+    receivedAt: result.receivedAt,
   });
 });
 
@@ -1129,7 +1132,9 @@ app.post('/api/v1/events/batch', async (req, res) => {
     return;
   }
 
-  const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(validatedEvents);
+  const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(validatedEvents, {
+    channel: 'events-batch',
+  });
 
   acceptedEvents.forEach((event, index) => broadcastEvent(event, acceptedSeqs[index] ?? null));
 
@@ -1154,6 +1159,8 @@ app.post('/api/v1/events/batch', async (req, res) => {
             status: result.outcome,
             duplicate: result.duplicate,
             fingerprint: result.fingerprint,
+            // The original acceptance time for a duplicate, never the retry's (issue #65).
+            receivedAt: result.receivedAt,
             ...(result.duplicateReason ? { duplicateReason: result.duplicateReason } : {}),
             ...(result.submittedId !== undefined ? { submittedId: result.submittedId } : {}),
             ...(result.matchesOriginal !== undefined ? { matchesOriginal: result.matchesOriginal } : {}),
@@ -1223,6 +1230,12 @@ app.get('/api/v1/snapshot', requireReady, async (_req, res) => {
 // Usage aggregates only (the snapshot's `usage` block), without the event list.
 app.get('/api/v1/usage', async (_req, res) => {
   res.json(await store.usageSummary());
+});
+
+// Usage ledger health (issue #65): counts and time bounds only, never a sum of tokens or cost (that is #66).
+// Sits under /api/v1, so it gets the same auth and rate limit as every other route here.
+app.get('/api/v1/usage/ledger/status', async (_req, res) => {
+  res.json(await store.usageLedgerStatus());
 });
 
 // OTLP/HTTP logs receiver counters (issue #59). Per-process, reset on restart like store.ingestionCounters().
@@ -2085,7 +2098,10 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     appendOptions.ignoreTimestamp = payload.timestamp === undefined;
   }
 
-  const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(generatedEvents, appendOptions as any);
+  const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(generatedEvents, {
+    ...appendOptions,
+    channel: 'webhook',
+  } as any);
 
   // Step 7: Record signature only after successful append
   if (verifiedSignature && accepted > 0) {

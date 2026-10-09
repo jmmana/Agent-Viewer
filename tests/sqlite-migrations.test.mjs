@@ -156,7 +156,17 @@ for (const fixtureName of fixtureNames) {
       const expectedEvents = isLegacy
         ? originalRows.map(eventFromLegacyRow)
         : originalRows.map(({ event_json }) => JSON.parse(event_json));
-      assert.deepEqual(await store.list({ limit: 100 }), expectedEvents.slice().reverse());
+      const createdAtById = new Map(originalRows.map(({ id, created_at }) => [id, created_at]));
+      // list() now carries receivedAt too (issue #65), equal to the row's own created_at.
+      const listed = await store.list({ limit: 100 });
+      assert.deepEqual(
+        listed.map(({ receivedAt, ...rest }) => rest),
+        expectedEvents.slice().reverse()
+      );
+      assert.deepEqual(
+        listed.map((event) => event.receivedAt),
+        listed.map((event) => createdAtById.get(event.id))
+      );
       for (const [index, cursorId] of originalIds.entries()) {
         assert.deepEqual(
           (await store.list({ afterId: cursorId, limit: 100 })).map(({ id }) => id),

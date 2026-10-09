@@ -466,12 +466,12 @@ analyst = viewer.agent("analyst", name="Iris", role_title="Market analyst", work
 analyst.researching("Reading the quarterly filings")
 analyst.tool_started("filing_fetcher", input_summary="Form 10-K")
 analyst.tool_completed("filing_fetcher", output_summary="42 pages retrieved")
-analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
+analyst.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024, cost_source="provider-reported", currency="USD")
 analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown.
+The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client.
 
 ### TypeScript SDK
 
@@ -484,7 +484,7 @@ const builder = viewer.agent({ id: 'builder', name: 'Atlas', roleTitle: 'Builder
 await builder.coding('Implementing the webhook handler');
 await builder.toolStarted('npm.test', 'unit suite');
 await builder.toolCompleted('npm.test', '128 passed');
-await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012 });
+await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012, costSource: 'provider-reported', currency: 'USD' });
 await builder.message('Handler is ready for review.', 'Nova');
 await builder.done('Pull request opened');
 ```
@@ -552,7 +552,7 @@ Aliases such as `message.sent`, `meeting.decision` or `approval.requested` are m
 
 </details>
 
-**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md).
+**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. The SDKs never assume `provider-reported`: a cost sent without a stated `costSource` goes out as `unknown`. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md).
 
 ---
 

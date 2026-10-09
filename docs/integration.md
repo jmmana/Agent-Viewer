@@ -39,13 +39,19 @@ await agent.toolCompleted('web.search', 'found 14 results');
 // 3. Emit observable dialogue to teammates or user
 await agent.message('I found the integration specification.');
 
-// 4. Report LLM tokens and cost telemetry
+// 4. Report LLM tokens and cost telemetry, exactly as you know them
 await agent.usage({
   provider: 'Google',
   model: 'gemini-2.5-pro',
   inputTokens: 4500,
   outputTokens: 900,
+  cacheReadTokens: 1200, // part of inputTokens; leave out when not reported
+  cacheWriteTokens: 0,
   cost: 0.0075,
+  costSource: 'estimated', // computed by your app; 'provider-reported' only when the provider returned it
+  currency: 'USD',
+  requestId: 'req_01',
+  taskId: 'task_01', // goes to the envelope taskId; create the task first with task.created
 });
 
 // 5. Conclude task
@@ -91,7 +97,13 @@ agent.usage(
     model="gemini-2.5-pro",
     input_tokens=4500,
     output_tokens=900,
+    cache_read_tokens=1200,  # part of input_tokens; leave out when not reported
+    cache_write_tokens=0,
     cost=0.0075,
+    cost_source="estimated",  # computed by your app; "provider-reported" only when the provider returned it
+    currency="USD",
+    request_id="req_01",
+    task_id="task_01",  # goes to the envelope taskId; create the task first with task.created
 )
 
 agent.done("Documentation analyzed")
@@ -392,6 +404,38 @@ A conflicting alias gets this response:
   ]
 }
 ```
+
+### Usage from the SDKs
+
+The Python and TypeScript SDKs send each figure exactly as the caller gives it, and never sum or price anything:
+
+- A token count or `currency` that is not given (or is `None` / `null`) is left out of the payload; an explicit `0` is kept. The SDKs never work out `cachedTokens` from `cacheReadTokens` and `cacheWriteTokens`, or the reverse.
+- `costSource` is exactly what the caller states. A cost given without it is sent as `"unknown"`, and each client (`AgentViewer` instance) prints one warning. With no cost, `costSource` is the stated value or `"unknown"`. A value other than `provider-reported`, `estimated` or `unknown` fails before anything is sent (`ValueError` in Python, a rejected promise with `TypeError` in TypeScript).
+- `currency` is never defaulted to `USD` and never rewritten; the server checks the ISO 4217 format.
+- `task_id` / `taskId` goes to the envelope `taskId`, not to the payload:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "type": "llm.usage",
+  "agentId": "builder",
+  "taskId": "task_42",
+  "payload": {
+    "provider": "Anthropic",
+    "model": "claude-sonnet-4-5",
+    "inputTokens": 1800,
+    "outputTokens": 450,
+    "cacheReadTokens": 1200,
+    "cacheWriteTokens": 300,
+    "cost": 0.012,
+    "costSource": "provider-reported",
+    "currency": "USD",
+    "requestId": "req_01"
+  }
+}
+```
+
+Here `cachedTokens` and `reasoningTokens` were not given, so they are missing from the payload, not set to `0`.
 
 ### `cachedTokens` is deprecated
 

@@ -1,6 +1,15 @@
 import { crewProject, type CrewRoomDefinition, type CrewView } from './crewModel';
 import { crewPolygon, type CrewPoint } from './crewRenderPrimitives';
-import { CREW_BACKGROUND_COLOR, CREW_DOOR_COLOR, CREW_FLOOR_GRID_STYLE, CREW_WALL_SHADES, crewFloorColor } from './crewLightingLayer';
+import {
+  CREW_BACKGROUND_COLOR,
+  CREW_BACKGROUND_COLOR_HIGH_CONTRAST,
+  CREW_DOOR_COLOR,
+  CREW_FLOOR_GRID_STYLE,
+  CREW_FLOOR_GRID_STYLE_HIGH_CONTRAST,
+  CREW_STROKE_HIGH_CONTRAST,
+  crewFloorColor,
+  crewWallShades,
+} from './crewLightingLayer';
 
 /**
  * Capa de escena: estructura fija de una sala Crew (fondo, paredes traseras, piso,
@@ -15,24 +24,27 @@ export interface CrewSceneGeometry {
 }
 
 /** Fondo de cámara en píxeles de pantalla, antes de aplicar la transformación de escena. */
-export function drawCrewBackground(ctx: CanvasRenderingContext2D, width: number, height: number): void {
-  ctx.fillStyle = CREW_BACKGROUND_COLOR;
+export function drawCrewBackground(ctx: CanvasRenderingContext2D, width: number, height: number, highContrast = false): void {
+  ctx.fillStyle = highContrast ? CREW_BACKGROUND_COLOR_HIGH_CONTRAST : CREW_BACKGROUND_COLOR;
   ctx.fillRect(0, 0, width, height);
 }
 
 /** Dos paredes traseras con altura 2.5D y el piso de la sala; las frontales se omiten (cutaway). */
 export function drawCrewRoomShell(ctx: CanvasRenderingContext2D, room: Pick<CrewRoomDefinition, 'id'>,
-  width: number, depth: number, { isoPoint, wallHeight }: CrewSceneGeometry): void {
+  width: number, depth: number, { isoPoint, wallHeight }: CrewSceneGeometry, highContrast = false): void {
   const corners = [isoPoint(0, 0), isoPoint(width, 0), isoPoint(width, depth), isoPoint(0, depth)];
-  crewPolygon(ctx, [corners[0], corners[1], isoPoint(width, 0, wallHeight), isoPoint(0, 0, wallHeight)], CREW_WALL_SHADES.xWall);
-  crewPolygon(ctx, [corners[3], corners[0], isoPoint(0, 0, wallHeight), isoPoint(0, depth, wallHeight)], CREW_WALL_SHADES.yWall);
-  crewPolygon(ctx, corners, crewFloorColor(room));
+  const walls = crewWallShades(highContrast);
+  const stroke = highContrast ? CREW_STROKE_HIGH_CONTRAST : undefined;
+  crewPolygon(ctx, [corners[0], corners[1], isoPoint(width, 0, wallHeight), isoPoint(0, 0, wallHeight)], walls.xWall, stroke);
+  crewPolygon(ctx, [corners[3], corners[0], isoPoint(0, 0, wallHeight), isoPoint(0, depth, wallHeight)], walls.yWall, stroke);
+  crewPolygon(ctx, corners, crewFloorColor(room, highContrast), stroke);
 }
 
 /** Cuadrícula de piso cada unidad local; es ayuda visual, no un contrato de celdas. */
-export function drawCrewFloorGrid(ctx: CanvasRenderingContext2D, width: number, depth: number, { isoPoint }: CrewSceneGeometry): void {
-  ctx.strokeStyle = CREW_FLOOR_GRID_STYLE.stroke;
-  ctx.lineWidth = CREW_FLOOR_GRID_STYLE.lineWidth;
+export function drawCrewFloorGrid(ctx: CanvasRenderingContext2D, width: number, depth: number, { isoPoint }: CrewSceneGeometry, highContrast = false): void {
+  const style = highContrast ? CREW_FLOOR_GRID_STYLE_HIGH_CONTRAST : CREW_FLOOR_GRID_STYLE;
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = style.lineWidth;
   for (let x = 0; x <= width; x++) {
     const p = isoPoint(x, 0), q = isoPoint(x, depth);
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();

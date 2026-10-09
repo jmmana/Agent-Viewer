@@ -1,7 +1,7 @@
 import type { CrewRoomDefinition, CrewView } from './crewModel';
 import { CREW_PROP_SIZE } from './crewSpatial';
 import { crewPolygon, type CrewPoint } from './crewRenderPrimitives';
-import { CREW_PROP_SHADES } from './crewLightingLayer';
+import { crewPropShades } from './crewLightingLayer';
 
 /**
  * Capa de props: dibuja cada mueble como una caja 2.5D con sus tres caras visibles
@@ -13,13 +13,14 @@ export type CrewFurnitureItem = CrewRoomDefinition['furniture'][number];
 
 /** Dibuja un mueble en un punto ya proyectado a coordenadas de sala (antes de isoPoint). */
 export function drawCrewProp(ctx: CanvasRenderingContext2D, item: Pick<CrewFurnitureItem, 'type'>,
-  x: number, y: number, view: CrewView, isoPoint: (x: number, y: number, z?: number) => CrewPoint): void {
+  x: number, y: number, view: CrewView, isoPoint: (x: number, y: number, z?: number) => CrewPoint,
+  highContrast = false): void {
   const size = CREW_PROP_SIZE[item.type];
   const sideView = view === 'left' || view === 'right';
   const w = sideView ? size.depth : size.width;
   const d = sideView ? size.width : size.depth;
   const h = size.height;
-  const shade = CREW_PROP_SHADES[item.type];
+  const shade = crewPropShades(highContrast)[item.type];
   const b = isoPoint(x + w / 2, y - d / 2);
   const c = isoPoint(x + w / 2, y + d / 2), e = isoPoint(x - w / 2, y + d / 2);
   const at = isoPoint(x - w / 2, y - d / 2, h), bt = isoPoint(x + w / 2, y - d / 2, h);

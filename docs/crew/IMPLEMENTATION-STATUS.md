@@ -1,7 +1,7 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-09 (America/Bogota). Main observado: `a8bd9a7`.
-Último avance: #167, módulos independientes del renderer Crew, y #158, benchmarks de rendimiento (ambos sin cerrar). Último issue completado: #116, contrato de estilo visual Crew. Avance sin cerrar también en #170, colisiones AABB, puertas funcionales y zonas navegables sobre las once salas. Último issue cerrado: #166, contrato de arquitectura de dos modos. Epic: #114.
+Último avance: #167, módulos independientes del renderer Crew, #158, benchmarks de rendimiento, y #157, controles de accesibilidad (los tres sin cerrar). Último issue completado: #116, contrato de estilo visual Crew. Avance sin cerrar también en #170, colisiones AABB, puertas funcionales y zonas navegables sobre las once salas. Último issue cerrado: #166, contrato de arquitectura de dos modos. Epic: #114.
 
 ## Avances y cierres verificados
 
@@ -157,6 +157,48 @@ Este inventario refleja el estado al redactar la primera ejecución. Desde enton
 | [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Persistencia en #183, enlaces/reset en #187, API embebida controlada en esta rama. Validación final y preferencias de accesibilidad pendientes. |
 | [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Inventario fusionado (#176); banco de originales en #194, integración y QA visual en runtime pendientes. |
 | [#173](https://github.com/jmmana/Agent-Viewer/issues/173) | ADR fusionado (#174); validación gráfica final pendiente. |
+
+## Continuación #157: accesibilidad, controles y audio (wiring)
+
+`crewPreferences.ts` crece de forma aditiva sobre el contrato de #171 (solo
+`reducedMotion`) con `muted`, `volume`, `highContrast`, `subtitles`, `hudSize`
+y `accessibilityPreset`; un JSON previo sin estos campos sigue leyéndose con
+sus defaults seguros. `applyCrewAccessibilityPreset()` aplica de una sola vez
+una combinación pensada para lector de pantalla o baja visión.
+
+`CrewStage` agrega los controles correspondientes (checkbox de alto contraste,
+checkbox de subtítulos, mute/volumen, select de tamaño de HUD, select de
+preset) dentro de un `<details>` colapsado por defecto para no empujar el
+canvas fuera del viewport en móvil (320-390px); "Reducir movimiento" queda en
+la barra principal, sin mover su posición. Los cambios de sala y de cámara se
+anuncian en una región `aria-live` visible solo si `subtitles` está activo
+(si no, sigue en el DOM para lectores de pantalla pero oculta visualmente).
+El canvas usa una paleta de alto contraste alternativa (`crewContrast.ts`),
+con relación de contraste WCAG calculada y probada (AA para el tema estándar,
+AAA para el de alto contraste).
+
+Limitación conocida y explícita: Crew no tiene ningún motor de audio propio
+todavía. Mute/volumen son wiring puro, sin ningún sonido real que controlar;
+quedan listos para que #150 (que depende de este issue) los lea cuando agregue
+el motor de audio real. No se creó ningún efecto de sonido ni música nueva.
+
+Validación: typecheck; 751 pruebas node (750 aprobadas, una omitida) y 648
+Vitest aprobadas, incluidas 17 pruebas nuevas de contraste WCAG y de las
+preferencias nuevas. 23/23 E2E Chrome aprobados, incluida una prueba nueva de
+navegación solo por teclado de los controles de accesibilidad. Builds
+app/lib/CLI y `check:package` aprobados; `npm audit --omit=dev` sin
+vulnerabilidades. SDK Python: 22/23 aprobadas; la prueba restante
+(`test_live_server_integration`) falla por un `tsx` ausente en
+`node_modules/.bin` de este entorno, una condición preexistente del worktree
+sin relación con este cambio.
+
+No se hizo prueba manual con VoiceOver/NVDA ni en dispositivo físico; la
+cobertura de teclado es automatizada (Playwright, foco + Espacio/Enter/flechas
+sobre los controles nuevos), no un lector de pantalla real. #166 ya se cerró
+(contrato de arquitectura); #169 y #156 siguen abiertos como issues aunque su
+código base (aislamiento de escena, cámara) ya existe en main. Este PR no toca
+esos archivos. #157 no se cierra del todo: falta la verificación manual con
+lector de pantalla real y el audio verdadero depende de #150.
 
 ## Próximos tres pasos
 

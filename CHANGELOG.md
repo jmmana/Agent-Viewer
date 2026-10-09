@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Crew accessibility preferences (#157)**: `CrewPreferences` (`src/crew/crewPreferences.ts`, re-exported from `@warlockcode/agent-viewer`) gains `muted`, `volume`, `highContrast`, `subtitles`, `hudSize` and `accessibilityPreset`, additive and backward compatible with the `#171` shape (only `reducedMotion`). New `applyCrewAccessibilityPreset()` sets several fields at once for a "screen reader" or "low vision" preset. `CrewStage` wires checkboxes/select/range controls for these preferences, a collapsed-by-default `<details>` disclosure to keep the toolbar usable on narrow viewports, visible camera/room-change captions gated by `subtitles` (screen-reader-only otherwise), and a high-contrast canvas palette (`src/crew/crewContrast.ts`, with a WCAG contrast-ratio helper and unit tests). Mute/volume are wiring only: Crew has no audio engine yet (#150 depends on this issue), so they are a documented no-op until real audio exists.
+
 ## [0.4.0] - 2026-10-09
 
 "Usage ledger": the server keeps one durable, append-only row per model call with its own receive time, answers grouped audit questions and paginated call listings over it, exports it as CSV or JSONL with per-currency reconciliation totals, redacts secrets at export, bounds how long it (and raw events) are kept, and no longer accepts a token in a URL or starts open by accident. Also ships the portal loading full history on open and OTLP metrics ingestion. The one breaking change is listed first; see [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) for the full upgrade notes, [docs/usage-ledger.md](docs/usage-ledger.md), [docs/usage-export.md](docs/usage-export.md), [docs/retention.md](docs/retention.md) and [docs/redaction.md](docs/redaction.md) for the references themselves.

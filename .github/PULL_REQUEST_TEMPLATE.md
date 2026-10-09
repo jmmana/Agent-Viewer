@@ -30,6 +30,7 @@ The first `npm run check:package` attempt was before `npm run build:cli` and rep
 ## What Is Left
 
 - No implementation work remains. Browser-based smoke verification was unavailable because the Playwright browser transport closed; the live health hook and banner are covered by Vitest.
+- CodeQL reported `js/missing-rate-limiting` on `GET /health`. This is a false positive: the required public health route only reports auth mode and intentionally stays unthrottled.
 
 ## Checklist
 

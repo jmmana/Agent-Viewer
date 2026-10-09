@@ -83,6 +83,11 @@ test('libera observadores Crew al salir y mantiene controles ES en cuatro tamañ
     const bounds = (await page.locator('canvas').boundingBox())!;
     expect(bounds.width).toBeGreaterThan(0);
     expect(bounds.x+bounds.width).toBeLessThanOrEqual(width);
+    // Un canvas con tamaño puede estar tapado por una barra lateral superpuesta.
+    await expect.poll(() => page.locator('canvas').evaluate(canvas => {
+      const rect = canvas.getBoundingClientRect();
+      return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === canvas;
+    })).toBe(true);
     await page.screenshot({path:testInfo.outputPath(`crew-es-${width}.png`)});
     await page.getByRole('button',{name:'Caricatura',exact:true}).click();
     await expect.poll(()=>page.evaluate(()=>(window as unknown as {__crewObserverCount:number}).__crewObserverCount)).toBe(0);

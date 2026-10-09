@@ -130,4 +130,9 @@ Playwright conserva vídeos WebM de las pruebas en test-results, publicados por 
 
 Reproducción: ejecutar `npm run dev` y, en otra terminal, `PLAYWRIGHT_CHANNEL=chrome npm run crew:capture` (o instalar Chromium con `npx playwright install chromium` y omitir la variable). Genera `test-results/crew-demo/runtime.webm`. Conversión opcional con ffmpeg: `ffmpeg -i test-results/crew-demo/runtime.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart runtime-navigation.mp4`.
 
-Validación de esta continuación: `npm run lint` y nueve E2E; código de producción sin cambios respecto a #185, cuyas 61 pruebas node, 449 Vitest y builds están aprobados. PR/SHA de esta continuación pendientes de publicación.
+Validación de esta continuación: `npm run lint` y nueve E2E; código de producción sin cambios respecto a #185, cuyas 61 pruebas node, 449 Vitest y builds están aprobados. Implementación inicial `0e46a0f`, [PR #186](https://github.com/jmmana/Agent-Viewer/pull/186), abierto sobre #185.
+
+
+### Hallazgo de QA visual móvil
+
+La captura de 320 px tras iniciar en escritorio mostró la barra lateral superpuesta a Crew. La primera aserción de tamaño del canvas no detectaba la oclusión. Corregido en App mediante visibilidad responsive de la barra únicamente en modo Crew, sin modificar el componente/renderer Caricatura ni su estado de apertura. La actividad sigue accesible desde la pestaña de actividad. El E2E ahora exige que `elementFromPoint` en el centro del canvas sea el propio canvas, además de revisar tamaño y visibilidad. Corrección validada: typecheck, 61 node, 449 Vitest, nueve E2E y build app aprobados. [Captura móvil corregida](evidence/camera-156/crew-mobile-es.png).

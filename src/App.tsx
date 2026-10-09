@@ -702,22 +702,24 @@ export default function App() {
             </div>
 
             {/* Collapsible Vertical Activity Timeline & Inspector Sidebar */}
-            <LiveTimelineSidebar
-              isOpen={isSidebarOpen}
-              onToggleOpen={() => setIsSidebarOpen((prev) => !prev)}
-              events={simState.events}
-              agents={simState.agents}
-              tasks={simState.tasks}
-              activeMeetingId={simState.activeMeetingId}
-              selectedAgent={selectedAgent}
-              onSelectAgent={(id) => setSelectedAgentId(id)}
-              onFocusAgent={handleFocusAgent}
-              onSendMessage={handleSendMessageToAgent}
-              onUpdateStatus={handleUpdateAgentStatus}
-              onOpenAgentDetailModal={(id) => setDetailModalAgentId(id)}
-              theme={theme}
-              locale={locale}
-            />
+            <div className={visualMode === 'crew' ? 'hidden lg:contents' : 'contents'}>
+              <LiveTimelineSidebar
+                isOpen={isSidebarOpen}
+                onToggleOpen={() => setIsSidebarOpen((prev) => !prev)}
+                events={simState.events}
+                agents={simState.agents}
+                tasks={simState.tasks}
+                activeMeetingId={simState.activeMeetingId}
+                selectedAgent={selectedAgent}
+                onSelectAgent={(id) => setSelectedAgentId(id)}
+                onFocusAgent={handleFocusAgent}
+                onSendMessage={handleSendMessageToAgent}
+                onUpdateStatus={handleUpdateAgentStatus}
+                onOpenAgentDetailModal={(id) => setDetailModalAgentId(id)}
+                theme={theme}
+                locale={locale}
+              />
+            </div>
           </div>
         )}
 

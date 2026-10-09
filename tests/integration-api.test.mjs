@@ -34,13 +34,27 @@ test('REST API: /health and /ready endpoints', async () => {
     const readyRes = await fetch(`${baseUrl}/ready`);
     assert.equal(readyRes.status, 200);
     const readyJson = await readyRes.json();
+    // Memory storage has nothing to replay (issue #52): the rebuild is reported 'done' at once, with
+    // zero events and zero duration.
     assert.deepEqual(readyJson, {
       ok: true,
       ready: true,
       storage: 'memory',
       ingestion: { conflicts: readyJson.ingestion.conflicts, legacyUnverifiedDuplicates: 0 },
+      rebuild: {
+        state: 'done',
+        totalEvents: 0,
+        processedEvents: 0,
+        skippedEvents: 0,
+        skippedEventIds: [],
+        startedAt: readyJson.rebuild.startedAt,
+        finishedAt: readyJson.rebuild.finishedAt,
+        durationMs: 0,
+      },
     });
     assert.equal(typeof readyJson.ingestion.conflicts, 'number');
+    assert.equal(typeof readyJson.rebuild.startedAt, 'number');
+    assert.equal(readyJson.rebuild.finishedAt, readyJson.rebuild.startedAt);
   } finally {
     server.close();
   }
@@ -70,8 +84,8 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.ok, true);
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
-      schemaVersion: 3,
-      latestKnownSchemaVersion: 3,
+      schemaVersion: 4,
+      latestKnownSchemaVersion: 4,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');

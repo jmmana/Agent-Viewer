@@ -235,8 +235,40 @@ Validation rules enforced:
 Base URL: `http://localhost:8787`
 
 ### Health & Readiness
-- `GET /health`: Health status, server version, connected SSE client count, and current `auth` / `webhookAuth` modes. An open server still returns HTTP 200 with `ok: true`.
-- `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`).
+- `GET /health`: Health status, server version, connected SSE client count, and current `auth` / `webhookAuth` modes. An open server still returns HTTP 200 with `ok: true`, including during a SQLite startup rebuild: point container liveness probes here.
+- `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`). With SQLite storage, `/ready` also answers `503` with `Retry-After: 1` and a `rebuild` object until the server finishes replaying the stored events into derived state; point container and orchestrator readiness probes here, not at `/health`.
+
+**SQLite startup rebuild.** On startup, a `sqlite`-backed server replays every stored event, in insertion order, through the same reducer the live path uses, rebuilding agents, runtimes, sessions, tasks, meetings and usage totals from scratch. The state after a restart is identical to the state before it. `GET /ready` reports progress:
+
+```json
+{
+  "ok": false,
+  "ready": false,
+  "storage": "sqlite",
+  "rebuild": {
+    "state": "running",
+    "totalEvents": 100000,
+    "processedEvents": 42000,
+    "skippedEvents": 0,
+    "skippedEventIds": [],
+    "startedAt": 1791460800000,
+    "finishedAt": null,
+    "durationMs": null
+  }
+}
+```
+
+`rebuild.state` is `"done"` once the replay finishes (`/ready` then answers `200`), or `"failed"` with a `rebuild.error` message if the replay could not complete (`/ready` stays `503`). A stored row that cannot be parsed or applied is skipped, counted in `rebuild.skippedEvents`, and its id listed in `rebuild.skippedEventIds` (first 20); the rest of the rebuild still completes. Memory storage has nothing to replay: `/ready` answers `200` immediately with `rebuild.state: "done"`.
+
+While the rebuild runs, routes that read or write derived state answer `503 store_rebuilding` (or `503 store_rebuild_failed` if the rebuild failed) with a `rebuild` object in the body and a `Retry-After: 1` header:
+
+| Route | Behavior during the rebuild |
+|---|---|
+| `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:agentId`, `POST /api/v1/runtimes` | `503 store_rebuilding` (or `store_rebuild_failed`). |
+| `POST /api/v1/events`, `POST /api/v1/events/batch`, `POST /api/v1/webhooks/generic` | Accepted, stored and broadcast as usual; the rebuild (or a later restart) applies them to derived state once it reaches them. |
+| `GET /api/v1/events`, `GET /api/v1/events/stream` | Unchanged: these read SQLite directly. |
+
+Both SDKs only write through the events routes, which stay open during the rebuild, and both already retry `5xx` responses on writes; no SDK change is needed. A client calling `snapshot()` during a rebuild sees the `503` as an error, which is the correct signal to retry after `Retry-After`.
 
 The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or `open`. These fields never include the token:
 
@@ -776,19 +808,25 @@ Events are tagged with `runtimeId` and `sessionId`, and queryable via:
 
 Agent Viewer supports two persistence backends:
 
-1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events).
-2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Runtime, session, and agent state remains in memory.
+1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events), derived state included.
+2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses (see [Health & Readiness](#health--readiness) above). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer ships with the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug.
 
 To enable SQLite persistence:
 ```env
 AGENT_VIEWER_STORAGE=sqlite
 AGENT_VIEWER_SQLITE_PATH=./data/agent-viewer.db
 AGENT_VIEWER_SQLITE_BACKUP=auto
+AGENT_VIEWER_REBUILD_PAGE_SIZE=2000
+AGENT_VIEWER_REBUILD_PAGE_DELAY_MS=0
 ```
+
+`AGENT_VIEWER_REBUILD_PAGE_SIZE` (default `2000`) controls how many rows the startup rebuild replays per page; `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` (default `0`) adds an extra delay after each page, useful for tests and diagnostics. The server yields to the event loop between pages, so `/health` and `/ready` keep answering during a long rebuild.
 
 SQLite schema migrations run automatically at startup. Existing databases are backed up next to the file before migration by default. Backups contain the same events, are never pruned automatically, and can delay startup for large databases. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if backups are managed separately. A server refuses a database with a newer schema. For rollback, stop the server and restore the `.bak` file before starting an older version.
 
-Migration 3 (`request-key-dedup`) adds the `(provider, requestId)` dedup key described in [Idempotency & Replays](#-5-idempotency--replays). It backfills `request_provider` and `request_id` from every stored `llm.usage` and `llm.failed` row and marks pre-existing rows that already shared a key as duplicates of the earliest one (`matchesOriginal` stays unknown for those: the legacy content was never compared under this rule). Because SQLite totals before this release lived only in the in-memory fallback and reset on restart, this migration itself changes no persisted figure; but totals rebuilt from an upgraded database by a later item (#52) will be lower wherever such duplicates existed, and that is the correction, not data loss. Downgrading to an older release is not supported for exact figures: it ignores the new columns and counts the duplicate rows again.
+Migration 3 (`request-key-dedup`) adds the `(provider, requestId)` dedup key described in [Idempotency & Replays](#-5-idempotency--replays). It backfills `request_provider` and `request_id` from every stored `llm.usage` and `llm.failed` row and marks pre-existing rows that already shared a key as duplicates of the earliest one (`matchesOriginal` stays unknown for those: the legacy content was never compared under this rule). Because SQLite totals before this release lived only in the in-memory fallback and reset on restart, this migration itself changes no persisted figure; but totals rebuilt from an upgraded database by migration 4 are lower wherever such duplicates existed, and that is the correction, not data loss. Downgrading to an older release is not supported for exact figures: it ignores the new columns and counts the duplicate rows again.
+
+Migration 4 (`events-seq`) adds `events.seq`, a durable insertion-order counter independent of `rowid` (`events.id` is a `TEXT PRIMARY KEY`, so SQLite is free to renumber `rowid` on `VACUUM`). It is backfilled from `rowid`, the true insertion order at the moment the migration runs; new rows get their `seq` from an in-memory counter seeded from the stored maximum. The startup rebuild replays events in `seq` order, and the `afterId` cursor used by `GET /api/v1/events` moved from `rowid` to `seq`.
 
 ---
 

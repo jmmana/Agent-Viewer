@@ -752,9 +752,11 @@ La firma se compara en tiempo constante. Las marcas de tiempo vencidas y las fir
 
 </details>
 
-**Almacenamiento:** `memory` (por defecto) guarda los últimos 10.000 eventos en un búfer circular. `sqlite` usa el módulo `node:sqlite` incluido en Node y guarda eventos en `./data/agent-viewer.db`; el estado de runtimes, sesiones y agentes permanece en memoria.
+**Almacenamiento:** `memory` (por defecto) guarda los últimos 10.000 eventos en un búfer circular, incluido el estado derivado. `sqlite` usa el módulo `node:sqlite` incluido en Node y guarda cada evento en `./data/agent-viewer.db`. Los runtimes, sesiones, agentes, tareas, reuniones y totales de uso no se guardan por separado: al arrancar, el servidor reconstruye todos ellos reproduciendo los eventos guardados, en orden, con el mismo reductor que usa la ruta en vivo. El estado tras un reinicio es idéntico al estado anterior, los eventos que no se pueden leer se omiten y se reportan, y `/ready` responde `503` hasta que termina la reconstrucción (ver más abajo). Reconstruir 100.000 eventos toma entre 1 y 2 segundos aproximadamente (ver `tests/sqlite-rebuild.test.mjs`). Como el reductor forma parte del servidor, una actualización de versión que lo cambie (por ejemplo una corrección de cómo se cuenta un costo desconocido) recalcula todo el historial con el nuevo reductor en el siguiente arranque: eso es intencional, no un error.
 
 Las migraciones del esquema SQLite se ejecutan automáticamente al iniciar. Antes de actualizar una base de datos existente, `AGENT_VIEWER_SQLITE_BACKUP=auto` crea por defecto un archivo `.bak` junto a ella. Las copias contienen los mismos datos de eventos, nunca se eliminan automáticamente y pueden alargar el primer inicio si el archivo es grande. Usa `AGENT_VIEWER_SQLITE_BACKUP=off` si gestionas las copias por tu cuenta. El servidor rechaza una base con un esquema más reciente; para volver atrás, detén el servidor y restaura el archivo `.bak` antes de iniciar una versión anterior. En modo SQLite, `/ready` informa `database.schemaVersion`, `database.latestKnownSchemaVersion` y `database.appliedAt`. Son datos de migración de la base; `schemaVersion` de `/health` corresponde a la versión del contrato de eventos (`1.0`).
+
+**Disponibilidad durante una reconstrucción SQLite:** `GET /ready` responde `503` con `Retry-After: 1` y `rebuild.state: "running"` hasta que termina la reproducción, luego `200` con `rebuild.state: "done"` y `rebuild.durationMs`. `GET /health` (el chequeo de vida) responde `200` todo el tiempo. Mientras la reconstrucción corre, `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:id` y `POST /api/v1/runtimes` responden `503 store_rebuilding`; `POST /api/v1/events` y `/events/batch` siguen abiertos, se guardan, y se aplican cuando la reconstrucción (o un reinicio posterior) los alcanza. Apunta los chequeos de vida del contenedor a `/health` y los de disponibilidad a `/ready`. El almacenamiento en memoria no tiene nada que reproducir: `/ready` responde `200` de inmediato.
 
 ---
 
@@ -770,6 +772,8 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` o `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | Archivo SQLite cuando el almacenamiento es `sqlite`. |
 | `AGENT_VIEWER_SQLITE_BACKUP` | `auto` | Hace una copia de una base SQLite existente antes de migrarla, o usa `off` si gestionas las copias por separado. |
+| `AGENT_VIEWER_REBUILD_PAGE_SIZE` | `2000` | Filas reproducidas por página durante la reconstrucción de arranque desde SQLite. |
+| `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` | `0` | Retraso adicional después de cada página de la reconstrucción, para pruebas y diagnóstico. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Máximo de eventos por petición de lote. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Peticiones por minuto por IP en `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | vacío | Activa la verificación HMAC del webhook genérico. |

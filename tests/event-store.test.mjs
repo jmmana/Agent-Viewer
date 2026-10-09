@@ -420,7 +420,7 @@ test('Usage aggregates: re-sending a stored event id does not change the summary
   assert.deepStrictEqual(await store.usageSummary(), before);
 });
 
-test('Usage aggregates: re-sending any id stored in SQLite does not change the summary, even after the memory ring evicted it', async () => {
+test('Usage aggregates: re-sending any id stored in SQLite does not change the summary, however many events were stored after it', async () => {
   const { dir, file } = tempDbPath('usage-dedup');
   const store = new SQLiteEventStore(file);
   try {
@@ -428,11 +428,11 @@ test('Usage aggregates: re-sending any id stored in SQLite does not change the s
     await store.appendBatch(events);
     const before = await store.usageSummary();
 
-    // Push the usage events out of the in-memory ring (10,000 events) with events that carry no usage.
+    // SQLite has no ring buffer (issue #52): unlike MemoryEventStore, eventsCount is the true stored count, not
+    // capped at 10,000, and the dedup index never forgets an original however many events came after it.
     const filler = Array.from({ length: 10_000 }, (_, index) => storeEvent(`evt_filler_${index}`, 10 + index));
     await store.appendBatch(filler);
-    // The ring keeps the newest 10,000 events, so the four usage events (stored first) are no longer in memory.
-    assert.equal((await store.snapshot()).eventsCount, 10_000);
+    assert.equal((await store.snapshot()).eventsCount, events.length + 10_000);
 
     assert.equal((await store.append(events[2])).duplicate, true);
     const batch = await store.appendBatch(events);
@@ -486,8 +486,8 @@ test('agent profile upserts preserve usage from events and preserve unknown cost
         },
       );
 
-      const memoryStore = store instanceof SQLiteEventStore ? store.memoryFallback : store;
-      memoryStore.agents.get('upsert-agent').cost = null;
+      // Cost stays null: the event's payload never reported a currency, so legacyCost() cannot single out one
+      // (currency, costSource) pair to add up (issue #52 removed the direct `memoryFallback` this used to poke).
       assert.equal((await store.upsertAgent({ id: 'upsert-agent', name: 'Updated again' })).cost, null);
     }
   } finally {
@@ -496,15 +496,19 @@ test('agent profile upserts preserve usage from events and preserve unknown cost
   }
 });
 
-test('agent.updated applies statusText without changing agent.registered behavior', async () => {
+test('agent.registered applies statusText (and status) when present, and agent.updated can still change it afterwards', async () => {
+  // Issue #52: `POST /api/v1/agents` now resolves status/statusText itself and puts them in the `agent.registered`
+  // payload, so a rebuild from storage reaches the same values the live route returned. The reducer must apply
+  // them on `agent.registered`, not only on `agent.updated`.
   const store = new MemoryEventStore();
   await store.upsertAgent({ id: 'updated-status-text', name: 'Status Text' });
   await store.append(storeEvent('evt_status_text_registered', 5500, {
     type: 'agent.registered',
     agentId: 'updated-status-text',
-    payload: { statusText: 'Registration text' },
+    payload: { statusText: 'Registration text', status: 'CODING' },
   }));
-  assert.equal((await store.getAgent('updated-status-text')).statusText, 'Active');
+  assert.equal((await store.getAgent('updated-status-text')).statusText, 'Registration text');
+  assert.equal((await store.getAgent('updated-status-text')).status, 'CODING');
   await store.append(storeEvent('evt_status_text_updated', 6000, {
     type: 'agent.updated',
     agentId: 'updated-status-text',
@@ -769,7 +773,7 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
   fs.copyFileSync(path.join(sqliteFixtures, 'agent-viewer-0.2.1.db'), file);
   const store = new SQLiteEventStore(file, { backup: 'off' });
   try {
-    assert.deepEqual(store.migration.applied.map(({ name }) => name), ['baseline', 'content-hash', 'request-key-dedup']);
+    assert.deepEqual(store.migration.applied.map(({ name }) => name), ['baseline', 'content-hash', 'request-key-dedup', 'events-seq']);
     const db = new DatabaseSync(file);
     const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();
     db.close();

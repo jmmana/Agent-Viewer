@@ -84,6 +84,32 @@ try {
   if (process.env.DEBUG && error instanceof Error && error.stack) console.error(error.stack);
   process.exit(1);
 }
+// Starts the SQLite startup rebuild without blocking the server from listening (issue #52). Memory storage
+// resolves at once. `init()` is safe to call more than once: `SQLiteEventStore` already started it from its own
+// constructor, so this just lets callers await the same promise if they need to.
+void store.init();
+
+/** Blocks a route that reads or writes derived state until the startup rebuild has finished. */
+// Generic over the route's own params/body/query types, so mixing this in as an extra handler before a typed
+// route (for example one with a `:agentId` param) never widens that route's own handler to `ParamsDictionary`.
+function requireReady<P = Record<string, string>, ResBody = any, ReqBody = any, ReqQuery = any>(
+  _req: express.Request<P, ResBody, ReqBody, ReqQuery>,
+  res: express.Response<ResBody>,
+  next: express.NextFunction
+): void {
+  const readiness = store.readiness();
+  if (readiness.ready) {
+    next();
+    return;
+  }
+  res.setHeader('Retry-After', '1');
+  res.status(503).json({
+    error: readiness.rebuild.state === 'failed' ? 'store_rebuild_failed' : 'store_rebuilding',
+    message: 'Server state is being rebuilt from storage',
+    rebuild: readiness.rebuild,
+  } as ResBody);
+}
+
 const clients = new Set<express.Response>();
 
 // Rate limiter storage
@@ -285,17 +311,20 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/ready', async (_req, res) => {
+app.get('/ready', (_req, res) => {
   try {
-    const storageType = process.env.AGENT_VIEWER_STORAGE || 'memory';
+    const readiness = store.readiness();
     const database = store.getSchemaInfo?.();
-    res.json({
-      ok: true,
-      ready: true,
-      storage: storageType,
+    if (!readiness.ready) res.setHeader('Retry-After', '1');
+    res.status(readiness.ready ? 200 : 503).json({
+      ok: readiness.ready,
+      ready: readiness.ready,
+      storage: readiness.storage,
       ...(database ? { database } : {}),
       // Per process, reset on restart: conflicting duplicates rejected and legacy rows matched by id only.
       ingestion: store.ingestionCounters(),
+      // Startup rebuild from SQLite (issue #52): 'done' at once for memory storage, nothing to replay.
+      rebuild: readiness.rebuild,
     });
   } catch (err: any) {
     res.status(503).json({ ok: false, ready: false, error: err?.message || 'Storage error' });
@@ -544,7 +573,7 @@ app.get('/api/v1/events', async (req, res) => {
 // -------------------------------------------------------------
 // Snapshot
 // -------------------------------------------------------------
-app.get('/api/v1/snapshot', async (_req, res) => {
+app.get('/api/v1/snapshot', requireReady, async (_req, res) => {
   const snapshot = await store.snapshot();
   res.json(snapshot);
 });
@@ -618,25 +647,17 @@ app.get('/api/v1/events/stream', async (req, res) => {
 // -------------------------------------------------------------
 // Agent Management
 // -------------------------------------------------------------
-app.post('/api/v1/agents', async (req, res) => {
+app.post('/api/v1/agents', requireReady, async (req, res) => {
   const { id, name, roleTitle, role, provider, model, workspace, status, statusText } = req.body ?? {};
   if (!id || typeof id !== 'string' || !name || typeof name !== 'string') {
     res.status(400).json({ error: 'validation_failed', message: 'Fields "id" and "name" are required' });
     return;
   }
 
-  const agent = await store.upsertAgent({
-    id,
-    name,
-    roleTitle,
-    role,
-    provider,
-    model,
-    workspace,
-    status: status || 'IDLE',
-    statusText: statusText || 'Registered',
-  });
-
+  // Every default this route would once have passed straight to `store.upsertAgent` now goes into the event
+  // payload instead (issue #52): the record below is read back from `ServerState` after the event is applied,
+  // the same state a startup rebuild reaches by replaying this same event.
+  const resolvedStatus = typeof status === 'string' && status.trim() ? status.trim().toUpperCase() : 'IDLE';
   const regEvent: CanonicalEvent = {
     schemaVersion: '1.0',
     id: serverEventId('reg'),
@@ -646,28 +667,30 @@ app.post('/api/v1/agents', async (req, res) => {
     agentId: id,
     severity: 'normal',
     summary: `Registered ${name}`,
-    payload: { id, name, roleTitle, provider, model, workspace },
+    payload: {
+      id,
+      name,
+      roleTitle: roleTitle || 'AI Agent',
+      role: role || 'custom',
+      provider: provider || 'Custom',
+      model: model || 'Custom',
+      workspace: workspace || 'development',
+      status: resolvedStatus,
+      statusText: statusText || 'Registered',
+    },
   };
 
   if (!(await appendServerEvent(regEvent, res))) return;
 
-  res.status(201).json(agent);
+  res.status(201).json(await store.getAgent(id));
 });
 
-app.patch('/api/v1/agents/:agentId', async (req, res) => {
+app.patch('/api/v1/agents/:agentId', requireReady, async (req, res) => {
   const agentId = req.params.agentId;
-  const existing = await store.getAgent(agentId);
-  if (!existing) {
-    res.status(404).json({ error: 'agent_not_found', message: `Agent "${agentId}" not found` });
-    return;
-  }
 
-  const body: unknown = req.body ?? {};
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    res.status(400).json({ error: 'validation_failed', message: 'Request body must be a JSON object' });
-    return;
-  }
-
+  // Checked before the existence lookup: `resolveEventAgentId` (issue #52's reducer, `serverState.ts`) never
+  // files these ids under an agent in the first place, so one would otherwise see 404 here instead of the
+  // dedicated reserved-id error.
   if (agentId === 'system' || agentId === 'external-runtime' || agentId.startsWith('runtime:')) {
     res.status(400).json({
       error: 'validation_failed',
@@ -678,6 +701,18 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
         message: 'Reserved agent ids cannot be updated through PATCH',
       }],
     });
+    return;
+  }
+
+  const existing = await store.getAgent(agentId);
+  if (!existing) {
+    res.status(404).json({ error: 'agent_not_found', message: `Agent "${agentId}" not found` });
+    return;
+  }
+
+  const body: unknown = req.body ?? {};
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    res.status(400).json({ error: 'validation_failed', message: 'Request body must be a JSON object' });
     return;
   }
 
@@ -806,14 +841,17 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
 // -------------------------------------------------------------
 // Runtimes & Sessions
 // -------------------------------------------------------------
-app.post('/api/v1/runtimes', async (req, res) => {
+app.post('/api/v1/runtimes', requireReady, async (req, res) => {
   const { id, name, framework, version, metadata } = req.body ?? {};
   if (!id || typeof id !== 'string') {
     res.status(400).json({ error: 'validation_failed', message: 'Field "id" is required' });
     return;
   }
 
-  const runtime = await store.upsertRuntime({ id, name, framework, version, metadata });
+  // The route resolves the 'custom' default itself and puts it in the event payload (issue #52), so the reducer
+  // never has to guess a runtime's framework from an event it only auto-created: `runtime.connected` always
+  // carries every field it sets, for a new runtime and for one that already exists.
+  const resolvedFramework = typeof framework === 'string' && framework.trim() ? framework.trim() : 'custom';
   const event: CanonicalEvent = {
     schemaVersion: '1.0',
     id: serverEventId('rt'),
@@ -823,24 +861,25 @@ app.post('/api/v1/runtimes', async (req, res) => {
     source: `runtime:${id}`,
     severity: 'normal',
     summary: `Runtime ${id} connected`,
-    payload: { id, name, framework, version, metadata },
+    payload: { id, name, framework: resolvedFramework, version, metadata },
   };
   if (!(await appendServerEvent(event, res))) return;
 
+  const runtime = (await store.listRuntimes()).find((r) => r.id === id) ?? null;
   res.status(201).json(runtime);
 });
 
-app.get('/api/v1/runtimes', async (_req, res) => {
+app.get('/api/v1/runtimes', requireReady, async (_req, res) => {
   const runtimes = await store.listRuntimes();
   res.json({ runtimes });
 });
 
-app.get('/api/v1/sessions', async (_req, res) => {
+app.get('/api/v1/sessions', requireReady, async (_req, res) => {
   const sessions = await store.listSessions();
   res.json({ sessions });
 });
 
-app.get('/api/v1/sessions/:sessionId', async (req, res) => {
+app.get('/api/v1/sessions/:sessionId', requireReady, async (req, res) => {
   const session = await store.getSession(req.params.sessionId);
   if (!session) {
     res.status(404).json({ error: 'session_not_found', message: `Session ${req.params.sessionId} not found` });

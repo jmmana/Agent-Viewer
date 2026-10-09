@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- SQLite-backed server state (agents, runtimes, sessions, tasks, meetings and usage totals) no longer resets to empty on restart. At startup the server now replays every stored event, in insertion order, through the same reducer the live path uses, so the state after a restart is identical to the state before it. An upgrade that changes the reducer recomputes the whole history with the new reducer at the next startup; that is intended, not a bug.
+
+### Changed
+- `GET /ready` answers `503` with `Retry-After: 1` and a `rebuild` object while a SQLite-backed server replays its stored events at startup, then `200` once the replay finishes. `GET /health` keeps answering `200` the whole time. While the rebuild runs, `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:id` and `POST /api/v1/runtimes` answer `503 store_rebuilding`; `POST /api/v1/events` and `/events/batch` stay open and are applied once the rebuild reaches them. Memory storage is unaffected: `/ready` answers `200` immediately.
+- `PATCH /api/v1/agents/:agentId` now emits an `agent.updated` event for any changed profile field (name, roleTitle, role, provider, model, workspace, statusText), not only for a status change. `POST /api/v1/agents` and `POST /api/v1/runtimes` now put every resolved default in their event payload (`agent.registered`, `runtime.connected`), so the state a startup rebuild reaches from stored events matches the live response exactly. Event ids built by these three routes now include a random suffix, so two changes to the same id in the same millisecond are never deduplicated against each other. SQLite migration 4 (`events-seq`) adds a durable insertion-order column (`events.seq`), backfilled from `rowid`; the startup rebuild and the `afterId` cursor use it instead of `rowid`, which SQLite can renumber on `VACUUM`.
+
 ### Added
 - The plain server warns at startup when `/api/v1` is open (no `AGENT_VIEWER_API_TOKEN`), naming the port, the bind address and whether webhooks are open too. `/health` reports the current `auth` (`token` or `open`) and `webhookAuth` (`signature`, `token` or `open`) modes, computed per request and never including the token. The live portal shows a persistent, localized banner and an `OPEN API` indicator next to the `LIVE` badge when the connected server is open; it never shows in demo mode or when the state cannot be read.
 

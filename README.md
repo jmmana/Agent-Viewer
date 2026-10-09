@@ -752,9 +752,11 @@ The signature is compared in constant time. Expired timestamps and bad signature
 
 </details>
 
-**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer. `sqlite` uses Node's built-in `node:sqlite` and persists events to `./data/agent-viewer.db`; runtime, session and agent state remains in memory.
+**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer, derived state included. `sqlite` uses Node's built-in `node:sqlite` and persists every event to `./data/agent-viewer.db`. Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses. The state after a restart is identical to the state before it, events that cannot be read are skipped and reported, and `/ready` answers `503` until the rebuild finishes (see below). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer is part of the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug.
 
 SQLite schema migrations run automatically at startup. Before upgrading an existing database, the default `AGENT_VIEWER_SQLITE_BACKUP=auto` writes a `.bak` file beside it. Backups contain the same event data, are never pruned automatically, and can make the first startup take longer for large files. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if you manage backups yourself. A server refuses a database with a newer schema; to roll back, stop the server and restore the `.bak` file before starting an older version. `/ready` reports `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt` in SQLite mode. These are database migration details; `/health`'s `schemaVersion` is the event contract version (`1.0`).
+
+**Readiness during a SQLite rebuild:** `GET /ready` answers `503` with `Retry-After: 1` and `rebuild.state: "running"` until the replay finishes, then `200` with `rebuild.state: "done"` and `rebuild.durationMs`. `GET /health` (the liveness probe) answers `200` the whole time. While the rebuild runs, `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:id` and `POST /api/v1/runtimes` answer `503 store_rebuilding`; `POST /api/v1/events` and `/events/batch` stay open, are stored, and are applied once the rebuild (or a later restart) reaches them. Point container health checks at `/health` and readiness checks at `/ready`. Memory storage has nothing to replay: `/ready` answers `200` immediately.
 
 ---
 
@@ -770,6 +772,8 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
 | `AGENT_VIEWER_SQLITE_BACKUP` | `auto` | Back up an existing SQLite database before migration, or set to `off` when backups are managed separately. |
+| `AGENT_VIEWER_REBUILD_PAGE_SIZE` | `2000` | Rows replayed per page of the SQLite startup rebuild. |
+| `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` | `0` | Extra delay awaited after each rebuild page, for tests and diagnostics. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Maximum events per batch request. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |

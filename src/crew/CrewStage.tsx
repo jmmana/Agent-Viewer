@@ -3,7 +3,7 @@ import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
-import { useCrewSprite } from './useCrewSprite';
+import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
@@ -106,9 +106,9 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const visibleAgents = crewAgentsInRoom(agents, roomId);
   const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
 
-  const illustratedAgents = presence.markers.filter(marker => marker.role === 'boss').length;
-  const spriteView = presence.markers.map(marker => crewSpriteView(marker, view)).find(Boolean) ?? null;
-  const sprite = useCrewSprite(spriteView);
+  const spriteViews = presence.markers.flatMap(marker => crewSpriteView(marker, view) ?? []);
+  const sprite = useCrewSprites(spriteViews);
+  const drawnIllustrations = presence.markers.filter(marker => { const v = crewSpriteView(marker, view); return v && sprite.images[v]; }).length;
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -121,8 +121,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprite: sprite.image, spriteView: spriteView ?? undefined, locale });
-  }, [room, camera, locale, presence, sprite.image, spriteView]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, locale });
+  }, [room, camera, locale, presence, sprite.images]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -231,7 +231,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       onLostPointerCapture={event => gestures.current.end(event.pointerId)}
     />
     <p aria-live="polite" data-testid="crew-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
-      {isEs ? `Ilustraciones estáticas: ${sprite.image ? illustratedAgents : 0}.` : `Static illustrations: ${sprite.image ? illustratedAgents : 0}.`}
+      {isEs ? `Ilustraciones estáticas: ${drawnIllustrations}.` : `Static illustrations: ${drawnIllustrations}.`}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>

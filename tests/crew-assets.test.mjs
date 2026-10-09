@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { CREW_CEO_SPRITE } from '../src/crew/crewSprites.ts';
 import { validateCrewAssets } from '../scripts/crew-assets.mjs';
 
 const root = fileURLToPath(new URL('../',import.meta.url));
@@ -29,3 +30,12 @@ for (const [name,mutate,pattern] of [
     assert.throws(()=>validateCrewAssets(root,value),pattern);
   });
 }
+
+test('el piloto CEO conserva dimensiones y anclaje del banco en sus cuatro vistas', () => {
+  for (const view of ['front','right','back','left']) {
+    const entry=manifest().assets.find(asset=>asset.id===`character.ceo.idle.${view}`);
+    assert.equal(entry.width,CREW_CEO_SPRITE.width);
+    assert.equal(entry.height,CREW_CEO_SPRITE.height);
+    assert.deepEqual(entry.anchor,CREW_CEO_SPRITE.anchor);
+  }
+});

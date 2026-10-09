@@ -14,6 +14,6 @@ Todos los recursos del banco siguen siendo `prototype`. Las vistas ausentes de p
 
 `npm run crew:assets:import` recupera los originales desde el commit indicado, que debe existir en el clon local. Es idempotente y rechaza sobrescribir archivos con contenido diferente. No cambia de rama ni fusiona #43.
 
-## Uso posterior
+## Piloto de uso en Crew
 
-El manifiesto usa `usage: bank-only`. Ningún renderer carga estos archivos y no se distribuyen en el paquete npm. Antes de integrarlos deben revisarse estilo, proporciones, cuatro vistas, anclajes y compatibilidad con el ADR de cámara. Cualquier derivado debe conservar el original y registrar su procedencia por separado. Una pose estática no acredita un clip animado ni la aceptación visual de una sala.
+El manifiesto usa `usage: source-bank`. El renderer Crew utiliza selectivamente las cuatro poses `character.ceo.idle.{front,right,back,left}` para agentes con rol boss presentes en la sala. El resto permanece fuera del runtime. Los cuatro módulos se cargan bajo demanda según la vista; la biblioteca incluye cada PNG en su módulo diferido y la aplicación los sirve como archivos con hash. El anclaje preservado es (0.5, 0.9375), con altura de presentación de 76 unidades. No se seleccionan poses de trabajo ni se infieren acciones desde una imagen estática. Las vistas se corresponden con el preset de cámara; el piloto aún no interpreta la orientación ni locomoción del agente. Cualquier derivado debe conservar el original y registrar su procedencia por separado. Una pose estática no acredita un clip animado ni la aceptación visual de una sala.

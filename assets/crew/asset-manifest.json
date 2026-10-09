@@ -5,7 +5,7 @@
     "pullRequest": 43,
     "commit": "355e9194bd83d8b741bc65d5b58a897d320ee584"
   },
-  "usage": "bank-only",
+  "usage": "source-bank",
   "reference": {
     "id": "reference.ceo",
     "status": "reference",

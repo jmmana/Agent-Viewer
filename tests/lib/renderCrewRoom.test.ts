@@ -3,6 +3,33 @@ import { CREW_ROOMS } from '../../src/crew/crewModel';
 import { crewGeometryBounds, crewIsoPoint, crewViewSize, renderCrewRoom } from '../../src/crew/renderCrewRoom';
 
 describe('Crew native 2.5D renderer', () => {
+  it('dibuja el original solo para el CEO presente y conserva marcadores si falta la imagen', () => {
+    const drawn: unknown[][] = [];
+    const labels: unknown[][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target,key) {
+        if (key === 'drawImage') return (...args: unknown[]) => drawn.push(args);
+        if (key === 'fillText') return (...args: unknown[]) => labels.push(args);
+        return () => {};
+      },
+      set() { return true; },
+    });
+    const markers = [
+      {id:'ceo',name:'Fixture CEO',role:'boss' as const,status:'IDLE' as const,x:2,y:3,number:1},
+      {id:'other',name:'Fixture other',role:'custom' as const,status:'IDLE' as const,x:4,y:3,number:2},
+    ];
+    const input = {ctx,width:900,height:600,room:CREW_ROOMS[0],
+      camera:{view:'front' as const,zoom:1,pan:{x:0,y:0}},markers};
+    renderCrewRoom(input);
+    expect(drawn).toHaveLength(0);
+    expect(labels).toHaveLength(2);
+    const sprite = {} as HTMLImageElement;
+    renderCrewRoom({...input,sprite});
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0][0]).toBe(sprite);
+    renderCrewRoom({...input,sprite,markers:[]});
+    expect(drawn).toHaveLength(1);
+  });
   it('projects floor and wall height into separate axes', () => {
     expect(crewIsoPoint(2, 1)).toEqual({ x: 34, y: 54 });
     expect(crewIsoPoint(2, 1, 20)).toEqual({ x: 34, y: 34 });

@@ -63,7 +63,7 @@ export function importCrewAssets(root = process.cwd()) {
   };
   const manifest = {
     schemaVersion:1,source:{repository:'jmmana/Agent-Viewer',pullRequest:43,commit:SOURCE_COMMIT},
-    usage:'bank-only',reference,assets,
+    usage:'source-bank',reference,assets,
   };
   writePreserving(root,MANIFEST,Buffer.from(JSON.stringify(manifest,null,2)+'\n'));
   return manifest;
@@ -72,7 +72,7 @@ export function importCrewAssets(root = process.cwd()) {
 /** Validación offline: integridad, dimensiones, licencia y clasificación sin aprobación automática. */
 export function validateCrewAssets(root = process.cwd(), suppliedManifest) {
   const manifest = suppliedManifest ?? JSON.parse(readFileSync(resolve(root,MANIFEST),'utf8'));
-  if (manifest.schemaVersion !== 1 || manifest.source?.commit !== SOURCE_COMMIT || manifest.usage !== 'bank-only') throw new Error('Contrato de banco Crew inválido');
+  if (manifest.schemaVersion !== 1 || manifest.source?.commit !== SOURCE_COMMIT || manifest.usage !== 'source-bank') throw new Error('Contrato de banco Crew inválido');
   if (!Array.isArray(manifest.assets) || !manifest.reference) throw new Error('Inventario incompleto');
   const ids = new Set(), files = new Set(), counts = {};
   const bankRoot = realpathSync(resolve(root,'assets/crew'))+sep;

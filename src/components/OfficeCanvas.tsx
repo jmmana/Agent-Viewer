@@ -5,6 +5,7 @@ import { getOfficeRenderedBounds, gridToScreen, screenToGrid } from '../engine/o
 import { compactTokens } from '../engine/modelOps';
 import { OfficeMotion } from '../engine/visualMotion';
 import { OfficeCrewAssets, type CharacterStyle } from '../engine/officeCrewAssets';
+import { OfficeFurnitureAssets } from '../engine/officeFurnitureAssets';
 import { cameraCenter } from '../engine/visualLayout';
 import type { OfficeMessageKey, OfficeTranslate } from '../content/officeMessages';
 import {
@@ -106,13 +107,18 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const motionRef = useRef(new OfficeMotion());
   const crewAssetsRef = useRef<OfficeCrewAssets | null>(null);
+  const furnitureAssetsRef = useRef<OfficeFurnitureAssets | null>(null);
 
   useEffect(() => {
     const assets = characterStyle === 'office-crew' ? new OfficeCrewAssets() : null;
+    const furniture = characterStyle === 'office-crew' ? new OfficeFurnitureAssets() : null;
     crewAssetsRef.current = assets;
+    furnitureAssetsRef.current = furniture;
     return () => {
       assets?.dispose();
+      furniture?.dispose();
       crewAssetsRef.current = null;
+      furnitureAssetsRef.current = null;
     };
   }, [characterStyle]);
   const visibleAgentsRef = useRef<Agent[]>(agents);
@@ -288,6 +294,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         nowMs: Date.now(),
         reducedMotion,
         crewAssets: crewAssetsRef.current ?? undefined,
+        furnitureAssets: furnitureAssetsRef.current ?? undefined,
         theme,
         translate,
         usageTelemetry,

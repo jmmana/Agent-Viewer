@@ -602,6 +602,46 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 - The same rules apply to each agent in `byAgent`, using only that agent's events: when one agent lacks a figure, only that agent and the run total become unknown.
 - Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}`.
 
+### Figures from the Agent Viewer server
+
+When your app is connected to the Agent Viewer server, read `GET /api/v1/usage` (`usageSummary()` in the TypeScript SDK) and pass its figures through. The library still does no math: the host maps each bucket, and only figures that are fully known become numbers.
+
+```tsx
+import type { UsageFigures } from '@warlockcode/agent-viewer';
+import type { UsageBucket } from './sdk/typescript/index';
+
+/** Exact figures only: a partial sum would be shown as if it were exact, so it becomes null ("unknown"). */
+function toFigures(bucket: UsageBucket): UsageFigures {
+  const input = bucket.tokens.input.unreportedCount === 0 ? bucket.tokens.input.sum : null;
+  const output = bucket.tokens.output.unreportedCount === 0 ? bucket.tokens.output.sum : null;
+  const single = bucket.calls > 0 && bucket.costUnknownCount === 0 && bucket.byCurrency.length === 1
+    ? bucket.byCurrency[0]
+    : null;
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: input !== null && output !== null ? input + output : null,
+    cost: single ? single.amount : null,
+    currency: single ? single.currency : undefined,
+  };
+}
+
+const summary = await viewer.usageSummary();
+const usage = {
+  total: toFigures(summary.total),
+  byAgent: Object.fromEntries(
+    summary.byAgent
+      .filter((agent) => agent.agentId !== null)
+      .map((agent) => [agent.agentId, toFigures(agent)]),
+  ),
+};
+```
+
+- `inputTokens` and `outputTokens` come from `tokens.input.sum` and `tokens.output.sum` only when that kind's `unreportedCount` is `0`; otherwise pass `null`.
+- `totalTokens` is the host's own addition of the two, sent only when both pass that test; otherwise `null`.
+- `cost` and `currency` are sent only when the bucket has calls, `costUnknownCount` is `0` and `byCurrency` has exactly one entry (one currency, one cost source). Otherwise send `cost: null`, shown as "unknown".
+- The `agentId: null` bucket (calls without an agent) has no key in `byAgent`; it only counts in `total`. Failed calls (`failed`) are not part of these figures.
+
 ## Replay
 
 `useEventReplay` plays a recorded run at its own pace and returns the visible slice, ready for `<AgentOffice events>`. It only reveals events; it never creates any. `ReplayControls` is an optional bar for it: play and pause, back to start, a position slider and speed buttons.

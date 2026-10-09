@@ -406,3 +406,229 @@ test('REST API: llm.failed is stored, listed and streamed without changing any t
     server.close();
   }
 });
+
+// -------------------------------------------------------------
+// Usage aggregates (issue #51)
+// -------------------------------------------------------------
+
+const TOKEN_KINDS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
+
+function assertBucketShape(bucket) {
+  assert.equal(typeof bucket.calls, 'number');
+  assert.deepEqual(Object.keys(bucket.tokens).sort(), [...TOKEN_KINDS].sort());
+  assert.ok(Array.isArray(bucket.byCurrency));
+  for (const key of ['costUnknownCount', 'costMissingCount', 'currencyMissingCount']) {
+    assert.equal(typeof bucket[key], 'number');
+  }
+  const pairCalls = bucket.byCurrency.reduce((total, pair) => total + pair.calls, 0);
+  assert.equal(pairCalls + bucket.costUnknownCount, bucket.calls);
+}
+
+async function getJson(baseUrl, route) {
+  const res = await fetch(`${baseUrl}${route}`);
+  assert.equal(res.status, 200);
+  return res.json();
+}
+
+test('REST API: GET /api/v1/usage returns the usage summary, equal to snapshot.usage', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const posted = await postEvent(baseUrl, {
+      id: 'evt_usage_endpoint_1',
+      type: 'llm.usage',
+      timestamp: Date.now(),
+      source: 'agent:usage-endpoint',
+      agentId: 'usage-endpoint',
+      summary: 'Priced usage',
+      payload: {
+        provider: 'openai',
+        model: 'gpt-5',
+        inputTokens: 1000,
+        outputTokens: 100,
+        cacheReadTokens: 400,
+        cost: 0.02,
+        costSource: 'provider-reported',
+        currency: 'USD',
+      },
+    });
+    assert.equal(posted.status, 202);
+
+    const usage = await getJson(baseUrl, '/api/v1/usage');
+    const snapshot = await getJson(baseUrl, '/api/v1/snapshot');
+    assert.deepStrictEqual(usage, snapshot.usage);
+
+    assert.equal(usage.schemaVersion, '1.0');
+    assert.ok(usage.eventsReduced >= 1);
+    assertBucketShape(usage.total);
+    assertBucketShape(usage.total.failed);
+    const agent = usage.byAgent.find((entry) => entry.agentId === 'usage-endpoint');
+    assert.ok(agent, 'Expected the agent bucket');
+    assert.equal(agent.calls, 1);
+    assert.deepEqual(agent.tokens.cacheRead, { sum: 400, unreportedCount: 0 });
+    assert.deepEqual(agent.tokens.reasoning, { sum: null, unreportedCount: 1 });
+    assert.deepEqual(agent.byCurrency, [
+      { currency: 'USD', costSource: 'provider-reported', amount: 0.02, amountExact: '0.02', calls: 1 },
+    ]);
+    assert.deepEqual(agent.byModel.map((entry) => [entry.provider, entry.model, entry.calls]), [['openai', 'gpt-5', 1]]);
+    const listed = snapshot.agents.find((entry) => entry.id === 'usage-endpoint');
+    assert.equal(listed.cost, 0.02);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: totalCost and the agent cost are null after a usage event without cost', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const posted = await postEvent(baseUrl, {
+      id: 'evt_usage_no_cost_total',
+      type: 'llm.usage',
+      timestamp: Date.now(),
+      source: 'agent:usage-no-cost',
+      agentId: 'usage-no-cost',
+      summary: 'Usage without cost',
+      payload: { provider: 'openai', model: 'gpt-5', inputTokens: 10, outputTokens: 1 },
+    });
+    assert.equal(posted.status, 202);
+
+    const snapshot = await getJson(baseUrl, '/api/v1/snapshot');
+    assert.equal(snapshot.totalCost, null);
+    assert.equal(snapshot.agents.find((entry) => entry.id === 'usage-no-cost').cost, null);
+    const agent = snapshot.usage.byAgent.find((entry) => entry.agentId === 'usage-no-cost');
+    assert.equal(agent.costMissingCount, 1);
+    assert.deepEqual(agent.byCurrency, []);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: generic webhook usage without provider or model lands in the null model bucket', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: 'webhook-usage-agent', usage: { inputTokens: 42, outputTokens: 7 } }),
+    });
+    assert.equal(res.status, 202);
+
+    const usage = await getJson(baseUrl, '/api/v1/usage');
+    const agent = usage.byAgent.find((entry) => entry.agentId === 'webhook-usage-agent');
+    assert.ok(agent, 'Expected the webhook agent bucket');
+    assert.deepEqual(agent.byModel.map((entry) => [entry.provider, entry.model, entry.calls]), [[null, null, 1]]);
+    assert.equal(agent.tokens.input.sum, 42);
+    assert.equal(agent.costMissingCount, 1);
+    assert.ok(usage.byModel.some((entry) => entry.provider === null && entry.model === null && entry.calls >= 1));
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: an agent registered without calls reports cost null and zero legacy tokens', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/agents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'registered-no-calls', name: 'No Calls' }),
+    });
+    assert.equal(res.status, 201);
+    const expected = { tokensInput: 0, tokensOutput: 0, cachedTokens: 0, reasoningTokens: 0, cost: null };
+    assert.deepEqual(agentTotals(await res.json()), expected);
+
+    const patched = await fetch(`${baseUrl}/api/v1/agents/registered-no-calls`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'THINKING' }),
+    });
+    assert.equal(patched.status, 200);
+    assert.deepEqual(agentTotals(await patched.json()), expected);
+
+    const snapshot = await getJson(baseUrl, '/api/v1/snapshot');
+    assert.deepEqual(agentTotals(snapshot.agents.find((entry) => entry.id === 'registered-no-calls')), expected);
+  } finally {
+    server.close();
+  }
+});
+
+for (const storage of ['memory', 'sqlite']) {
+  test(`REST API: GET /api/v1/usage on an empty ${storage} server, then the documented example`, () => {
+    // A fresh server needs a fresh module, so this case runs in its own process.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `agent-viewer-api-usage-${storage}-`));
+    try {
+      const serverUrl = new URL('../server/index.ts', import.meta.url).href;
+      const fixture = fs.readFileSync(new URL('./fixtures/usage/docs-example.jsonl', import.meta.url), 'utf8');
+      const script = `
+        const http = await import('node:http');
+        const { app } = await import(${JSON.stringify(serverUrl)});
+        const server = http.createServer(app);
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const baseUrl = 'http://127.0.0.1:' + server.address().port;
+        const empty = await (await fetch(baseUrl + '/api/v1/usage')).json();
+        const events = ${JSON.stringify(fixture)}.split('\\n').filter(Boolean).map((line) => JSON.parse(line));
+        const batch = await fetch(baseUrl + '/api/v1/events/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ events }),
+        });
+        const usage = await (await fetch(baseUrl + '/api/v1/usage')).json();
+        const snapshot = await (await fetch(baseUrl + '/api/v1/snapshot')).json();
+        server.close();
+        console.log(JSON.stringify({ empty, batchStatus: batch.status, usage, snapshot }));
+        process.exit(0);
+      `;
+      const env = {
+        ...process.env,
+        NODE_ENV: 'test',
+        AGENT_VIEWER_STORAGE: storage,
+        AGENT_VIEWER_SQLITE_PATH: path.join(dir, 'events.db'),
+      };
+      delete env.AGENT_VIEWER_API_TOKEN;
+      delete env.AGENT_VIEWER_API_KEY;
+      const result = spawnSync(
+        process.execPath,
+        ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script],
+        { cwd: dir, env, encoding: 'utf8' },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout.trim().split('\n').pop());
+
+      const emptyBucket = {
+        calls: 0,
+        tokens: Object.fromEntries(TOKEN_KINDS.map((kind) => [kind, { sum: null, unreportedCount: 0 }])),
+        byCurrency: [],
+        costUnknownCount: 0,
+        costMissingCount: 0,
+        currencyMissingCount: 0,
+        firstTimestamp: null,
+        lastTimestamp: null,
+      };
+      assert.deepStrictEqual(output.empty, {
+        schemaVersion: '1.0',
+        eventsReduced: 0,
+        total: { ...emptyBucket, failed: emptyBucket },
+        byModel: [],
+        byAgent: [],
+      });
+
+      assert.equal(output.batchStatus, 202);
+      assert.deepStrictEqual(output.usage, output.snapshot.usage);
+      assert.equal(output.usage.eventsReduced, 4);
+      assert.equal(output.usage.total.calls, 3);
+      assert.equal(output.usage.total.failed.calls, 1);
+      assert.deepEqual(output.usage.total.byCurrency, [
+        { currency: 'USD', costSource: 'provider-reported', amount: 0.042, amountExact: '0.042', calls: 2 },
+      ]);
+      assert.deepEqual(output.snapshot.totalTokens, { input: 4200, output: 950, cached: 1200, reasoning: 0 });
+      assert.equal(output.snapshot.totalCost, null);
+      if (storage === 'sqlite') assert.ok(fs.existsSync(env.AGENT_VIEWER_SQLITE_PATH), 'Expected the SQLite store');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+

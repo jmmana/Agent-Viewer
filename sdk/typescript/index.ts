@@ -5,6 +5,19 @@ import type {
   EventSeverity,
   LlmUsagePayloadSchema,
 } from '../../src/integrations/canonicalContract';
+import type { ViewerSnapshot } from '../../server/store';
+import type { UsageSummary } from '../../server/usageAggregates';
+
+export type { ViewerSnapshot } from '../../server/store';
+export type {
+  UsageSummary,
+  UsageAggregate,
+  UsageBucket,
+  ModelUsage,
+  AgentUsage,
+  TokenFigure,
+  CurrencyCost,
+} from '../../server/usageAggregates';
 
 /** Where a reported cost comes from. The SDK never chooses it for the caller. */
 export type CostSource = 'provider-reported' | 'estimated' | 'unknown';
@@ -407,14 +420,28 @@ export class AgentViewer {
     });
   }
 
-  async snapshot(): Promise<any> {
+  async snapshot(): Promise<ViewerSnapshot> {
     const response = await fetch(`${this.url}/api/v1/snapshot`, {
       headers: this.buildHeaders(),
     });
     if (!response.ok) {
       throw new AgentViewerError(`Failed to fetch snapshot: ${response.status}`, response.status);
     }
-    return response.json();
+    return (await response.json()) as ViewerSnapshot;
+  }
+
+  /**
+   * Usage aggregates from `GET /api/v1/usage`, by agent and by `(provider, model)`. A token `sum` is `null` when
+   * no call reported that kind, and costs are listed per currency and cost source, never added together.
+   */
+  async usageSummary(): Promise<UsageSummary> {
+    const response = await fetch(`${this.url}/api/v1/usage`, {
+      headers: this.buildHeaders(),
+    });
+    if (!response.ok) {
+      throw new AgentViewerError(`Failed to fetch usage summary: ${response.status}`, response.status);
+    }
+    return (await response.json()) as UsageSummary;
   }
 
   private buildHeaders(idempotencyKey?: string): Record<string, string> {

@@ -414,6 +414,11 @@ app.get('/api/v1/snapshot', async (_req, res) => {
   res.json(snapshot);
 });
 
+// Usage aggregates only (the snapshot's `usage` block), without the event list.
+app.get('/api/v1/usage', async (_req, res) => {
+  res.json(await store.usageSummary());
+});
+
 // -------------------------------------------------------------
 // Realtime Stream (SSE)
 // -------------------------------------------------------------

@@ -268,7 +268,11 @@ test('PATCH rejects usage, unknown, read-only, invalid, empty, and reserved fiel
         cached: agentTotals.cached,
         reasoning: agentTotals.reasoning,
       });
-      assert.equal(snapshot.totalCost, agentTotals.cost);
+      // Unknown is never zero (#51): the total cost is a number only when every call reported one.
+      if (snapshot.totalCost !== null) {
+        assert.ok(snapshot.agents.every((agent) => agent.cost !== null));
+        assert.ok(Math.abs(snapshot.totalCost - agentTotals.cost) < 1e-9);
+      }
     } finally {
       server.close();
     }

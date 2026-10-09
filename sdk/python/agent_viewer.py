@@ -373,6 +373,18 @@ class AgentViewer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def usage_summary(self) -> Dict[str, Any]:
+        """Fetch the usage aggregates from ``GET /api/v1/usage``.
+
+        The summary groups every ``llm.usage`` call by agent and by ``(provider, model)``, with failed calls
+        (``llm.failed``) kept under ``failed``. A token ``sum`` may be ``None``: it means no call reported that
+        kind, never zero; ``unreportedCount`` says how many calls left it out. Amounts are listed per currency
+        and cost source in ``byCurrency`` and are never summed across them.
+        """
+        req = urllib.request.Request(f"{self.url}/api/v1/usage", headers=self._build_headers(), method="GET")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     # Legacy method compatibility
     def register_agent(
         self,

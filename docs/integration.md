@@ -56,7 +56,12 @@ await agent.usage({
 
 // 5. Conclude task
 await agent.done('Research completed successfully');
+
+// 6. Read the server's usage aggregates (GET /api/v1/usage), typed as UsageSummary
+const usage = await viewer.usageSummary();
 ```
+
+`viewer.snapshot()` returns the typed `ViewerSnapshot`, and `viewer.usageSummary()` returns the `UsageSummary` described in [Usage aggregates](#usage-aggregates-get-apiv1usage). Both throw `AgentViewerError` on a non-2xx response.
 
 ---
 
@@ -107,6 +112,9 @@ agent.usage(
 )
 
 agent.done("Documentation analyzed")
+
+# Usage aggregates from GET /api/v1/usage (a dict): a token "sum" may be None, costs are per currency
+usage = viewer.usage_summary()
 ```
 
 ---
@@ -223,7 +231,8 @@ Base URL: `http://localhost:8787`
 - `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch).
 - `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`).
 - `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay.
-- `GET /api/v1/snapshot`: Returns full aggregate snapshot (agents, tasks, meetings, runtimes, tokens, total cost).
+- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
+- `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
 
 ### Agents
 - `POST /api/v1/agents`: Register or upsert an agent profile.
@@ -523,7 +532,7 @@ Token and cost fields are filled only when the provider actually billed the fail
 
 There is **no free-text error field on purpose**: provider error messages can echo prompt fragments or credentials. Build the envelope `summary` from `provider`, `model` and `errorKind` only.
 
-`llm.failed` events are stored, streamed over SSE and listed, and they register an agent the server has not seen yet, but they do not change any token or cost total. The embedded office stores the agent's provider and model from them and never changes the agent's status, because a failed attempt is often retried.
+`llm.failed` events are stored, streamed over SSE and listed, and they register an agent the server has not seen yet, but they do not change any top-level token or cost figure: the server counts them apart, under `failed` in the [usage aggregates](#usage-aggregates-get-apiv1usage). The embedded office stores the agent's provider and model from them and never changes the agent's status, because a failed attempt is often retried.
 
 #### Recommended `errorKind` mapping
 
@@ -547,6 +556,117 @@ The list is exported as `LLM_ERROR_KINDS` (with the `isLlmErrorKind` guard) from
 - `cachedTokens: 0` and `reasoningTokens: 0` in events stored by 0.2.x may mean "not reported": the 0.2.x validator wrote `0` when the field was missing. Stored rows are not rewritten.
 - Mixed versions: a 0.3.0 SDK needs a 0.3.0 server. A 0.2.x server rejects `llm.failed` with HTTP 400 and silently drops `cacheReadTokens` and `cacheWriteTokens`.
 - The loose normalizer used by the embedded library and the generic webhook no longer writes `0` for a missing `inputTokens` or `outputTokens`. A webhook `usage` object without them is stored as an `llm.usage` event without those keys, which means unknown.
+
+### Usage aggregates (`GET /api/v1/usage`)
+
+The server adds up every accepted `llm.usage` call, one call at a time, by agent and by the `(provider, model)` of that call. Failed calls (`llm.failed`) are counted apart. These are the figures that hosts, dashboards and the portal should read; they can all be traced back to the stored events.
+
+```http
+GET /api/v1/usage
+Authorization: Bearer <token>
+```
+
+The response is a `UsageSummary`. The same object is the `usage` block of `GET /api/v1/snapshot`. Authentication and rate limits are the same as for every `/api/v1` route (`401` without a valid token, `429` over the limit). There are no query parameters yet.
+
+```json
+{
+  "schemaVersion": "1.0",
+  "eventsReduced": 4,
+  "total": {
+    "calls": 3,
+    "tokens": {
+      "input":      { "sum": 4200, "unreportedCount": 0 },
+      "output":     { "sum": 950,  "unreportedCount": 0 },
+      "cacheRead":  { "sum": 1200, "unreportedCount": 2 },
+      "cacheWrite": { "sum": null, "unreportedCount": 3 },
+      "reasoning":  { "sum": null, "unreportedCount": 3 }
+    },
+    "byCurrency": [
+      { "currency": "USD", "costSource": "provider-reported", "amount": 0.042, "amountExact": "0.042", "calls": 2 }
+    ],
+    "costUnknownCount": 1,
+    "costMissingCount": 1,
+    "currencyMissingCount": 0,
+    "firstTimestamp": 1791459000000,
+    "lastTimestamp": 1791459900000,
+    "failed": {
+      "calls": 1,
+      "tokens": {
+        "input":      { "sum": null, "unreportedCount": 1 },
+        "output":     { "sum": null, "unreportedCount": 1 },
+        "cacheRead":  { "sum": null, "unreportedCount": 1 },
+        "cacheWrite": { "sum": null, "unreportedCount": 1 },
+        "reasoning":  { "sum": null, "unreportedCount": 1 }
+      },
+      "byCurrency": [],
+      "costUnknownCount": 1,
+      "costMissingCount": 1,
+      "currencyMissingCount": 0,
+      "firstTimestamp": 1791459950000,
+      "lastTimestamp": 1791459950000
+    }
+  },
+  "byModel": [
+    { "provider": "openai", "model": "gpt-5", "calls": 2, "...": "UsageAggregate fields" },
+    { "provider": "openai", "model": "gpt-5-mini", "calls": 1, "...": "UsageAggregate fields" }
+  ],
+  "byAgent": [
+    {
+      "agentId": "planner",
+      "calls": 2,
+      "...": "UsageAggregate fields",
+      "byModel": [
+        { "provider": "openai", "model": "gpt-5", "calls": 1, "...": "UsageAggregate fields" },
+        { "provider": "openai", "model": "gpt-5-mini", "calls": 1, "...": "UsageAggregate fields" }
+      ]
+    },
+    { "agentId": null, "calls": 1, "...": "calls emitted by a runtime with no agent", "byModel": ["..."] }
+  ]
+}
+```
+
+This example comes from four events: two successful calls in USD (one by `planner`, one by a runtime with no agent), one successful call by `planner` without a cost, and one failed call by `planner`. It is kept in `tests/fixtures/usage/docs-example.jsonl` and checked by the test suite.
+
+An empty server returns `eventsReduced: 0`, `calls: 0`, every token as `{ "sum": null, "unreportedCount": 0 }`, `byCurrency: []`, null timestamps, empty `byModel` and `byAgent`, and `failed` with the same empty shape.
+
+#### Schema
+
+| Type | Fields |
+|---|---|
+| `UsageSummary` | `schemaVersion` (`"1.0"`), `eventsReduced` (`llm.usage` + `llm.failed` events applied), `total` (`UsageAggregate`), `byModel` (`ModelUsage[]`, sorted by provider then model, nulls last), `byAgent` (`AgentUsage[]`, sorted by agent id, null last). |
+| `UsageAggregate` | Every `UsageBucket` field for the successful calls, plus `failed` (a `UsageBucket` of the `llm.failed` calls). |
+| `ModelUsage` | `UsageAggregate` plus `provider` and `model` of the calls themselves (`null` when the payload did not have them). |
+| `AgentUsage` | `UsageAggregate` plus `agentId` (`null` for calls without an agent) and `byModel` (`ModelUsage[]` of that agent). |
+| `UsageBucket` | `calls`, `tokens` (`input`, `output`, `cacheRead`, `cacheWrite`, `reasoning`, each a `TokenFigure`), `byCurrency` (`CurrencyCost[]`, sorted by currency then cost source), `costUnknownCount` (= `costMissingCount` + `currencyMissingCount`), `costMissingCount`, `currencyMissingCount`, `firstTimestamp`, `lastTimestamp` (smallest and largest event `timestamp`, client clock, or `null`). |
+| `TokenFigure` | `sum` (sum of the calls that reported this kind, `null` when none did) and `unreportedCount` (calls that left it out). |
+| `CurrencyCost` | `currency` (ISO 4217 code as reported), `costSource`, `amount` (`Number(amountExact)`), `amountExact` (exact decimal string), `calls`. |
+
+The TypeScript types are exported by the TypeScript SDK (`UsageSummary`, `UsageAggregate`, `UsageBucket`, `ModelUsage`, `AgentUsage`, `TokenFigure`, `CurrencyCost`, `ViewerSnapshot`).
+
+#### Reduction rules
+
+1. **Buckets come from the call itself.** The agent is the event's `agentId`, else its `source` without the `agent:` prefix. Calls from `system`, `external-runtime` or `runtime:*`, and calls with neither, go to the `agentId: null` bucket; they are always part of `total`. The model bucket is the `(provider, model)` of the payload exactly as sent (no trimming, case folding or aliasing); a missing value is `null` and forms its own bucket. The agent's current `provider` and `model` are never used, so switching models never moves past calls.
+2. **Every call is added four times:** to `total`, to `byModel`, to `byAgent` and to that agent's `byModel`. An `llm.failed` call goes to the `failed` sub-bucket of the same four places, never to the top-level figures. A bucket that only saw failed calls has `calls: 0` and `failed.calls >= 1`.
+3. **Tokens.** A reported non-negative integer adds to `sum`; a missing or `null` field adds 1 to `unreportedCount`. An explicit `0` is a reported zero. Values that are not non-negative integers (possible only on paths that skip validation) count as unreported. Token fields are `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens` and `reasoningTokens`; a legacy `cachedTokens` counts through the `cacheReadTokens` that validation copies from it.
+4. **Cost.** A missing, `null`, negative or non-finite `cost` adds 1 to `costMissingCount`. A valid `cost` with a missing currency or one that is not three capital letters (`"usd"` included) adds 1 to `currencyMissingCount`, and its amount is not added anywhere. Otherwise the amount is added to its `(currency, costSource)` pair; `cost: 0` is a known zero. A missing or unlisted `costSource` is `unknown`, a pair of its own that is never merged with `provider-reported` or `estimated`.
+5. **No grand total.** Currencies are never converted or added together, and billed and estimated amounts are never merged. Nothing is priced on the server.
+6. **Invariants.** In every bucket, `unreportedCount <= calls` for each token kind, `sum` is `null` exactly when no call reported the kind, and the `calls` of all `byCurrency` pairs plus `costUnknownCount` equal `calls`.
+
+**Arithmetic.** Amounts are accumulated in fixed point, in nano units (1e-9 of the currency unit), so the result never depends on the order of the events: `0.1` + `0.2` gives `"0.3"`. Each amount is taken as the shortest decimal string of the number (exponent forms such as `1e-7` expanded) and rounded half-even at 9 decimals, so digits past the ninth decimal are lost. `amountExact` has no trailing zeros (`"0.042"`, `"3"`).
+
+**Scope.** Each stored event id is reduced once: a duplicate is skipped before any side effect. In memory mode, totals keep counting events that the 10,000-event ring has evicted. With SQLite, the aggregates live in memory and start empty after a restart until a rebuild from stored events exists. Buckets are not capped.
+
+#### Legacy snapshot fields (deprecated)
+
+The snapshot keeps `totalTokens`, `totalCost` and the `AgentRecord` usage fields (`tokensInput`, `tokensOutput`, `cachedTokens`, `reasoningTokens`, `cost`) for 0.x clients. They are projections of the aggregates, read only the successful calls, and will be removed in 1.0.
+
+- Token fields are the `sum` of the reported values, or `0` when none was reported. They are lower bounds when `unreportedCount > 0`. `cached` and `cachedTokens` are the cache-read sum.
+- `totalCost` and `AgentRecord.cost` are the amount of the only `byCurrency` entry when the bucket has `calls > 0`, `costUnknownCount === 0` and exactly one `byCurrency` entry (one currency and one cost source). Otherwise they are `null`, including for an agent with no calls.
+- Usage figures change only through stored `llm.usage` events: usage fields sent to `POST /api/v1/agents` or `PATCH /api/v1/agents/:agentId` never move them.
+
+#### Auditing a figure
+
+Every figure traces back to its calls: `GET /api/v1/events?type=llm.usage&agentId=<id>` lists the successful calls of an agent and `GET /api/v1/events?type=llm.failed&agentId=<id>` the failed ones. In memory mode that list only covers the events still in the ring.
 
 ---
 

@@ -273,6 +273,176 @@ test('SQLiteEventStore: migrates databases created before the event_json column 
   }
 });
 
+// -------------------------------------------------------------
+// Usage aggregates (issue #51)
+// -------------------------------------------------------------
+
+function loadUsageFixture(name) {
+  const text = fs.readFileSync(new URL(`./fixtures/usage/${name}.jsonl`, import.meta.url), 'utf8');
+  return text.split('\n').filter((line) => line.trim().length > 0).map((line) => JSON.parse(line));
+}
+
+function legacyOf(agent) {
+  return {
+    tokensInput: agent.tokensInput,
+    tokensOutput: agent.tokensOutput,
+    cachedTokens: agent.cachedTokens,
+    reasoningTokens: agent.reasoningTokens,
+    cost: agent.cost,
+  };
+}
+
+const NO_USAGE = { tokensInput: 0, tokensOutput: 0, cachedTokens: 0, reasoningTokens: 0, cost: null };
+
+test('Usage aggregates: MemoryEventStore and SQLiteEventStore produce deep-equal usage blocks', async () => {
+  const events = loadUsageFixture('mixed');
+  const { dir, file } = tempDbPath('usage-parity');
+  const memory = new MemoryEventStore();
+  const sqlite = new SQLiteEventStore(file);
+  try {
+    for (const event of events) await memory.append(event);
+    await sqlite.appendBatch(events);
+
+    const memorySnapshot = await memory.snapshot();
+    const sqliteSnapshot = await sqlite.snapshot();
+    assert.deepStrictEqual(sqliteSnapshot.usage, memorySnapshot.usage);
+    assert.deepStrictEqual(await sqlite.usageSummary(), await memory.usageSummary());
+    assert.deepStrictEqual(await memory.usageSummary(), memorySnapshot.usage);
+    assert.equal(memorySnapshot.usage.eventsReduced, 17);
+    assert.deepStrictEqual(sqliteSnapshot.totalTokens, memorySnapshot.totalTokens);
+    assert.equal(sqliteSnapshot.totalCost, memorySnapshot.totalCost);
+    const byId = (list) => Object.fromEntries(list.map((agent) => [agent.id, legacyOf(agent)]));
+    assert.deepStrictEqual(byId(sqliteSnapshot.agents), byId(memorySnapshot.agents));
+  } finally {
+    await sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Usage aggregates: legacy snapshot fields follow the single-currency rule and count agent-less calls', async () => {
+  const store = new MemoryEventStore();
+  for (const event of loadUsageFixture('docs-example')) await store.append(event);
+  const snapshot = await store.snapshot();
+
+  // Deprecated lower bounds: sums of reported values, agent-less calls included.
+  assert.deepEqual(snapshot.totalTokens, { input: 4200, output: 950, cached: 1200, reasoning: 0 });
+  // One call has no cost, so no single figure can be given.
+  assert.equal(snapshot.totalCost, null);
+  const planner = snapshot.agents.find((agent) => agent.id === 'planner');
+  assert.deepEqual(legacyOf(planner), { tokensInput: 3000, tokensOutput: 700, cachedTokens: 1200, reasoningTokens: 0, cost: null });
+  assert.equal(planner.model, 'gpt-5', 'the display model is the latest call, but no figure reads it');
+  assert.deepEqual(snapshot.usage.byModel.map((entry) => [entry.model, entry.calls]), [['gpt-5', 2], ['gpt-5-mini', 1]]);
+  assert.equal(snapshot.agents.some((agent) => agent.id === 'rt_doc' || agent.id === 'runtime:rt_doc'), false);
+
+  // Every successful call in USD provider-reported with a known cost: the legacy figure is that amount.
+  const priced = new MemoryEventStore();
+  await priced.append(loadUsageFixture('docs-example')[1]);
+  await priced.append(loadUsageFixture('docs-example')[2]);
+  const pricedSnapshot = await priced.snapshot();
+  assert.equal(pricedSnapshot.totalCost, pricedSnapshot.usage.total.byCurrency[0].amount);
+  assert.equal(pricedSnapshot.totalCost, 0.042);
+  assert.equal(pricedSnapshot.agents.find((agent) => agent.id === 'planner').cost, 0.02);
+
+  // USD and EUR, or billed and estimated: two pairs, so null.
+  const mixed = new MemoryEventStore();
+  for (const event of loadUsageFixture('mixed')) await mixed.append(event);
+  const mixedSnapshot = await mixed.snapshot();
+  assert.equal(mixedSnapshot.totalCost, null);
+  assert.equal(mixedSnapshot.agents.find((agent) => agent.id === 'builder').cost, null);
+  assert.equal(mixedSnapshot.agents.find((agent) => agent.id === 'flaky').cost, null, 'failed calls only: no cost');
+});
+
+test('Usage aggregates: an agent is charged per call, whatever model it shows now', async () => {
+  const store = new MemoryEventStore();
+  const base = { schemaVersion: '1.0', type: 'llm.usage', source: 'agent:switcher', agentId: 'switcher', severity: 'normal', summary: 'usage' };
+  await store.append({ ...base, id: 'evt_switch_a', timestamp: 1, payload: { provider: 'p', model: 'a', inputTokens: 10, outputTokens: 1 } });
+  await store.append({ ...base, id: 'evt_switch_b', timestamp: 2, payload: { provider: 'p', model: 'b', inputTokens: 20, outputTokens: 2 } });
+  const snapshot = await store.snapshot();
+  assert.equal(snapshot.agents[0].model, 'b');
+  const [agent] = snapshot.usage.byAgent;
+  assert.deepEqual(agent.byModel.map((entry) => [entry.model, entry.calls, entry.tokens.input.sum]), [['a', 1, 10], ['b', 1, 20]]);
+});
+
+for (const [label, create] of [
+  ['MemoryEventStore', () => ({ store: new MemoryEventStore(), cleanup: () => {} })],
+  ['SQLiteEventStore', () => {
+    const { dir, file } = tempDbPath('upsert-usage');
+    const store = new SQLiteEventStore(file);
+    return { store, cleanup: async () => { await store.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  }],
+]) {
+  test(`Usage aggregates: ${label}.upsertAgent ignores usage fields and a registered agent without calls has cost null`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const registered = await store.upsertAgent({ id: 'quiet', name: 'Quiet' });
+      assert.deepEqual(legacyOf(registered), NO_USAGE);
+      assert.deepEqual(legacyOf(await store.getAgent('quiet')), NO_USAGE);
+      assert.deepEqual(legacyOf((await store.listAgents()).find((agent) => agent.id === 'quiet')), NO_USAGE);
+      assert.deepEqual(legacyOf((await store.snapshot()).agents.find((agent) => agent.id === 'quiet')), NO_USAGE);
+
+      for (const event of loadUsageFixture('docs-example')) await store.append(event);
+      const before = await store.snapshot();
+
+      const forged = await store.upsertAgent({
+        id: 'planner',
+        cost: 99,
+        tokensInput: 99,
+        tokensOutput: 99,
+        cachedTokens: 99,
+        reasoningTokens: 99,
+      });
+      const ghost = await store.upsertAgent({ id: 'ghost', cost: 99, tokensInput: 99 });
+      const after = await store.snapshot();
+
+      assert.deepEqual(legacyOf(forged), legacyOf(before.agents.find((agent) => agent.id === 'planner')));
+      assert.deepEqual(legacyOf(ghost), NO_USAGE);
+      assert.deepStrictEqual(after.usage, before.usage);
+      assert.deepEqual(after.totalTokens, before.totalTokens);
+      assert.equal(after.totalCost, before.totalCost);
+      assert.deepEqual(legacyOf(after.agents.find((agent) => agent.id === 'planner')), legacyOf(forged));
+    } finally {
+      await cleanup();
+    }
+  });
+}
+
+test('Usage aggregates: re-sending a stored event id does not change the summary (memory ring)', async () => {
+  const store = new MemoryEventStore(50);
+  const events = loadUsageFixture('docs-example');
+  for (const event of events) await store.append(event);
+  const before = await store.usageSummary();
+
+  assert.equal((await store.append(events[2])).duplicate, true);
+  const batch = await store.appendBatch(events);
+  assert.equal(batch.accepted, 0);
+  assert.equal(batch.duplicates, events.length);
+  assert.deepStrictEqual(await store.usageSummary(), before);
+});
+
+test('Usage aggregates: re-sending any id stored in SQLite does not change the summary, even after the memory ring evicted it', async () => {
+  const { dir, file } = tempDbPath('usage-dedup');
+  const store = new SQLiteEventStore(file);
+  try {
+    const events = loadUsageFixture('docs-example');
+    await store.appendBatch(events);
+    const before = await store.usageSummary();
+
+    // Push the usage events out of the in-memory ring (10,000 events) with events that carry no usage.
+    const filler = Array.from({ length: 10_000 }, (_, index) => storeEvent(`evt_filler_${index}`, 10 + index));
+    await store.appendBatch(filler);
+    // The ring keeps the newest 10,000 events, so the four usage events (stored first) are no longer in memory.
+    assert.equal((await store.snapshot()).eventsCount, 10_000);
+
+    assert.equal((await store.append(events[2])).duplicate, true);
+    const batch = await store.appendBatch(events);
+    assert.equal(batch.accepted, 0);
+    assert.deepStrictEqual(await store.usageSummary(), before);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('agent profile upserts preserve usage from events and preserve unknown cost', async () => {
   const { dir, file } = tempDbPath('upsert-usage');
   const stores = [new MemoryEventStore(), new SQLiteEventStore(file)];

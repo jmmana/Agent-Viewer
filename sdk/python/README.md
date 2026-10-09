@@ -54,6 +54,7 @@ The agent registers itself on its first call. Requests retry with exponential ba
 - `viewer.agent(id, name=None, role_title=None, provider=None, model=None, workspace=None)` returns an `AgentHandle`.
 - `viewer.emit(event_type, summary, payload, ...)` and `viewer.emit_batch(events)` send canonical events directly.
 - `viewer.heartbeat()`, `viewer.health()` and `viewer.snapshot()` talk to the runtime endpoints.
+- `viewer.usage_summary()` returns the server's usage aggregates (`GET /api/v1/usage`) as a dict: totals by agent and by `(provider, model)`, with failed calls under `failed`. A token `sum` may be `None` (no call reported that kind, never zero), and costs are listed per currency and cost source in `byCurrency`, never summed together. In `viewer.snapshot()`, `totalCost` is `None` unless every call reported one single currency.
 
 `AgentHandle` methods:
 

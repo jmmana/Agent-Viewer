@@ -342,6 +342,25 @@ class TestPythonSDK(unittest.TestCase):
             self.assertIsNotNone(bot_agent, "Registered agent not found in server snapshot")
             self.assertEqual(bot_agent["name"], "Python Bot")
 
+            # Usage aggregates round trip
+            summary = viewer.usage_summary()
+            self.assertEqual(summary["schemaVersion"], "1.0")
+            self.assertEqual(summary, snapshot["usage"])
+            bot_usage = next((a for a in summary["byAgent"] if a["agentId"] == "py_bot"), None)
+            self.assertIsNotNone(bot_usage, "Agent missing from the usage summary")
+            self.assertEqual(bot_usage["calls"], 2)
+            self.assertEqual(bot_usage["tokens"]["input"]["sum"], 500 + 1800)
+            gpt = next(m for m in bot_usage["byModel"] if m["provider"] == "OpenAI" and m["model"] == "gpt-4o")
+            self.assertEqual(gpt["calls"], 1)
+            # The SDK sends the stated currency and cost source, so each call lands in its own pair.
+            self.assertEqual(
+                [(c["currency"], c["costSource"], c["amountExact"], c["calls"]) for c in gpt["byCurrency"]],
+                [("USD", "provider-reported", "0.005", 1)],
+            )
+            self.assertEqual(gpt["currencyMissingCount"], 0)
+            # One call is provider-reported and the other estimated: two pairs, so no single legacy figure.
+            self.assertIsNone(snapshot["totalCost"])
+
         finally:
             proc.terminate()
             try:

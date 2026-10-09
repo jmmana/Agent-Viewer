@@ -376,7 +376,7 @@ export function OficinaConConsumo({ events }: { events: readonly OfficeEventInpu
 }
 ```
 
-`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`, y devuelve un costo desconocido antes que una suma parcial.
+`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`: ignora los ids de evento repetidos, deja como desconocido un conteo de tokens que un evento no reporta y devuelve un costo desconocido antes que una suma parcial o una suma de monedas mezcladas o ausentes.
 
 </details>
 

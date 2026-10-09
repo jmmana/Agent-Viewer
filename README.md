@@ -376,7 +376,7 @@ export function OfficeWithUsage({ events }: { events: readonly OfficeEventInput[
 }
 ```
 
-`showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported, and returns an unknown cost rather than a partial sum.
+`showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported: it ignores repeated event ids, keeps a token count unknown when an event does not report it, and returns an unknown cost rather than a partial sum or a sum of mixed or missing currencies.
 
 </details>
 

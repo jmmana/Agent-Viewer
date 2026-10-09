@@ -585,10 +585,22 @@ If your app has no usage service, `summarizeUsage(events)` is an explicit opt-in
 const usage = useMemo(() => summarizeUsage(events), [events]);
 ```
 
-- `totalTokens` is `inputTokens + outputTokens`. Token counts an event does not report count as zero.
-- The `cost` is `null` (shown as "unknown") when any `llm.usage` event lacks a reported cost, or when events report different currencies. A partial sum is never shown.
-- The same rules apply to each agent in `byAgent`, using only that agent's events.
-- Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero.
+- Events are deduplicated by `id`, like the office and the server do: the first event with a given id wins, whatever its type or agent, and later events with that id are ignored (SSE reconnects, retries and merged replay files repeat events). An event without an `id` (or with an empty or non-string one) cannot be matched, so each one is counted; the same object passed twice counts once.
+- Token counts come from the raw payload. A count is reported only when it is a non-negative integer. If any event does not report `inputTokens`, the `inputTokens` figure is `null` (shown as "unknown"), and the same goes for `outputTokens`. `totalTokens` is `inputTokens + outputTokens` only when both are known, and `null` otherwise.
+- A cost is reported only when it is a finite, non-negative number, and a currency counts only when it is an ISO 4217 code (`^[A-Z]{3}$`, such as `USD`). Values like `'usd'`, `'dollars'` or `''` count as no currency. Costs are never converted:
+
+  | Costs seen (after deduplication) | `cost` | `currency` |
+  |---|---|---|
+  | No `llm.usage` event | `null` | `undefined` |
+  | Any event without a reported cost | `null` | `undefined` |
+  | All costs in one ISO currency, e.g. all `USD` | sum | `'USD'` |
+  | Two or more ISO currencies, e.g. `USD` and `EUR` | `null` | `undefined` |
+  | At least one ISO currency and at least one cost without currency | `null` | `undefined` |
+  | All costs reported, none with a currency | sum | `undefined` (shown as a plain number) |
+
+- `currency` is set only when `cost` is known, so no currency label ever appears next to an unknown cost. A partial sum is never shown.
+- The same rules apply to each agent in `byAgent`, using only that agent's events: when one agent lacks a figure, only that agent and the run total become unknown.
+- Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}`.
 
 ## Replay
 

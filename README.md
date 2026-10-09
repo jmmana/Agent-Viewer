@@ -593,10 +593,22 @@ flowchart LR
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Replays missed events from `Last-Event-ID`; heartbeat every 15 s. |
 | `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes, tokens and cost. |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
-| `PATCH` | `/api/v1/agents/:agentId` | Update an agent's status or properties. |
+| `PATCH` | `/api/v1/agents/:agentId` | Update an agent's profile or status (descriptive fields only; usage is reported with `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |
 | `GET` | `/api/v1/sessions`, `/api/v1/sessions/:sessionId` | List sessions / inspect one with its events. |
 | `POST` | `/api/v1/webhooks/generic` | Flat webhook: `agent`, `status`, `message`, `tool`, `usage`. |
+
+**PATCH agent fields:** `name`, `roleTitle`, `provider`, and `model` emit `agent.updated`. `status` emits `agent.status.changed`; `statusText` and `workspace` accompany that event when `status` is present, and otherwise emit `agent.updated`. Values must be strings: profile fields and `workspace` are trimmed and limited to 1-200 characters, `statusText` to 0-1000 characters, and `status` must be a known status. All other fields are rejected. Usage fields such as `tokensInput`, `inputTokens`, `cachedTokens`, `cost`, `currency`, and `latencyMs` cannot be patched. Report usage through `POST /api/v1/events` with an `llm.usage` event or the SDK `usage()` helper.
+
+For example, a usage field returns HTTP 400:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "Usage and cost cannot be edited through PATCH. Send an llm.usage event to POST /api/v1/events (or use the SDK usage() helper) so the spend is recorded and auditable.",
+  "issues": [{ "path": "cost", "code": "usage_not_patchable", "message": "Report cost with an llm.usage event." }]
+}
+```
 
 <details>
 <summary><b>🧾 Validation, idempotency and batch responses</b></summary>

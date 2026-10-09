@@ -272,3 +272,72 @@ test('SQLiteEventStore: migrates databases created before the event_json column 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('agent profile upserts preserve usage from events and preserve unknown cost', async () => {
+  const { dir, file } = tempDbPath('upsert-usage');
+  const stores = [new MemoryEventStore(), new SQLiteEventStore(file)];
+  try {
+    for (const store of stores) {
+      await store.append({
+        schemaVersion: '1.0',
+        id: `usage-${stores.indexOf(store)}`,
+        type: 'llm.usage',
+        timestamp: 5000,
+        source: 'agent:upsert-agent',
+        agentId: 'upsert-agent',
+        severity: 'normal',
+        summary: 'Usage',
+        payload: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedTokens: 3,
+          reasoningTokens: 2,
+          cost: 0.25,
+        },
+      });
+      const usageBefore = await store.getAgent('upsert-agent');
+      await store.upsertAgent({ id: 'upsert-agent', name: 'Updated once' });
+      const afterFirst = await store.upsertAgent({ id: 'upsert-agent', model: 'updated-model' });
+      assert.deepEqual(
+        {
+          tokensInput: afterFirst.tokensInput,
+          tokensOutput: afterFirst.tokensOutput,
+          cachedTokens: afterFirst.cachedTokens,
+          reasoningTokens: afterFirst.reasoningTokens,
+          cost: afterFirst.cost,
+        },
+        {
+          tokensInput: usageBefore.tokensInput,
+          tokensOutput: usageBefore.tokensOutput,
+          cachedTokens: usageBefore.cachedTokens,
+          reasoningTokens: usageBefore.reasoningTokens,
+          cost: usageBefore.cost,
+        },
+      );
+
+      const memoryStore = store instanceof SQLiteEventStore ? store.memoryFallback : store;
+      memoryStore.agents.get('upsert-agent').cost = null;
+      assert.equal((await store.upsertAgent({ id: 'upsert-agent', name: 'Updated again' })).cost, null);
+    }
+  } finally {
+    for (const store of stores) await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('agent.updated applies statusText without changing agent.registered behavior', async () => {
+  const store = new MemoryEventStore();
+  await store.upsertAgent({ id: 'updated-status-text', name: 'Status Text' });
+  await store.append(storeEvent('evt_status_text_registered', 5500, {
+    type: 'agent.registered',
+    agentId: 'updated-status-text',
+    payload: { statusText: 'Registration text' },
+  }));
+  assert.equal((await store.getAgent('updated-status-text')).statusText, 'Active');
+  await store.append(storeEvent('evt_status_text_updated', 6000, {
+    type: 'agent.updated',
+    agentId: 'updated-status-text',
+    payload: { statusText: 'Updated profile text' },
+  }));
+  assert.equal((await store.getAgent('updated-status-text')).statusText, 'Updated profile text');
+});

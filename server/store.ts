@@ -53,6 +53,10 @@ export interface AgentRecord {
   lastSeenAt: number;
 }
 
+export type AgentProfileInput = { id: string } & Partial<
+  Pick<AgentRecord, 'name' | 'roleTitle' | 'role' | 'provider' | 'model' | 'status' | 'statusText' | 'workspace'>
+>;
+
 export interface ViewerSnapshot {
   schemaVersion: '1.0';
   timestamp: number;
@@ -97,7 +101,7 @@ export interface EventStore {
   listSessions(): Promise<SessionRecord[]>;
   getSession(sessionId: string): Promise<SessionRecord | null>;
 
-  upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord>;
+  upsertAgent(agent: AgentProfileInput): Promise<AgentRecord>;
   getAgent(agentId: string): Promise<AgentRecord | null>;
   listAgents(): Promise<AgentRecord[]>;
 
@@ -258,7 +262,7 @@ export class MemoryEventStore implements EventStore {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  async upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord> {
+  async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
     const existing = this.agents.get(agent.id);
     const updated: AgentRecord = {
       id: agent.id,
@@ -270,11 +274,11 @@ export class MemoryEventStore implements EventStore {
       status: agent.status ?? existing?.status ?? 'IDLE',
       statusText: agent.statusText ?? existing?.statusText ?? 'Active',
       workspace: agent.workspace ?? existing?.workspace ?? 'development',
-      tokensInput: (existing?.tokensInput ?? 0) + (agent.tokensInput ?? 0),
-      tokensOutput: (existing?.tokensOutput ?? 0) + (agent.tokensOutput ?? 0),
-      cachedTokens: (existing?.cachedTokens ?? 0) + (agent.cachedTokens ?? 0),
-      reasoningTokens: (existing?.reasoningTokens ?? 0) + (agent.reasoningTokens ?? 0),
-      cost: (existing?.cost ?? 0) + (agent.cost ?? 0),
+      tokensInput: existing ? existing.tokensInput : 0,
+      tokensOutput: existing ? existing.tokensOutput : 0,
+      cachedTokens: existing ? existing.cachedTokens : 0,
+      reasoningTokens: existing ? existing.reasoningTokens : 0,
+      cost: existing ? existing.cost : 0,
       lastSeenAt: Date.now(),
     };
     this.agents.set(agent.id, updated);
@@ -367,6 +371,9 @@ export class MemoryEventStore implements EventStore {
         if (typeof event.payload?.provider === 'string') ag.provider = event.payload.provider;
         if (typeof event.payload?.model === 'string') ag.model = event.payload.model;
         if (typeof event.payload?.workspace === 'string') ag.workspace = event.payload.workspace;
+        if (event.type === 'agent.updated' && typeof event.payload?.statusText === 'string') {
+          ag.statusText = event.payload.statusText;
+        }
       } else if (event.type === 'agent.status.changed') {
         if (typeof event.payload?.status === 'string') ag.status = event.payload.status.toUpperCase();
         if (typeof event.payload?.statusText === 'string') ag.statusText = event.payload.statusText;
@@ -704,7 +711,7 @@ export class SQLiteEventStore implements EventStore {
     return this.memoryFallback.getSession(sessionId);
   }
 
-  async upsertAgent(agent: Partial<AgentRecord> & { id: string }): Promise<AgentRecord> {
+  async upsertAgent(agent: AgentProfileInput): Promise<AgentRecord> {
     return this.memoryFallback.upsertAgent(agent);
   }
 

@@ -91,6 +91,30 @@ These are design rules, enforced in code, not marketing:
 
 ## ⚡ Quickstart
 
+### One command
+
+```bash
+npx @warlockcode/agent-viewer
+```
+
+Starts the ingestion server and the office together on `http://127.0.0.1:8787`, opens your browser and prints the session token and a `curl` command you can paste to make your first agent appear. Then, without JSON:
+
+```bash
+npx @warlockcode/agent-viewer send --agent demo --status working --message "Hello"
+```
+
+Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). The same with Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (flags after the image name are added to its defaults; image tags and tokens in the [CLI guide](docs/cli.md#docker)). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
+
+### Watch Claude Code work
+
+```bash
+npx @warlockcode/agent-viewer install claude-code   # in your project, shows the change and asks first
+```
+
+Your Claude Code sessions and their subagents appear in the office: tools, handoffs, and when Claude waits for you. Only tool names, agent types, timings and statuses are sent, never arguments, prompts, code or paths. Setup, privacy and uninstall: [docs/claude-code.md](docs/claude-code.md).
+
+### From the repository
+
 Working on the repository requires Node.js 24 or later. Apps that only install the library need React 19, nothing else.
 
 ```bash
@@ -153,7 +177,9 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. Open **http://localhost:3000/?mode=live** to watch the stream.
+This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
+
+> **Maintainers:** GitHub Container Registry creates the `ghcr.io/jmmana/agent-viewer` package as private, and the release workflow cannot change that. After the first release that publishes it, make it public once in the package page: **Package settings > Danger Zone > Change visibility > Public**. The release run summary shows the current visibility.
 
 ---
 
@@ -166,7 +192,7 @@ This starts the API on **:8787** with SQLite on a named volume, and the built de
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> in professional mode: a meeting where agents propose, object, agree and decide. Only the events passed to the component are drawn.</sub>
 </p>
 
-Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.2.1**. ES modules only, React and React DOM 19 as peer dependencies, `lucide-react` and `zod` as its only runtime dependencies, TypeScript declarations included.
+Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.2.1**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
 
 Publication on npm is coming soon. Until then, install it from the GitHub release asset (the package name and your imports stay the same when you switch to npm):
 
@@ -409,6 +435,8 @@ Honest maturity, so you know what you are getting:
 | Integration | Where | Maturity |
 |---|---|---|
 | **REST API, batch, SSE** | [`server/`](server/index.ts) | ✅ **Stable.** Covered by integration, SSE and webhook security tests in CI. |
+| **Claude Code** | [`agent-viewer install claude-code`](docs/claude-code.md) | ✅ **Stable.** Official Claude Code hooks: sessions, subagents as their own agents, tools, waiting for you. Fixture tests for every hook type prove no arguments or content leave the machine. |
+| **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. Not on PyPI yet. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
@@ -636,7 +664,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Server port. |
-| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development. `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
+| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development with `npm run server`; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |

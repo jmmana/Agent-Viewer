@@ -1,0 +1,16 @@
+{
+  "session_id": "f3b1c2d4-0000-4000-8000-SECRETSESSION",
+  "prompt_id": "550e8400-e29b-41d4-a716-SECRETPROMPTID",
+  "transcript_path": "/Users/SECRET-user/.claude/projects/SECRET-project/transcript.jsonl",
+  "cwd": "/Users/SECRET-user/code/SECRET-project",
+  "scratchpad_dir": "/tmp/claude-1000/SECRET-scratch",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cat /etc/SECRET-passwd && export TOKEN=SECRET",
+    "description": "SECRET description of the command",
+    "timeout": 120000
+  },
+  "tool_use_id": "toolu_01ABC123"
+}

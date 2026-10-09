@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import type { Server } from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
-import dotenv from 'dotenv';
 import { z } from 'zod';
 import {
   type CanonicalEvent,
@@ -12,7 +14,17 @@ import {
 import type { AgentStatus } from '../src/types/agent';
 import { createEventStore, type EventStore } from './store';
 
-dotenv.config({ quiet: true });
+/**
+ * Set by the `agent-viewer` CLI before it imports this module. The CLI configures the server through its own
+ * flags, so it neither reads a `.env` file from the user's directory nor lets this module listen on its own.
+ */
+const embedded = process.env.AGENT_VIEWER_EMBEDDED === '1';
+
+// dotenv is a development dependency: the published CLI runs embedded and never loads it.
+if (!embedded) {
+  const dotenv = await import('dotenv');
+  dotenv.config({ quiet: true });
+}
 
 const app = express();
 // Express 5 defaults to the "simple" query parser. Keep the "extended" (qs) parser of Express 4 so query
@@ -172,8 +184,25 @@ app.use('/api/v1', (req, res, next) => {
 // -------------------------------------------------------------
 // Health & Ready
 // -------------------------------------------------------------
-/** Single source of the version: package.json, the same number the release tag uses. */
-const SERVER_VERSION: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+/**
+ * Single source of the version: package.json, the same number the release tag uses. The file is looked up
+ * from this module's folder upwards, so the lookup works from the TypeScript sources and from the bundled CLI.
+ */
+function readPackageVersion(): string {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 6; depth++) {
+    const candidate = path.join(dir, 'package.json');
+    if (existsSync(candidate)) {
+      const pkg = JSON.parse(readFileSync(candidate, 'utf8'));
+      if (pkg.name === '@warlockcode/agent-viewer' && typeof pkg.version === 'string') return pkg.version;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return '0.0.0';
+}
+const SERVER_VERSION: string = readPackageVersion();
 
 app.get('/health', (_req, res) => {
   res.json({
@@ -199,8 +228,31 @@ app.get('/ready', async (_req, res) => {
   }
 });
 
+/** Listeners told about every event the server accepts, in the order they are broadcast (used by `--record`). */
+type AcceptedEventListener = (event: CanonicalEvent) => void | Promise<void>;
+const acceptedEventListeners = new Set<AcceptedEventListener>();
+
+/** Calls `listener` with each accepted event. Returns a function that removes the listener. */
+export function onEventAccepted(listener: AcceptedEventListener): () => void {
+  acceptedEventListeners.add(listener);
+  return () => {
+    acceptedEventListeners.delete(listener);
+  };
+}
+
 // Helper to broadcast event to SSE subscribers (without named event so EventSource.onmessage receives all)
 function broadcastEvent(event: CanonicalEvent) {
+  for (const listener of acceptedEventListeners) {
+    // A failing listener must never break ingestion, whether it throws or returns a rejected promise.
+    try {
+      const result = listener(event);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // Ignored on purpose, see above.
+    }
+  }
   const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
   for (const client of clients) {
     try {
@@ -740,14 +792,16 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 
 let serverInstance: any = null;
 const isDirectRun =
+  !embedded &&
   process.argv[1] &&
   (process.argv[1].endsWith('server/index.ts') ||
     process.argv[1].endsWith('server/index.js') ||
     process.argv[1].endsWith('server') ||
     (process.env.npm_lifecycle_event === 'server'));
 
-export function startServer(portToListen = port) {
-  return app.listen(portToListen);
+/** Starts listening. Without `host` it binds every interface, as before; the CLI passes `127.0.0.1`. */
+export function startServer(portToListen = port, host?: string): Server {
+  return host ? app.listen(portToListen, host) : app.listen(portToListen);
 }
 
 if (isDirectRun && process.env.NODE_ENV !== 'test') {

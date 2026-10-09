@@ -55,7 +55,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
 
 <table>
   <tr>
-    <td align="center" width="25%"><h2>22</h2><sub>canonical event types<br/>in contract V1</sub></td>
+    <td align="center" width="25%"><h2>23</h2><sub>canonical event types<br/>in contract V1</sub></td>
     <td align="center" width="25%"><h2>9</h2><sub>rooms agents<br/>work and meet in</sub></td>
     <td align="center" width="25%"><h2>EN · ES</h2><sub>116 text keys,<br/>all replaceable</sub></td>
     <td align="center" width="25%"><h2>0</h2><sub>usage figures computed<br/>by the component</sub></td>
@@ -84,6 +84,7 @@ These are design rules, enforced in code, not marketing:
 3. **Nothing invented in professional mode.** The embedded office has no ambient life, no invented lines, no sounds. Showcase mode adds simulated office life, and every simulated bubble says so (`SOCIAL · SIMULATED`).
 4. **Unknown is not zero.** The component never computes, adds up or prices usage. A missing cost is shown as "unknown", never as `0`.
 5. **A good guest in your app.** No injected styles, no global selectors, no `localStorage`, no global keyboard shortcuts, nothing runs on import. Two offices on one page never share state.
+6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
 **What it is not:** a tracing backend, a log store or an APM replacement. It does not import OTLP traces yet, it does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
 
@@ -112,7 +113,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
   ghcr.io/jmmana/agent-viewer
 ```
 
-Drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. Flags after the image name are added to its defaults; image tags and tokens are in the [CLI guide](docs/cli.md#docker). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
+Drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. Flags after the image name are added to its defaults; image tags and tokens are in the [CLI guide](docs/cli.md#docker).
 
 ### Watch Claude Code work
 
@@ -448,7 +449,7 @@ Honest maturity, so you know what you are getting:
 | **Claude Code tokens (OTLP logs)** | [`agent-viewer install claude-code --telemetry`](docs/claude-code.md#tokens-and-cost) | ✅ **Stable.** `POST /v1/logs` receives Claude Code's native OpenTelemetry export and turns `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed` on the main agent. Opt-in, off by default. Reference: [docs/otlp.md](docs/otlp.md). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
-| **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. Not on PyPI yet. |
+| **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
 | **JSONL log replay** | [`parseEventLog`](docs/event-log.md) | ✅ **Stable.** Library API, and drag and drop in the demo app. |
 | **LangGraph** | [`examples/langgraph-adapter.ts`](examples/langgraph-adapter.ts) | 🧪 **Example adapter.** Node, tool and usage callbacks mapped to SDK calls. Type-checked in CI, not run against LangGraph. |
@@ -528,7 +529,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 |---|---|---|
 | `schemaVersion` | `"1.0"` | Contract version. |
 | `id` | `string` | Unique event id, also the idempotency key. One id names exactly one event: reusing it for different content is rejected with 409. |
-| `type` | `string` | One of the 22 canonical types (aliases accepted). |
+| `type` | `string` | One of the 23 canonical types (aliases accepted). |
 | `timestamp` | `number` | Unix epoch in milliseconds. |
 | `source` | `string` | Producer, for example `runtime:crewai` or `agent:researcher`. |
 | `agentId` | `string?` | The agent the event is about. |
@@ -538,7 +539,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | `payload` | `object` | Type-specific details. |
 
 <details>
-<summary><b>📋 The 22 event types and what they do in the office</b></summary>
+<summary><b>📋 The 23 event types and what they do in the office</b></summary>
 <br/>
 
 | Category | Type | Effect |
@@ -827,11 +828,10 @@ Agent Viewer needs no model provider keys: usage figures come from your runtime.
 
 ## 🧭 Roadmap
 
-Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts.
+Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR.
 
 Planned, not available yet:
 
-- [ ] Publish `@warlockcode/agent-viewer` on npm.
 - [ ] Import OTLP (OpenTelemetry) traces.
 - [ ] More adapters, packaged and tested against the real frameworks.
 - [ ] An MCP server, so agents can report into the office directly.
@@ -856,7 +856,7 @@ npm run build:lib               # library
 npm run check:package           # publint + attw
 ```
 
-Three rules keep the product honest: never require or expose private model reasoning, keep simulated dialogue visibly marked as simulated, and never show an unknown figure as zero.
+Three rules keep the product honest: never require or expose private model reasoning, keep simulated dialogue visibly marked as simulated, and never show an unknown figure as zero. Field-by-field detail: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
 ---
 

@@ -55,7 +55,7 @@ Es código abierto (MIT), corre en tu máquina, no necesita ninguna clave de pro
 
 <table>
   <tr>
-    <td align="center" width="25%"><h2>22</h2><sub>tipos de evento<br/>en el contrato V1</sub></td>
+    <td align="center" width="25%"><h2>23</h2><sub>tipos de evento<br/>en el contrato V1</sub></td>
     <td align="center" width="25%"><h2>9</h2><sub>salas donde los agentes<br/>trabajan y se reúnen</sub></td>
     <td align="center" width="25%"><h2>ES · EN</h2><sub>116 claves de texto,<br/>todas reemplazables</sub></td>
     <td align="center" width="25%"><h2>0</h2><sub>cifras de consumo calculadas<br/>por el componente</sub></td>
@@ -84,6 +84,7 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 3. **Nada inventado en modo profesional.** La oficina integrada no tiene vida ambiental, ni frases inventadas, ni sonidos. El modo vitrina agrega vida de oficina simulada, y cada burbuja simulada lo dice (`SOCIAL · SIMULADO`).
 4. **Desconocido no es cero.** El componente nunca calcula, suma ni pone precio al consumo. Un costo que falta se muestra como "desconocido", nunca como `0`.
 5. **Un buen invitado en tu app.** No inyecta estilos, no usa selectores globales ni `localStorage`, no registra atajos de teclado globales y no ejecuta nada al importarse. Dos oficinas en la misma página nunca comparten estado.
+6. **Desconocido no es cero, en ningún lado.** El servidor, el portal, la CLI y los SDK nunca guardan ni muestran una cifra desconocida como cero, y nunca suman monedas distintas. Semántica completa, campo por campo: [docs/usage-semantics.es.md](usage-semantics.es.md) ([english](../README.md)).
 
 **Lo que no es:** un backend de trazas, un almacén de logs ni un reemplazo de tu APM. Todavía no importa trazas OTLP, no llama a proveedores de modelos y los adaptadores de frameworks son ejemplos para adaptar, no integraciones empaquetadas. Mira la [tabla de madurez](#-conecta-tus-agentes).
 
@@ -112,7 +113,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
   ghcr.io/jmmana/agent-viewer
 ```
 
-Quita `127.0.0.1:` solo para acceder desde otros equipos, y hazlo detrás de TLS. Las opciones después del nombre de la imagen se suman a sus valores por defecto; las etiquetas y los tokens están en la [guía de la CLI](cli.md#docker). Mientras el paquete no esté en npm y la próxima versión no publique la imagen, ejecuta el `.tgz` de la versión con `npx ./warlockcode-agent-viewer-<versión>.tgz`.
+Quita `127.0.0.1:` solo para acceder desde otros equipos, y hazlo detrás de TLS. Las opciones después del nombre de la imagen se suman a sus valores por defecto; las etiquetas y los tokens están en la [guía de la CLI](cli.md#docker).
 
 ### Mira trabajar a Claude Code
 
@@ -448,7 +449,7 @@ Madurez honesta, para que sepas qué te llevas:
 | **Tokens de Claude Code (logs OTLP)** | [`agent-viewer install claude-code --telemetry`](claude-code.md#tokens-and-cost) | ✅ **Estable.** `POST /v1/logs` recibe la exportación OpenTelemetry nativa de Claude Code y convierte `claude_code.api_request`/`claude_code.api_error` en `llm.usage`/`llm.failed` sobre el agente principal. Opcional, desactivado por defecto. Referencia (en inglés): [otlp.md](otlp.md). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](cli.md) | ✅ **Estable.** Servidor y oficina en un comando, y `send` para eventos rápidos. Prueba de punta a punta en CI. |
 | **Webhook genérico** | `POST /api/v1/webhooks/generic` | ✅ **Estable.** Cuerpo plano, firma HMAC-SHA256 opcional con ventana anti repetición de 5 minutos. |
-| **SDK de Python** | [`sdk/python/`](../sdk/python/agent_viewer.py) | ✅ **Estable.** Solo biblioteca estándar, probado contra un servidor real en CI. Todavía no está en PyPI. |
+| **SDK de Python** | [`sdk/python/`](../sdk/python/agent_viewer.py) | ✅ **Estable.** Solo biblioteca estándar, probado contra un servidor real en CI. `pip install agent-viewer`. |
 | **SDK de TypeScript** | [`sdk/typescript/`](../sdk/typescript/index.ts) | ✅ **Estable.** Probado en CI. Aún no es un paquete aparte: impórtalo desde una copia del repositorio. |
 | **Repetición de logs JSONL** | [`parseEventLog`](event-log.md) | ✅ **Estable.** API de la librería, y arrastrar y soltar en la app de demostración. |
 | **LangGraph** | [`examples/langgraph-adapter.ts`](../examples/langgraph-adapter.ts) | 🧪 **Adaptador de ejemplo.** Callbacks de nodos, herramientas y consumo traducidos a llamadas del SDK. Verificado con el compilador en CI, no ejecutado contra LangGraph. |
@@ -528,7 +529,7 @@ Un solo sobre para todo. Los productores lo envían, el servidor lo valida con Z
 |---|---|---|
 | `schemaVersion` | `"1.0"` | Versión del contrato. |
 | `id` | `string` | Id único del evento; también es la clave de idempotencia. Un id nombra exactamente un evento: reutilizarlo con otro contenido se rechaza con 409. |
-| `type` | `string` | Uno de los 22 tipos canónicos (se aceptan alias). |
+| `type` | `string` | Uno de los 23 tipos canónicos (se aceptan alias). |
 | `timestamp` | `number` | Época Unix en milisegundos. |
 | `source` | `string` | Quién lo produce, por ejemplo `runtime:crewai` o `agent:researcher`. |
 | `agentId` | `string?` | El agente del que habla el evento. |
@@ -538,7 +539,7 @@ Un solo sobre para todo. Los productores lo envían, el servidor lo valida con Z
 | `payload` | `object` | Detalle propio de cada tipo. |
 
 <details>
-<summary><b>📋 Los 22 tipos de evento y qué hacen en la oficina</b></summary>
+<summary><b>📋 Los 23 tipos de evento y qué hacen en la oficina</b></summary>
 <br/>
 
 | Categoría | Tipo | Efecto |
@@ -827,11 +828,10 @@ Agent Viewer no necesita claves de proveedores de modelos: las cifras de consumo
 
 ## 🧭 Hoja de ruta
 
-Ya incluido en la [0.2.0](../CHANGELOG.md): la librería integrable, los modos profesional y vitrina, los tipos de mensaje, la repetición, la exportación de video, el CSS aislado, el acceso por teclado y los textos en español e inglés.
+Ya incluido en la [0.2.0](../CHANGELOG.md): la librería integrable, los modos profesional y vitrina, los tipos de mensaje, la repetición, la exportación de video, el CSS aislado, el acceso por teclado y los textos en español e inglés. Ya incluido en la [0.3.0](../CHANGELOG.md): cifras de consumo ciertas de punta a punta, `llm.failed`, telemetría de tokens de Claude Code, y la primera publicación en npm, PyPI y GHCR.
 
 Planeado, todavía no disponible:
 
-- [ ] Publicar `@warlockcode/agent-viewer` en npm.
 - [ ] Importar trazas OTLP (OpenTelemetry).
 - [ ] Más adaptadores, empaquetados y probados contra los frameworks reales.
 - [ ] Un servidor MCP, para que los agentes reporten directamente a la oficina.
@@ -856,7 +856,7 @@ npm run build:lib               # librería
 npm run check:package           # publint + attw
 ```
 
-Tres reglas mantienen honesto el producto: nunca pedir ni exponer el razonamiento privado de un modelo, marcar siempre como simulado el diálogo simulado y nunca mostrar como cero una cifra desconocida.
+Tres reglas mantienen honesto el producto: nunca pedir ni exponer el razonamiento privado de un modelo, marcar siempre como simulado el diálogo simulado y nunca mostrar como cero una cifra desconocida. Detalle campo por campo: [docs/usage-semantics.es.md](usage-semantics.es.md) ([english](../README.md)).
 
 ---
 

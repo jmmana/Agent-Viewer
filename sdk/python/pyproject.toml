@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-viewer"
-version = "0.2.1"
+version = "0.3.0"
 description = "Python client SDK for Agent Viewer multi-agent visual observability"
 readme = "README.md"
 authors = [{ name = "Juan Manuel Castillo Pinto (WarlockCode)" }]

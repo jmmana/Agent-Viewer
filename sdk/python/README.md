@@ -6,7 +6,11 @@ The SDK is a single module, `agent_viewer`, built on the Python standard library
 
 ## Install
 
-From a clone of the repository:
+```bash
+pip install agent-viewer
+```
+
+From a clone of the repository instead:
 
 ```bash
 pip install ./sdk/python
@@ -16,7 +20,7 @@ You can also build a wheel and install it elsewhere:
 
 ```bash
 python -m pip wheel ./sdk/python -w dist/
-pip install dist/agent_viewer-0.2.0-py3-none-any.whl
+pip install dist/agent_viewer-0.3.0-py3-none-any.whl
 ```
 
 ## Quick start

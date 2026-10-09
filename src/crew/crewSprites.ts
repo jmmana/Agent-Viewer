@@ -1,7 +1,7 @@
-import type { CrewView } from './crewModel';
+import { CREW_VIEWS, type CrewView } from './crewModel';
 import type { CrewPresenceMarker } from './crewPresence';
 
-// Piloto CEO: una pose estática por vista. Otros roles conservan su marcador.
+// Piloto CEO: cuatro orientaciones originales. Otros roles conservan su marcador.
 const sources = {
   front: () => import('./sprites/ceo-front'),
   right: () => import('./sprites/ceo-right'),
@@ -10,8 +10,17 @@ const sources = {
 };
 export const CREW_CEO_SPRITE = { width: 256, height: 352, anchor: { x: .5, y: .9375 }, displayHeight: 76 } as const;
 
-export function crewSpriteView(marker: Pick<CrewPresenceMarker, 'role'>, view: CrewView): CrewView | null {
-  return marker.role === 'boss' ? view : null;
+export type CrewSpriteImages = Partial<Record<CrewView, HTMLImageElement>>;
+const FACINGS = ['SE','SW','NW','NE'] as const;
+// +Y se proyecta hacia la izquierda de pantalla; -Y, hacia la derecha.
+const SPRITE_FACINGS: readonly CrewView[] = ['front','left','back','right'];
+
+/** Rota la dirección del dominio en los mismos ejes locales que crewProject. */
+export function crewSpriteView(marker: Pick<CrewPresenceMarker, 'role'|'facing'>, view: CrewView): CrewView | null {
+  if (marker.role !== 'boss') return null;
+  const facing = FACINGS.indexOf(marker.facing === undefined ? 'SE' : marker.facing);
+  const camera = CREW_VIEWS.indexOf(view);
+  return facing < 0 || camera < 0 ? null : SPRITE_FACINGS[(facing + camera) % 4];
 }
 
 /** Carga solo la vista solicitada; la cancelación impide callbacks después de salir. */

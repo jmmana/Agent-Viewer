@@ -7,6 +7,16 @@ const room = CREW_ROOMS[1];
 const agent = (index: number) => Object.freeze({id:`agent-${index}`,name:`Fixture ${index}`,workspace:'development' as const,status:'CODING' as const});
 
 describe('Presencia espacial Crew de solo lectura', () => {
+  it('copia la orientación sin mover al actor ni modificar el snapshot', () => {
+    const original = Object.freeze({...agent(1),role:'boss' as const,facing:'NE' as const});
+    const before = JSON.stringify(original);
+    const first = projectCrewPresence([original],room).markers[0];
+    const second = projectCrewPresence([{...original,facing:'SW'}],room).markers[0];
+    expect(first.facing).toBe('NE');
+    expect(second.facing).toBe('SW');
+    expect([first.x,first.y]).toEqual([second.x,second.y]);
+    expect(JSON.stringify(original)).toBe(before);
+  });
   it('no crea presencia cuando no hay eventos o la sala no corresponde', () => {
     expect(projectCrewPresence([],room)).toEqual({markers:[],unplaced:[]});
     expect(projectCrewPresence([agent(1)],CREW_ROOMS[0]).markers).toHaveLength(0);

@@ -3,7 +3,7 @@ import { CREW_PROP_SIZE } from './crewSpatial';
 import type { CrewPresenceMarker } from './crewPresence';
 import type { CrewAnimationFrame } from './crewAnimation';
 import type { CrewCamera } from './crewCamera';
-import { CREW_CEO_SPRITE, crewSpriteView } from './crewSprites';
+import { CREW_CEO_SPRITE, crewSpriteView, type CrewSpriteImages } from './crewSprites';
 
 /**
  * A standalone 2.5D Crew renderer prototype.
@@ -20,7 +20,7 @@ export interface CrewRenderInput {
   camera: CrewCamera;
   locale?: string;
   markers?: readonly CrewPresenceMarker[];
-  sprite?: HTMLImageElement;
+  sprites?: CrewSpriteImages;
   blink?: {image: HTMLImageElement; frame: CrewAnimationFrame};
 }
 export const CREW_TILE_X = 34;
@@ -82,7 +82,7 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprite, blink }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
@@ -127,16 +127,18 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
       const p = crewProject(marker.x,marker.y,room,view);
       return {x:p.x,y:p.y,draw:()=>{
         const point = crewIsoPoint(p.x,p.y);
-        if (sprite && crewSpriteView(marker, view)) {
+        const direction = crewSpriteView(marker, view);
+        const sprite = direction ? sprites[direction] : undefined;
+        if (sprite) {
           const spec = CREW_CEO_SPRITE;
           const height = spec.displayHeight, width = height * spec.width / spec.height;
-          if (blink && view === 'front') {
+          if (blink && direction === 'front') {
             const f=blink.frame, scale=height/f.height;
             ctx.drawImage(blink.image,f.x,f.y,f.width,f.height,
               point.x-f.anchor.x*scale,point.y-f.anchor.y*scale,f.width*scale,height);
           } else ctx.drawImage(sprite,point.x-width*spec.anchor.x,point.y-height*spec.anchor.y,width,height);
         }
-        const badgeY = point.y + (sprite && crewSpriteView(marker,view) ? 9 : 0);
+        const badgeY = point.y + (sprite ? 9 : 0);
         ctx.beginPath();
         ctx.ellipse(point.x,badgeY,12,8,0,0,Math.PI*2);
         ctx.fillStyle = marker.status === 'ERROR' || marker.status === 'BLOCKED' ? '#b91c1c' : '#1d4ed8';

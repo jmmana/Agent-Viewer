@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CrewView } from './crewModel';
 import { loadCrewSprite } from './crewSprites';
 
@@ -13,4 +13,15 @@ export function useCrewSprite(view: CrewView | null) {
     return loadCrewSprite(view, image => setLoaded({view, image}), () => setFailedView(view));
   }, [view]);
   return { image: loaded?.view === view ? loaded.image : undefined, failed: view !== null && failedView === view };
+}
+
+/** Cada orientación requerida se carga una sola vez por escena, aunque varios agentes la compartan. */
+export function useCrewSprites(views: readonly CrewView[]) {
+  const front = useCrewSprite(views.includes('front') ? 'front' : null);
+  const right = useCrewSprite(views.includes('right') ? 'right' : null);
+  const back = useCrewSprite(views.includes('back') ? 'back' : null);
+  const left = useCrewSprite(views.includes('left') ? 'left' : null);
+  const images = useMemo(() => ({front:front.image,right:right.image,back:back.image,left:left.image}),
+    [front.image,right.image,back.image,left.image]);
+  return {images,failed:front.failed || right.failed || back.failed || left.failed};
 }

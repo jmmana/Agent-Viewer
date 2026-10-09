@@ -6,6 +6,21 @@ const fakeImage = () => ({ naturalWidth:256, naturalHeight:352, src:'', onload:n
   removeAttribute:vi.fn() }) as unknown as HTMLImageElement;
 
 describe('Carga del piloto ilustrado Crew', () => {
+  it('combina las cuatro direcciones del dominio con las cuatro cámaras', () => {
+    const views = ['front','right','back','left'] as const;
+    const cases = [
+      ['SE',['front','left','back','right']],
+      ['SW',['left','back','right','front']],
+      ['NW',['back','right','front','left']],
+      ['NE',['right','front','left','back']],
+    ] as const;
+    for (const [facing,expected] of cases) {
+      const marker = Object.freeze({role:'boss' as const,facing});
+      expect(views.map(view=>crewSpriteView(marker,view))).toEqual(expected);
+    }
+    expect(crewSpriteView({role:'boss',facing:'invalid' as never},'front')).toBeNull();
+    expect(crewSpriteView({role:'boss'},'front')).toBe('front');
+  });
   it('no asigna el CEO a roles desconocidos o ausentes', () => {
     expect(crewSpriteView({role:'boss'},'back')).toBe('back');
     expect(crewSpriteView({role:'custom'},'front')).toBeNull();

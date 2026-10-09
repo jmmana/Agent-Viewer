@@ -1,5 +1,8 @@
 # Run from the repository root: docker compose -f docker/compose.yml up --build
 # Office: http://localhost:3000  Ingestion API: http://localhost:8787
+# The API never runs without a token. Set AGENT_VIEWER_API_TOKEN before `up` to choose it; otherwise the api
+# service generates one on first start, keeps it in its volume and prints it (docker compose logs api). Open
+# the office with it in the fragment: http://localhost:3000/?mode=live#token=<token>
 name: agent-viewer
 
 services:
@@ -13,6 +16,7 @@ services:
       - "8787:8787"
     environment:
       - PORT=8787
+      - AGENT_VIEWER_API_TOKEN=${AGENT_VIEWER_API_TOKEN:-}
       - AGENT_VIEWER_STORAGE=sqlite
       - AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db
       # Must match the origin the browser loads the office from (the viewer service below).

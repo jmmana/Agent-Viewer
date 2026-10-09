@@ -1,0 +1,24 @@
+{
+  "session_id": "f3b1c2d4-0000-4000-8000-SECRETSESSION",
+  "prompt_id": "550e8400-e29b-41d4-a716-SECRETPROMPTID",
+  "transcript_path": "/Users/SECRET-user/.claude/projects/SECRET-project/transcript.jsonl",
+  "cwd": "/Users/SECRET-user/code/SECRET-project",
+  "scratchpad_dir": "/tmp/claude-1000/SECRET-scratch",
+  "permission_mode": "default",
+  "agent_id": "agent-SECRET-a1b2c3",
+  "agent_type": "Explore",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/Users/SECRET-user/.claude/subagents/agent-SECRET.jsonl",
+  "last_assistant_message": "SECRET analysis complete. Found 3 issues in /Users/SECRET-user/code",
+  "background_tasks": [
+    {
+      "id": "t1",
+      "type": "shell",
+      "status": "running",
+      "description": "SECRET task",
+      "command": "sleep SECRET"
+    }
+  ],
+  "session_crons": []
+}

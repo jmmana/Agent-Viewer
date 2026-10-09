@@ -35,7 +35,7 @@ Requisitos:
 - React y React DOM 19 (`^19.0.0`). Son dependencias peer, así que las aporta tu app.
 - Un bundler o framework que entienda módulos ES e importaciones de CSS (Vite, Next.js, webpack y similares). El paquete es solo ESM: no hay build CommonJS.
 
-Las dependencias de ejecución son `lucide-react` (iconos) y `zod` (validación estricta de eventos). Incluye las declaraciones de TypeScript.
+Las dependencias de ejecución son `lucide-react` (iconos), `zod` (validación estricta de eventos) y `express` (el servidor del comando `agent-viewer`; los módulos de la librería nunca lo importan, así que no llega a tu bundle). El paquete declara Node.js 22.13 o superior en `engines`. Incluye las declaraciones de TypeScript.
 
 La publicación en npm llegará pronto. Mientras tanto, instala el paquete desde el archivo de la release de GitHub:
 
@@ -770,7 +770,7 @@ Todo se exporta desde `@warlockcode/agent-viewer`. La hoja de estilos es `@warlo
 | Archivos de log | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |
 
-`connectEventStream(baseUrl, onEvent, onStatus?, options?)` abre un `EventSource` en `${baseUrl}/api/v1/events/stream`, llama a `onEvent` con cada evento válido y se reconecta con espera progresiva, retomando desde el último id de evento. Opciones: `token` (se envía como parámetro `token` de la URL), `maxReconnectAttempts` (por defecto sin límite), `initialBackoffMs` (1000), `maxBackoffMs` (15000) y `heartbeatTimeoutMs` (35000). `onStatus` recibe `connecting`, `connected`, `reconnecting`, `disconnected`, `error` o `closed`. La conexión devuelta tiene `close()`, `status()` y `getLastEventId()`.
+`connectEventStream(baseUrl, onEvent, onStatus?, options?)` abre el flujo en `${baseUrl}/api/v1/events/stream`, llama a `onEvent` con cada evento válido y se reconecta con espera progresiva, retomando desde el último id de evento. Opciones: `token` (viaja en una cabecera `Authorization: Bearer` sobre un `fetch` con streaming, así que no queda en URLs ni en registros de acceso; solo donde `fetch` no puede hacer streaming se usa un `EventSource` con el parámetro `token` de la URL), `fetch` (el `fetch` que usa ese flujo, por defecto el global), `maxReconnectAttempts` (por defecto sin límite), `initialBackoffMs` (1000), `maxBackoffMs` (15000) y `heartbeatTimeoutMs` (35000). `onStatus` recibe `connecting`, `connected`, `reconnecting`, `disconnected`, `error` o `closed`. La conexión devuelta tiene `close()`, `status()` y `getLastEventId()`.
 
 ## Garantías de aislamiento
 

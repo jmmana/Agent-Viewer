@@ -5,6 +5,14 @@ import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
 import { readPackageVersion } from './version';
 
+function sqliteBackupMode(value: string | undefined): 'auto' | 'off' {
+  const backup = value ?? 'auto';
+  if (backup !== 'auto' && backup !== 'off') {
+    throw new Error(`Invalid AGENT_VIEWER_SQLITE_BACKUP value "${backup}"; use "auto" or "off".`);
+  }
+  return backup;
+}
+
 let _DatabaseSync: any = null;
 function getDatabaseSync(): any {
   if (!_DatabaseSync) {
@@ -463,6 +471,8 @@ export class SQLiteEventStore implements EventStore {
     filePath = './data/agent-viewer.db',
     options: { backup?: 'auto' | 'off'; appVersion?: string; migrations?: readonly Migration[] } = {}
   ) {
+    const backup = sqliteBackupMode(options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP);
+
     const dir = path.dirname(filePath);
     if (dir && dir !== '.' && !fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
@@ -472,11 +482,6 @@ export class SQLiteEventStore implements EventStore {
     this.db = new DBSync(filePath);
     this.memoryFallback = new MemoryEventStore();
     this.migrations = options.migrations ?? MIGRATIONS;
-    const backup = options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP ?? 'auto';
-    if (backup !== 'auto' && backup !== 'off') {
-      this.db.close();
-      throw new Error(`Invalid AGENT_VIEWER_SQLITE_BACKUP value "${backup}"; use "auto" or "off".`);
-    }
     try {
       this.migration = runMigrations(this.db, {
         appVersion: options.appVersion ?? readPackageVersion(),
@@ -702,10 +707,7 @@ export function createEventStore(): EventStore {
   const storageType = (process.env.AGENT_VIEWER_STORAGE || 'memory').toLowerCase();
   if (storageType === 'sqlite') {
     const dbPath = process.env.AGENT_VIEWER_SQLITE_PATH || './data/agent-viewer.db';
-    const backup = process.env.AGENT_VIEWER_SQLITE_BACKUP || 'auto';
-    if (backup !== 'auto' && backup !== 'off') {
-      throw new Error(`Invalid AGENT_VIEWER_SQLITE_BACKUP value "${backup}"; use "auto" or "off".`);
-    }
+    const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
     return new SQLiteEventStore(dbPath, { backup });
   }
   return new MemoryEventStore();

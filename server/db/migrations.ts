@@ -177,20 +177,26 @@ function backupDatabase(
   toVersion: number
 ): string {
   let timestamp = Date.now();
-  while (true) {
-    const backupPath = `${filePath}.pre-v${fromVersion}-to-v${toVersion}.${timestamp}.bak`;
-    const escapedPath = backupPath.replaceAll("'", "''");
-    try {
-      withBusyRetry(() => db.exec(`VACUUM INTO '${escapedPath}'`));
-      return backupPath;
-    } catch (error) {
-      if (fs.existsSync(backupPath) && fs.statSync(backupPath).isFile()) {
-        timestamp++;
-        continue;
-      }
-      throw new SchemaBackupError(backupPath, error);
-    }
+  let backupPath = `${filePath}.pre-v${fromVersion}-to-v${toVersion}.${timestamp}.bak`;
+  while (fs.existsSync(backupPath) || fs.existsSync(`${backupPath}-journal`)) {
+    timestamp++;
+    backupPath = `${filePath}.pre-v${fromVersion}-to-v${toVersion}.${timestamp}.bak`;
   }
+
+  const escapedPath = backupPath.replaceAll("'", "''");
+  try {
+    withBusyRetry(() => db.exec(`VACUUM INTO '${escapedPath}'`));
+  } catch (error) {
+    for (const partialPath of [backupPath, `${backupPath}-journal`]) {
+      try {
+        fs.rmSync(partialPath, { force: true });
+      } catch {
+        // Preserve the backup failure while best-effort removing partial files.
+      }
+    }
+    throw new SchemaBackupError(backupPath, error);
+  }
+  return backupPath;
 }
 
 export function runMigrations(db: DatabaseSync, options: MigrationOptions): MigrationResult {
@@ -203,19 +209,25 @@ export function runMigrations(db: DatabaseSync, options: MigrationOptions): Migr
 
   db.exec('PRAGMA busy_timeout = 5000');
   const initial = withBusyRetry(() => {
-    const hasHistory = tableExists(db, 'schema_migrations');
-    const hasEvents = tableExists(db, 'events');
-    if (!hasHistory) {
-      if (hasEvents) {
-        const columns = eventColumns(db);
-        const missingColumns = LEGACY_EVENT_COLUMNS.filter((column) => !columns.has(column));
-        if (missingColumns.length > 0) throw new SchemaShapeError(missingColumns);
+    db.exec('BEGIN');
+    try {
+      const hasHistory = tableExists(db, 'schema_migrations');
+      const hasEvents = tableExists(db, 'events');
+      if (!hasHistory) {
+        if (hasEvents) {
+          const columns = eventColumns(db);
+          const missingColumns = LEGACY_EVENT_COLUMNS.filter((column) => !columns.has(column));
+          if (missingColumns.length > 0) throw new SchemaShapeError(missingColumns);
+        }
+        return { hasEvents, rows: [] as MigrationRow[] };
       }
-      return { hasEvents, rows: [] as MigrationRow[] };
+      const rows = readHistory(db);
+      validateHistory(rows, migrations, options);
+      if ((rows.at(-1)?.version ?? 0) >= 1) assertEventShape(db, CURRENT_EVENT_COLUMNS);
+      return { hasEvents, rows };
+    } finally {
+      db.exec('ROLLBACK');
     }
-    const rows = readHistory(db);
-    validateHistory(rows, migrations, options);
-    return { hasEvents, rows };
   });
   const fromVersion = validateHistory(initial.rows, migrations, options);
 

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { app } from '../server/index.ts';
+import { app, store } from '../server/index.ts';
 
 function startTestServer() {
   return new Promise((resolve) => {
@@ -69,6 +69,27 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(typeof ready.database.appliedAt, 'number');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REST API: /ready returns 503 when schema info cannot be read', async () => {
+  const original = store.getSchemaInfo;
+  store.getSchemaInfo = () => {
+    throw new Error('schema metadata unavailable');
+  };
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/ready`);
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      ready: false,
+      error: 'schema metadata unavailable',
+    });
+  } finally {
+    server.close();
+    if (original === undefined) delete store.getSchemaInfo;
+    else store.getSchemaInfo = original;
   }
 });
 

@@ -4,8 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   MIGRATIONS,
@@ -14,10 +13,13 @@ import {
   SchemaHistoryMismatchError,
   SchemaShapeError,
   SchemaTooNewError,
+  runMigrations,
 } from '../server/db/migrations.ts';
-import { SQLiteEventStore } from '../server/store.ts';
+import { createEventStore, SQLiteEventStore } from '../server/store.ts';
+import { readPackageVersion } from '../server/version.ts';
 
 const fixtures = path.join(import.meta.dirname, 'fixtures/sqlite');
+const appVersion = readPackageVersion();
 const fixtureNames = [
   'agent-viewer-0.1.x-2b00789.db',
   'agent-viewer-0.2.0.db',
@@ -118,10 +120,13 @@ for (const fixtureName of fixtureNames) {
       .prepare(`SELECT rowid, id, created_at, ${hasEventJson ? 'event_json,' : ''} type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload FROM events ORDER BY rowid`)
       .all();
     const originalIds = originalRows.map(({ id }) => id);
-    const expectedByCursor = originalDb
-      .prepare(`SELECT id FROM events WHERE rowid > (SELECT rowid FROM events WHERE id = ?) ORDER BY timestamp DESC, created_at DESC, rowid DESC`)
-      .all(originalIds[0])
-      .map(({ id }) => id);
+    const expectedAfterIds = originalIds.map((cursorId) => {
+      const cursor = originalRows.find(({ id }) => id === cursorId);
+      return originalRows
+        .filter(({ rowid }) => rowid > cursor.rowid)
+        .sort((a, b) => b.timestamp - a.timestamp || b.created_at - a.created_at || b.rowid - a.rowid)
+        .map(({ id }) => id);
+    });
     originalDb.close();
 
     const store = new SQLiteEventStore(file);
@@ -149,7 +154,13 @@ for (const fixtureName of fixtureNames) {
         ? originalRows.map(eventFromLegacyRow)
         : originalRows.map(({ event_json }) => JSON.parse(event_json));
       assert.deepEqual(await store.list({ limit: 100 }), expectedEvents.slice().reverse());
-      assert.deepEqual((await store.list({ afterId: originalIds[0], limit: 100 })).map(({ id }) => id), expectedByCursor);
+      for (const [index, cursorId] of originalIds.entries()) {
+        assert.deepEqual(
+          (await store.list({ afterId: cursorId, limit: 100 })).map(({ id }) => id),
+          expectedAfterIds[index],
+          `afterId parity for cursor ${cursorId}`
+        );
+      }
       assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
       assert.deepEqual(
         db.prepare('SELECT version, name FROM schema_migrations').all().map(({ version, name }) => [version, name]),
@@ -232,14 +243,25 @@ test('a failed migration rolls back its DDL and closes the database', () => {
       },
     },
   ];
-  assert.throws(
-    () => new SQLiteEventStore(file, { backup: 'off', migrations }),
-    (error) =>
-      error instanceof MigrationFailedError &&
-      error.code === 'migration_failed' &&
-      error.version === 2 &&
-      error.cause.message === 'expected failure'
-  );
+  const originalClose = DatabaseSync.prototype.close;
+  let storeHandleCloseCount = 0;
+  DatabaseSync.prototype.close = function (...args) {
+    storeHandleCloseCount++;
+    return originalClose.apply(this, args);
+  };
+  try {
+    assert.throws(
+      () => new SQLiteEventStore(file, { backup: 'off', migrations }),
+      (error) =>
+        error instanceof MigrationFailedError &&
+        error.code === 'migration_failed' &&
+        error.version === 2 &&
+        error.cause.message === 'expected failure'
+    );
+    assert.equal(storeHandleCloseCount, 1);
+  } finally {
+    DatabaseSync.prototype.close = originalClose;
+  }
   const db = new DatabaseSync(file);
   assert.deepEqual(db.prepare('SELECT version FROM schema_migrations').all().map(({ version }) => version), [1]);
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'partial_change'").get(), undefined);
@@ -277,41 +299,54 @@ test('backups are made only for existing legacy databases when enabled', async (
   fs.rmSync(fresh.dir, { recursive: true, force: true });
 });
 
-test('a failed backup aborts migration without changing the database', () => {
-  const { dir, file } = tempDbPath('backup-failure');
+test('a failed VACUUM INTO removes partial backup files and throws SchemaBackupError', () => {
+  const { dir, file } = tempDbPath('partial-backup');
   fs.copyFileSync(path.join(fixtures, 'agent-viewer-0.2.1.db'), file);
+  const db = new DatabaseSync(file);
+  const originalExec = db.exec.bind(db);
   const stamp = 1791500000000;
   const backupPath = `${file}.pre-v0-to-v1.${stamp}.bak`;
-  fs.mkdirSync(backupPath);
-  const before = hashFile(file);
+  db.exec = (sql) => {
+    if (sql.startsWith('VACUUM INTO ')) {
+      fs.writeFileSync(backupPath, 'partial backup');
+      fs.writeFileSync(`${backupPath}-journal`, 'partial journal');
+      throw new Error('disk full');
+    }
+    return originalExec(sql);
+  };
   const originalNow = Date.now;
   Date.now = () => stamp;
   try {
     assert.throws(
-      () => new SQLiteEventStore(file),
-      (error) => error instanceof SchemaBackupError && error.code === 'schema_backup_failed' && error.backupPath === backupPath
+      () => runMigrations(db, { appVersion, filePath: file, backup: 'auto' }),
+      (error) => error instanceof SchemaBackupError && error.backupPath === backupPath && error.cause.message === 'disk full'
     );
-    assert.equal(hashFile(file), before);
-    const db = new DatabaseSync(file);
+    assert.equal(fs.existsSync(backupPath), false);
+    assert.equal(fs.existsSync(`${backupPath}-journal`), false);
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'").get(), undefined);
-    db.close();
   } finally {
     Date.now = originalNow;
+    db.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 test('four concurrent processes can migrate a fresh file', async () => {
   const { dir, file } = tempDbPath('concurrent');
+  const start = Date.now() + 1500;
   const code = `
     const { SQLiteEventStore } = await import('./server/store.ts');
+    const start = Number(process.env.START);
+    while (Date.now() < start) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(25, start - Date.now()));
+    }
     const store = new SQLiteEventStore(process.env.AGENT_VIEWER_SQLITE_PATH);
     await store.close();
   `;
   const children = Array.from({ length: 4 }, () => {
     const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
       cwd: process.cwd(),
-      env: { ...process.env, AGENT_VIEWER_SQLITE_PATH: file, AGENT_VIEWER_SQLITE_BACKUP: 'auto' },
+      env: { ...process.env, AGENT_VIEWER_SQLITE_PATH: file, AGENT_VIEWER_SQLITE_BACKUP: 'auto', START: String(start) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -335,8 +370,28 @@ test('four concurrent processes can migrate a fresh file', async () => {
 
 test('invalid backup modes are rejected with a clear configuration error', () => {
   const { dir, file } = tempDbPath('invalid-backup-mode');
-  assert.throws(() => new SQLiteEventStore(file, { backup: 'sometimes' }), /AGENT_VIEWER_SQLITE_BACKUP.*auto.*off/);
-  fs.rmSync(dir, { recursive: true, force: true });
+  const previous = process.env.AGENT_VIEWER_SQLITE_BACKUP;
+  const previousStorage = process.env.AGENT_VIEWER_STORAGE;
+  const previousPath = process.env.AGENT_VIEWER_SQLITE_PATH;
+  try {
+    assert.throws(() => new SQLiteEventStore(file, { backup: 'sometimes' }), /AGENT_VIEWER_SQLITE_BACKUP.*auto.*off/);
+    assert.equal(fs.existsSync(file), false);
+    process.env.AGENT_VIEWER_SQLITE_BACKUP = '';
+    assert.throws(() => new SQLiteEventStore(file), /AGENT_VIEWER_SQLITE_BACKUP.*auto.*off/);
+    assert.equal(fs.existsSync(file), false);
+    process.env.AGENT_VIEWER_STORAGE = 'sqlite';
+    process.env.AGENT_VIEWER_SQLITE_PATH = file;
+    assert.throws(() => createEventStore(), /AGENT_VIEWER_SQLITE_BACKUP.*auto.*off/);
+    assert.equal(fs.existsSync(file), false);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_VIEWER_SQLITE_BACKUP;
+    else process.env.AGENT_VIEWER_SQLITE_BACKUP = previous;
+    if (previousStorage === undefined) delete process.env.AGENT_VIEWER_STORAGE;
+    else process.env.AGENT_VIEWER_STORAGE = previousStorage;
+    if (previousPath === undefined) delete process.env.AGENT_VIEWER_SQLITE_PATH;
+    else process.env.AGENT_VIEWER_SQLITE_PATH = previousPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('direct server startup reports a too-new database in one line and exits with status 1', () => {
@@ -364,7 +419,7 @@ test('direct server startup reports a too-new database in one line and exits wit
     .split(/\r?\n/)
     .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
   assert.deepEqual(relevantLines, [
-    `The database ${file} has schema version 3, but this server (0.2.1) only knows up to version 1. Upgrade agent-viewer, or set AGENT_VIEWER_SQLITE_PATH to another file. The file was not modified.`,
+    `The database ${file} has schema version 3, but this server (${appVersion}) only knows up to version 1. Upgrade agent-viewer, or set AGENT_VIEWER_SQLITE_PATH to another file. The file was not modified.`,
   ]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -379,10 +434,16 @@ test('migration registry is contiguous and only adds entries to its snapshot', (
 test('committed SQLite fixtures match their manifest hashes and row counts', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(fixtures, 'manifest.json'), 'utf8'));
   for (const entry of manifest.fixtures) {
-    const file = path.join(fixtures, entry.file);
-    assert.equal(hashFile(file), entry.sha256);
-    const db = new DatabaseSync(file);
-    assert.equal(db.prepare('SELECT count(*) AS count FROM events').get().count, entry.rowCount);
-    db.close();
+    const { dir, file } = tempDbPath('fixture-manifest');
+    try {
+      const committedFixture = path.join(fixtures, entry.file);
+      assert.equal(hashFile(committedFixture), entry.sha256);
+      fs.copyFileSync(committedFixture, file);
+      const db = new DatabaseSync(file);
+      assert.equal(db.prepare('SELECT count(*) AS count FROM events').get().count, entry.rowCount);
+      db.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

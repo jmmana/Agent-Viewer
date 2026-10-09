@@ -1,9 +1,21 @@
 # Estado de implementación de Crew
 
-Actualizado: 2026-10-09 (America/Bogota).
-Último issue trabajado: #118/#155, orientación individual del CEO respecto a la cámara. Epic: #114.
+Actualizado: 2026-10-09 (America/Bogota). Main observado: `2d3c43e`.
+Último issue completado: #168, catálogo y selector de oficinas Crew. Epic: #114.
 
-## Resumen de la ejecución
+## Avances y cierres verificados
+
+| Issue | Resultado | PR integrado y verificación |
+| --- | --- | --- |
+| [#168](https://github.com/jmmana/Agent-Viewer/issues/168) | Cerrado. Catálogo de once salas, puertas y llegadas locales, selector con búsqueda bilingüe, teclado, estados de ocupación y aislamiento de eventos. La escena seleccionada es la única visible en Crew; Caricatura conserva su renderer y store. | [PR #222](https://github.com/jmmana/Agent-Viewer/pull/222), merge `2d3c43e`. 19 E2E Chrome y 607 Vitest; lint, builds app/lib/CLI, check de paquete y pruebas Python reportados en el PR. Los checks previos al merge `verify`, `cli-node-22` y `crew-browser` pasaron en ambos runs. Contrato, aceptación y capturas: [ISSUE-168-ACCEPTANCE.md](ISSUE-168-ACCEPTANCE.md). |
+| [#171](https://github.com/jmmana/Agent-Viewer/issues/171) | Cerrado. Preferencias, enlaces, restablecimiento, navegación y controles de Crew quedan integrados con estado por instancia y almacenamiento validado. | [PR #221](https://github.com/jmmana/Agent-Viewer/pull/221), merge `119002d`. Checks previos al merge `verify`, `cli-node-22` y `crew-browser` pasaron en ambos runs. Criterios y límites: [ISSUE-171-ACCEPTANCE.md](ISSUE-171-ACCEPTANCE.md). |
+| [#172](https://github.com/jmmana/Agent-Viewer/issues/172) | Cerrado. La auditoría documenta procedencia y destino de 53 assets más la referencia, preservación de originales, renderer independiente y los 1.584 SVG como estudios, no animación final. #43 continúa abierto como draft y no se ha fusionado como reemplazo de Caricatura. | [PR #218](https://github.com/jmmana/Agent-Viewer/pull/218), merge `920dce7`. Comparación fuente/banco 54/54 y 11 pruebas de integridad; checks previos al merge `verify`, `cli-node-22` y `crew-browser` pasaron en ambos runs. Auditoría: [ISSUE-172-ACCEPTANCE.md](ISSUE-172-ACCEPTANCE.md). |
+
+Por indicación del usuario, la coordinación futura asigna a Luna los issues cuyo entregable sea documentación y a Sol los issues de implementación de código. Mantener esa correspondencia por tipo de trabajo y dejar las decisiones compartidas de alcance bajo coordinación del usuario.
+
+Crew continúa en Beta; estos cierres no certifican G1 ni convierten los prototipos del banco en arte final. Las siguientes secciones conservan cortes históricos: las fechas, ramas y estados de issues descritos allí no sustituyen los cierres actuales de la tabla superior.
+
+## Historial técnico de implementación
 
 Nuevo incremento de orientación: cada CEO usa el facing de su snapshot y la cámara; se comparten imágenes por orientación, y el parpadeo solo aparece en rostros frontales respecto al observador. La prueba de cuatro actores comprueba la imagen dibujada para cada número de presencia y que cambiar cámara no modifica el snapshot. [Contrato y matriz de 16 combinaciones](FACING.md).
 
@@ -25,7 +37,7 @@ El incremento posterior incorpora el piloto estático del CEO en cuatro vistas, 
 
 Crew sigue en Beta. G1 no está certificado: faltan arte final de salas, animaciones verdaderas, integración completa de acciones, rendimiento y dispositivos físicos. Los apartados históricos siguientes registran cada incremento con los pendientes que existían entonces.
 
-## Base verificada
+## Base verificada en el corte histórico de la primera ejecución
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
 - Rama actual: `feat/crew-facing-118`, basada en main `30c0514`.
@@ -63,9 +75,9 @@ Gestos por pointerId con pinch anclado al centro de los dedos, paneo simultáneo
 - Docker local: daemon no respondió a la consulta; builds pendientes de CI.
 - Implementación: commit `75f2da7`, [PR #182](https://github.com/jmmana/Agent-Viewer/pull/182), abierto sobre #177. [CI del último commit](https://github.com/jmmana/Agent-Viewer/actions/runs/37868883704) aprobado, incluyendo Docker y navegador.
 
-## Estado real de los 55 issues
+## Estado de los 55 issues en el corte histórico de la primera ejecución
 
-Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterios finales.
+Este inventario refleja el estado al redactar la primera ejecución. Desde entonces, #168, #171 y #172 se cerraron con las evidencias enlazadas en el bloque superior.
 
 | Issue | Estado verificable |
 | --- | --- |

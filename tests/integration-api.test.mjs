@@ -24,6 +24,8 @@ test('REST API: /health and /ready endpoints', async () => {
     assert.equal(healthJson.ok, true);
     assert.equal(healthJson.service, 'agent-viewer');
     assert.equal(healthJson.schemaVersion, '1.0');
+    assert.ok(['open', 'token'].includes(healthJson.auth));
+    assert.ok(['open', 'token', 'signature'].includes(healthJson.webhookAuth));
 
     const readyRes = await fetch(`${baseUrl}/ready`);
     assert.equal(readyRes.status, 200);

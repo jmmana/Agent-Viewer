@@ -202,8 +202,18 @@ Validation rules enforced:
 Base URL: `http://localhost:8787`
 
 ### Health & Readiness
-- `GET /health`: Health status, server version, connected SSE client count.
+- `GET /health`: Health status, server version, connected SSE client count, and current `auth` / `webhookAuth` modes. An open server still returns HTTP 200 with `ok: true`.
 - `GET /ready`: Verification that storage engine is ready.
+
+The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or `open`. These fields never include the token:
+
+```json
+{ "auth": "open", "webhookAuth": "open" }
+```
+
+```json
+{ "auth": "token", "webhookAuth": "signature" }
+```
 
 ### Events
 - `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header.

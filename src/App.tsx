@@ -10,6 +10,7 @@ import {
 } from './engine/simulationEngine';
 import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
+import { OpenApiBanner } from './components/OpenApiBanner';
 import { OfficeCanvas } from './components/OfficeCanvas';
 import { AgentInspector } from './components/AgentInspector';
 import { ActivityTimeline } from './components/ActivityTimeline';
@@ -29,6 +30,7 @@ import { advanceLivingOffice, applyAmbientLife } from './engine/livingOfficeEngi
 import { applyExternalEvent } from './integrations/eventIngestion';
 import { connectEventStream } from './integrations/realtimeClient';
 import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './integrations/liveConnection';
+import { useServerAuthState } from './integrations/serverHealth';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
 import { Upload, AlertCircle, X } from 'lucide-react';
@@ -38,6 +40,15 @@ export default function App() {
     import.meta.env.VITE_AGENT_VIEWER_MODE === 'live' ||
     new URLSearchParams(window.location.search).get('mode') === 'live'
   );
+  const apiBase = useMemo(() => {
+    if (typeof window === 'undefined') return undefined;
+    return resolveLiveConnection(
+      window.location,
+      import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined,
+      isLiveMode,
+    ).apiBase;
+  }, [isLiveMode]);
+  const serverAuth = useServerAuthState(isLiveMode ? apiBase : undefined);
 
   const [isLiveConnected, setIsLiveConnected] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -198,11 +209,6 @@ export default function App() {
   }, [ambientSocialEnabled, politicsChatterEnabled, locale]);
 
   useEffect(() => {
-    const { apiBase } = resolveLiveConnection(
-      window.location,
-      import.meta.env.VITE_AGENT_VIEWER_API_URL as string | undefined,
-      isLiveMode,
-    );
     if (!apiBase) {
       // Not streaming, but a token in the address still leaves the address bar and the history entry.
       takeLiveCredentials(window);
@@ -246,7 +252,7 @@ export default function App() {
       connection?.close();
       setIsLiveConnected(false);
     };
-  }, [isLiveMode]);
+  }, [apiBase, isLiveMode]);
 
   // Demo playback timer
   useEffect(() => {
@@ -639,7 +645,9 @@ export default function App() {
         onOpenModelOps={() => handleOpenModelOps()}
         isLiveMode={isLiveMode}
         isLiveConnected={isLiveConnected}
+        openApi={serverAuth === 'open'}
       />
+      {isLiveMode && serverAuth === 'open' && <OpenApiBanner locale={locale} />}
 
       {/* Main View Area */}
       <main className="flex-1 flex overflow-hidden relative">

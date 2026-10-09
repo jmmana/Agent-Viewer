@@ -103,7 +103,7 @@ Levanta el servidor de ingesta y la oficina juntos en `http://127.0.0.1:8787`, a
 npx @warlockcode/agent-viewer send --agent demo --status working --message "Hola"
 ```
 
-Las opciones (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) están en la [guía de la CLI](cli.md) (en inglés). Lo mismo con Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (las opciones después del nombre de la imagen se suman a sus valores por defecto; etiquetas y tokens en la [guía de la CLI](cli.md#docker)). Mientras el paquete no esté en npm y la próxima versión no publique la imagen, ejecuta el `.tgz` de la versión con `npx ./warlockcode-agent-viewer-<versión>.tgz`.
+Las opciones (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) están en la [guía de la CLI](cli.md) (en inglés). Lo mismo con Docker: `docker run --rm -p 127.0.0.1:8787:8787 ghcr.io/jmmana/agent-viewer` (las opciones después del nombre de la imagen se suman a sus valores por defecto; etiquetas y tokens en la [guía de la CLI](cli.md#docker)). Mientras el paquete no esté en npm y la próxima versión no publique la imagen, ejecuta el `.tgz` de la versión con `npx ./warlockcode-agent-viewer-<versión>.tgz`.
 
 ### Mira trabajar a Claude Code
 
@@ -177,7 +177,7 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compilada en **:3000**. La API nunca corre sin token: define `AGENT_VIEWER_API_TOKEN` antes de `up` para elegirlo, o lee el que genera con `docker compose -f docker/compose.yml logs api`. Luego abre **http://localhost:3000/?mode=live#token=&lt;token&gt;** para ver el flujo (la oficina quita el token de la barra de direcciones en cuanto lo lee).
+Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compilada en **:3000**. Compose publica ambos puertos solo en `127.0.0.1`. Para acceder a la oficina desde otros equipos, restaura los mapeos `"8787:8787"` y `"3000:3000"`, actualiza `AGENT_VIEWER_CORS_ORIGIN` y `VITE_AGENT_VIEWER_API_URL`, y pon los servicios detrás de TLS. La API nunca corre sin token: define `AGENT_VIEWER_API_TOKEN` antes de `up` para elegirlo, o lee el que genera con `docker compose -f docker/compose.yml logs api`. Luego abre **http://localhost:3000/?mode=live#token=&lt;token&gt;** para ver el flujo (la oficina quita el token de la barra de direcciones en cuanto lo lee).
 
 > **Mantenedores:** GitHub Container Registry crea el paquete `ghcr.io/jmmana/agent-viewer` como privado, y el flujo de publicación no puede cambiarlo. Después de la primera versión que lo publique, hazlo público una vez en la página del paquete: **Package settings > Danger Zone > Change visibility > Public**. El resumen de la ejecución de la publicación muestra la visibilidad actual.
 
@@ -584,7 +584,7 @@ flowchart LR
 
 | Método | Endpoint | Para qué |
 |---|---|---|
-| `GET` | `/health` | Estado, versión, versión del esquema y clientes SSE conectados. |
+| `GET` | `/health` | Estado, versión, versión del esquema, clientes SSE conectados y modos actuales `auth` / `webhookAuth`. |
 | `GET` | `/ready` | Disponibilidad del almacenamiento. |
 | `POST` | `/api/v1/events` | Ingesta de un evento. Respeta el encabezado `Idempotency-Key`. |
 | `POST` | `/api/v1/events/batch` | Ingesta de hasta 100 eventos (configurable). Los duplicados se omiten sin error. |
@@ -674,6 +674,8 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | `VITE_AGENT_VIEWER_API_URL` | ninguno | App de demostración: servidor del que recibe el flujo. Sin ella, solo el modo en vivo se conecta (a `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | ninguno | App de demostración: `live` arranca en modo en vivo, igual que `?mode=live`. `npm run dev:full` la define por ti. |
 
+Cuando `AGENT_VIEWER_API_TOKEN` está vacío, el servidor avisa al arrancar, `/health` informa `auth: "open"` y el portal en vivo muestra un aviso persistente.
+
 ---
 
 ## 🎮 App de demostración
@@ -704,10 +706,10 @@ Los valores por defecto están pensados para desarrollo local. Antes de exponer 
 
 | Área | Por defecto | En producción |
 |---|---|---|
-| Token de la API | sin definir, `/api/v1/*` abierto | Define `AGENT_VIEWER_API_TOKEN` con un secreto de alta entropía. |
+| Token de la API | sin definir, `/api/v1/*` abierto | Comprueba con `curl -s localhost:8787/health` y revisa `auth`; define `AGENT_VIEWER_API_TOKEN` con un secreto de alta entropía. |
 | Webhooks | sin firma si no hay secreto | Define `AGENT_VIEWER_WEBHOOK_SECRET` para exigir firmas HMAC. |
 | CORS | `*` | Define `AGENT_VIEWER_CORS_ORIGIN` con el origen exacto de tu frontend. |
-| Red | escucha en `0.0.0.0` | Ponlo detrás de un proxy inverso con TLS. |
+| Red | el servidor escucha en `0.0.0.0`; los puertos de Docker Compose usan `127.0.0.1` | Para exponer Compose, restaura `"8787:8787"` / `"3000:3000"` y ponlo detrás de un proxy inverso con TLS. |
 | Almacenamiento | en memoria | `AGENT_VIEWER_STORAGE=sqlite` en un volumen protegido. |
 
 Agent Viewer no necesita claves de proveedores de modelos: las cifras de consumo las reporta tu runtime. Reporta vulnerabilidades en privado con [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) o en `jmmana@gmail.com`, nunca en un issue público. Política completa: [SECURITY.md](../.github/SECURITY.md) (en inglés).

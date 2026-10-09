@@ -142,6 +142,55 @@ function getApiToken(): string | undefined {
   return undefined;
 }
 
+export type AuthMode = 'token' | 'open';
+export type WebhookAuthMode = 'signature' | 'token' | 'open';
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+export function currentAuthMode(): AuthMode {
+  return getApiToken() ? 'token' : 'open';
+}
+
+export function currentWebhookAuthMode(): WebhookAuthMode {
+  if (process.env.AGENT_VIEWER_WEBHOOK_SECRET) return 'signature';
+  return currentAuthMode();
+}
+
+export function openApiWarning(input: {
+  port: number;
+  host?: string;
+  webhookSecret: boolean;
+  tokenSet: boolean;
+}): string[] {
+  if (input.tokenSet) return [];
+
+  const loopback = input.host !== undefined && LOOPBACK_HOSTS.has(input.host);
+  const lines = [
+    '[agent-viewer] WARNING: AGENT_VIEWER_API_TOKEN is not set, so /api/v1 is OPEN.',
+    loopback
+      ? `[agent-viewer]   Listening on ${input.host} only, port ${input.port}. Any process on this machine can send events, change the token and cost figures you see, and read every agent, task and usage record.`
+      : `[agent-viewer]   Listening on every interface, port ${input.port}. Anyone who can reach it can send events,`,
+    ...(!loopback ? ['[agent-viewer]   change the token and cost figures you see, and read every agent, task and usage record.'] : []),
+  ];
+  if (!input.webhookSecret) lines.push('[agent-viewer]   Webhooks are open too (no AGENT_VIEWER_WEBHOOK_SECRET).');
+  lines.push(
+    '[agent-viewer]   Fix: set AGENT_VIEWER_API_TOKEN to a long random value (for example: openssl rand -base64 32)',
+    '[agent-viewer]   and restart, or use `agent-viewer start`, which always runs with a token.',
+    '[agent-viewer]   A future release will refuse to start without a token.',
+  );
+  return lines;
+}
+
+function warnIfApiOpen(portToListen: number, host?: string): void {
+  for (const line of openApiWarning({
+    port: portToListen,
+    host,
+    webhookSecret: Boolean(process.env.AGENT_VIEWER_WEBHOOK_SECRET),
+    tokenSet: currentAuthMode() === 'token',
+  })) {
+    console.warn(line);
+  }
+}
+
 /** Constant-time string comparison. Hashing first gives equal-length buffers, so length does not leak or throw. */
 function safeEqual(provided: string, expected: string): boolean {
   const a = crypto.createHash('sha256').update(provided).digest();
@@ -212,6 +261,8 @@ app.get('/health', (_req, res) => {
     version: SERVER_VERSION,
     schemaVersion: '1.0',
     clientsConnected: clients.size,
+    auth: currentAuthMode(),
+    webhookAuth: currentWebhookAuthMode(),
   });
 });
 
@@ -801,14 +852,17 @@ const isDirectRun =
 
 /** Starts listening. Without `host` it binds every interface, as before; the CLI passes `127.0.0.1`. */
 export function startServer(portToListen = port, host?: string): Server {
-  return host ? app.listen(portToListen, host) : app.listen(portToListen);
+  const server = host ? app.listen(portToListen, host) : app.listen(portToListen);
+  server.once('listening', () => warnIfApiOpen(portToListen, host));
+  return server;
 }
 
 if (isDirectRun && process.env.NODE_ENV !== 'test') {
   // Express 5 passes listen errors (for example EADDRINUSE) to this callback instead of emitting them unhandled.
   serverInstance = app.listen(port, (err?: Error) => {
     if (err) throw err;
-    console.log(`Agent Viewer ingestion server listening on http://localhost:${port}`);
+    warnIfApiOpen(port);
+    console.log(`Agent Viewer ingestion server listening on every interface, port ${port} (http://localhost:${port} from this machine)`);
   });
 }
 

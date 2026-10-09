@@ -80,6 +80,11 @@ const translations = {
     'settings.reset': 'Reset Simulation State',
     'settings.cancel': 'Cancel',
     'settings.save': 'Save Changes',
+    'security.openApi.label': 'OPEN API',
+    'security.openApi.title': 'This server has no API token',
+    'security.openApi.body': 'Anyone who can reach it can send events, change the token and cost figures shown here, and read every usage record.',
+    'security.openApi.action': 'Set AGENT_VIEWER_API_TOKEN and restart the server.',
+    'security.openApi.docsLink': 'How to set a token',
   },
   es: {
     ...OFFICE_MESSAGES.es,
@@ -154,6 +159,11 @@ const translations = {
     'settings.reset': 'Reiniciar Estado de Simulación',
     'settings.cancel': 'Cancelar',
     'settings.save': 'Guardar Cambios',
+    'security.openApi.label': 'API ABIERTA',
+    'security.openApi.title': 'Este servidor no tiene token de API',
+    'security.openApi.body': 'Cualquiera que llegue a él puede enviar eventos, cambiar las cifras de tokens y costos que ves aquí y leer todo el consumo.',
+    'security.openApi.action': 'Define AGENT_VIEWER_API_TOKEN y reinicia el servidor.',
+    'security.openApi.docsLink': 'Cómo definir un token',
   },
 } as const;
 

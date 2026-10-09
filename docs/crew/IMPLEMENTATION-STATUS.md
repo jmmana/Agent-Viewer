@@ -184,4 +184,4 @@ El contenedor conserva una memoria de cámara Caricatura por instancia y la rest
 
 Cambio compartido necesario: App y AgentOffice proveen la memoria; OfficeCanvas conserva el comportamiento anterior cuando no se le proporciona. Pruebas StrictMode verifican pan/zoom/orientación y memorias distintas. E2E nuevo compara el PNG del canvas antes/después de rotar, acercar, arrastrar, entrar a Crew y regresar; son idénticos bajo reduced-motion y LIVE vacío.
 
-Validación: typecheck, 61 node, 463 Vitest, doce E2E, builds app/lib y paquete aprobados. Corrige el hallazgo documentado en #190. La prueba de igualdad de píxeles cubre ese escenario determinista, no toda la paridad visual con agentes activos. PR/SHA pendientes de publicación.
+Validación: typecheck, 61 node, 463 Vitest, doce E2E, builds app/lib y paquete aprobados. Corrige el hallazgo documentado en #190. La prueba de igualdad de píxeles cubre ese escenario determinista, no toda la paridad visual con agentes activos. Implementación `80ce444`, [PR #191](https://github.com/jmmana/Agent-Viewer/pull/191), abierto sobre #190. CI en curso al publicar.

@@ -13,11 +13,18 @@ interface CrewRoomLayout {
 }
 
 export type CrewRoomType = 'office' | 'workroom' | 'meeting' | 'social' | 'reception' | 'infrastructure';
+/**
+ * Una puerta es un lado de un enlace entre dos salas (`CREW_ROOM_EDGES`). `edgeId`
+ * referencia el enlace compartido; el estado abierto/cerrado vive solo ahí
+ * (`crewRoutes.ts`), nunca duplicado por lado, para que ambos lados de la misma
+ * puerta física concuerden siempre.
+ */
+export interface CrewDoor { id: string; wall: 'south'; offset: number; width: number; connectsTo: string | null; edgeId: string | null }
 export interface CrewRoomDefinition extends CrewRoomLayout {
   type: CrewRoomType;
   /** Capacidad de representación local, no límite de agentes del dominio. */
   capacity: number;
-  doors: readonly { id: string; wall: 'south'; offset: number; width: number }[];
+  doors: readonly CrewDoor[];
   arrivalPoints: readonly { id: string; doorId: string; x: number; y: number }[];
 }
 
@@ -110,12 +117,75 @@ const ROOM_TYPES: Readonly<Record<string, CrewRoomType>> = {
   coffee: 'social', lounge: 'social', reception: 'reception',
 };
 
+/**
+ * Árbol de expansión (10 enlaces para 11 salas): cada enlace es una puerta física
+ * compartida por dos salas. `crewRoutes.ts` es la única fuente del estado
+ * abierto/cerrado de cada enlace; aquí solo se describe la topología fija del
+ * edificio. No se usa la grilla antigua ni `OFFICE_ROOMS`.
+ */
+export interface CrewRoomEdge { id: string; roomA: string; roomB: string }
+export const CREW_ROOM_EDGES: readonly CrewRoomEdge[] = [
+  { id: 'e-reception-ceo', roomA: 'reception', roomB: 'ceo' },
+  { id: 'e-reception-finance', roomA: 'reception', roomB: 'finance' },
+  { id: 'e-reception-lounge', roomA: 'reception', roomB: 'lounge' },
+  { id: 'e-lounge-coffee', roomA: 'lounge', roomB: 'coffee' },
+  { id: 'e-coffee-meeting', roomA: 'coffee', roomB: 'meeting' },
+  { id: 'e-meeting-development', roomA: 'meeting', roomB: 'development' },
+  { id: 'e-development-planning', roomA: 'development', roomB: 'planning' },
+  { id: 'e-development-research', roomA: 'development', roomB: 'research' },
+  { id: 'e-research-qa', roomA: 'research', roomB: 'qa' },
+  { id: 'e-qa-infrastructure', roomA: 'qa', roomB: 'infrastructure' },
+] as const;
+
+/**
+ * Posición de cada puerta sobre la pared sur de su sala. El primer enlace de
+ * cada sala conserva el umbral original (offset .75) para no mover la cámara,
+ * los enlaces adicionales de las salas con más de un vecino usan offsets
+ * propios, verificados contra el mobiliario existente de esa sala.
+ */
+const ROOM_DOOR_OFFSETS: Readonly<Record<string, number>> = {
+  ceo: .75, finance: .75, planning: .75, infrastructure: .75,
+  lounge: .75, coffee: .75, meeting: .75, research: .75, qa: .75, reception: .75,
+  development: .75,
+};
+const ROOM_EXTRA_DOOR_OFFSETS: Readonly<Record<string, number>> = {
+  'lounge:e-lounge-coffee': 6.5,
+  'coffee:e-coffee-meeting': 10.25,
+  'meeting:e-meeting-development': 13.25,
+  'research:e-research-qa': 11.25,
+  'qa:e-qa-infrastructure': 12.25,
+  'development:e-development-planning': 7.5,
+  'development:e-development-research': 14.25,
+  'reception:e-reception-finance': 6,
+  'reception:e-reception-lounge': 11.25,
+};
+
+function roomEdges(roomId: string): readonly CrewRoomEdge[] {
+  return CREW_ROOM_EDGES.filter(edge => edge.roomA === roomId || edge.roomB === roomId);
+}
+function otherRoom(edge: CrewRoomEdge, roomId: string): string {
+  return edge.roomA === roomId ? edge.roomB : edge.roomA;
+}
+
 export const CREW_ROOMS: readonly CrewRoomDefinition[] = CREW_ROOM_LAYOUTS.map(layout => {
-  const doorId = `${layout.id}-entry`;
+  const edges = roomEdges(layout.id);
+  const doors: CrewDoor[] = edges.map((edge, index) => {
+    const neighbor = otherRoom(edge, layout.id);
+    const isPrimary = index === 0;
+    const offset = isPrimary ? ROOM_DOOR_OFFSETS[layout.id]
+      : ROOM_EXTRA_DOOR_OFFSETS[`${layout.id}:${edge.id}`];
+    return {
+      id: isPrimary ? `${layout.id}-entry` : `${layout.id}-door-${neighbor}`,
+      wall: 'south', offset, width: 1, connectsTo: neighbor, edgeId: edge.id,
+    };
+  });
   const room: CrewRoomDefinition = {
     ...layout, type: ROOM_TYPES[layout.id], capacity: 0,
-    doors: [{ id: doorId, wall: 'south', offset: .75, width: 1 }],
-    arrivalPoints: [{ id: `${layout.id}-arrival`, doorId, x: .75, y: layout.depth - .75 }],
+    doors,
+    arrivalPoints: doors.map(door => ({
+      id: door.id.endsWith('-entry') ? `${layout.id}-arrival` : `${layout.id}-arrival-${door.connectsTo}`,
+      doorId: door.id, x: door.offset, y: layout.depth - .75,
+    })),
   };
   return { ...room, capacity: crewPresenceSlots(room).length };
 });

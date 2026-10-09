@@ -39,3 +39,20 @@ export function parseCrewCameraStore(serialized: string | null): CrewCameraByRoo
     return {};
   }
 }
+
+/**
+ * Zoom around a pointer measured relative to the canvas center, keeping
+ * the same world point under the cursor when changing the zoom factor.
+ */
+export function zoomCrewCameraAt(camera: CrewCamera, requestedZoom: number, cursorFromCenter: { x: number; y: number }): CrewCamera {
+  const nextZoom = Math.max(.5, Math.min(3, requestedZoom));
+  const ratio = nextZoom / camera.zoom;
+  return {
+    ...camera,
+    zoom: nextZoom,
+    pan: {
+      x: cursorFromCenter.x - (cursorFromCenter.x - camera.pan.x) * ratio,
+      y: cursorFromCenter.y - (cursorFromCenter.y - camera.pan.y) * ratio,
+    },
+  };
+}

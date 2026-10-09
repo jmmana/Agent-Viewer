@@ -4,10 +4,12 @@ import {
   aggregateModelUsage,
   compactTokens,
   getProviderMeta,
+  getModelSpec,
   MODEL_CATALOG,
   calculateModelCost,
-  InferenceLogItem,
-  SimulatedTokenBurst,
+  generateSimulatedCallId,
+  type SimulatedCall,
+  type SimulatedCallPreset,
 } from '../engine/modelOps';
 import { t, type Locale, type TranslationKey } from '../i18n';
 import { localizeDemoText } from '../content/demoScript';
@@ -32,6 +34,7 @@ import {
   Database,
   Gauge,
   Flame,
+  Info,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -40,11 +43,16 @@ interface ModelOpsModalProps {
   onClose: () => void;
   agents: Agent[];
   onFocusAgent: (agent: Agent) => void;
-  onSimulateTokenBurst?: (burst: SimulatedTokenBurst) => void;
+  /** Records a what-if call from the simulator. Never mutates agent counters, totals or events. */
+  onSimulateCall?: (call: SimulatedCall) => void;
+  /** Calls recorded this session, newest first. Lives outside `SimulationState` (see `recordSimulatedCall`). */
+  simulatedCalls?: SimulatedCall[];
   onChangeAgentModel?: (agentId: string, newProvider: string, newModel: string) => void;
   initialProviderFilter?: string | null;
   events?: ViewerEvent[];
   locale: Locale;
+  /** The portal cannot invent usage or change a remote agent's model against a live server. */
+  isLiveMode?: boolean;
 }
 
 type MessageParams = Record<string, string | number>;
@@ -57,22 +65,11 @@ const TITLE_ID = 'av-modelops-title';
 const PANEL_ID = 'av-modelops-panel';
 const tabId = (tab: ModelOpsTab) => `av-modelops-tab-${tab}`;
 
-/**
- * Feed entries keep the endpoint and a catalog key for the description, so the text follows the
- * current locale even for entries created before a language switch.
- */
-type FeedItem = Omit<InferenceLogItem, 'promptSnippet' | 'agentName'> & {
-  agentName: string | null;
-  endpoint: string;
-  snippetKey: TranslationKey;
-  snippetParams?: MessageParams;
-};
-
 interface BurstNotice {
   provider: string;
   model: string;
   tokens: number;
-  cost: number;
+  cost: number | null;
 }
 
 // Provider descriptions in the engine are English only; the modal shows the catalog text instead.
@@ -96,12 +93,6 @@ const MODEL_DESC_KEYS: Record<string, TranslationKey> = {
   'deepseek-r1-distill': 'ops.model.desc.deepseek-r1-distill',
 };
 
-const STATUS_KEYS: Record<InferenceLogItem['status'], TranslationKey> = {
-  '200 OK': 'ops.status.ok',
-  CACHED: 'ops.status.cached',
-  STREAMING: 'ops.status.streaming',
-};
-
 const TAB_KEYS: Record<ModelOpsTab, TranslationKey> = {
   matrix: 'ops.tab.matrix',
   simulator: 'ops.tab.simulator',
@@ -116,16 +107,30 @@ const TAB_ICONS: Record<ModelOpsTab, LucideIcon> = {
   feed: Activity,
 };
 
+/** The same SIMULATED / SIMULADO tag on every simulated item: feed row, simulator summary, toast, bubble. */
+const SimulatedBadge: React.FC<{ label: string }> = ({ label }) => (
+  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
+    {label}
+  </span>
+);
+
+/** "$x.xxxx" when known, the translated "Unknown" when the model is not in the demo catalog. */
+function formatCost(value: number | null, tr: (key: TranslationKey, params?: MessageParams) => string): string {
+  return value === null ? tr('ops.value.unknown') : `$${value.toFixed(4)}`;
+}
+
 export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
   isOpen,
   onClose,
   agents,
   onFocusAgent,
-  onSimulateTokenBurst,
+  onSimulateCall,
+  simulatedCalls = [],
   onChangeAgentModel,
   initialProviderFilter = null,
   events = [],
   locale,
+  isLiveMode = false,
 }) => {
   const tr = (key: TranslationKey, params?: MessageParams) => t(locale, key, params);
 
@@ -137,59 +142,11 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
   // Simulator State
   const [selectedSimulatorModel, setSelectedSimulatorModel] = useState<string>('gpt-4o');
+  const [selectedPreset, setSelectedPreset] = useState<SimulatedCallPreset>('custom');
   const [simInputTokens, setSimInputTokens] = useState<number>(1800);
   const [simOutputTokens, setSimOutputTokens] = useState<number>(450);
   const [simCacheHitRatio, setSimCacheHitRatio] = useState<number>(0.35); // 35% cache
   const [lastBurstSuccess, setLastBurstSuccess] = useState<BurstNotice | null>(null);
-
-  // Local live inference feed
-  const [liveInferenceFeed, setLiveInferenceFeed] = useState<FeedItem[]>([
-    {
-      id: 'inf-init-1',
-      timestamp: Date.now() - 1000 * 22,
-      provider: 'OpenAI',
-      model: 'gpt-4o',
-      agentName: 'Elena Rostova',
-      inputTokens: 3200,
-      outputTokens: 780,
-      cachedTokens: 1200,
-      cost: 0.0173,
-      latencyMs: 640,
-      status: '200 OK',
-      endpoint: 'POST /v1/chat/completions',
-      snippetKey: 'ops.feed.snippet.gateway',
-    },
-    {
-      id: 'inf-init-2',
-      timestamp: Date.now() - 1000 * 48,
-      provider: 'Anthropic',
-      model: 'claude-3-5-sonnet',
-      agentName: 'Kenji Sato',
-      inputTokens: 4100,
-      outputTokens: 1120,
-      cachedTokens: 2400,
-      cost: 0.0243,
-      latencyMs: 820,
-      status: '200 OK',
-      endpoint: 'POST /v1/messages',
-      snippetKey: 'ops.feed.snippet.renderer',
-    },
-    {
-      id: 'inf-init-3',
-      timestamp: Date.now() - 1000 * 95,
-      provider: 'Google Gemini',
-      model: 'gemini-2.5-pro',
-      agentName: 'Dr. Maya Chen',
-      inputTokens: 18500,
-      outputTokens: 1450,
-      cachedTokens: 12000,
-      cost: 0.0341,
-      latencyMs: 760,
-      status: 'CACHED',
-      endpoint: 'POST /models/gemini-2.5-pro:generateContent',
-      snippetKey: 'ops.feed.snippet.crossAttention',
-    },
-  ]);
 
   // Close on Escape key
   useEffect(() => {
@@ -308,57 +265,52 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
     return key ? tr(key) : fallback;
   };
 
-  // Trigger simulated token request burst
-  const handleTriggerBurst = (modelName: string, providerName: string, customIn?: number, customOut?: number) => {
-    const spec = MODEL_CATALOG[modelName] || MODEL_CATALOG['gpt-4o'];
+  // Record a what-if call in the simulator. Never sent to any model, never counted in any total: see
+  // `SimulatedCall` and `App.handleSimulateCall`.
+  const handleSimulate = (
+    modelName: string,
+    providerName: string,
+    preset: SimulatedCallPreset,
+    customIn?: number,
+    customOut?: number,
+  ) => {
+    const spec = getModelSpec(modelName);
     const inTokens = customIn ?? simInputTokens;
     const outTokens = customOut ?? simOutputTokens;
     const cacheTokens = Math.round(inTokens * simCacheHitRatio);
     const cost = calculateModelCost(modelName, inTokens, outTokens, cacheTokens);
-    const latencyMs = Math.round(spec.latencyMs * (0.85 + Math.random() * 0.35));
+    const latencyMs = spec ? Math.round(spec.latencyMs * (0.85 + Math.random() * 0.35)) : null;
 
-    const burstPayload: SimulatedTokenBurst = {
-      provider: providerName,
-      model: modelName,
-      inputTokens: inTokens,
-      outputTokens: outTokens,
-      cachedTokens: cacheTokens,
-      cost,
-      latencyMs,
-      timestamp: Date.now(),
-    };
+    // Same agent in the office, so its bubble shows it; null (simulator operator) when there is none.
+    const targetAgent =
+      agents.find((a) => a.provider === providerName && a.model === modelName) ||
+      agents.find((a) => a.provider === providerName) ||
+      null;
 
-    if (onSimulateTokenBurst) {
-      onSimulateTokenBurst(burstPayload);
-    }
-
-    // Add to local live stream
-    const targetAgent = agents.find((a) => a.provider === providerName && a.model === modelName) || agents[0];
-    const newLogItem: FeedItem = {
-      id: `inf-${Date.now()}`,
+    const call: SimulatedCall = {
+      id: generateSimulatedCallId(),
+      simulated: true,
       timestamp: Date.now(),
       provider: providerName,
       model: modelName,
-      // null means the simulator operator; its label is resolved at render time
-      agentName: targetAgent ? targetAgent.name : null,
+      agentId: targetAgent ? targetAgent.id : null,
+      preset,
       inputTokens: inTokens,
       outputTokens: outTokens,
       cachedTokens: cacheTokens,
-      cost,
+      estimatedCost: cost,
+      currency: cost === null ? null : 'USD',
       latencyMs,
-      status: cacheTokens > inTokens * 0.5 ? 'CACHED' : '200 OK',
-      endpoint: 'POST /inference/v1/dispatch',
-      snippetKey: 'ops.feed.snippet.burst',
-      snippetParams: { model: modelName },
     };
 
-    setLiveInferenceFeed((prev) => [newLogItem, ...prev.slice(0, 24)]);
+    onSimulateCall?.(call);
     setLastBurstSuccess({ provider: providerName, model: modelName, tokens: inTokens + outTokens, cost });
     setTimeout(() => setLastBurstSuccess(null), 3500);
   };
 
   // Quick preset payloads
   const applyPresetPayload = (type: 'chat' | 'code' | 'rag' | 'batch') => {
+    setSelectedPreset(type);
     if (type === 'chat') {
       setSimInputTokens(450);
       setSimOutputTokens(180);
@@ -422,7 +374,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                 </h2>
                 <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                   <Radio className="w-3 h-3 text-emerald-400 animate-pulse" aria-hidden="true" />
-                  <span>{tr('ops.header.activeNodes', { count: 4 })}</span>
+                  <span>{tr('ops.header.activeNodes', { count: providerData.length })}</span>
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -553,20 +505,22 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
             })}
           </div>
 
-          {/* Quick simulator shortcut button */}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleTriggerBurst('gpt-4o', 'OpenAI', 1500, 400)}
-              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-950 transition-colors"
-            >
-              <Flame className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
-              <span>{tr('ops.quickBurst')}</span>
-            </button>
-          </div>
+          {/* Quick simulator shortcut button. Not rendered in live mode: see ops.sim.banner. */}
+          {!isLiveMode && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleSimulate('gpt-4o', 'OpenAI', 'custom', 1500, 400)}
+                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-950 transition-colors"
+              >
+                <Flame className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
+                <span>{tr('ops.quickBurst')}</span>
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* NOTIFICATION OF LAST BURST */}
+        {/* NOTIFICATION OF LAST SIMULATED CALL */}
         {lastBurstSuccess && (
           <div
             role="status"
@@ -574,16 +528,16 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
           >
             <div className="flex items-center gap-2 font-medium text-xs">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
+              <SimulatedBadge label={tr('ops.badge.simulated')} />
               <span>
                 {tr('ops.toast.burst', {
                   provider: lastBurstSuccess.provider,
                   model: lastBurstSuccess.model,
                   tokens: lastBurstSuccess.tokens.toLocaleString(),
-                  cost: `$${lastBurstSuccess.cost.toFixed(4)}`,
+                  cost: formatCost(lastBurstSuccess.cost, tr),
                 })}
               </span>
             </div>
-            <span className="text-[10px] text-emerald-400 font-mono">{tr('ops.toast.updated')}</span>
           </div>
         )}
 
@@ -826,10 +780,10 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                             <ArrowUpRight className="w-3 h-3" aria-hidden="true" />
                           </button>
 
-                          {provider.models[0] && (
+                          {!isLiveMode && provider.models[0] && (
                             <button
                               type="button"
-                              onClick={() => handleTriggerBurst(provider.models[0].model, provider.provider, 1200, 350)}
+                              onClick={() => handleSimulate(provider.models[0].model, provider.provider, 'custom', 1200, 350)}
                               title={tr('ops.provider.quickBurstTitle', { model: provider.models[0].model })}
                               className="px-2 py-1 rounded-lg bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800/60 text-[10px] font-semibold flex items-center gap-1 transition-colors"
                             >
@@ -870,7 +824,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                   )}
                   {displayedModels.map((model) => {
                     const meta = getProviderMeta(model.provider);
-                    const spec = MODEL_CATALOG[model.model] || MODEL_CATALOG['gpt-4o'];
+                    const spec = getModelSpec(model.model);
                     const assignedAgents = agents.filter(
                       (a) => a.provider === model.provider && a.model === model.model
                     );
@@ -892,22 +846,26 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-sm font-bold text-white font-mono">
-                                  {spec.name || model.model}
+                                  {spec?.name || model.model}
                                 </span>
                                 <span
                                   className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${meta.badgeBg} ${meta.badgeBorder} ${meta.accent}`}
                                 >
                                   {model.provider}
                                 </span>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
-                                  {tr('ops.models.context', { value: spec.contextWindow })}
-                                </span>
-                                <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
-                                  {tr('ops.models.latency', { ms: spec.latencyMs })}
-                                </span>
+                                {spec && (
+                                  <>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
+                                      {tr('ops.models.context', { value: spec.contextWindow })}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
+                                      {tr('ops.models.latency', { ms: spec.latencyMs })}
+                                    </span>
+                                  </>
+                                )}
                               </div>
                               <span className="text-[11px] text-slate-400 block mt-0.5">
-                                {modelDescription(spec.id, spec.description)}
+                                {spec ? modelDescription(spec.id, spec.description) : tr('ops.models.notInCatalog')}
                               </span>
                             </div>
                           </div>
@@ -926,14 +884,16 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                               <span>{tr('ops.models.configure')}</span>
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={() => handleTriggerBurst(model.model, model.provider)}
-                              className="px-3 py-1.5 rounded-xl bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-md shadow-cyan-950"
-                            >
-                              <Zap className="w-3.5 h-3.5" aria-hidden="true" />
-                              <span>{tr('ops.models.simulate')}</span>
-                            </button>
+                            {!isLiveMode && (
+                              <button
+                                type="button"
+                                onClick={() => handleSimulate(model.model, model.provider, 'custom')}
+                                className="px-3 py-1.5 rounded-xl bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-md shadow-cyan-950"
+                              >
+                                <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>{tr('ops.models.simulate')}</span>
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -980,7 +940,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                               {compactTokens(model.inputTokens)}
                             </span>
                             <span className="text-[10px] text-slate-400 block">
-                              ${spec.inputPer1M.toFixed(2)}/1M
+                              {spec ? `$${spec.inputPer1M.toFixed(2)}/1M` : tr('ops.value.unknown')}
                             </span>
                           </div>
 
@@ -990,7 +950,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                               {compactTokens(model.outputTokens)}
                             </span>
                             <span className="text-[10px] text-slate-400 block">
-                              ${spec.outputPer1M.toFixed(2)}/1M
+                              {spec ? `$${spec.outputPer1M.toFixed(2)}/1M` : tr('ops.value.unknown')}
                             </span>
                           </div>
 
@@ -1000,7 +960,7 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                               {compactTokens(model.cachedTokens)}
                             </span>
                             <span className="text-[10px] text-slate-400 block">
-                              ${spec.cachePer1M.toFixed(2)}/1M
+                              {spec ? `$${spec.cachePer1M.toFixed(2)}/1M` : tr('ops.value.unknown')}
                             </span>
                           </div>
 
@@ -1081,6 +1041,15 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                   <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                     {tr('ops.sim.intro')}
                   </p>
+                </div>
+
+                {/* Persistent simulation banner: these calls are never sent anywhere and never counted. */}
+                <div
+                  role="note"
+                  className="flex items-start gap-2 p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-[11px]"
+                >
+                  <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                  <span>{tr('ops.sim.banner')}</span>
                 </div>
 
                 {/* Preset Payloads */}
@@ -1174,10 +1143,17 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                       ))}
                     </select>
                     {(() => {
-                      const spec = MODEL_CATALOG[selectedSimulatorModel] || MODEL_CATALOG['gpt-4o'];
+                      const spec = getModelSpec(selectedSimulatorModel);
+                      if (!spec) {
+                        return (
+                          <p className="text-[10px] text-slate-400 mt-1 font-mono">{tr('ops.sim.rateUnknown')}</p>
+                        );
+                      }
                       return (
                         <p className="text-[10px] text-slate-400 mt-1 font-mono">
                           {tr('ops.sim.rate', { input: spec.inputPer1M, output: spec.outputPer1M })}
+                          {' '}
+                          <span className="text-slate-500">({tr('ops.sim.estimatedLabel')})</span>
                         </p>
                       );
                     })()}
@@ -1246,7 +1222,10 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                   return (
                     <div className="p-4 rounded-xl bg-slate-900 border border-cyan-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="space-y-1">
-                        <span className="text-xs text-slate-400 font-medium block">{tr('ops.sim.summary')}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400 font-medium">{tr('ops.sim.summary')}</span>
+                          <SimulatedBadge label={tr('ops.badge.simulated')} />
+                        </div>
                         <div className="flex items-center gap-3 font-mono text-xs flex-wrap">
                           <span className="text-white font-bold">
                             {tr('ops.sim.totalTokens', { value: totalTokensInBurst.toLocaleString() })}
@@ -1265,14 +1244,16 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                           </span>
                           <span className="text-slate-400" aria-hidden="true">·</span>
                           <span className="text-emerald-300 font-bold">
-                            {tr('ops.sim.costValue', { value: estimatedCost.toFixed(5) })}
+                            {estimatedCost === null
+                              ? tr('ops.value.unknown')
+                              : tr('ops.sim.costValue', { value: estimatedCost.toFixed(5) })}
                           </span>
                         </div>
                       </div>
 
                       <button
                         type="button"
-                        onClick={() => handleTriggerBurst(targetModelObj.model, targetModelObj.provider)}
+                        onClick={() => handleSimulate(targetModelObj.model, targetModelObj.provider, selectedPreset)}
                         className="px-6 py-2.5 bg-gradient-to-r from-cyan-700 via-sky-700 to-indigo-600 hover:from-cyan-600 hover:to-indigo-500 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-xl shadow-cyan-950 transition-all active:scale-95 shrink-0"
                       >
                         <Play className="w-4 h-4 fill-current" aria-hidden="true" />
@@ -1346,13 +1327,16 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                             <select
                               aria-label={tr('ops.agents.modelSelect', { name: agent.name })}
                               value={`${agent.provider}::${agent.model}`}
+                              disabled={isLiveMode}
+                              title={isLiveMode ? tr('ops.agents.readOnlyLive') : undefined}
                               onChange={(e) => {
+                                if (isLiveMode) return;
                                 const [newProv, newMod] = e.target.value.split('::');
                                 if (onChangeAgentModel) {
                                   onChangeAgentModel(agent.id, newProv, newMod);
                                 }
                               }}
-                              className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-white font-mono focus:outline-none focus:border-cyan-500"
+                              className="bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-white font-mono focus:outline-none focus:border-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               {allModels.map((m) => (
                                 <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
@@ -1398,29 +1382,34 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <Activity className="w-4 h-4 text-cyan-400" aria-hidden="true" />
-                    <span>{tr('ops.feed.heading')}</span>
+                    <span>{tr('ops.feed.simulated.heading')}</span>
                   </h3>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    {tr('ops.feed.subtitle')}
-                  </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleTriggerBurst('claude-3-5-sonnet', 'Anthropic', 2100, 600)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-800/60 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
-                  <span>{tr('ops.feed.emit')}</span>
-                </button>
+                {!isLiveMode && (
+                  <button
+                    type="button"
+                    onClick={() => handleSimulate('claude-3-5-sonnet', 'Anthropic', 'custom', 2100, 600)}
+                    className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-cyan-800/60 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
+                    <span>{tr('ops.feed.emit')}</span>
+                  </button>
+                )}
               </div>
 
               <div className="space-y-2">
-                {liveInferenceFeed.map((item) => {
-                  const meta = getProviderMeta(item.provider);
+                {simulatedCalls.length === 0 && (
+                  <p className="text-slate-400 text-[11px] italic p-4 rounded-xl bg-slate-950 border border-slate-800">
+                    {tr('ops.feed.simulated.empty')}
+                  </p>
+                )}
+                {simulatedCalls.map((call) => {
+                  const meta = getProviderMeta(call.provider);
+                  const callAgent = call.agentId ? agents.find((a) => a.id === call.agentId) : undefined;
                   return (
                     <div
-                      key={item.id}
+                      key={call.id}
                       className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono transition-colors"
                     >
                       <div className="flex items-center gap-3">
@@ -1431,21 +1420,16 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         />
                         <div>
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-white">{item.model}</span>
+                            <span className="font-bold text-white">{call.model}</span>
                             <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${meta.badgeBg} ${meta.badgeBorder} ${meta.accent}`}>
-                              {item.provider}
+                              {call.provider}
                             </span>
                             <span className="text-slate-400 font-sans text-[11px]">
                               {tr('ops.feed.by')}{' '}
-                              <strong className="text-slate-200">{item.agentName ?? tr('ops.feed.operator')}</strong>
+                              <strong className="text-slate-200">{callAgent?.name ?? tr('ops.feed.operator')}</strong>
                             </span>
-                            <span className="text-[10px] text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                              {tr(STATUS_KEYS[item.status])}
-                            </span>
+                            <SimulatedBadge label={tr('ops.badge.simulated')} />
                           </div>
-                          <span className="text-[11px] text-slate-400 mt-0.5 block line-clamp-1">
-                            {item.endpoint} - {tr(item.snippetKey, item.snippetParams)}
-                          </span>
                         </div>
                       </div>
 
@@ -1453,20 +1437,22 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
                         <div>
                           <span className="text-slate-400 block text-[9px]">{tr('ops.feed.col.tokens')}</span>
                           <span className="text-sky-300 font-semibold">
-                            {tr('ops.tokens.inValue', { value: item.inputTokens })}
+                            {tr('ops.tokens.inValue', { value: call.inputTokens })}
                           </span>
                           <span className="text-slate-400" aria-hidden="true"> / </span>
                           <span className="text-emerald-300 font-semibold">
-                            {tr('ops.tokens.outValue', { value: item.outputTokens })}
+                            {tr('ops.tokens.outValue', { value: call.outputTokens })}
                           </span>
                         </div>
                         <div>
                           <span className="text-slate-400 block text-[9px]">{tr('ops.feed.col.latency')}</span>
-                          <span className="text-amber-300 font-semibold">{item.latencyMs}ms</span>
+                          <span className="text-amber-300 font-semibold">
+                            {call.latencyMs === null ? tr('ops.value.unknown') : `${call.latencyMs}ms`}
+                          </span>
                         </div>
                         <div>
                           <span className="text-slate-400 block text-[9px]">{tr('ops.feed.col.cost')}</span>
-                          <span className="text-emerald-400 font-bold">${item.cost.toFixed(4)}</span>
+                          <span className="text-emerald-400 font-bold">{formatCost(call.estimatedCost, tr)}</span>
                         </div>
                       </div>
                     </div>

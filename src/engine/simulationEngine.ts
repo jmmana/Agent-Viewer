@@ -833,13 +833,24 @@ export function createDemoSteps(locale: Locale = 'en'): DemoStep[] {
 export const DEMO_STEPS: DemoStep[] = createDemoSteps('en');
 
 // Helper to launch a custom prompt/task simulation
+export interface TriggerCustomTaskOptions {
+  /**
+   * Whether this task's simulated usage is added to the agent's counters and to the office totals.
+   * `false` in live mode: the portal cannot invent usage for a task against a real agent, so the task is
+   * still created but no token or cost figure is added anywhere.
+   */
+  countUsage?: boolean;
+}
+
 export function triggerCustomTaskSimulation(
   state: SimulationState,
   title: string,
   description: string,
   assignedRole: 'backend_engineer' | 'frontend_engineer' | 'research_lead' | 'qa_engineer' | 'security_analyst',
   locale: Locale = 'en',
+  options: TriggerCustomTaskOptions = {},
 ): Task {
+  const countUsage = options.countUsage ?? true;
   const targetAgent = state.agents.find((a) => a.role === assignedRole) || state.agents[3];
   const boss = state.agents.find((a) => a.id === 'boss');
 
@@ -872,17 +883,21 @@ export function triggerCustomTaskSimulation(
   targetAgent.status = 'CODING';
   targetAgent.statusText = demoText(locale, 'custom.agent.statusText', { taskId, title });
   targetAgent.currentTaskId = taskId;
-  targetAgent.tokensInput += 4200;
-  targetAgent.tokensOutput += 850;
-  targetAgent.cost += 0.024;
+  if (countUsage) {
+    targetAgent.tokensInput += 4200;
+    targetAgent.tokensOutput += 850;
+    targetAgent.cost += 0.024;
+  }
   targetAgent.speechBubble = {
     text: demoText(locale, 'custom.agent.bubble', { title }),
     expiresAt: Date.now() + 4000,
   };
 
-  state.totalTokens.input += 4200;
-  state.totalTokens.output += 850;
-  state.totalCost += 0.024;
+  if (countUsage) {
+    state.totalTokens.input += 4200;
+    state.totalTokens.output += 850;
+    state.totalCost += 0.024;
+  }
 
   state.events.unshift({
     id: `evt-custom-${Date.now()}`,

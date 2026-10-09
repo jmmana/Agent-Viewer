@@ -1,7 +1,9 @@
 import type { SimulationState } from './simulationEngine';
 
 export const SESSION_STORAGE_KEY = 'agent-viewer-session-v1';
-export const SESSION_SCHEMA_VERSION = 1;
+export const SESSION_SCHEMA_VERSION = 2;
+/** Schema versions this build still knows how to load (and migrate forward from). */
+const READABLE_SCHEMA_VERSIONS = new Set([1, SESSION_SCHEMA_VERSION]);
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -51,14 +53,68 @@ export function serializeSession(state: SimulationState, savedAt = Date.now()): 
   return JSON.stringify(envelope);
 }
 
+function isBurstEventId(id: unknown): boolean {
+  return typeof id === 'string' && id.startsWith('evt-burst-');
+}
+
+function clampNonNegative(value: number): number {
+  return value < 0 ? 0 : value;
+}
+
+/**
+ * Migrates a v1 session to v2: 0.2.x Model Ops simulated bursts were written as real `llm.usage` events
+ * (`evt-burst-*`) and added straight into agent and office counters. This removes those events and reverses
+ * their effect, clamped at 0. A burst whose event was already evicted from the stored event list (the event
+ * log is capped) cannot be reversed, so its counters stay; this is a known, documented limitation.
+ */
+function migrateV1ToV2(state: SimulationState): SimulationState {
+  const burstEvents = state.events.filter((event) => isBurstEventId((event as { id?: unknown }).id));
+  if (burstEvents.length === 0) return state;
+
+  const agents = state.agents.map((agent) => ({ ...agent }));
+  let input = state.totalTokens.input;
+  let output = state.totalTokens.output;
+  let cached = state.totalTokens.cached;
+  let cost = state.totalCost;
+
+  for (const event of burstEvents) {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const burstInput = typeof payload.inputTokens === 'number' ? payload.inputTokens : 0;
+    const burstOutput = typeof payload.outputTokens === 'number' ? payload.outputTokens : 0;
+    const burstCached = typeof payload.cachedTokens === 'number' ? payload.cachedTokens : 0;
+    const burstCost = typeof payload.cost === 'number' ? payload.cost : 0;
+
+    const agent = agents.find((a) => a.id === event.source);
+    if (agent) {
+      agent.tokensInput = clampNonNegative(agent.tokensInput - burstInput);
+      agent.tokensOutput = clampNonNegative(agent.tokensOutput - burstOutput);
+      agent.cachedTokens = clampNonNegative(agent.cachedTokens - burstCached);
+      agent.cost = clampNonNegative(agent.cost - burstCost);
+    }
+
+    input = clampNonNegative(input - burstInput);
+    output = clampNonNegative(output - burstOutput);
+    cached = clampNonNegative(cached - burstCached);
+    cost = clampNonNegative(cost - burstCost);
+  }
+
+  return {
+    ...state,
+    agents,
+    events: state.events.filter((event) => !isBurstEventId((event as { id?: unknown }).id)),
+    totalTokens: { ...state.totalTokens, input, output, cached },
+    totalCost: cost,
+  };
+}
+
 export function deserializeSession(raw: string | null): SimulationState | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<StoredSession>;
-    if (parsed.schemaVersion !== SESSION_SCHEMA_VERSION) return null;
+    if (typeof parsed.schemaVersion !== 'number' || !READABLE_SCHEMA_VERSIONS.has(parsed.schemaVersion)) return null;
     if (!isFiniteNumber(parsed.savedAt)) return null;
     if (!isCompatibleSimulationState(parsed.state)) return null;
-    return parsed.state;
+    return parsed.schemaVersion === 1 ? migrateV1ToV2(parsed.state) : parsed.state;
   } catch {
     return null;
   }

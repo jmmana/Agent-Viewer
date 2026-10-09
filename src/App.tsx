@@ -26,7 +26,7 @@ import { LiveTimelineSidebar } from './components/LiveTimelineSidebar';
 import { OverflowFloorView } from './components/OverflowFloorView';
 import { ModelOpsModal } from './components/ModelOpsModal';
 import { AgentDetailModal } from './components/AgentDetailModal';
-import { SimulatedTokenBurst } from './engine/modelOps';
+import { recordSimulatedCall, SimulatedCall } from './engine/modelOps';
 import { DoorOpen } from 'lucide-react';
 import { applyDocumentLocale, detectLocale, Locale, persistLocale, t, type TranslationKey } from './i18n';
 import { createOfficeTranslator } from './content/officeMessages';
@@ -97,6 +97,8 @@ export default function App() {
   // Model Ops Telemetry Modal state
   const [isModelOpsOpen, setIsModelOpsOpen] = useState(false);
   const [modelOpsInitialProvider, setModelOpsInitialProvider] = useState<string | null>(null);
+  // What-if calls from the Model Ops simulator. Kept outside simState: never persisted, exported or counted.
+  const [simulatedCalls, setSimulatedCalls] = useState<SimulatedCall[]>([]);
 
   // Agent Detail Modal state (triggered on double click)
   const [detailModalAgentId, setDetailModalAgentId] = useState<string | null>(null);
@@ -407,71 +409,38 @@ export default function App() {
     setIsModelOpsOpen(true);
   };
 
-  // Ingest simulated or real token inference burst into live telemetry
-  const handleSimulateTokenBurst = (burst: SimulatedTokenBurst) => {
+  // Record a Model Ops simulator what-if call. Never touches agent counters, office totals or `events`: a
+  // simulated call is a sandbox figure, not usage. Only a speech bubble on the matching agent is visual.
+  const handleSimulateCall = (call: SimulatedCall) => {
+    setSimulatedCalls((prev) => recordSimulatedCall(prev, call));
+
+    if (!call.agentId) return;
     setSimState((prev) => {
-      // Find an agent with that provider and model, or pick the first matching agent
-      const targetAgent =
-        prev.agents.find((a) => a.provider === burst.provider && a.model === burst.model) ||
-        prev.agents.find((a) => a.provider === burst.provider) ||
-        prev.agents[0];
+      const targetAgent = prev.agents.find((a) => a.id === call.agentId);
+      if (!targetAgent) return prev;
 
       const nextAgents = prev.agents.map((a) => {
-        if (a.id === targetAgent.id) {
-          return {
-            ...a,
-            tokensInput: a.tokensInput + burst.inputTokens,
-            tokensOutput: a.tokensOutput + burst.outputTokens,
-            cachedTokens: a.cachedTokens + (burst.cachedTokens || 0),
-            cost: a.cost + burst.cost,
-            speechBubble: {
-              text: t(locale, 'operator.burstBubble', {
-                tokens: (burst.inputTokens + burst.outputTokens).toLocaleString(locale),
-                model: burst.model,
-              }),
-              expiresAt: Date.now() + 4000,
-            },
-          };
-        }
-        return a;
+        if (a.id !== targetAgent.id) return a;
+        return {
+          ...a,
+          speechBubble: {
+            text: t(locale, 'operator.simulatedBubble', {
+              tokens: (call.inputTokens + call.outputTokens).toLocaleString(locale),
+              model: call.model,
+            }),
+            expiresAt: Date.now() + 4000,
+          },
+        };
       });
 
-      const nextTotalTokens = {
-        input: prev.totalTokens.input + burst.inputTokens,
-        output: prev.totalTokens.output + burst.outputTokens,
-        cached: prev.totalTokens.cached + (burst.cachedTokens || 0),
-        reasoning: prev.totalTokens.reasoning,
-      };
-
-      const burstEvent: ViewerEvent = {
-        id: `evt-burst-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        type: 'llm.usage',
-        timestamp: Date.now(),
-        source: targetAgent.id,
-        target: 'server_room',
-        severity: 'normal',
-        summary: t(locale, 'operator.burstEvent', {
-          provider: burst.provider,
-          model: burst.model,
-          tokens: (burst.inputTokens + burst.outputTokens).toLocaleString(locale),
-          latency: burst.latencyMs,
-          cost: `$${burst.cost.toFixed(4)}`,
-        }),
-        payload: burst,
-      };
-
-      return {
-        ...prev,
-        agents: nextAgents,
-        totalTokens: nextTotalTokens,
-        totalCost: prev.totalCost + burst.cost,
-        events: [burstEvent, ...prev.events],
-      };
+      return { ...prev, agents: nextAgents };
     });
   };
 
-  // Reassign agent model interactively from Model Ops
+  // Reassign agent model interactively from Model Ops. Demo mode only: the portal cannot change the model
+  // of a remote agent, so this is a no-op in live mode (the modal also hides the control there).
   const handleChangeAgentModel = (agentId: string, newProvider: string, newModel: string) => {
+    if (isLiveMode) return;
     setSimState((prev) => {
       const nextAgents = prev.agents.map((a) => {
         if (a.id === agentId) {
@@ -522,7 +491,9 @@ export default function App() {
         events: [...prev.events],
         totalTokens: { ...prev.totalTokens },
       };
-      triggerCustomTaskSimulation(nextState, title, description, assignedRole, locale);
+      triggerCustomTaskSimulation(nextState, title, description, assignedRole, locale, {
+        countUsage: !isLiveMode,
+      });
       return nextState;
     });
   };
@@ -847,11 +818,13 @@ export default function App() {
         onClose={() => setIsModelOpsOpen(false)}
         agents={simState.agents}
         onFocusAgent={handleFocusAgent}
-        onSimulateTokenBurst={handleSimulateTokenBurst}
+        onSimulateCall={handleSimulateCall}
+        simulatedCalls={simulatedCalls}
         onChangeAgentModel={handleChangeAgentModel}
         initialProviderFilter={modelOpsInitialProvider}
         events={simState.events}
         locale={locale}
+        isLiveMode={isLiveMode}
       />
 
       {/* Comprehensive Agent Detail Modal (Double click on agent) */}

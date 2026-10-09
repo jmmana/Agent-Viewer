@@ -31,12 +31,11 @@ const EN = {
   'ops.tab.matrix': 'Usage by provider and model',
   'ops.tab.simulator': 'LLM traffic simulator',
   'ops.tab.agents': 'Agent assignment ({count})',
-  'ops.tab.feed': 'Live inference feed',
+  'ops.tab.feed': 'Inference feed',
   'ops.quickBurst': 'Inject quick request (+1.9K t)',
 
-  // Last burst notification
-  'ops.toast.burst': 'Inference injected into {provider} · {model}: +{tokens} tokens ({cost})',
-  'ops.toast.updated': 'Updated on the map and telemetry',
+  // Last simulated call notification
+  'ops.toast.burst': 'Simulated call on {provider} · {model}: +{tokens} tokens (estimated {cost})',
 
   // Matrix tab: filters
   'ops.filter.provider': 'Provider:',
@@ -89,6 +88,8 @@ const EN = {
   'ops.metric.reasoning': 'REASONING (COT)',
   'ops.metric.reasoningHint': 'thinking',
   'ops.metric.estimatedCost': 'ESTIMATED COST',
+  'ops.models.notInCatalog': 'Not in the demo catalog',
+  'ops.value.unknown': 'Unknown',
   'ops.model.desc.gpt-4o': 'Flagship multimodal model with high speed and precision',
   'ops.model.desc.o1-mini': 'Advanced chain-of-thought reasoning for logic and math',
   'ops.model.desc.gpt-4o-mini': 'Ultra-fast, cost-effective inference for high throughput',
@@ -120,6 +121,9 @@ const EN = {
   'ops.sim.cachedValue': '{value} cached',
   'ops.sim.costValue': '${value} USD',
   'ops.sim.fire': 'Fire live inference',
+  'ops.sim.banner': 'Simulation. These calls are not sent to any model and are not counted in any total.',
+  'ops.sim.rateUnknown': 'Rate: unknown',
+  'ops.sim.estimatedLabel': 'Demo catalog rate (estimate)',
 
   // Agents tab
   'ops.agents.heading': 'Interactive model reassignment for agents',
@@ -134,23 +138,20 @@ const EN = {
   'ops.agents.modelSelect': 'Assigned model for {name}',
   'ops.agents.focus': 'Center camera',
   'ops.agents.focusAria': 'Center camera on {name}',
+  'ops.agents.readOnlyLive': 'The portal cannot change the model of a remote agent.',
 
-  // Live feed tab
-  'ops.feed.heading': 'Real-time inference log',
-  'ops.feed.subtitle': 'Chronological stream of requests, input/output tokens, latencies and status codes',
+  // Feed tab
+  'ops.feed.simulated.heading': 'Simulated calls',
+  'ops.feed.simulated.empty': 'Run the simulator to see example calls here.',
   'ops.feed.emit': 'Send request',
   'ops.feed.by': 'by',
   'ops.feed.operator': 'Simulator operator',
   'ops.feed.col.tokens': 'TOKENS',
   'ops.feed.col.latency': 'LATENCY',
   'ops.feed.col.cost': 'COST',
-  'ops.feed.snippet.gateway': 'Fastify GraphQL gateway schema refactor',
-  'ops.feed.snippet.renderer': 'React Canvas 2.5D visual depth renderer',
-  'ops.feed.snippet.crossAttention': 'Cross-attention index',
-  'ops.feed.snippet.burst': '[{model}] execution burst',
-  'ops.status.ok': '200 OK',
-  'ops.status.cached': 'CACHED',
-  'ops.status.streaming': 'STREAMING',
+
+  // Simulated badge, shown on every simulated item: feed row, simulator summary, toast, agent bubble
+  'ops.badge.simulated': 'SIMULATED',
 
   // Footer
   'ops.footer.tip': 'Tip:',
@@ -186,12 +187,11 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.tab.matrix': 'Consumo por proveedor y modelo',
   'ops.tab.simulator': 'Simulador de tráfico LLM',
   'ops.tab.agents': 'Asignación a agentes ({count})',
-  'ops.tab.feed': 'Registro de inferencia en vivo',
+  'ops.tab.feed': 'Flujo de inferencia',
   'ops.quickBurst': 'Inyectar petición rápida (+1.9K t)',
 
-  // Last burst notification
-  'ops.toast.burst': '¡Inferencia inyectada en {provider} · {model}! +{tokens} tokens ({cost})',
-  'ops.toast.updated': 'Actualizado en el mapa y la telemetría',
+  // Última llamada simulada
+  'ops.toast.burst': 'Llamada simulada en {provider} · {model}: +{tokens} tokens (estimado {cost})',
 
   // Matrix tab: filters
   'ops.filter.provider': 'Proveedor:',
@@ -245,6 +245,8 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.metric.reasoning': 'RAZONAMIENTO (COT)',
   'ops.metric.reasoningHint': 'pensamiento',
   'ops.metric.estimatedCost': 'COSTO ESTIMADO',
+  'ops.models.notInCatalog': 'No está en el catálogo de demostración',
+  'ops.value.unknown': 'Desconocido',
   'ops.model.desc.gpt-4o': 'Modelo multimodal insignia, rápido y preciso',
   'ops.model.desc.o1-mini': 'Razonamiento avanzado en cadena (CoT) para lógica y matemáticas',
   'ops.model.desc.gpt-4o-mini': 'Inferencia ultrarrápida y económica para alto volumen',
@@ -276,6 +278,9 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.sim.cachedValue': '{value} en caché',
   'ops.sim.costValue': '${value} USD',
   'ops.sim.fire': 'Disparar inferencia en vivo',
+  'ops.sim.banner': 'Simulación. Estas llamadas no se envían a ningún modelo y no cuentan en ningún total.',
+  'ops.sim.rateUnknown': 'Tarifa: desconocida',
+  'ops.sim.estimatedLabel': 'Tarifa del catálogo de demostración (estimada)',
 
   // Agents tab
   'ops.agents.heading': 'Reasignación interactiva de modelos a agentes',
@@ -290,23 +295,20 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.agents.modelSelect': 'Modelo asignado a {name}',
   'ops.agents.focus': 'Centrar cámara',
   'ops.agents.focusAria': 'Centrar cámara en {name}',
+  'ops.agents.readOnlyLive': 'El portal no puede cambiar el modelo de un agente remoto.',
 
-  // Live feed tab
-  'ops.feed.heading': 'Registro de inferencia en tiempo real',
-  'ops.feed.subtitle': 'Flujo cronológico de peticiones, tokens de entrada y salida, latencias y códigos de estado',
+  // Feed tab
+  'ops.feed.simulated.heading': 'Llamadas simuladas',
+  'ops.feed.simulated.empty': 'Ejecuta el simulador para ver ejemplos de llamadas aquí.',
   'ops.feed.emit': 'Emitir petición',
   'ops.feed.by': 'por',
   'ops.feed.operator': 'Operador del simulador',
   'ops.feed.col.tokens': 'TOKENS',
   'ops.feed.col.latency': 'LATENCIA',
   'ops.feed.col.cost': 'COSTO',
-  'ops.feed.snippet.gateway': 'Refactorización del esquema del gateway GraphQL en Fastify',
-  'ops.feed.snippet.renderer': 'Renderizador de profundidad visual 2.5D en React Canvas',
-  'ops.feed.snippet.crossAttention': 'Índice de atención cruzada',
-  'ops.feed.snippet.burst': 'Ráfaga de ejecución [{model}]',
-  'ops.status.ok': '200 OK',
-  'ops.status.cached': 'EN CACHÉ',
-  'ops.status.streaming': 'EN STREAMING',
+
+  // Insignia de simulado, en cada elemento simulado: fila del feed, resumen del simulador, aviso, burbuja
+  'ops.badge.simulated': 'SIMULADO',
 
   // Footer
   'ops.footer.tip': 'Consejo:',

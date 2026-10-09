@@ -517,7 +517,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | Field | Type | Description |
 |---|---|---|
 | `schemaVersion` | `"1.0"` | Contract version. |
-| `id` | `string` | Unique event id, also the idempotency key. |
+| `id` | `string` | Unique event id, also the idempotency key. One id names exactly one event: reusing it for different content is rejected with 409. |
 | `type` | `string` | One of the 22 canonical types (aliases accepted). |
 | `timestamp` | `number` | Unix epoch in milliseconds. |
 | `source` | `string` | Producer, for example `runtime:crewai` or `agent:researcher`. |
@@ -586,9 +586,9 @@ flowchart LR
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/health` | Status, version, schema version and connected SSE clients. |
-| `GET` | `/ready` | Storage readiness. SQLite also returns the database schema version and latest migration time. |
-| `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. |
-| `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Duplicates are skipped, not errors. |
+| `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
+| `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
+| `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Replays missed events from `Last-Event-ID`; heartbeat every 15 s. |
 | `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
@@ -624,22 +624,64 @@ Invalid events get HTTP 400 with the exact paths that failed:
 }
 ```
 
-An event id that was already ingested returns HTTP 200 instead of a second copy:
+The event id is the idempotency key, and the content decides what a repeated id means. The server compares a `fingerprint` (`sha256:` over the event as validated, keys sorted, defaults filled in) with the one it stored:
+
+| Stored | Incoming | Answer | Effect |
+|---|---|---|---|
+| no event with this id | any | `202` accepted | Stored, aggregated and streamed. |
+| same id, same content | | `200` duplicate | Nothing changes. This is a true retry. |
+| same id, different content | | `409 conflicting_duplicate` | Not stored, not aggregated, not streamed. The stored event stays as it was. |
+
+The first send returns `202` with the fingerprint, and a true retry returns HTTP 200 with the same fingerprint instead of a second copy:
 
 ```json
-{ "accepted": true, "duplicate": true, "id": "evt_req_9921" }
+{ "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
 ```
 
-A batch reports each event:
+The same id with any different stored field (a token count, the cost, a cost that was `0` and is now missing, or the `timestamp`) is rejected with HTTP 409:
 
 ```json
 {
-  "accepted": 2,
-  "duplicates": 0,
-  "total": 2,
-  "results": [{ "id": "evt_b1", "duplicate": false }, { "id": "evt_b2", "duplicate": false }]
+  "error": "conflicting_duplicate",
+  "message": "An event with id \"evt_req_9921\" was already stored with different content. The new event was not applied.",
+  "id": "evt_req_9921",
+  "fingerprint": "sha256:9b0e...",
+  "storedFingerprint": "sha256:3f1c..."
 }
 ```
+
+A retry must resend the identical event, `timestamp` included; rebuilding the body with a new `Date.now()` is a different event. Give every distinct event its own id. A type alias that validation resolves to the canonical type is the same event, so it is a duplicate.
+
+When both the `Idempotency-Key` header and a non-empty body `id` are sent and they differ, nothing is stored and the answer is HTTP 400. A header with no body `id` becomes the id, as before:
+
+```json
+{ "error": "idempotency_key_mismatch", "message": "Idempotency-Key \"a\" does not match the event id \"b\"." }
+```
+
+A batch answers `202` whenever validation passes, even if no item was applied, so read `conflicts` and each item's `status` (in input order). Items are compared with the store and with earlier items of the same batch:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 1,
+  "conflicts": 1,
+  "total": 3,
+  "results": [
+    { "id": "evt_b1", "status": "accepted",  "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b2", "status": "duplicate", "duplicate": true,  "fingerprint": "sha256:bb..." },
+    { "id": "evt_b3", "status": "conflict",  "duplicate": false, "fingerprint": "sha256:cc...",
+      "error": "conflicting_duplicate", "storedFingerprint": "sha256:3f1c..." }
+  ]
+}
+```
+
+Each conflict also writes one `warn` log line with the id, type, source, agent and both fingerprints (never the payload), and `GET /ready` counts them since the process started:
+
+```json
+{ "ok": true, "ready": true, "storage": "sqlite", "ingestion": { "conflicts": 1, "legacyUnverifiedDuplicates": 0 } }
+```
+
+`legacyUnverifiedDuplicates` counts repeated ids that matched SQLite rows written before 0.2.0 (or with unreadable `event_json`): their content cannot be compared, so they are treated as duplicates. The counters reset on restart.
 
 </details>
 

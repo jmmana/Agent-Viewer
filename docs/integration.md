@@ -63,6 +63,18 @@ const usage = await viewer.usageSummary();
 
 `viewer.snapshot()` returns the typed `ViewerSnapshot`, and `viewer.usageSummary()` returns the `UsageSummary` described in [Usage aggregates](#usage-aggregates-get-apiv1usage). Both throw `AgentViewerError` on a non-2xx response.
 
+Events without an `id` get `evt_<uuid>` from `crypto.randomUUID()`. `AgentViewerError` carries `status` and `code` (the `error` field of the response body). `code === 'conflicting_duplicate'` (status `409`) means the id was already stored with different content: the event was not applied, and the SDK does not retry it. `emitBatch()` returns `{ accepted, duplicates, conflicts, results }`, where each result has `status` (`'accepted'`, `'duplicate'` or `'conflict'`); see [Idempotency & Replays](#-5-idempotency--replays).
+
+```ts
+try {
+  await viewer.emit({ id: 'evt_call_42', type: 'llm.usage', timestamp: callTime, payload });
+} catch (err) {
+  if (err instanceof AgentViewerError && err.code === 'conflicting_duplicate') {
+    // Another event already uses this id. Give each distinct event its own id.
+  }
+}
+```
+
 ---
 
 ### Option B: Python
@@ -224,11 +236,11 @@ Base URL: `http://localhost:8787`
 
 ### Health & Readiness
 - `GET /health`: Health status, server version, connected SSE client count.
-- `GET /ready`: Verification that storage engine is ready. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`).
+- `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`).
 
 ### Events
-- `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header.
-- `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch).
+- `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header. Answers `202` (accepted), `200` (duplicate: same id, same content) or `409 conflicting_duplicate` (same id, different content, not applied), each with the event `fingerprint`. A header that differs from a non-empty body `id` is a `400 idempotency_key_mismatch`.
+- `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch). Each result has a `status` of `accepted`, `duplicate` or `conflict`.
 - `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`).
 - `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay.
 - `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
@@ -299,15 +311,16 @@ Response:
 {
   "accepted": 2,
   "duplicates": 0,
+  "conflicts": 0,
   "total": 2,
   "results": [
-    { "id": "evt_b1", "duplicate": false },
-    { "id": "evt_b2", "duplicate": false }
+    { "id": "evt_b1", "status": "accepted", "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b2", "status": "accepted", "duplicate": false, "fingerprint": "sha256:bb..." }
   ]
 }
 ```
 
-Duplicate event IDs are skipped idempotently without throwing errors.
+The batch answers `202` whenever validation passes, even when some or all items were not applied, so read `conflicts` and each item's `status`. Items are evaluated in order, against the store and against earlier items of the same batch. A repeated identical item is a `duplicate` (nothing stored again). A repeated id with different content is a `conflict`: it is not stored, not aggregated and not streamed, and its result adds `"error": "conflicting_duplicate"` and the `storedFingerprint`. Only accepted items are streamed. With SQLite a batch is stored all or nothing.
 
 ---
 
@@ -322,15 +335,37 @@ curl -X POST http://localhost:8787/api/v1/events \
   -d '{ ... }'
 ```
 
-If the server receives an event ID that has already been ingested, it returns HTTP 200:
+The header becomes the id when the body has none (or an empty one). When the body has a non-empty `id` that differs from the header, nothing is stored and the server answers HTTP 400:
 
 ```json
-{
-  "accepted": true,
-  "duplicate": true,
-  "id": "evt_req_9921"
-}
+{ "error": "idempotency_key_mismatch", "message": "Idempotency-Key \"a\" does not match the event id \"b\"." }
 ```
+
+**An id must identify exactly one event.** The server keeps a `fingerprint` of every stored event: `sha256:` over the event as validated (keys sorted, unknown keys stripped, defaults such as `severity` or `costSource` filled in, aliases resolved to the canonical type). A repeated id is then compared by content:
+
+- Same id, same fingerprint: a true retry. HTTP 200, nothing changes:
+
+  ```json
+  { "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
+  ```
+
+- Same id, different fingerprint: HTTP 409. The new event is not stored, not aggregated and not streamed, and the stored event stays as it was:
+
+  ```json
+  {
+    "error": "conflicting_duplicate",
+    "message": "An event with id \"evt_req_9921\" was already stored with different content. The new event was not applied.",
+    "id": "evt_req_9921",
+    "fingerprint": "sha256:9b0e...",
+    "storedFingerprint": "sha256:3f1c..."
+  }
+  ```
+
+Any stored field counts, `timestamp` included, and `0`, `null` and a missing value are three different contents (unknown is never zero). **A retry must resend the identical event, with the same `timestamp`.** A client that rebuilds the body with a new `Date.now()` on each attempt now gets `409` on the retry (the first copy is kept, so totals are right, but the client sees an error). The SDKs build each event once and resend the same object, and send `Idempotency-Key` equal to the event id. Neither SDK retries a 409: TypeScript raises `AgentViewerError` with `code === 'conflicting_duplicate'` and `status === 409`, Python raises `AgentViewerError` with `code == "conflicting_duplicate"` and `status_code == 409`.
+
+Each conflict writes one `warn` log line on the server with the id, type, source, agent id and both fingerprints, never the payload. `GET /ready` counts them in `ingestion.conflicts` since the process started. With SQLite, rows written before 0.2.0 (or with unreadable `event_json`) have no fingerprint: a repeated id that matches one is treated as a duplicate and counted in `ingestion.legacyUnverifiedDuplicates`, with one warning per process.
+
+Ids the server generates itself (`POST /api/v1/agents`, `PATCH /api/v1/agents/:agentId`, `POST /api/v1/runtimes` and the generic webhook) are `evt_<kind>_<uuid>`, for example `evt_reg_0b9f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4`, so two requests in the same millisecond never collide. The generic webhook response adds `duplicateCount` and `conflictCount` next to `acceptedCount`; both are `0` in normal operation.
 
 ---
 
@@ -514,7 +549,7 @@ Send one `llm.failed` event per failed **attempt**. A retry that succeeds is a s
 }
 ```
 
-The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, "id": "evt_9f2c" }`, and `GET /api/v1/events?type=llm.failed` returns the payload as validated: no `inputTokens` key, `cost: null`, `costSource: "unknown"`.
+The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, "id": "evt_9f2c", "fingerprint": "sha256:..." }`, and `GET /api/v1/events?type=llm.failed` returns the payload as validated: no `inputTokens` key, `cost: null`, `costSource: "unknown"`.
 
 | Field | Required | Rule |
 |---|---|---|
@@ -654,7 +689,7 @@ The TypeScript types are exported by the TypeScript SDK (`UsageSummary`, `UsageA
 
 **Arithmetic.** Amounts are accumulated in fixed point, in nano units (1e-9 of the currency unit), so the result never depends on the order of the events: `0.1` + `0.2` gives `"0.3"`. Each amount is taken as the shortest decimal string of the number (exponent forms such as `1e-7` expanded) and rounded half-even at 9 decimals, so digits past the ninth decimal are lost. `amountExact` has no trailing zeros (`"0.042"`, `"3"`).
 
-**Scope.** Each stored event id is reduced once: a duplicate is skipped before any side effect. In memory mode, totals keep counting events that the 10,000-event ring has evicted. With SQLite, the aggregates live in memory and start empty after a restart until a rebuild from stored events exists. Buckets are not capped.
+**Scope.** Each stored event id is reduced once: a duplicate or a conflicting duplicate is skipped before any side effect. In memory mode, totals keep counting events that the 10,000-event ring has evicted. With SQLite, the aggregates live in memory and start empty after a restart until a rebuild from stored events exists. Buckets are not capped.
 
 #### Legacy snapshot fields (deprecated)
 

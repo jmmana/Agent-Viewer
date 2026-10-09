@@ -140,7 +140,7 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
   process.env.AGENT_VIEWER_API_TOKEN = token;
   delete process.env.AGENT_VIEWER_API_KEY;
 
-  const [{ app, onEventAccepted, startServer }, { default: express }] = await Promise.all([
+  const [{ app, onEventAccepted, startServer, shutdown }, { default: express }] = await Promise.all([
     import('../server/index.ts'),
     import('express'),
   ]);
@@ -227,8 +227,13 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
       if (sessionWritten) removeSessionFile(pid);
       server.closeAllConnections?.();
       server.close(() => {
-        if (recorder) recorder.end(() => resolve());
-        else resolve();
+        // Stops the retention job (issue #70) and closes the store, after the HTTP server itself is closed: the
+        // embedded server installs no SIGTERM/SIGINT handler of its own (server/index.ts), so this is the only
+        // place its store ever gets closed.
+        void shutdown().finally(() => {
+          if (recorder) recorder.end(() => resolve());
+          else resolve();
+        });
       });
     });
     return closing;

@@ -22,6 +22,7 @@ import {
   type EventStore,
   type TelemetryAppendOutcome,
 } from './store';
+import { parseRetentionConfig, startRetention, usageRetentionWarning, type RetentionConfig, type RetentionJobHandle } from './retention';
 import { readPackageVersion } from './version';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
@@ -118,9 +119,13 @@ const PATCH_USAGE_MESSAGE =
 
 let store: EventStore;
 let sseReplayMax: number;
+let retentionConfig: RetentionConfig;
 try {
   store = createEventStore();
   sseReplayMax = parseSseReplayMax(process.env.AGENT_VIEWER_SSE_REPLAY_MAX);
+  // Issue #70: validated once at startup, like every other env-derived config here. A bad value must never be
+  // silently ignored or guessed at, since it governs permanent deletion.
+  retentionConfig = parseRetentionConfig(process.env);
 } catch (error) {
   if (!isDirectRun) throw error;
   const message = error instanceof Error ? error.message : String(error);
@@ -132,6 +137,24 @@ try {
 // resolves at once. `init()` is safe to call more than once: `SQLiteEventStore` already started it from its own
 // constructor, so this just lets callers await the same promise if they need to.
 void store.init();
+
+if (retentionConfig.ledgerDays !== null) {
+  console.log(usageRetentionWarning(retentionConfig.ledgerDays));
+}
+// Wired unconditionally, right after the store (issue #70): with both windows unset this creates no timer at
+// all, so importing this module in a test (which never configures either variable) is unaffected. `shutdown()`
+// below stops it before closing the store.
+const retentionJob: RetentionJobHandle = startRetention({ store, config: retentionConfig });
+
+/**
+ * Stops the retention job (waiting for a run already in progress) and closes the store. Called by the direct-run
+ * `SIGTERM`/`SIGINT` handlers below, and by the embedded CLI's `close()` (`cli/start.ts`) after it closes the
+ * HTTP server (issue #70). Safe to call more than once: both steps it calls already are.
+ */
+export async function shutdown(): Promise<void> {
+  await retentionJob.stop();
+  await store.close();
+}
 
 /** Blocks a route that reads or writes derived state until the startup rebuild has finished. */
 // Generic over the route's own params/body/query types, so mixing this in as an extra handler before a typed
@@ -1306,6 +1329,51 @@ app.get('/api/v1/usage/calls', async (req, res) => {
   });
 });
 
+/** `limit` for GET /api/v1/admin/retention: an integer from 1 to 200, default 20. Unlike `clampedLimit` above,
+ * an invalid value is a 400, not a silent fallback: this is an audit endpoint, and a typo here should be visible
+ * rather than quietly answering with the wrong amount of history. */
+function parseRetentionLimit(raw: unknown): number | 'invalid' {
+  if (raw === undefined) return 20;
+  if (typeof raw !== 'string' || !/^[0-9]+$/.test(raw)) return 'invalid';
+  const value = Number(raw);
+  return value >= 1 && value <= 200 ? value : 'invalid';
+}
+
+// Read-only retention admin surface (issue #70): same auth and rate limit as every /api/v1 route, no endpoint to
+// trigger a purge or change a window. `windowDays`/`policy` come straight from the config parsed once at startup
+// (`retentionConfig`); everything else (counts, coverage, run history) comes from the store, so this route runs
+// no SQL of its own.
+app.get('/api/v1/admin/retention', async (req, res) => {
+  const limit = parseRetentionLimit(req.query.limit);
+  if (limit === 'invalid') {
+    res.status(400).json({ error: 'invalid_limit', message: 'limit must be an integer from 1 to 200' });
+    return;
+  }
+  const status = await store.retentionStatus(limit);
+  const readiness = store.readiness();
+  const totals = retentionJob.totals();
+  res.json({
+    schemaVersion: '1.0',
+    storage: readiness.storage,
+    now: Date.now(),
+    intervalMinutes: retentionConfig.intervalMinutes,
+    events: {
+      windowDays: retentionConfig.eventsDays,
+      policy: retentionConfig.eventsDays === null ? 'keep' : 'purge',
+      ...status.events,
+      totalDeletedSinceStart: totals.events,
+    },
+    usageLedger: {
+      windowDays: retentionConfig.ledgerDays,
+      policy: retentionConfig.ledgerDays === null ? 'keep' : 'purge',
+      ...status.usageLedger,
+      totalDeletedSinceStart: totals.usageLedger,
+    },
+    lastRun: status.lastRun,
+    runs: status.runs,
+  });
+});
+
 // OTLP/HTTP logs receiver counters (issue #59). Per-process, reset on restart like store.ingestionCounters().
 // Holds no token or cost sums: this is a shape/volume view of what the route did, never a usage figure.
 app.get('/api/v1/otlp/stats', (_req, res) => {
@@ -2296,6 +2364,23 @@ if (isDirectRun && process.env.NODE_ENV !== 'test') {
     warnIfApiOpen(address.port, directRunHost);
     console.log(`Agent Viewer ingestion server listening on ${directRunHost}, port ${address.port} (${boundUrl(address)})`);
   });
+
+  // Issue #70: a direct run (npm run server, the Docker `api` image) owns its own process, so it stops the
+  // retention job and closes the store itself on SIGTERM/SIGINT. The embedded CLI installs no handler here: its
+  // `close()` (cli/start.ts) calls the same exported `shutdown()` after it closes the HTTP server, so neither
+  // path double-closes the store.
+  let shuttingDown = false;
+  const handleShutdownSignal = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    shutdown()
+      .catch((error) => {
+        console.error(`[agent-viewer] shutdown error: ${error instanceof Error ? error.message : String(error)}`);
+      })
+      .finally(() => process.exit(0));
+  };
+  process.on('SIGTERM', handleShutdownSignal);
+  process.on('SIGINT', handleShutdownSignal);
 }
 
 export { app, serverInstance, store };

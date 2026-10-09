@@ -40,27 +40,29 @@ export class LangGraphViewerAdapter {
   }
 
   /**
-   * Invoked when a tool call starts inside a LangGraph node.
+   * Invoked when a tool call starts inside a LangGraph node. `toolCallId` is the LangChain tool
+   * message's `tool_call.id` (the id LangGraph uses to pair a `ToolMessage` with the `AIMessage` that
+   * requested it), never invented when the callback does not carry one.
    */
-  async onToolStart(nodeName: string, toolName: string, inputSummary?: string): Promise<void> {
+  async onToolStart(nodeName: string, toolName: string, inputSummary?: string, toolCallId?: string): Promise<void> {
     const agent = this.getAgent(nodeName);
-    await agent.toolStarted(toolName, inputSummary);
+    await agent.toolStarted(toolName, inputSummary, { toolCallId });
   }
 
   /**
-   * Invoked when a tool call finishes.
+   * Invoked when a tool call finishes. Same `tool_call.id` as `onToolStart` for the matching call.
    */
-  async onToolEnd(nodeName: string, toolName: string, outputSummary?: string): Promise<void> {
+  async onToolEnd(nodeName: string, toolName: string, outputSummary?: string, toolCallId?: string): Promise<void> {
     const agent = this.getAgent(nodeName);
-    await agent.toolCompleted(toolName, outputSummary);
+    await agent.toolCompleted(toolName, outputSummary, { toolCallId });
   }
 
   /**
-   * Invoked when a tool call encounters an error.
+   * Invoked when a tool call encounters an error. Same `tool_call.id` as `onToolStart` for the matching call.
    */
-  async onToolError(nodeName: string, toolName: string, error: string): Promise<void> {
+  async onToolError(nodeName: string, toolName: string, error: string, toolCallId?: string): Promise<void> {
     const agent = this.getAgent(nodeName);
-    await agent.toolFailed(toolName, error);
+    await agent.toolFailed(toolName, error, { toolCallId });
   }
 
   /**
@@ -77,6 +79,13 @@ export class LangGraphViewerAdapter {
    * `costSource` says where `cost` comes from and defaults to `unknown`: pass
    * `provider-reported` only when the provider returned the cost, or `estimated` when the
    * host app computed it. A missing cache count stays unknown, and a cost of 0 is kept.
+   *
+   * `traceId` is the LangGraph root run id (the top-level `run_id` from the callback manager) and
+   * `parentId` is the callback's own `parentRunId`; both are forwarded only when the host passes them.
+   * `toolCallId` is forwarded here only when this model call happened inside a tool's execution (a
+   * sub-agent run started by a tool), not the id of a tool call the model is about to make. `tags` is
+   * never read from LangGraph's own run tags or metadata (unbounded, can carry prompt text): it is only
+   * ever an explicit value the host chooses to pass.
    */
   async onModelUsage(
     nodeName: string,
@@ -89,6 +98,10 @@ export class LangGraphViewerAdapter {
       latencyMs?: number;
       cost?: number | null;
       costSource?: CostSource;
+      traceId?: string;
+      parentId?: string;
+      toolCallId?: string;
+      tags?: readonly string[];
     }
   ): Promise<void> {
     const agent = this.getAgent(nodeName);
@@ -101,6 +114,10 @@ export class LangGraphViewerAdapter {
       latencyMs: usage.latencyMs,
       cost: usage.cost ?? null,
       costSource: usage.costSource ?? 'unknown',
+      traceId: usage.traceId,
+      parentId: usage.parentId,
+      toolCallId: usage.toolCallId,
+      tags: usage.tags,
     });
   }
 

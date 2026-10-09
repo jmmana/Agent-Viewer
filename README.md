@@ -556,7 +556,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | | `meeting.started` | Starts at once. |
 | | `meeting.message` | Bubble headed by its kind; a `decision` is added to the meeting decisions. |
 | | `meeting.ended`, `meeting.cancelled` | Frees the room; participants walk back to their workspace. |
-| Telemetry | `llm.usage` | Provider, model, input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost, cost source and currency. A figure that was not reported stays unknown, never 0. |
+| Telemetry | `llm.usage` | Provider, model, input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost, cost source and currency. A figure that was not reported stays unknown, never 0. Optional correlation fields: `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` and `tags` ([docs/integration.md](docs/integration.md#correlation-and-attribution-fields-issue-64)). |
 | | `llm.failed` | One failed model call attempt: provider, model, error kind, HTTP status and whether it can be retried. Tokens and cost only when the provider billed the attempt. No status change. |
 | Runtime | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | Runtime health; no visible change. |
 

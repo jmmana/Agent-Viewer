@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { app } from '../server/index.ts';
 import { AgentViewer, AgentViewerError } from '../sdk/typescript/index.ts';
+
+const vectorsPath = fileURLToPath(new URL('./fixtures/usage-correlation-vectors.json', import.meta.url));
+const vectors = JSON.parse(readFileSync(vectorsPath, 'utf8'));
 
 function startTestServer() {
   return new Promise((resolve) => {
@@ -313,6 +318,152 @@ test('TypeScript SDK usage: new fields go to the payload and taskId to the envel
 // -------------------------------------------------------------
 // Ingestion integrity (issue #47)
 // -------------------------------------------------------------
+
+// -------------------------------------------------------------
+// Usage correlation block (issue #64)
+// -------------------------------------------------------------
+
+test('TypeScript SDK usage: correlation fields are forwarded when defined, omitted otherwise', async (t) => {
+  const { usageEvents } = stubFetch(t);
+  t.mock.method(console, 'warn', () => {});
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.usage({
+    ...base,
+    traceId: 'trace_1',
+    parentId: 'span_1',
+    toolCallId: 'call_1',
+    meetingId: 'meeting_1',
+    userId: 'usr_1',
+    tags: ['env:prod', 'env:prod', 'feature:x'],
+  });
+  await agent.usage({ ...base });
+
+  const [withCorrelation, without] = usageEvents().map((e) => e.payload);
+  assert.equal(withCorrelation.traceId, 'trace_1');
+  assert.equal(withCorrelation.parentId, 'span_1');
+  assert.equal(withCorrelation.toolCallId, 'call_1');
+  assert.equal(withCorrelation.meetingId, 'meeting_1');
+  assert.equal(withCorrelation.userId, 'usr_1');
+  // The SDK never deduplicates locally: that is the server's job. It sends exactly what it was given.
+  assert.deepEqual(withCorrelation.tags, ['env:prod', 'env:prod', 'feature:x']);
+  for (const field of [...vectors.idFields, 'tags']) {
+    assert.equal(field in without, false, `${field} should not be sent as undefined or null`);
+  }
+});
+
+function bodiesOf(requests, type) {
+  return requests.map((r) => r.body).filter((body) => body.type === type);
+}
+
+test('TypeScript SDK usage: toolStarted, toolCompleted and toolFailed forward toolCallId when given', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.toolStarted('git.commit', 'committing', { toolCallId: 'call_started' });
+  await agent.toolCompleted('git.commit', 'done', { toolCallId: 'call_completed' });
+  await agent.toolFailed('git.commit', 'failed', { toolCallId: 'call_failed' });
+  await agent.toolStarted('git.push');
+
+  const [started, secondStarted] = bodiesOf(requests, 'tool.started');
+  const [completed] = bodiesOf(requests, 'tool.completed');
+  const [failed] = bodiesOf(requests, 'tool.failed');
+  assert.equal(started.payload.toolCallId, 'call_started');
+  assert.equal(completed.payload.toolCallId, 'call_completed');
+  assert.equal(failed.payload.toolCallId, 'call_failed');
+  assert.equal('toolCallId' in secondStarted.payload, false);
+});
+
+test('TypeScript SDK usage: an invalid correlation id rejects locally with AgentViewerError before any request', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  for (const field of vectors.idFields) {
+    for (const vector of vectors.idCases) {
+      await (vector.valid
+        ? agent.usage({ ...base, [field]: vector.value })
+        : assert.rejects(
+          agent.usage({ ...base, [field]: vector.value }),
+          (err) => {
+            assert.ok(err instanceof AgentViewerError, `${field} / ${vector.name}: expected AgentViewerError`);
+            assert.ok(
+              err.issues.some((issue) => issue.path === `payload.${field}`),
+              `${field} / ${vector.name}: expected an issue at payload.${field}, got ${JSON.stringify(err.issues)}`,
+            );
+            return true;
+          },
+        ));
+    }
+  }
+  assert.ok(requests.length > 0, 'valid cases should have sent a request');
+});
+
+test('TypeScript SDK usage: tags follow the shared tag vectors, with the same rejection shape', async (t) => {
+  stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  for (const vector of vectors.tagCases) {
+    if (vector.valid) {
+      await agent.usage({ ...base, tags: vector.tags });
+      continue;
+    }
+    await assert.rejects(
+      agent.usage({ ...base, tags: vector.tags }),
+      (err) => {
+        assert.ok(err instanceof AgentViewerError, `${vector.name}: expected AgentViewerError`);
+        const paths = err.issues.map((issue) => issue.path);
+        for (const expectedPath of vector.expectedPaths) {
+          assert.ok(paths.includes(expectedPath), `${vector.name}: expected ${expectedPath} in ${paths}`);
+        }
+        return true;
+      },
+    );
+  }
+});
+
+test('TypeScript SDK: llmFailed() sends the failure payload with correlation fields, severity high', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.llmFailed({
+    provider: 'OpenAI',
+    model: 'gpt-4.1',
+    errorKind: 'rate_limited',
+    httpStatus: 429,
+    retryable: true,
+    traceId: 'trace_failed',
+    tags: ['env:prod'],
+    taskId: 'task_1',
+  });
+
+  const [body] = bodiesOf(requests, 'llm.failed');
+  assert.equal(body.type, 'llm.failed');
+  assert.equal(body.severity, 'high');
+  assert.equal(body.taskId, 'task_1');
+  assert.equal('taskId' in body.payload, false);
+  assert.equal(body.payload.provider, 'OpenAI');
+  assert.equal(body.payload.model, 'gpt-4.1');
+  assert.equal(body.payload.errorKind, 'rate_limited');
+  assert.equal(body.payload.httpStatus, 429);
+  assert.equal(body.payload.retryable, true);
+  assert.equal(body.payload.traceId, 'trace_failed');
+  assert.deepEqual(body.payload.tags, ['env:prod']);
+});
+
+test('TypeScript SDK: llmFailed() omits model when not given, and rejects an invalid correlation field', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.llmFailed({ provider: 'OpenAI' });
+  const [failed] = bodiesOf(requests, 'llm.failed');
+  assert.equal('model' in failed.payload, false);
+  assert.equal(failed.payload.errorKind, undefined);
+
+  await assert.rejects(
+    agent.llmFailed({ provider: 'OpenAI', traceId: '' }),
+    (err) => err instanceof AgentViewerError && err.issues.some((issue) => issue.path === 'payload.traceId'),
+  );
+});
 
 test('TypeScript SDK: default event ids are 128-bit random UUIDs', async (t) => {
   const { requests } = stubFetch(t);

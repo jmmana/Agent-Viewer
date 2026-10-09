@@ -67,15 +67,21 @@ class CrewAIViewerAdapter:
         handle = self.agents.get(agent_id) or self.viewer.agent(agent_id)
         handle.status("CODING" if "code" in action_summary.lower() else "RESEARCHING", action_summary)
 
-    def on_tool_start(self, agent_id: str, tool_name: str, tool_input: Optional[str] = None) -> None:
-        """Called when a tool execution starts."""
+    def on_tool_start(
+        self, agent_id: str, tool_name: str, tool_input: Optional[str] = None, tool_call_id: Optional[str] = None
+    ) -> None:
+        """Called when a tool execution starts. CrewAI does not expose a tool call id at this callback, so
+        ``tool_call_id`` is omitted unless the caller explicitly passes one.
+        """
         handle = self.agents.get(agent_id) or self.viewer.agent(agent_id)
-        handle.tool_started(tool_name, tool_input)
+        handle.tool_started(tool_name, tool_input, tool_call_id=tool_call_id)
 
-    def on_tool_end(self, agent_id: str, tool_name: str, tool_output: Optional[str] = None) -> None:
-        """Called when a tool execution finishes."""
+    def on_tool_end(
+        self, agent_id: str, tool_name: str, tool_output: Optional[str] = None, tool_call_id: Optional[str] = None
+    ) -> None:
+        """Called when a tool execution finishes. Same note as ``on_tool_start`` about ``tool_call_id``."""
         handle = self.agents.get(agent_id) or self.viewer.agent(agent_id)
-        handle.tool_completed(tool_name, tool_output)
+        handle.tool_completed(tool_name, tool_output, tool_call_id=tool_call_id)
 
     def on_agent_message(self, agent_id: str, text: str, target: Optional[str] = None) -> None:
         """Display an observable dialogue line between agents or to the user."""
@@ -91,12 +97,20 @@ class CrewAIViewerAdapter:
         output_tokens: int,
         cost: Optional[float] = None,
         cost_source: str = "unknown",
+        trace_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        tags: Optional[list] = None,
     ) -> None:
         """Report token telemetry.
 
         ``cost_source`` says where ``cost`` comes from and defaults to ``"unknown"``: pass
         ``"provider-reported"`` only when the provider returned the cost, or ``"estimated"``
         when the host app computed it. A cost of 0 is a real cost and is kept.
+
+        CrewAI exposes no run, trace or parent span id at this callback, so ``trace_id`` and
+        ``tool_call_id`` are forwarded only when the caller explicitly passes one, and no ``parent_id`` is
+        ever sent. ``tags`` is never read from CrewAI's own metadata: it is only ever an explicit value the
+        host chooses to pass.
         """
         handle = self.agents.get(agent_id) or self.viewer.agent(agent_id)
         handle.usage(
@@ -106,6 +120,9 @@ class CrewAIViewerAdapter:
             output_tokens=output_tokens,
             cost=cost,
             cost_source=cost_source,
+            trace_id=trace_id,
+            tool_call_id=tool_call_id,
+            tags=tags,
         )
 
     def on_task_complete(self, agent_id: str, summary: str = "Task finished") -> None:

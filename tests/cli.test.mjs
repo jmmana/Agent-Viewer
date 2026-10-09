@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { CliUsageError, parseCliArgs } from '../cli/args.ts';
+import { CliUsageError, parseCliArgs, USAGE } from '../cli/args.ts';
 import { buildSendEvents } from '../cli/send.ts';
 import { normalizeStatus } from '../cli/statuses.ts';
 import { resolveConnection, writeSessionFile } from '../cli/connection.ts';
@@ -102,11 +102,32 @@ test('CLI args: send, claude-hook, install, uninstall, help and version', () => 
     command: 'claude-hook', url: undefined, token: undefined, includeSummaries: true,
   });
   assert.deepEqual(parseCliArgs(['install', 'claude-code', '--project', 'app', '--yes'], '/work'), {
-    command: 'install', target: 'claude-code', project: path.resolve('/work', 'app'), yes: true, includeSummaries: false, url: undefined, token: undefined,
+    command: 'install', target: 'claude-code', project: path.resolve('/work', 'app'), yes: true, includeSummaries: false, url: undefined, token: undefined, telemetry: undefined,
   });
   assert.equal(parseCliArgs(['uninstall', 'claude-code', '-y'], '/work').yes, true);
   assert.equal(parseCliArgs(['--help']).command, 'help');
   assert.equal(parseCliArgs(['-v']).command, 'version');
+});
+
+test('CLI args: --telemetry and --no-telemetry, absent is undefined, last flag wins', () => {
+  assert.equal(parseCliArgs(['install', 'claude-code'], '/work').telemetry, undefined);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--telemetry'], '/work').telemetry, true);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--no-telemetry'], '/work').telemetry, false);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--telemetry', '--no-telemetry'], '/work').telemetry, false);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--no-telemetry', '--telemetry'], '/work').telemetry, true);
+  assert.throws(() => parseCliArgs(['uninstall', 'claude-code', '--telemetry'], '/work'), CliUsageError);
+  assert.throws(() => parseCliArgs(['uninstall', 'claude-code', '--no-telemetry'], '/work'), CliUsageError);
+});
+
+test('CLI args: otel-headers needs --url, and the usage text lists the new flags', () => {
+  assert.deepEqual(parseCliArgs(['otel-headers', '--url', 'http://127.0.0.1:8787'], '/work'), {
+    command: 'otel-headers', url: 'http://127.0.0.1:8787',
+  });
+  assert.throws(() => parseCliArgs(['otel-headers'], '/work'), CliUsageError);
+  assert.throws(() => parseCliArgs(['otel-headers', '--url', 'not a url'], '/work'), CliUsageError);
+  assert.match(USAGE, /--telemetry/);
+  assert.match(USAGE, /--no-telemetry/);
+  assert.match(USAGE, /otel-headers/);
 });
 
 test('CLI statuses: office statuses and everyday words', () => {

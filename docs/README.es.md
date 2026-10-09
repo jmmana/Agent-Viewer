@@ -120,7 +120,7 @@ Quita `127.0.0.1:` solo para acceder desde otros equipos, y hazlo detrás de TLS
 npx @warlockcode/agent-viewer install claude-code   # en tu proyecto; muestra el cambio y pregunta antes
 ```
 
-Tus sesiones de Claude Code y sus subagentes aparecen en la oficina: herramientas, traspasos y cuándo Claude te espera. Solo viajan nombres de herramientas, tipos de agente, tiempos y estados; nunca argumentos, prompts, código ni rutas. Instalación, privacidad y desinstalación: [claude-code.md](claude-code.md) (en inglés).
+Tus sesiones de Claude Code y sus subagentes aparecen en la oficina: herramientas, traspasos y cuándo Claude te espera. Solo viajan nombres de herramientas, tipos de agente, tiempos y estados; nunca argumentos, prompts, código ni rutas. La telemetría de tokens y costo es opcional, mediante `install claude-code --telemetry`; sin ella, la promesa anterior se cumple tal cual está escrita. Instalación, privacidad y desinstalación: [claude-code.md](claude-code.md) (en inglés).
 
 ### Desde el repositorio
 

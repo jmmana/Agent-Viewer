@@ -120,7 +120,7 @@ Drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. F
 npx @warlockcode/agent-viewer install claude-code   # in your project, shows the change and asks first
 ```
 
-Your Claude Code sessions and their subagents appear in the office: tools, handoffs, and when Claude waits for you. Only tool names, agent types, timings and statuses are sent, never arguments, prompts, code or paths. Setup, privacy and uninstall: [docs/claude-code.md](docs/claude-code.md).
+Your Claude Code sessions and their subagents appear in the office: tools, handoffs, and when Claude waits for you. Only tool names, agent types, timings and statuses are sent, never arguments, prompts, code or paths. Token and cost telemetry is opt-in, through `install claude-code --telemetry`; without it, the promise above holds exactly as written. Setup, privacy and uninstall: [docs/claude-code.md](docs/claude-code.md).
 
 ### From the repository
 

@@ -3,6 +3,24 @@ import { CREW_ROOMS } from '../../src/crew/crewModel';
 import { crewGeometryBounds, crewIsoPoint, crewViewSize, renderCrewRoom } from '../../src/crew/renderCrewRoom';
 
 describe('Crew native 2.5D renderer', () => {
+  it('selecciona imagen por actor y aplica parpadeo solo al rostro visible', () => {
+    const drawn: unknown[][]=[];
+    const ctx=new Proxy({} as CanvasRenderingContext2D,{
+      get(_target,key){return key==='drawImage' ? (...args:unknown[])=>drawn.push(args) : ()=>{};},
+      set(){return true;},
+    });
+    const front={} as HTMLImageElement, back={} as HTMLImageElement, atlas={} as HTMLImageElement;
+    const markers=[
+      {id:'a',name:'A',role:'boss' as const,facing:'NE' as const,status:'IDLE' as const,x:2,y:2,number:1},
+      {id:'b',name:'B',role:'boss' as const,facing:'SW' as const,status:'IDLE' as const,x:4,y:4,number:2},
+    ];
+    renderCrewRoom({ctx,width:900,height:600,room:CREW_ROOMS[0],markers,
+      camera:{view:'right',zoom:1,pan:{x:0,y:0}},sprites:{front,back},
+      blink:{image:atlas,frame:{x:0,y:0,width:535,height:735,anchor:{x:267.5,y:678},durationMs:100}}});
+    expect(drawn.map(call=>call[0])).toEqual([atlas,back]);
+    expect(drawn[0]).toHaveLength(9);
+    expect(drawn[1]).toHaveLength(5);
+  });
   it('dibuja el original solo para el CEO presente y conserva marcadores si falta la imagen', () => {
     const drawn: unknown[][] = [];
     const labels: unknown[][] = [];
@@ -24,10 +42,10 @@ describe('Crew native 2.5D renderer', () => {
     expect(drawn).toHaveLength(0);
     expect(labels).toHaveLength(2);
     const sprite = {} as HTMLImageElement;
-    renderCrewRoom({...input,sprite});
+    renderCrewRoom({...input,sprites:{front:sprite}});
     expect(drawn).toHaveLength(1);
     expect(drawn[0][0]).toBe(sprite);
-    renderCrewRoom({...input,sprite,markers:[]});
+    renderCrewRoom({...input,sprites:{front:sprite},markers:[]});
     expect(drawn).toHaveLength(1);
   });
   it('projects floor and wall height into separate axes', () => {

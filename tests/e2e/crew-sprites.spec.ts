@@ -25,7 +25,8 @@ test('CEO estático en cuatro vistas, carga aislada por sala y regreso a Caricat
   for(const view of ['front','right','back','left']) {
     await page.locator('#crew-view').selectOption(view);
     await expect(page.getByTestId('crew-art-status')).toHaveText('Illustrations: 1.');
-    await expect.poll(()=>page.evaluate(v=>(window as any).__crewDrawn.some((url:string)=>url.includes(`idle-${v}.png`)),view)).toBe(true);
+    const facing = {front:'front',right:'left',back:'back',left:'right'}[view];
+    await expect.poll(()=>page.evaluate(v=>(window as any).__crewDrawn.some((url:string)=>url.includes(`idle-${v}.png`)),facing)).toBe(true);
     await page.screenshot({path:info.outputPath(`ceo-${view}.png`)});
   }
   expect(new Set(images.map(url=>url.split('/').at(-1)))).toEqual(new Set(['idle-front.png','idle-right.png','idle-back.png','idle-left.png']));

@@ -1,9 +1,15 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-09 (America/Bogota).
-Último issue trabajado: #117/#118, controlador de fotogramas y parpadeo frontal del CEO. Epic: #114.
+Último issue trabajado: #118/#155, orientación individual del CEO respecto a la cámara. Epic: #114.
 
 ## Resumen de la ejecución
+
+Nuevo incremento de orientación: cada CEO usa el facing de su snapshot y la cámara; se comparten imágenes por orientación, y el parpadeo solo aparece en rostros frontales respecto al observador. La prueba de cuatro actores comprueba la imagen dibujada para cada número de presencia y que cambiar cámara no modifica el snapshot. [Contrato y matriz de 16 combinaciones](FACING.md).
+
+Validación: 379 Node aprobados y uno omitido, 579 Vitest y 17 E2E; tipos y builds app/lib/CLI/paquete aprobados. Evidencia: [captura frontal](evidence/facing-118/facing-front.png), [cámara derecha](evidence/facing-118/facing-right.png), [vídeo](evidence/facing-118/runtime.mp4). Los originales no se modificaron. La orientación discreta no implementa un giro animado ni caminar.
+
+### Incremento anterior
 
 Último incremento: atlas original RGBA de cuatro fotogramas y controlador temporal de parpadeo frontal, con anclajes por fotograma, carga diferida, recuperación ante error y respeto por movimiento reducido. El reloj se detiene al ocultar la pestaña o salir de Crew. No escribe eventos, tareas ni métricas. [Recurso, procedencia y prompt](../../assets/crew/clips/README.md). [Captura](evidence/blink-117/ceo-blink.png) y [vídeo](evidence/blink-117/runtime.mp4).
 
@@ -22,7 +28,8 @@ Crew sigue en Beta. G1 no está certificado: faltan arte final de salas, animaci
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-animation-controller-117`, basada en main `6f756c1`.
+- Rama actual: `feat/crew-facing-118`, basada en main `c32113e`.
+- Controlador y parpadeo: #205, integrado en main.
 - Piloto estático anterior: `feat/crew-character-assets-118`, integrado mediante #195.
 - Banco: `feat/crew-asset-bank-172`, basado en `5cb4643` de #191.
 - Cámara Caricatura: `fix/crew-cartoon-camera-166`, basada en `cccc4bd` de #190.
@@ -219,3 +226,9 @@ El controlador puro selecciona cuadros por tiempo transcurrido y duraciones expl
 No se implementaron caminar, giros, sentarse, teclear ni llamada. No se convierte el parpadeo en prueba de animación laboral ni de orientación del dominio. #117/#118 continúan abiertos.
 
 La integración `6583a3f` incorpora main `8218153` sin conflictos. Se repitieron tipos, tests, builds app/lib/CLI y paquete sobre esa base; todos aprobaron localmente. CI del PR valida también Python, CLI Node 22.13 y contenedores.
+
+## Orientación individual, #118/#155
+
+La proyección de presencia conserva facing como dato de solo lectura. El renderer resuelve la pose por actor; una misma sala puede mostrar varios CEO con diferentes direcciones. La carga se comparte para cada orientación necesaria y conserva las imágenes aún utilizadas cuando cambian otros actores. Valores ausentes usan SE y valores inválidos conservan marcador.
+
+Se corrigió la equivalencia previa entre nombre de cámara y nombre de imagen: cámara right lleva +X a +Y, cuya proyección corresponde al lateral izquierdo. Las pruebas y las capturas reflejan esa convención. El parpadeo se habilita por rostro visible, no por el nombre de la cámara. No se cambian contratos de eventos ni se generan estados de trabajo.

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release pipeline hardening**, a direct follow-up to the 0.3.0 release gate (#63): `.github/workflows/release.yml` no longer lets a tag "succeed" with nothing published.
+  - The npm publish step now fails the job (instead of a silent `exit 0`) when `NPM_TOKEN` (or trusted publishing) is missing on a real release tag.
+  - A new `pypi` job builds the sdist and wheel from `sdk/python/` with `python -m build`, checks them with `twine check`, installs the wheel in a clean venv and publishes to PyPI with `pypa/gh-action-pypi-publish` (trusted publishing, `pypi` environment).
+  - A tag with an `-rc.N`, `-beta.N` or `-alpha.N` suffix (for example `v0.3.0-rc.1`) is now detected as a prerelease: every job still builds and checks everything, but nothing publishes to npm, PyPI or GHCR, and the GitHub release is created as a prerelease. The detection lives in `scripts/release-rules.mjs` and is exposed as the `release` job's `is_prerelease` output so every other job reads the same value.
+  - The GHCR docker job now pushes only on a non-prerelease tag (it still builds both images on a prerelease, to verify they build) and only after npm and PyPI have finished.
+  - The GitHub release notes are now the real `## [X.Y.Z]` section extracted from `CHANGELOG.md` via `--notes-file`, instead of the fixed text `"See CHANGELOG.md"`.
+  - The version-alignment check now also fails when `sdk/python/pyproject.toml` disagrees with the tag, not only `package.json`.
+  - New `tests/release-versions.test.mjs` and `tests/release-workflow.test.mjs` cover this logic (`node:test`), importing the shared `scripts/release-rules.mjs` rather than re-implementing it, and asserting on the workflow's actual job structure and shell scripts.
+
 ## [0.3.0] - 2026-10-09
 
 "Cifras ciertas" (true figures): the server, the portal, the CLI and the SDKs stop treating an unknown token count, cost or currency as zero, split cache reads from cache writes, add `llm.failed`, and Claude Code finally reports tokens through `install claude-code --telemetry`. First release published to npm, GHCR and (pending the owner's PyPI trusted-publisher setup) PyPI. The full semantics, field by field, are written down once in [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)); every section below links back to it instead of restating the rules. While the package is at 0.x, its API may still change between minor versions.

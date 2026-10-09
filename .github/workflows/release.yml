@@ -1,16 +1,30 @@
 name: Release
 
 # Runs when a version tag such as v0.3.0 is pushed.
-# 1. Verifies and packs the package (library and CLI) and attaches the .tgz to the GitHub release.
-# 2. Publishes to npm only when the NPM_TOKEN secret exists (to be configured by the package owner).
-# 3. Builds the Docker images and pushes them to GitHub Container Registry:
+# 1. Verifies and packs the package (library and CLI) and attaches the .tgz, the Python sdist and the
+#    wheel to the GitHub release, with notes extracted from the matching CHANGELOG.md section.
+# 2. Publishes to npm (trusted publishing with the NPM_TOKEN secret as a fallback) and to PyPI
+#    (trusted publishing) on a real release tag. Missing publish credentials fail the job instead of
+#    silently skipping.
+# 3. Builds the Docker images and pushes them to GitHub Container Registry on a real release tag:
 #    ghcr.io/jmmana/agent-viewer:<version>      office + API in one container (target app), also :latest
 #    ghcr.io/jmmana/agent-viewer:<version>-api  API only (target api), also :latest-api
+#
+# A prerelease tag (vX.Y.Z-rc.N, -beta.N or -alpha.N, for example v0.3.0-rc.1) is a dry run: every job
+# builds and checks everything, but nothing is published to npm, PyPI or GHCR, and the GitHub release is
+# created as a prerelease. Use it to verify a release before tagging the real version.
+# See scripts/release-rules.mjs for the prerelease detection, version-alignment and changelog-extraction
+# logic shared with tests/release-versions.test.mjs.
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to re-run (for example v0.3.0). Used to retry a failed publish job.'
+        required: true
 
 permissions:
   contents: write
@@ -20,9 +34,14 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      is_prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Use Node.js 24
         uses: actions/setup-node@v6
@@ -33,13 +52,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check version matches tag
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Detect prerelease
+        id: prerelease
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          version="v$(node -p "require('./package.json').version")"
-          if [ "$version" != "$GITHUB_REF_NAME" ]; then
-            echo "package.json version $version does not match tag $GITHUB_REF_NAME"
-            exit 1
+          if node scripts/release-rules.mjs is-prerelease "$TAG"; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Check version matches tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: node scripts/release-rules.mjs check-versions "$TAG"
 
       - name: Typecheck and tests
         run: |
@@ -55,28 +86,98 @@ jobs:
       - name: Pack
         run: npm pack
 
-      - name: Attach package to the GitHub release
+      - name: Extract changelog section
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: node scripts/release-rules.mjs changelog-section "$TAG" > release-notes.md
+
+      - name: Create or update the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          IS_PRERELEASE: ${{ steps.prerelease.outputs.is_prerelease }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" warlockcode-agent-viewer-*.tgz --clobber
+          extra_flags=()
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            extra_flags+=(--prerelease)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" warlockcode-agent-viewer-*.tgz --clobber
           else
-            gh release create "$GITHUB_REF_NAME" warlockcode-agent-viewer-*.tgz --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md"
+            gh release create "$TAG" warlockcode-agent-viewer-*.tgz \
+              --title "$TAG" --notes-file release-notes.md "${extra_flags[@]}"
           fi
 
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          IS_PRERELEASE: ${{ steps.prerelease.outputs.is_prerelease }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN is not configured: skipping npm publish."
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "Prerelease tag ($TAG): skipping npm publish (dry run)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
+          fi
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error title=npm publish blocked::NPM_TOKEN is not configured. Configure npm trusted publishing or the NPM_TOKEN secret before tagging a real (non-prerelease) release." >> /dev/stderr
+            echo "npm publish blocked: NPM_TOKEN is missing on a real release tag ($TAG)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
           npm publish --provenance --access public --ignore-scripts
 
-  docker:
+  pypi:
     needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Use Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: python -m pip install --upgrade build twine
+
+      - name: Build sdist and wheel
+        run: python -m build sdk/python --outdir dist
+
+      - name: Check distribution metadata
+        run: twine check dist/*
+
+      - name: Install the wheel and import it in a clean venv
+        run: |
+          python -m venv /tmp/agent-viewer-venv
+          /tmp/agent-viewer-venv/bin/pip install dist/*.whl
+          cd /tmp && /tmp/agent-viewer-venv/bin/python -c "import agent_viewer; print(agent_viewer.__file__)"
+
+      - name: Prerelease summary
+        if: needs.release.outputs.is_prerelease == 'true'
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          echo "Prerelease tag ($TAG): skipping PyPI publish (dry run)." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish to PyPI
+        if: needs.release.outputs.is_prerelease != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+      - name: Attach distributions to the GitHub release
+        if: needs.release.outputs.is_prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber
+
+  docker:
+    needs: [release, pypi]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -84,9 +185,12 @@ jobs:
       packages: write
     env:
       IMAGE: ghcr.io/jmmana/agent-viewer
+      IS_PRERELEASE: ${{ needs.release.outputs.is_prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
 
       - name: Set up QEMU (arm64 images)
         uses: docker/setup-qemu-action@v4
@@ -95,6 +199,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
+        if: needs.release.outputs.is_prerelease != 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -115,14 +220,14 @@ jobs:
             org.opencontainers.image.title=Agent Viewer
             org.opencontainers.image.description=Agent Viewer office and ingestion API in one container
 
-      - name: Build and push the office + API image
+      - name: Build (and push on a real release) the office + API image
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
           target: app
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ needs.release.outputs.is_prerelease != 'true' }}
           tags: ${{ steps.app-meta.outputs.tags }}
           labels: ${{ steps.app-meta.outputs.labels }}
           cache-from: type=gha
@@ -143,22 +248,28 @@ jobs:
             org.opencontainers.image.title=Agent Viewer API
             org.opencontainers.image.description=Agent Viewer ingestion API (REST, batch, SSE, webhooks)
 
-      - name: Build and push the API image
+      - name: Build (and push on a real release) the API image
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
           target: api
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ needs.release.outputs.is_prerelease != 'true' }}
           tags: ${{ steps.api-meta.outputs.tags }}
           labels: ${{ steps.api-meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Prerelease summary
+        if: needs.release.outputs.is_prerelease == 'true'
+        run: |
+          echo "Prerelease tag: built both images to verify they build, did not push to GHCR (dry run)." | tee -a "$GITHUB_STEP_SUMMARY"
+
       # GHCR creates a new package as private, and the GITHUB_TOKEN cannot change that. Until the owner makes it
-      # public once, `docker pull` without logging in fails. The summary says so on every release.
+      # public once, `docker pull` without logging in fails. The summary says so on every real release.
       - name: Image visibility
+        if: needs.release.outputs.is_prerelease != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

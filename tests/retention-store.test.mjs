@@ -334,3 +334,40 @@ test('SQLite purge: rollups over the retained ledger are byte-for-byte identical
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('SQLite: a retention run left "running" by a dead process is closed as error/interrupted on the next open', async () => {
+  const { dir, file } = tempDbPath('stale-run');
+  let store = new SQLiteEventStore(file, { backup: 'off' });
+  await store.init();
+  const runningId = await store.recordRetentionRun({ startedAt: 1_000, trigger: 'schedule' });
+  // A second, already-finished run must be left alone: only a genuinely stuck 'running' row is rewritten.
+  const finishedId = await store.recordRetentionRun({ startedAt: 500, trigger: 'startup' });
+  await store.finishRetentionRun(finishedId, {
+    finishedAt: 600,
+    status: 'ok',
+    eventsWindowDays: null,
+    eventsCutoffMs: null,
+    eventsDeleted: 0,
+    ledgerWindowDays: null,
+    ledgerCutoffMs: null,
+    ledgerDeleted: 0,
+    error: null,
+  });
+  await store.close();
+
+  // Simulate the process dying mid-run: `runningId` is never finished before we reopen the same file.
+  store = new SQLiteEventStore(file, { backup: 'off' });
+  await store.init();
+  try {
+    const status = await store.retentionStatus();
+    const stale = status.runs.find((r) => r.id === runningId);
+    const finished = status.runs.find((r) => r.id === finishedId);
+    assert.equal(stale.status, 'error');
+    assert.equal(stale.error, 'interrupted');
+    assert.notEqual(stale.finishedAt, null);
+    assert.equal(finished.status, 'ok', 'an already-finished run is left untouched');
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

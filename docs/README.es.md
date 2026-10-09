@@ -591,7 +591,8 @@ flowchart LR
 | `POST` | `/api/v1/events/batch` | Ingesta de hasta 100 eventos (configurable). Los duplicados se omiten sin error. |
 | `GET` | `/api/v1/events` | Consulta con `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Reenvía los eventos perdidos desde `Last-Event-ID`; latido cada 15 s. |
-| `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes, tokens y costo. |
+| `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes y el bloque `usage`. Los campos obsoletos `totalCost` y `cost` de cada agente son `null` salvo que todas las llamadas reporten una sola moneda conocida (una moneda, un origen de costo). |
+| `GET` | `/api/v1/usage` | Solo los agregados de consumo, llamada por llamada: por agente y por `(provider, model)`, con los conteos de lo desconocido y los costos por moneda, nunca sumados entre monedas. [Detalles](integration.md#usage-aggregates-get-apiv1usage) (en inglés). |
 | `POST` | `/api/v1/agents` | Registra o actualiza un agente. |
 | `PATCH` | `/api/v1/agents/:agentId` | Actualiza el estado o las propiedades de un agente. |
 | `POST` / `GET` | `/api/v1/runtimes` | Registra un runtime (latido) / lista los runtimes. |

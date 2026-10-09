@@ -590,6 +590,46 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 - Las mismas reglas valen para cada agente en `byAgent`, con solo los eventos de ese agente.
 - Sin ningún evento `llm.usage`, todas las cifras son `null` (se muestran como "desconocido"), no cero.
 
+### Cifras del servidor de Agent Viewer
+
+Si tu app está conectada al servidor de Agent Viewer, lee `GET /api/v1/usage` (`usageSummary()` en el SDK de TypeScript) y pasa sus cifras tal cual. La librería sigue sin hacer cuentas: el host traduce cada grupo, y solo las cifras conocidas por completo se vuelven números.
+
+```tsx
+import type { UsageFigures } from '@warlockcode/agent-viewer';
+import type { UsageBucket } from './sdk/typescript/index';
+
+/** Solo cifras exactas: una suma parcial se vería como exacta, así que pasa a null ("desconocido"). */
+function toFigures(bucket: UsageBucket): UsageFigures {
+  const input = bucket.tokens.input.unreportedCount === 0 ? bucket.tokens.input.sum : null;
+  const output = bucket.tokens.output.unreportedCount === 0 ? bucket.tokens.output.sum : null;
+  const single = bucket.calls > 0 && bucket.costUnknownCount === 0 && bucket.byCurrency.length === 1
+    ? bucket.byCurrency[0]
+    : null;
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: input !== null && output !== null ? input + output : null,
+    cost: single ? single.amount : null,
+    currency: single ? single.currency : undefined,
+  };
+}
+
+const summary = await viewer.usageSummary();
+const usage = {
+  total: toFigures(summary.total),
+  byAgent: Object.fromEntries(
+    summary.byAgent
+      .filter((agent) => agent.agentId !== null)
+      .map((agent) => [agent.agentId, toFigures(agent)]),
+  ),
+};
+```
+
+- `inputTokens` y `outputTokens` salen de `tokens.input.sum` y `tokens.output.sum` solo cuando el `unreportedCount` de ese tipo es `0`; si no, pasa `null`.
+- `totalTokens` es la suma que hace el host de esos dos, y solo se envía cuando ambos cumplen esa condición; si no, `null`.
+- `cost` y `currency` se envían solo cuando el grupo tiene llamadas, `costUnknownCount` es `0` y `byCurrency` tiene una sola entrada (una moneda, un origen de costo). Si no, envía `cost: null`, que se muestra como "desconocido".
+- El grupo `agentId: null` (llamadas sin agente) no tiene clave en `byAgent`; solo cuenta en `total`. Las llamadas fallidas (`failed`) no forman parte de estas cifras.
+
 ## Repetición
 
 `useEventReplay` reproduce una ejecución grabada a su propio ritmo y devuelve el tramo visible, listo para `<AgentOffice events>`. Solo revela eventos; nunca crea ninguno. `ReplayControls` es una barra opcional para el hook: reproducir y pausar, volver al inicio, una barra de posición y botones de velocidad.

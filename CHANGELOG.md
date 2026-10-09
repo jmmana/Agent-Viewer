@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Canonical event `llm.failed` for one failed model call attempt: `provider`, `model`, `errorKind` (one of `LLM_ERROR_KINDS`, default `unknown`), `httpStatus`, `retryable`, `requestId`, `providerErrorCode` and `latencyMs`, plus tokens and cost only when the provider billed the attempt (none defaults to 0). It has no free-text error field on purpose. The server stores, lists and streams it and registers an unseen agent from it, but it never changes token or cost totals; the office only stores the agent's provider and model and never changes its status. Mapping guide in [docs/integration.md](docs/integration.md).
 - `llm.usage` fields `cacheReadTokens` (tokens served from the prompt cache) and `cacheWriteTokens` (tokens written to it), both part of `inputTokens`. Validation keeps them and rejects a `cacheReadTokens` + `cacheWriteTokens` sum above `inputTokens`.
 - Library exports `LLM_ERROR_KINDS`, `isLlmErrorKind` and the type `LlmErrorKind`. `CanonicalEventType` includes `'llm.failed'`.
+- Server usage aggregates, computed call by call by one pure reducer (`server/usageAggregates.ts`): every `llm.usage` call is added to the total, to its agent and to the `(provider, model)` of the call itself, so switching models never moves past calls. Failed calls (`llm.failed`) are counted apart under `failed`. Unknown stays visible: each token kind has a `sum` that is `null` until a call reports it, plus `unreportedCount`; cost is kept per `(currency, costSource)` pair in exact fixed point, with `costMissingCount` and `currencyMissingCount` for calls that cannot be priced. Nothing is priced, converted or summed across currencies. Guide: [Usage aggregates](docs/integration.md#usage-aggregates-get-apiv1usage).
+- `usage` block in `GET /api/v1/snapshot` and new `GET /api/v1/usage`, which returns the same `UsageSummary` without the event list (same token and rate limits as the rest of `/api/v1`).
+- TypeScript SDK `usageSummary()` and Python SDK `usage_summary()`. The TypeScript SDK types `snapshot()` as `Promise<ViewerSnapshot>` and exports `UsageSummary`, `UsageAggregate`, `UsageBucket`, `ModelUsage`, `AgentUsage`, `TokenFigure`, `CurrencyCost` and `ViewerSnapshot`.
 
 ### Changed
 - `express` is now a runtime dependency (the CLI runs the server from the installed package). `dotenv` stays a development dependency: the server loads `.env` only when run directly.
@@ -29,9 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `normalizeCanonicalEvent` (used by the library and the generic webhook) no longer invents `inputTokens: 0` or `outputTokens: 0` for `llm.usage`, keeps `llm.failed` instead of rewriting it to `agent.status.changed`, and sets an unlisted `llm.failed` `errorKind` to `unknown`.
 - Exhaustive `switch` statements over `CanonicalEventType` in host TypeScript code must handle `'llm.failed'`.
 - A 0.3.0 SDK needs a 0.3.0 server: a 0.2.x server rejects `llm.failed` and drops `cacheReadTokens` and `cacheWriteTokens`.
+- **Snapshot behavior change:** `totalCost` in `GET /api/v1/snapshot` and `cost` of each agent (snapshot, `POST /api/v1/agents` and `PATCH /api/v1/agents/:agentId` responses) can now be `null`: they hold a number only when every successful call reported a cost in one single currency with one single `costSource`. A call without cost, USD plus EUR, or billed plus estimated cost gives `null` instead of a misleading sum, and an agent with no calls has `cost: null` instead of `0`. Readers that assumed a number must handle `null`.
+- `llm.usage` calls without an agent (from `runtime:*`, `system` or `external-runtime`) now count in `totalTokens` and in `usage.total` under `agentId: null`; they were dropped before. Per-agent token fields are unchanged for well-formed events.
+- The server store no longer accepts usage figures outside stored events: `upsertAgent` ignores `tokensInput`, `tokensOutput`, `cachedTokens`, `reasoningTokens` and `cost` (its input type no longer has them), so usage fields sent to `POST` or `PATCH /api/v1/agents` never move a figure.
 
 ### Deprecated
 - `llm.usage` `cachedTokens`: send `cacheReadTokens` instead. It is still accepted, kept as sent and copied into `cacheReadTokens` when that field is absent; a different number in both fields is rejected at `payload.cachedTokens`.
+- Snapshot `totalTokens` and `totalCost`, and the `AgentRecord` usage fields `tokensInput`, `tokensOutput`, `cachedTokens`, `reasoningTokens` and `cost`: read `usage` (or `GET /api/v1/usage`) instead. The token fields are sums of reported values only, so they are lower bounds when some call did not report a kind. They will be removed in 1.0.
 
 ## [0.2.1] - 2026-10-08
 

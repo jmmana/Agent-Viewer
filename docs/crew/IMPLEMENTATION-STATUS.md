@@ -157,4 +157,4 @@ Enlaces `?visualMode=crew&crewRoom=development` prevalecen sobre la selección g
 
 Restablecer Crew vuelve a Dirección, limpia todas sus cámaras y mantiene Crew abierto; no reinicia agentes, coste ni tokens. La recarga conserva el reset, incluso al haber entrado por un enlace a otra oficina.
 
-Validación: typecheck, 61 node, 452 Vitest, diez E2E Chrome, builds app/lib y validación de paquete aprobados. Captura móvil con nuevos controles revisada a 320 px. Base #186 en `dfdb060` tiene CI aprobado (run 37869826733). Falta API embebida; #171 no se cierra. PR/SHA de esta continuación pendientes de publicación.
+Validación: typecheck, 61 node, 452 Vitest, diez E2E Chrome, builds app/lib y validación de paquete aprobados. Captura móvil con nuevos controles revisada a 320 px. Base #186 en `dfdb060` tiene CI aprobado (run 37869826733). Falta API embebida; #171 no se cierra. Implementación `9b93f94`, [PR #187](https://github.com/jmmana/Agent-Viewer/pull/187), abierto sobre #186. CI en curso al publicar.

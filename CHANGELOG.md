@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The plain server warns at startup when `/api/v1` is open (no `AGENT_VIEWER_API_TOKEN`), naming the port, the bind address and whether webhooks are open too. `/health` reports the current `auth` (`token` or `open`) and `webhookAuth` (`signature`, `token` or `open`) modes, computed per request and never including the token. The live portal shows a persistent, localized banner and an `OPEN API` indicator next to the `LIVE` badge when the connected server is open; it never shows in demo mode or when the state cannot be read.
+
+### Changed
+- Docker Compose now publishes the API and viewer ports on `127.0.0.1` only. To restore network-wide publishing, change the mappings back to `"8787:8787"` and `"3000:3000"`, update `AGENT_VIEWER_CORS_ORIGIN` and `VITE_AGENT_VIEWER_API_URL`, and put the services behind TLS. The plain server's listening log now accurately says it listens on every interface instead of suggesting `localhost`.
+
 ### Fixed
 - Webhook usage retries no longer double-count. The generic webhook now uses deterministic event IDs derived from idempotency keys, so identical retries are deduplicated inside the store. Same delivery with same `Idempotency-Key` header, body `idempotencyKey` field, or signature gets a `200` duplicate response instead of `202` new events. A sender that re-signs a retry needs to include `idempotencyKey` in the body for the same effect.
 - Webhook usage no longer drops `currency`, `costSource`, `requestId` and the cache fields. Validation now uses the same `LlmUsagePayloadSchema` as the events API, and these fields are kept exactly as sent.

@@ -173,12 +173,15 @@ export async function runDuplicateConflictScenario({ app, mode }) {
 
     const retry = await post(event);
     assert.equal(retry.status, 200);
-    assert.deepEqual(await retry.json(), {
+    const retryJson = await retry.json();
+    assert.equal(typeof retryJson.receivedAt, 'number');
+    assert.deepEqual(retryJson, {
       accepted: true,
       duplicate: true,
       duplicateReason: 'event_id',
       id,
       fingerprint: firstJson.fingerprint,
+      receivedAt: retryJson.receivedAt,
     });
 
     const readyBefore = await (await fetch(`${baseUrl}/ready`)).json();

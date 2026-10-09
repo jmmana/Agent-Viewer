@@ -84,8 +84,8 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.ok, true);
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
-      schemaVersion: 5,
-      latestKnownSchemaVersion: 5,
+      schemaVersion: 6,
+      latestKnownSchemaVersion: 6,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');
@@ -660,7 +660,14 @@ test('REST API: llm.failed is stored, listed and streamed without changing any t
     assert.equal(failedRes.status, 202);
     const failedJson = await failedRes.json();
     assert.match(failedJson.fingerprint, /^sha256:[0-9a-f]{64}$/);
-    assert.deepEqual(failedJson, { accepted: true, duplicate: false, id: 'evt_failed_api_1', fingerprint: failedJson.fingerprint });
+    assert.equal(typeof failedJson.receivedAt, 'number');
+    assert.deepEqual(failedJson, {
+      accepted: true,
+      duplicate: false,
+      id: 'evt_failed_api_1',
+      fingerprint: failedJson.fingerprint,
+      receivedAt: failedJson.receivedAt,
+    });
 
     // A partly billed failure must not change the totals either.
     const billedRes = await postEvent(baseUrl, {
@@ -991,16 +998,25 @@ test('REST API: re-sending an event returns 200 duplicate with the fingerprint o
     assert.equal(first.status, 202);
     const firstJson = await first.json();
     assert.match(firstJson.fingerprint, /^sha256:[0-9a-f]{64}$/);
-    assert.deepEqual(firstJson, { accepted: true, duplicate: false, id: event.id, fingerprint: firstJson.fingerprint });
+    assert.equal(typeof firstJson.receivedAt, 'number');
+    assert.deepEqual(firstJson, {
+      accepted: true,
+      duplicate: false,
+      id: event.id,
+      fingerprint: firstJson.fingerprint,
+      receivedAt: firstJson.receivedAt,
+    });
 
     const second = await postEvent(baseUrl, event);
     assert.equal(second.status, 200);
+    // A duplicate echoes the original acceptance time, never the retry's (issue #65).
     assert.deepEqual(await second.json(), {
       accepted: true,
       duplicate: true,
       duplicateReason: 'event_id',
       id: event.id,
       fingerprint: firstJson.fingerprint,
+      receivedAt: firstJson.receivedAt,
     });
 
     // The same event with its keys in another order is still the same content.
@@ -1128,8 +1144,11 @@ test('REST API: batch reports per-item status and conflicts, and only stores and
     assert.deepEqual(json.results.map(({ status }) => status), ['accepted', 'duplicate', 'conflict', 'accepted']);
     assert.deepEqual(json.results.map(({ duplicate }) => duplicate), [false, true, false, false]);
     const [first, second, third, fourth] = json.results;
-    assert.deepEqual(Object.keys(first).sort(), ['duplicate', 'fingerprint', 'id', 'status']);
+    assert.deepEqual(Object.keys(first).sort(), ['duplicate', 'fingerprint', 'id', 'receivedAt', 'status']);
+    assert.equal(typeof first.receivedAt, 'number');
     assert.equal(second.fingerprint, first.fingerprint);
+    // The duplicate echoes the original's receive time, not the retry's (issue #65).
+    assert.equal(second.receivedAt, first.receivedAt);
     assert.equal(third.error, 'conflicting_duplicate');
     assert.equal(third.storedFingerprint, first.fingerprint);
     assert.notEqual(third.fingerprint, first.fingerprint);
@@ -1545,6 +1564,79 @@ test('REST API: a mismatched request-id duplicate logs one warning with ids and 
     assert.deepEqual(Object.keys(logged).sort(), ['duplicateId', 'originalId', 'provider', 'requestId'].sort());
     assert.equal(logged.originalId, 'evt_reqdup_warn_1');
     assert.equal(logged.duplicateId, 'evt_reqdup_warn_2');
+  } finally {
+    server.close();
+  }
+});
+
+// -------------------------------------------------------------
+// Usage ledger (issue #65)
+// -------------------------------------------------------------
+
+test('REST API: GET /api/v1/events returns receivedAt on every event, equal to the POST response value', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const event = usageWithRequest('evt_ledger_received_at', 'req-ledger-received-at');
+    const postRes = await postEvent(baseUrl, event);
+    const postJson = await postRes.json();
+    assert.equal(typeof postJson.receivedAt, 'number');
+
+    const [listed] = await listEvents(baseUrl, `limit=1000`).then((events) =>
+      events.filter((e) => e.id === 'evt_ledger_received_at')
+    );
+    assert.equal(typeof listed.receivedAt, 'number');
+    assert.equal(listed.receivedAt, postJson.receivedAt);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/ledger/status requires the API token when one is configured, and has the documented shape', async () => {
+  process.env.AGENT_VIEWER_API_TOKEN = 'ledger-status-secret';
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const unauth = await fetch(`${baseUrl}/api/v1/usage/ledger/status`);
+    assert.equal(unauth.status, 401);
+
+    const authed = await fetch(`${baseUrl}/api/v1/usage/ledger/status`, {
+      headers: { Authorization: 'Bearer ledger-status-secret' },
+    });
+    assert.equal(authed.status, 200);
+    const json = await authed.json();
+    assert.equal(json.schemaVersion, '1.0');
+    assert.equal(json.storage, 'memory');
+    assert.equal(json.migration, null);
+    assert.ok('rows' in json && 'rowsByOrigin' in json && 'legacyRows' in json && 'skips' in json && 'complete' in json);
+    // Never a sum of tokens or cost.
+    assert.equal('tokens' in json, false);
+    assert.equal('cost' in json, false);
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('REST API: ingest_channel is tagged per route (events, events-batch, webhook)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, usageWithRequest('evt_channel_single', 'req-channel-single'));
+    await fetch(`${baseUrl}/api/v1/events/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [usageWithRequest('evt_channel_batch', 'req-channel-batch')] }),
+    });
+    await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: 'channel-bot', usage: { provider: 'p', model: 'm', inputTokens: 1, outputTokens: 1, requestId: 'req-channel-webhook' } }),
+    });
+
+    const byId = Object.fromEntries(store.ledger.map((row) => [row.eventId, row]));
+    assert.equal(byId.evt_channel_single.ingestChannel, 'events');
+    assert.equal(byId.evt_channel_batch.ingestChannel, 'events-batch');
+    const webhookRow = store.ledger.find((row) => row.requestId === 'req-channel-webhook');
+    assert.ok(webhookRow);
+    assert.equal(webhookRow.ingestChannel, 'webhook');
   } finally {
     server.close();
   }

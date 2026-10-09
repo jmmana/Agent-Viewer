@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
 import { eventFingerprint } from './eventFingerprint';
+import { rowToEvent } from './eventRow';
 import { readPackageVersion } from './version';
 import type { TelemetryPointInput } from './otlp/metrics';
 import type { TelemetryPointRecord } from './telemetry';
@@ -17,6 +18,17 @@ import {
   requestKeyString,
   type UsageFingerprintFields,
 } from './requestKey';
+import {
+  dbRowToLedgerRowInput,
+  ledgerRequestKey,
+  runUsageLedgerBackfill,
+  sameCall,
+  toLedgerRow,
+  type IngestChannel,
+  type LedgerOrigin,
+  type LedgerSkipReason,
+  type UsageLedgerRow,
+} from './usageLedger';
 import { type UsageSummary } from './usageAggregates';
 import {
   applyEvent,
@@ -170,12 +182,46 @@ export interface AppendResult {
    * 'accepted'; `null` for a duplicate or a conflict, since neither one is broadcast on the live stream.
    */
   seq: EventSeq | null;
+  /**
+   * Server receive time (ms epoch) of the event this id is held under (issue #65): for 'accepted', the receive
+   * time of this very call; for a 'duplicate', the receive time of the *original* acceptance, never of the
+   * retry.
+   */
+  receivedAt: number;
   /** Set when outcome === 'duplicate'. */
   duplicateReason?: DuplicateReason;
   /** The id the client actually sent. Present only when it differs from `id`. */
   submittedId?: string;
   /** Only for a 'request_id' duplicate: whether its usage-relevant fields match the original's. */
   matchesOriginal?: boolean | null;
+}
+
+/** Options accepted by `append`/`appendBatch` (issue #65). Optional and additive: the agent/runtime callers in
+ * `server/index.ts` that never produce usage events keep working unchanged. */
+export interface AppendOptions {
+  /** Server clock at request arrival. All events of one `appendBatch` call share one value. Default `Date.now()`. */
+  receivedAt?: number;
+  /** Which route accepted this event, recorded on its ledger row when it is `llm.usage`/`llm.failed`. */
+  channel?: IngestChannel;
+}
+
+/** What `list()` returns (issue #65): the stored event plus the server receive time SQLite already kept in
+ * `created_at` but never returned. `GET /api/v1/snapshot` and SSE frames are unaffected; see the issue. */
+export type EventWithReceivedAt = CanonicalEvent & { receivedAt: number };
+
+export interface UsageLedgerStatus {
+  schemaVersion: '1.0';
+  storage: 'memory' | 'sqlite';
+  rows: number;
+  rowsByOrigin: { live: number; backfill: number };
+  legacyRows: number;
+  skips: { duplicate: number; conflict: number; unparseable: number };
+  oldestReceivedAt: number | null;
+  newestReceivedAt: number | null;
+  /** `false` only in memory mode, once the memory-mode ledger cap (`AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS`) has
+   * dropped rows (issue #53's "no silent loss" rule, applied to the ledger). Always `true` in SQLite mode. */
+  complete: boolean;
+  migration: { id: string; appliedAt: number } | null;
 }
 
 /**
@@ -224,6 +270,9 @@ export interface AppendBatchResult {
    * implementation here does; kept so an alternate implementation never has to lie about a seq that does not exist).
    */
   acceptedSeqs: Array<EventSeq | null>;
+  /** The `receivedAt` each submitted id was accepted under (issue #65): covers both accepted and duplicate ids,
+   * so a caller can echo the original acceptance time even for a duplicate item in the batch. */
+  receivedAtById: Map<string, number>;
 }
 
 /** Per-process ingestion counters, reset on restart. Exposed by `GET /ready`. */
@@ -240,6 +289,10 @@ interface AppendResultExtra {
   matchesOriginal?: boolean | null;
   /** Insertion sequence of the stored row (issue #54). Only ever passed for outcome 'accepted'. */
   seq?: EventSeq;
+  /** Server receive time this id is held under (issue #65). Filled in by the caller once known; `0` is a safe
+   * placeholder for call sites that do not yet have it (`append`/`appendBatch` always overwrite it before the
+   * result reaches a caller). */
+  receivedAt?: number;
 }
 
 /**
@@ -263,6 +316,7 @@ function appendResult(
     duplicate: outcome === 'duplicate',
     accepted: outcome !== 'conflict',
     seq: extra?.seq ?? null,
+    receivedAt: extra?.receivedAt ?? 0,
     ...(duplicateReason ? { duplicateReason } : {}),
     ...(extra?.submittedId !== undefined && extra.submittedId !== id ? { submittedId: extra.submittedId } : {}),
     ...(extra?.matchesOriginal !== undefined ? { matchesOriginal: extra.matchesOriginal } : {}),
@@ -301,18 +355,21 @@ function summarizeBatch(results: AppendResult[], events: CanonicalEvent[]): Appe
   let conflicts = 0;
   const acceptedEvents: CanonicalEvent[] = [];
   const acceptedSeqs: Array<EventSeq | null> = [];
+  const receivedAtById = new Map<string, number>();
   results.forEach((result, index) => {
     if (result.outcome === 'accepted') {
       accepted++;
       acceptedEvents.push(events[index]);
       acceptedSeqs.push(result.seq);
+      receivedAtById.set(events[index].id, result.receivedAt);
     } else if (result.outcome === 'duplicate') {
       duplicates++;
+      receivedAtById.set(events[index].id, result.receivedAt);
     } else {
       conflicts++;
     }
   });
-  return { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs };
+  return { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs, receivedAtById };
 }
 
 /** Result of one `appendTelemetryPoints` call (issue #73). Never includes a point's value or any raw attribute. */
@@ -342,15 +399,19 @@ export interface TelemetryPointFilter {
 
 export interface EventStore {
   /** Stores a new event, or classifies a repeated id as a duplicate (same content) or a conflict (different content). */
-  append(event: CanonicalEvent): Promise<AppendResult>;
+  append(event: CanonicalEvent, options?: AppendOptions): Promise<AppendResult>;
   /** Same rules as `append`, item by item in input order, also against earlier items of the same batch. */
-  appendBatch(events: CanonicalEvent[], options?: { atomic?: boolean; ignoreTimestamp?: boolean }): Promise<AppendBatchResult>;
+  appendBatch(
+    events: CanonicalEvent[],
+    options?: { atomic?: boolean; ignoreTimestamp?: boolean } & AppendOptions
+  ): Promise<AppendBatchResult>;
   /** Conflicts rejected and legacy rows matched by id only, since process start. */
   ingestionCounters(): IngestionCounters;
   /** True for an original event id and for a duplicate reference's own id. */
   exists(eventId: string): Promise<boolean>;
-  /** Never includes a duplicate reference: only originals and events with no request key. */
-  list(options?: ListEventsOptions): Promise<CanonicalEvent[]>;
+  /** Never includes a duplicate reference: only originals and events with no request key. Each event carries its
+   * server receive time (issue #65). */
+  list(options?: ListEventsOptions): Promise<EventWithReceivedAt[]>;
 
   /**
    * Seq of a stored original event, for SSE reconnect replay (issue #54). `null` when the id was never stored,
@@ -370,6 +431,8 @@ export interface EventStore {
   getSchemaInfo?(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } | undefined;
   /** Usage aggregates of every accepted `llm.usage` and `llm.failed` event. */
   usageSummary(): Promise<UsageSummary>;
+  /** Counts and time bounds of the usage ledger (issue #65), never a sum of tokens or cost. */
+  usageLedgerStatus(): Promise<UsageLedgerStatus>;
 
   /** The original event id already stored under this `(provider, requestId)` key, normalizing both arguments. */
   findByRequest(provider: string, requestId: string): Promise<{ id: string } | null>;
@@ -540,11 +603,21 @@ export interface MemoryEventStoreOptions {
   now?: () => number;
   /** Cap on stored OTLP telemetry points (issue #73). Default `100000`; must be an integer >= 1. */
   telemetryMaxPoints?: number;
+  /**
+   * Cap on stored usage ledger rows (issue #65). Default `100000`; must be an integer >= 1. Deliberately **not**
+   * tied to `maxEvents`: the ledger is evidence and must outlive the event ring's much smaller default window
+   * (`new MemoryEventStore(50)` still keeps far more than 50 ledger rows). Once reached, further ledger rows (and
+   * their skip decisions) are dropped, never silently: `usageLedgerStatus().complete` turns `false` and stays
+   * `false` for the life of the process.
+   */
+  usageLedgerMaxRows?: number;
 }
 
 const DEFAULT_MAX_EVENTS = 10000;
 /** Default `AGENT_VIEWER_TELEMETRY_MAX_POINTS` (issue #73): memory-mode cap on stored OTLP metric points. */
 export const DEFAULT_TELEMETRY_MAX_POINTS = 100000;
+/** Default `AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS` (issue #65): memory-mode cap on stored ledger rows. */
+export const DEFAULT_USAGE_LEDGER_MAX_ROWS = 100000;
 
 function telemetryPointKey(point: Pick<TelemetryPointInput, 'seriesKey' | 'startTimeUnixNano' | 'timeUnixNano'>): string {
   return `${point.seriesKey}|${point.startTimeUnixNano}|${point.timeUnixNano}`;
@@ -605,6 +678,20 @@ export class MemoryEventStore implements EventStore {
    * SSE replay never see them.
    */
   private duplicateRefs = new Map<string, DuplicateReference>();
+  /** Server receive time of every original event id ever accepted (issue #65), kept forever like `eventHashes`:
+   * a duplicate must echo the *original* acceptance time, even long after the event itself was evicted. */
+  private originalReceivedAt = new Map<string, number>();
+  /** Usage ledger rows (issue #65), append-only, never tied to the event ring: evicting an event from `window`
+   * never removes its ledger row. Capped independently by `usageLedgerMaxRows`. */
+  private ledger: UsageLedgerRow[] = [];
+  private ledgerByEventId = new Map<string, number>();
+  private ledgerByRequestKey = new Map<string, number>();
+  private ledgerSkips = new Map<string, { reason: LedgerSkipReason; keptEventId: string | null; detectedAt: number }>();
+  private ledgerSeq = 1;
+  private usageLedgerMaxRows: number;
+  /** `false` once `usageLedgerMaxRows` has dropped at least one ledger row or skip (issue #53's rule, applied to
+   * the ledger: never lost silently, always reported). */
+  private ledgerComplete = true;
   private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
   /** Agents, runtimes, sessions, tasks, meetings and usage: everything `applyEvent` (`serverState.ts`) owns. */
   private state: ServerState = createServerState();
@@ -643,6 +730,11 @@ export class MemoryEventStore implements EventStore {
       throw new Error(`MemoryEventStore telemetryMaxPoints must be a positive integer, got ${telemetryMaxPoints}`);
     }
     this.telemetryMaxPoints = telemetryMaxPoints;
+    const usageLedgerMaxRows = opts.usageLedgerMaxRows ?? DEFAULT_USAGE_LEDGER_MAX_ROWS;
+    if (!Number.isInteger(usageLedgerMaxRows) || usageLedgerMaxRows < 1) {
+      throw new Error(`MemoryEventStore usageLedgerMaxRows must be a positive integer, got ${usageLedgerMaxRows}`);
+    }
+    this.usageLedgerMaxRows = usageLedgerMaxRows;
   }
 
   /** Nothing to replay: a `MemoryEventStore` starts empty and is ready as soon as it is constructed. */
@@ -673,12 +765,20 @@ export class MemoryEventStore implements EventStore {
    * original, the event id against a stored duplicate reference (issue #48: its own id is remembered too, so
    * resending it still resolves to the original), and finally the request key for `llm.usage` / `llm.failed`.
    */
-  private classifyAndApply(event: CanonicalEvent, ignoreTimestamp = false): AppendResult {
+  private classifyAndApply(
+    event: CanonicalEvent,
+    ignoreTimestamp = false,
+    receivedAtOverride?: number,
+    channel: IngestChannel = 'events'
+  ): AppendResult {
     const fingerprint = eventFingerprint(event, ignoreTimestamp);
 
     const storedFingerprint = this.eventHashes.get(event.id);
     if (storedFingerprint !== undefined) {
-      if (storedFingerprint === fingerprint) return appendResult('duplicate', event.id, fingerprint);
+      const originalReceivedAt = this.originalReceivedAt.get(event.id) ?? receivedAtOverride ?? this.now();
+      if (storedFingerprint === fingerprint) {
+        return appendResult('duplicate', event.id, fingerprint, undefined, { receivedAt: originalReceivedAt });
+      }
       this.counters.conflicts++;
       warnConflict(event, fingerprint, storedFingerprint);
       return appendResult('conflict', event.id, fingerprint, storedFingerprint);
@@ -687,8 +787,13 @@ export class MemoryEventStore implements EventStore {
     const existingRef = this.duplicateRefs.get(event.id);
     if (existingRef) {
       const refFingerprint = eventFingerprint(existingRef.event, ignoreTimestamp);
+      const originalReceivedAt =
+        this.originalReceivedAt.get(existingRef.duplicateOf) ?? receivedAtOverride ?? this.now();
       if (refFingerprint === fingerprint) {
-        return appendResult('duplicate', existingRef.duplicateOf, fingerprint, undefined, { submittedId: event.id });
+        return appendResult('duplicate', existingRef.duplicateOf, fingerprint, undefined, {
+          submittedId: event.id,
+          receivedAt: originalReceivedAt,
+        });
       }
       this.counters.conflicts++;
       warnConflict(event, fingerprint, refFingerprint);
@@ -702,6 +807,7 @@ export class MemoryEventStore implements EventStore {
         const fields = extractUsageFingerprintFields(event);
         const matchesOriginal = fingerprintFieldsMatch(original.fields, fields);
         if (!matchesOriginal) warnRequestKeyMismatch(original.id, event.id, requestKey.provider, requestKey.requestId);
+        const originalReceivedAt = this.originalReceivedAt.get(original.id) ?? receivedAtOverride ?? this.now();
         const ref: DuplicateReference = {
           id: event.id,
           duplicateOf: original.id,
@@ -718,13 +824,15 @@ export class MemoryEventStore implements EventStore {
           duplicateReason: 'request_id',
           submittedId: event.id,
           matchesOriginal,
+          receivedAt: originalReceivedAt,
         });
       }
     }
 
     this.eventHashes.set(event.id, fingerprint);
     this.acceptedEvents++;
-    const receivedAt = this.now();
+    const receivedAt = receivedAtOverride ?? this.now();
+    this.originalReceivedAt.set(event.id, receivedAt);
     const seq = this.nextSeq++;
     this.eventSeqs.set(event.id, seq);
     const evicted = this.window.push({ event, receivedAt, seq });
@@ -740,7 +848,90 @@ export class MemoryEventStore implements EventStore {
     if (requestKey) {
       this.requestIndex.set(requestKey.key, { id: event.id, fields: extractUsageFingerprintFields(event) });
     }
-    return appendResult('accepted', event.id, fingerprint, undefined, { seq });
+    this.applyLedgerDecision(event, { receivedAt, origin: 'live', channel, legacyContract: false });
+    return appendResult('accepted', event.id, fingerprint, undefined, { seq, receivedAt });
+  }
+
+  /**
+   * Gives one accepted `llm.usage`/`llm.failed` event exactly one ledger decision (issue #65): a new row, or a
+   * `usage_ledger_skips` entry (`duplicate` when the `(provider, requestId)` key is already held by a row with
+   * the same figures, `conflict` when it is held with different figures). A non-usage event, or a payload
+   * `toLedgerRow` cannot read, produces neither (nothing to do for the former; the latter cannot happen on the
+   * live path, since the routes already validated the payload shape). Mirrors `SQLiteEventStore`'s transactional
+   * write so both stores reach the same rows and skips for the same input (see `tests/usage-ledger.test.mjs`).
+   */
+  private applyLedgerDecision(
+    event: CanonicalEvent,
+    ctx: { receivedAt: number; origin: LedgerOrigin; channel: IngestChannel; legacyContract: boolean }
+  ): void {
+    const ledgerRow = toLedgerRow(event, ctx);
+    if (ledgerRow === null) return;
+
+    const key = ledgerRequestKey(ledgerRow);
+    if (key !== null) {
+      const existingIndex = this.ledgerByRequestKey.get(key);
+      if (existingIndex !== undefined) {
+        const existing = this.ledger[existingIndex];
+        const reason: LedgerSkipReason = sameCall(existing, ledgerRow) ? 'duplicate' : 'conflict';
+        this.recordLedgerSkip(ledgerRow.eventId, reason, existing.eventId, ctx.receivedAt);
+        return;
+      }
+    }
+
+    if (this.ledger.length >= this.usageLedgerMaxRows) {
+      this.ledgerComplete = false;
+      return;
+    }
+    const row: UsageLedgerRow = { ...ledgerRow, seq: this.ledgerSeq++ };
+    const index = this.ledger.length;
+    this.ledger.push(row);
+    this.ledgerByEventId.set(row.eventId, index);
+    if (key !== null) this.ledgerByRequestKey.set(key, index);
+  }
+
+  private recordLedgerSkip(eventId: string, reason: LedgerSkipReason, keptEventId: string | null, detectedAt: number): void {
+    if (this.ledgerSkips.size + this.ledger.length >= this.usageLedgerMaxRows * 2) {
+      // Extremely defensive: skips share no hard cap of their own in the issue, but must still never grow
+      // without bound once the ledger itself is already full and reporting incomplete.
+      this.ledgerComplete = false;
+      return;
+    }
+    this.ledgerSkips.set(eventId, { reason, keptEventId, detectedAt });
+  }
+
+  async usageLedgerStatus(): Promise<UsageLedgerStatus> {
+    let live = 0;
+    let backfill = 0;
+    let legacyRows = 0;
+    let oldest: number | null = null;
+    let newest: number | null = null;
+    for (const row of this.ledger) {
+      if (row.origin === 'live') live++;
+      else backfill++;
+      if (row.legacyContract) legacyRows++;
+      if (oldest === null || row.receivedAt < oldest) oldest = row.receivedAt;
+      if (newest === null || row.receivedAt > newest) newest = row.receivedAt;
+    }
+    let duplicate = 0;
+    let conflict = 0;
+    let unparseable = 0;
+    for (const skip of this.ledgerSkips.values()) {
+      if (skip.reason === 'duplicate') duplicate++;
+      else if (skip.reason === 'conflict') conflict++;
+      else unparseable++;
+    }
+    return {
+      schemaVersion: '1.0',
+      storage: 'memory',
+      rows: this.ledger.length,
+      rowsByOrigin: { live, backfill },
+      legacyRows,
+      skips: { duplicate, conflict, unparseable },
+      oldestReceivedAt: oldest,
+      newestReceivedAt: newest,
+      complete: this.ledgerComplete,
+      migration: null,
+    };
   }
 
   /** One warning, the first time the dedup index crosses the documented memory-cost threshold. */
@@ -761,13 +952,18 @@ export class MemoryEventStore implements EventStore {
     }
   }
 
-  async append(event: CanonicalEvent): Promise<AppendResult> {
-    return this.classifyAndApply(event);
+  async append(event: CanonicalEvent, options?: AppendOptions): Promise<AppendResult> {
+    return this.classifyAndApply(event, false, options?.receivedAt, options?.channel ?? 'events');
   }
 
-  async appendBatch(events: CanonicalEvent[], options?: { atomic?: boolean; ignoreTimestamp?: boolean }): Promise<AppendBatchResult> {
+  async appendBatch(
+    events: CanonicalEvent[],
+    options?: { atomic?: boolean; ignoreTimestamp?: boolean } & AppendOptions
+  ): Promise<AppendBatchResult> {
     const atomic = options?.atomic ?? false;
     const ignoreTimestamp = options?.ignoreTimestamp ?? false;
+    const receivedAt = options?.receivedAt ?? this.now();
+    const channel = options?.channel ?? 'events-batch';
 
     if (atomic) {
       // Check all conflicts before inserting any
@@ -780,10 +976,12 @@ export class MemoryEventStore implements EventStore {
             const fp = eventFingerprint(e, ignoreTimestamp);
             const stored = this.eventHashes.get(e.id);
             if (stored === undefined) {
-              return appendResult('accepted', e.id, fp);
+              return appendResult('accepted', e.id, fp, undefined, { receivedAt });
             }
             if (stored === fp) {
-              return appendResult('duplicate', e.id, fp);
+              return appendResult('duplicate', e.id, fp, undefined, {
+                receivedAt: this.originalReceivedAt.get(e.id) ?? receivedAt,
+              });
             }
             this.counters.conflicts++;
             return appendResult('conflict', e.id, fp, stored);
@@ -793,10 +991,10 @@ export class MemoryEventStore implements EventStore {
       }
       // All checks passed, now insert. Each item evicts through the ring as it is pushed, in order, so a batch
       // larger than maxEvents still retains exactly the newest maxEvents events (issue #53).
-      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp));
+      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp, receivedAt, channel));
       return summarizeBatch(results, events);
     } else {
-      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp));
+      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp, receivedAt, channel));
       return summarizeBatch(results, events);
     }
   }
@@ -852,7 +1050,7 @@ export class MemoryEventStore implements EventStore {
    * `beforeId`, walks the ring newest to oldest and stops as soon as `limit` entries are collected, instead of
    * copying the whole window per call (issue #53).
    */
-  async list(options: ListEventsOptions = {}): Promise<CanonicalEvent[]> {
+  async list(options: ListEventsOptions = {}): Promise<EventWithReceivedAt[]> {
     const limit = options.limit && options.limit > 0 ? options.limit : 100;
     const matches = (event: CanonicalEvent): boolean => {
       if (options.runtimeId && event.runtimeId !== options.runtimeId) return false;
@@ -864,13 +1062,13 @@ export class MemoryEventStore implements EventStore {
     };
 
     if (!options.beforeId) {
-      const result: CanonicalEvent[] = [];
-      this.window.forEachNewestToOldest(({ event }) => {
+      const result: EventWithReceivedAt[] = [];
+      this.window.forEachNewestToOldest(({ event, receivedAt }) => {
         if (!matches(event)) return true;
         // Mirrors `result.slice(0, index)` on the equivalent array implementation: everything from the cursor
         // onward (older, in this walk order) is excluded, whether or not `limit` was reached yet.
         if (options.afterId && event.id === options.afterId) return false;
-        result.push(event);
+        result.push({ ...event, receivedAt });
         return result.length < limit;
       });
       return result;
@@ -880,16 +1078,16 @@ export class MemoryEventStore implements EventStore {
     // convention as `afterId`. Whether the cursor turns up at all is only known once the walk (down to any
     // `afterId` cut) finishes, so the matched events are collected first and sliced relative to the cursor
     // afterward, rather than exited early the way the no-`beforeId` branch above does.
-    const matched: CanonicalEvent[] = [];
+    const matched: EventWithReceivedAt[] = [];
     let cursorIndex = -1;
-    this.window.forEachNewestToOldest(({ event }) => {
+    this.window.forEachNewestToOldest(({ event, receivedAt }) => {
       if (!matches(event)) return true;
       if (options.afterId && event.id === options.afterId) return false;
       if (event.id === options.beforeId) {
         cursorIndex = matched.length;
         return true;
       }
-      matched.push(event);
+      matched.push({ ...event, receivedAt });
       return true;
     });
     const start = cursorIndex === -1 ? 0 : cursorIndex;
@@ -1214,6 +1412,19 @@ export class SQLiteEventStore implements EventStore {
     };
     if (earliestRow.earliest !== null) this.totalsSinceCache = earliestRow.earliest;
 
+    // Usage ledger startup catch-up (issue #65): runs on every open, not only the first time migration 6 itself
+    // applies. Normally a no-op (its own WHERE clause only selects usage/failed rows missing both a ledger row
+    // and a skip row); it fills any gap left by an older server that wrote events while the ledger table existed
+    // but was not kept up to date, for example after a downgrade to 0.3.x and back.
+    const baselineRow = this.db.prepare('SELECT applied_at FROM schema_migrations WHERE version = 1').get() as
+      | { applied_at: number }
+      | undefined;
+    runUsageLedgerBackfill(
+      this.db,
+      { origin: 'backfill', legacyContractCutoff: baselineRow ? Number(baselineRow.applied_at) : null },
+      { log: (message) => this.rebuildOptions.logger.info(message) }
+    );
+
     // Kicked off here (not only from `server/index.ts`) so a store built directly, as many tests do, never needs
     // an explicit `init()` call: for a file with no backlog beyond one page, every row is applied synchronously
     // below, before this constructor returns (see `init()`).
@@ -1361,7 +1572,8 @@ export class SQLiteEventStore implements EventStore {
     fingerprint: string,
     requestKey: { provider: string; requestId: string } | null,
     duplicateOf: string | null,
-    matchesOriginal: boolean | null
+    matchesOriginal: boolean | null,
+    receivedAt: number
   ): EventSeq {
     const seq = this.nextSeq++;
     insertStmt.run(
@@ -1376,7 +1588,7 @@ export class SQLiteEventStore implements EventStore {
       event.summary,
       JSON.stringify(event.payload),
       JSON.stringify(event),
-      Date.now(),
+      receivedAt,
       fingerprint,
       requestKey ? requestKey.provider : null,
       requestKey ? requestKey.requestId : null,
@@ -1398,40 +1610,66 @@ export class SQLiteEventStore implements EventStore {
   }
 
   private prepareLookup(): any {
-    return this.db.prepare('SELECT content_hash, duplicate_of FROM events WHERE id = ?');
+    return this.db.prepare('SELECT content_hash, duplicate_of, created_at FROM events WHERE id = ?');
+  }
+
+  /** The server receive time already stored for `id`, or `null` when no row holds that id. */
+  private lookupCreatedAt(id: string): number | null {
+    const row = this.db.prepare('SELECT created_at FROM events WHERE id = ?').get(id) as { created_at: number } | undefined;
+    return row ? Number(row.created_at) : null;
   }
 
   /**
    * The original event id already stored under this `(provider, requestId)` key, with the usage-relevant fields
-   * needed for the fingerprint comparison. Kept as its own small method so a test can override it, for example to
-   * force the UNIQUE-constraint race path deterministically (`node:sqlite` is synchronous, so two instances in
-   * one process cannot truly interleave).
+   * needed for the fingerprint comparison and its server receive time (issue #65: a duplicate echoes the
+   * original's acceptance time, never the retry's). Kept as its own small method so a test can override it, for
+   * example to force the UNIQUE-constraint race path deterministically (`node:sqlite` is synchronous, so two
+   * instances in one process cannot truly interleave).
    */
-  private lookupRequestKey(provider: string, requestId: string): { id: string; fields: UsageFingerprintFields } | null {
+  private lookupRequestKey(
+    provider: string,
+    requestId: string
+  ): { id: string; fields: UsageFingerprintFields; receivedAt: number } | null {
     const row = this.db
-      .prepare('SELECT id, type, payload FROM events WHERE request_provider = ? AND request_id = ? AND duplicate_of IS NULL LIMIT 1')
-      .get(provider, requestId) as { id: string; type: string; payload: string } | undefined;
+      .prepare(
+        'SELECT id, type, payload, created_at FROM events WHERE request_provider = ? AND request_id = ? AND duplicate_of IS NULL LIMIT 1'
+      )
+      .get(provider, requestId) as { id: string; type: string; payload: string; created_at: number } | undefined;
     if (!row) return null;
     const payload = JSON.parse(row.payload || '{}');
-    return { id: row.id, fields: extractUsageFingerprintFields({ type: row.type, payload } as CanonicalEvent) };
+    return {
+      id: row.id,
+      fields: extractUsageFingerprintFields({ type: row.type, payload } as CanonicalEvent),
+      receivedAt: Number(row.created_at),
+    };
   }
 
   /** Decides the outcome for an id that is already stored. A NULL hash cannot be compared: duplicate, never conflict. */
   private classifyStored(
     event: CanonicalEvent,
     fingerprint: string,
-    row: { content_hash: string | null; duplicate_of: string | null }
+    row: { content_hash: string | null; duplicate_of: string | null; created_at: number }
   ): PendingOutcome {
     const stored = row.content_hash;
     // A row whose own id is itself a duplicate reference resolves to its original; resending its id is still an
-    // event_id duplicate (its own content is remembered too), it just points one hop further.
+    // event_id duplicate (its own content is remembered too), it just points one hop further. The original's own
+    // receive time (not this row's) is what a duplicate response must echo.
     const originalId = row.duplicate_of ?? event.id;
     const submittedId = row.duplicate_of ? event.id : undefined;
+    const originalReceivedAt = row.duplicate_of ? (this.lookupCreatedAt(originalId) ?? Number(row.created_at)) : Number(row.created_at);
     if (stored === null || stored === undefined) {
-      return { result: appendResult('duplicate', originalId, fingerprint, undefined, { submittedId }), event, legacyUnverified: true };
+      return {
+        result: appendResult('duplicate', originalId, fingerprint, undefined, { submittedId, receivedAt: originalReceivedAt }),
+        event,
+        legacyUnverified: true,
+      };
     }
     if (stored === fingerprint) {
-      return { result: appendResult('duplicate', originalId, fingerprint, undefined, { submittedId }), event, legacyUnverified: false };
+      return {
+        result: appendResult('duplicate', originalId, fingerprint, undefined, { submittedId, receivedAt: originalReceivedAt }),
+        event,
+        legacyUnverified: false,
+      };
     }
     return { result: appendResult('conflict', event.id, fingerprint, stored), event, legacyUnverified: false };
   }
@@ -1443,9 +1681,18 @@ export class SQLiteEventStore implements EventStore {
    * insert still hits either UNIQUE violation (for example when two processes share one file), the row is read
    * again and classified instead of surfacing an error.
    */
-  private classifyAndInsert(lookupStmt: any, insertStmt: any, event: CanonicalEvent, ignoreTimestamp = false): PendingOutcome {
+  private classifyAndInsert(
+    lookupStmt: any,
+    insertStmt: any,
+    event: CanonicalEvent,
+    ignoreTimestamp = false,
+    receivedAt: number = Date.now(),
+    channel: IngestChannel = 'events'
+  ): PendingOutcome {
     const fingerprint = eventFingerprint(event, ignoreTimestamp);
-    const existing = lookupStmt.get(event.id) as { content_hash: string | null; duplicate_of: string | null } | undefined;
+    const existing = lookupStmt.get(event.id) as
+      | { content_hash: string | null; duplicate_of: string | null; created_at: number }
+      | undefined;
     if (existing) return this.classifyStored(event, fingerprint, existing);
 
     const requestKey = requestKeyFor(event);
@@ -1453,10 +1700,12 @@ export class SQLiteEventStore implements EventStore {
     if (requestKey && original) {
       const matchesOriginal = fingerprintFieldsMatch(original.fields, extractUsageFingerprintFields(event));
       try {
-        this.insertEvent(insertStmt, event, fingerprint, requestKey, original.id, matchesOriginal);
+        this.insertEvent(insertStmt, event, fingerprint, requestKey, original.id, matchesOriginal, receivedAt);
       } catch (error) {
         if (!isUniqueIdViolation(error)) throw error;
-        const raced = lookupStmt.get(event.id) as { content_hash: string | null; duplicate_of: string | null } | undefined;
+        const raced = lookupStmt.get(event.id) as
+          | { content_hash: string | null; duplicate_of: string | null; created_at: number }
+          | undefined;
         if (!raced) throw error;
         return this.classifyStored(event, fingerprint, raced);
       }
@@ -1465,6 +1714,7 @@ export class SQLiteEventStore implements EventStore {
           duplicateReason: 'request_id',
           submittedId: event.id,
           matchesOriginal,
+          receivedAt: original.receivedAt,
         }),
         event,
         legacyUnverified: false,
@@ -1476,7 +1726,7 @@ export class SQLiteEventStore implements EventStore {
 
     let seq: EventSeq;
     try {
-      seq = this.insertEvent(insertStmt, event, fingerprint, requestKey, null, null);
+      seq = this.insertEvent(insertStmt, event, fingerprint, requestKey, null, null, receivedAt);
     } catch (error) {
       if (requestKey && isUniqueRequestKeyViolation(error)) {
         // Lost a race with another writer that claimed this request key first. Defensive only: several processes
@@ -1486,12 +1736,13 @@ export class SQLiteEventStore implements EventStore {
         const raced = this.lookupRequestKey(requestKey.provider, requestKey.requestId);
         if (raced) {
           const matchesOriginal = fingerprintFieldsMatch(raced.fields, extractUsageFingerprintFields(event));
-          this.insertEvent(insertStmt, event, fingerprint, requestKey, raced.id, matchesOriginal);
+          this.insertEvent(insertStmt, event, fingerprint, requestKey, raced.id, matchesOriginal, receivedAt);
           return {
             result: appendResult('duplicate', raced.id, fingerprint, undefined, {
               duplicateReason: 'request_id',
               submittedId: event.id,
               matchesOriginal,
+              receivedAt: raced.receivedAt,
             }),
             event,
             legacyUnverified: false,
@@ -1502,11 +1753,133 @@ export class SQLiteEventStore implements EventStore {
         }
       }
       if (!isUniqueIdViolation(error)) throw error;
-      const raced = lookupStmt.get(event.id) as { content_hash: string | null; duplicate_of: string | null } | undefined;
+      const raced = lookupStmt.get(event.id) as
+        | { content_hash: string | null; duplicate_of: string | null; created_at: number }
+        | undefined;
       if (!raced) throw error;
       return this.classifyStored(event, fingerprint, raced);
     }
-    return { result: appendResult('accepted', event.id, fingerprint, undefined, { seq }), event, legacyUnverified: false };
+    // A newly accepted usage event gets exactly one ledger decision in this same insert step (issue #65), so it
+    // is covered by whichever transaction the caller (`append`/`appendBatch`) already opened around this call.
+    this.applyLedgerDecision(event, { receivedAt, origin: 'live', channel, legacyContract: false });
+    return { result: appendResult('accepted', event.id, fingerprint, undefined, { seq, receivedAt }), event, legacyUnverified: false };
+  }
+
+  /** SQLite half of the ledger write (issue #65). See `MemoryEventStore.applyLedgerDecision` for the mirrored
+   * memory-mode logic; both must reach the same rows and skips for the same input sequence
+   * (`tests/usage-ledger.test.mjs`, "store parity"). */
+  private applyLedgerDecision(
+    event: CanonicalEvent,
+    ctx: { receivedAt: number; origin: LedgerOrigin; channel: IngestChannel; legacyContract: boolean }
+  ): void {
+    const ledgerRow = toLedgerRow(event, ctx);
+    if (ledgerRow === null) return;
+
+    const key = ledgerRequestKey(ledgerRow);
+    if (key !== null) {
+      const existingRaw = this.db
+        .prepare('SELECT * FROM usage_ledger WHERE provider = ? AND request_id = ? LIMIT 1')
+        .get(ledgerRow.provider, ledgerRow.requestId);
+      if (existingRaw) {
+        const existing = dbRowToLedgerRowInput(existingRaw);
+        const reason: LedgerSkipReason = sameCall(existing, ledgerRow) ? 'duplicate' : 'conflict';
+        this.db
+          .prepare(
+            'INSERT INTO usage_ledger_skips (event_id, reason, kept_event_id, detected_at, origin) VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id) DO NOTHING'
+          )
+          .run(ledgerRow.eventId, reason, existing.eventId, ctx.receivedAt, ctx.origin);
+        return;
+      }
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO usage_ledger (
+          event_id, event_type, request_id, received_at, occurred_at, origin, legacy_contract, ingest_channel,
+          runtime_id, session_id, agent_id, task_id, provider, model, input_tokens, output_tokens,
+          cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_source, latency_ms,
+          status, error_kind, trace_id, parent_id, tool_call_id, meeting_id, user_id, tags
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id) DO NOTHING`
+      )
+      .run(
+        ledgerRow.eventId,
+        ledgerRow.eventType,
+        ledgerRow.requestId,
+        ledgerRow.receivedAt,
+        ledgerRow.occurredAt,
+        ledgerRow.origin,
+        ledgerRow.legacyContract ? 1 : 0,
+        ledgerRow.ingestChannel,
+        ledgerRow.runtimeId,
+        ledgerRow.sessionId,
+        ledgerRow.agentId,
+        ledgerRow.taskId,
+        ledgerRow.provider,
+        ledgerRow.model,
+        ledgerRow.inputTokens,
+        ledgerRow.outputTokens,
+        ledgerRow.cacheReadTokens,
+        ledgerRow.cacheWriteTokens,
+        ledgerRow.reasoningTokens,
+        ledgerRow.cost,
+        ledgerRow.currency,
+        ledgerRow.costSource,
+        ledgerRow.latencyMs,
+        ledgerRow.status,
+        ledgerRow.errorKind,
+        ledgerRow.traceId,
+        ledgerRow.parentId,
+        ledgerRow.toolCallId,
+        ledgerRow.meetingId,
+        ledgerRow.userId,
+        JSON.stringify(ledgerRow.tags)
+      );
+  }
+
+  async usageLedgerStatus(): Promise<UsageLedgerStatus> {
+    const counts = this.db
+      .prepare(
+        `SELECT COUNT(*) AS rows,
+                SUM(CASE WHEN origin = 'live' THEN 1 ELSE 0 END) AS live,
+                SUM(CASE WHEN origin = 'backfill' THEN 1 ELSE 0 END) AS backfill,
+                SUM(CASE WHEN legacy_contract = 1 THEN 1 ELSE 0 END) AS legacyRows,
+                MIN(received_at) AS oldest,
+                MAX(received_at) AS newest
+         FROM usage_ledger`
+      )
+      .get() as { rows: number; live: number | null; backfill: number | null; legacyRows: number | null; oldest: number | null; newest: number | null };
+    const skipCounts = this.db
+      .prepare(
+        `SELECT
+          SUM(CASE WHEN reason = 'duplicate' THEN 1 ELSE 0 END) AS duplicate,
+          SUM(CASE WHEN reason = 'conflict' THEN 1 ELSE 0 END) AS conflict,
+          SUM(CASE WHEN reason = 'unparseable' THEN 1 ELSE 0 END) AS unparseable
+         FROM usage_ledger_skips`
+      )
+      .get() as { duplicate: number | null; conflict: number | null; unparseable: number | null };
+    const migrationRow = this.db
+      .prepare("SELECT version, applied_at FROM schema_migrations WHERE name = 'usage-ledger' LIMIT 1")
+      .get() as { version: number; applied_at: number } | undefined;
+
+    return {
+      schemaVersion: '1.0',
+      storage: 'sqlite',
+      rows: counts.rows,
+      rowsByOrigin: { live: counts.live ?? 0, backfill: counts.backfill ?? 0 },
+      legacyRows: counts.legacyRows ?? 0,
+      skips: {
+        duplicate: skipCounts.duplicate ?? 0,
+        conflict: skipCounts.conflict ?? 0,
+        unparseable: skipCounts.unparseable ?? 0,
+      },
+      oldestReceivedAt: counts.oldest === null || counts.oldest === undefined ? null : Number(counts.oldest),
+      newestReceivedAt: counts.newest === null || counts.newest === undefined ? null : Number(counts.newest),
+      complete: true,
+      migration: migrationRow
+        ? { id: `${String(migrationRow.version).padStart(4, '0')}_usage_ledger`, appliedAt: Number(migrationRow.applied_at) }
+        : null,
+    };
   }
 
   /** Counters and log lines, applied only once the outcome is final (after the commit for a batch). */
@@ -1530,34 +1903,34 @@ export class SQLiteEventStore implements EventStore {
     }
   }
 
+  /** See `server/eventRow.ts`: shared with the usage ledger backfill (issue #65) so both read the same shape. */
   private rowToEvent(r: any): CanonicalEvent {
-    if (typeof r.event_json === 'string' && r.event_json.length > 0) {
-      try {
-        return JSON.parse(r.event_json) as CanonicalEvent;
-      } catch {
-        // Fall back to the column mapping below
-      }
-    }
-
-    // Rows written before event_json existed: rebuild the event from the indexed columns.
-    return {
-      schemaVersion: '1.0' as const,
-      id: r.id,
-      type: r.type,
-      timestamp: Number(r.timestamp),
-      runtimeId: r.runtime_id ?? undefined,
-      sessionId: r.session_id ?? undefined,
-      source: r.agent_id ? `agent:${r.agent_id}` : (r.runtime_id ? `runtime:${r.runtime_id}` : 'external'),
-      agentId: r.agent_id ?? undefined,
-      taskId: r.task_id ?? undefined,
-      severity: r.severity,
-      summary: r.summary,
-      payload: JSON.parse(r.payload || '{}'),
-    };
+    return rowToEvent(r);
   }
 
-  async append(event: CanonicalEvent): Promise<AppendResult> {
-    const pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event);
+  /**
+   * Wrapped in its own transaction since issue #65: a new event's row and its ledger decision (`toLedgerRow`,
+   * inside `classifyAndInsert`) must both land or both roll back, so an event can never exist without a ledger
+   * row or a recorded skip. A duplicate or conflict never reaches `classifyAndInsert`'s insert step, so wrapping
+   * every call (not only the accepted path) is a minor, constant cost in exchange for never special-casing which
+   * outcome needed the transaction.
+   */
+  async append(event: CanonicalEvent, options?: AppendOptions): Promise<AppendResult> {
+    const receivedAt = options?.receivedAt ?? Date.now();
+    const channel = options?.channel ?? 'events';
+    let pending: PendingOutcome;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event, false, receivedAt, channel);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // The transaction may already have been rolled back by SQLite.
+      }
+      throw error;
+    }
     this.recordOutcome(pending);
     if (pending.result.outcome === 'accepted') {
       this.eventsCountCache++;
@@ -1575,9 +1948,16 @@ export class SQLiteEventStore implements EventStore {
    * like repeats across requests. Memory side effects run after the commit, with the accepted events only.
    * When atomic is true and a conflict is found, the entire batch is rejected without inserting any events.
    */
-  async appendBatch(events: CanonicalEvent[], options?: { atomic?: boolean; ignoreTimestamp?: boolean }): Promise<AppendBatchResult> {
+  async appendBatch(
+    events: CanonicalEvent[],
+    options?: { atomic?: boolean; ignoreTimestamp?: boolean } & AppendOptions
+  ): Promise<AppendBatchResult> {
     const atomic = options?.atomic ?? false;
     const ignoreTimestamp = options?.ignoreTimestamp ?? false;
+    // One receive time for the whole batch (issue #65): every accepted item shares it, and it also becomes
+    // every item's `events.created_at`, so the two can never disagree.
+    const receivedAt = options?.receivedAt ?? Date.now();
+    const channel = options?.channel ?? 'events-batch';
 
     const lookupStmt = this.prepareLookup();
     const insertStmt = this.prepareInsert();
@@ -1595,10 +1975,10 @@ export class SQLiteEventStore implements EventStore {
             const fp = eventFingerprint(e, ignoreTimestamp);
             const r = lookupStmt.get(e.id) as { fingerprint: string } | undefined;
             if (!r) {
-              return appendResult('accepted', e.id, fp);
+              return appendResult('accepted', e.id, fp, undefined, { receivedAt });
             }
             if (r.fingerprint === fp) {
-              return appendResult('duplicate', e.id, fp);
+              return appendResult('duplicate', e.id, fp, undefined, { receivedAt: this.lookupCreatedAt(e.id) ?? receivedAt });
             }
             this.counters.conflicts++;
             return appendResult('conflict', e.id, fp, r.fingerprint);
@@ -1612,7 +1992,7 @@ export class SQLiteEventStore implements EventStore {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const event of events) {
-        pending.push(this.classifyAndInsert(lookupStmt, insertStmt, event, ignoreTimestamp));
+        pending.push(this.classifyAndInsert(lookupStmt, insertStmt, event, ignoreTimestamp, receivedAt, channel));
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -1645,7 +2025,7 @@ export class SQLiteEventStore implements EventStore {
     return !!stmt.get(eventId);
   }
 
-  async list(options: ListEventsOptions = {}): Promise<CanonicalEvent[]> {
+  async list(options: ListEventsOptions = {}): Promise<EventWithReceivedAt[]> {
     // A duplicate reference is never returned here (issue #48): only originals and events with no request key.
     const conditions: string[] = ['duplicate_of IS NULL'];
     const params: any[] = [];
@@ -1706,7 +2086,9 @@ export class SQLiteEventStore implements EventStore {
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as any[];
 
-    return rows.map((r) => this.rowToEvent(r));
+    // `receivedAt` (issue #65): the server clock already stored in `created_at`, finally returned. `GET
+    // /api/v1/snapshot` and SSE frames are unaffected on purpose; they build their own event lists separately.
+    return rows.map((r) => ({ ...this.rowToEvent(r), receivedAt: Number(r.created_at) }));
   }
 
   /**
@@ -2118,17 +2500,27 @@ export function parseTelemetryMaxPoints(raw: string | undefined): number {
   return Number.isInteger(value) && value >= 1 ? value : DEFAULT_TELEMETRY_MAX_POINTS;
 }
 
+/** Parses `AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS` (issue #65). Same leniency as `parseTelemetryMaxPoints`: unset,
+ * empty or invalid falls back to the default instead of stopping the server. */
+export function parseUsageLedgerMaxRows(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_USAGE_LEDGER_MAX_ROWS;
+  const value = Number(raw.trim());
+  return Number.isInteger(value) && value >= 1 ? value : DEFAULT_USAGE_LEDGER_MAX_ROWS;
+}
+
 export function createEventStore(): EventStore {
   const storageType = (process.env.AGENT_VIEWER_STORAGE || 'memory').toLowerCase();
   const rawMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
   const maxEvents = parseMaxEvents(rawMaxEvents);
   const maxEventsWasSet = rawMaxEvents !== undefined && rawMaxEvents.trim() !== '';
   const telemetryMaxPoints = parseTelemetryMaxPoints(process.env.AGENT_VIEWER_TELEMETRY_MAX_POINTS);
+  const usageLedgerMaxRows = parseUsageLedgerMaxRows(process.env.AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS);
 
   if (storageType === 'sqlite') {
     // Since issue #52, SQLite mode has no capped in-memory window to limit: every event is persisted and the
     // startup rebuild replays the whole table. AGENT_VIEWER_MAX_EVENTS only applies to the memory store.
-    // AGENT_VIEWER_TELEMETRY_MAX_POINTS has the same scope restriction for the same reason (issue #73).
+    // AGENT_VIEWER_TELEMETRY_MAX_POINTS and AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS have the same scope restriction,
+    // for the same reason (issues #73 and #65): the database keeps every row and every ledger entry.
     if (maxEventsWasSet) {
       console.log(`[agent-viewer] AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode; every event is stored and never capped.`);
     }
@@ -2136,5 +2528,5 @@ export function createEventStore(): EventStore {
     const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
     return new SQLiteEventStore(dbPath, { backup });
   }
-  return new MemoryEventStore({ maxEvents, telemetryMaxPoints });
+  return new MemoryEventStore({ maxEvents, telemetryMaxPoints, usageLedgerMaxRows });
 }

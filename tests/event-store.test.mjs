@@ -240,7 +240,10 @@ test('SQLiteEventStore: persists the full canonical event so it round-trips iden
     // A fresh instance reads from disk only, not from the in-memory side store.
     store = new SQLiteEventStore(file);
     const [listed] = await store.list({ runtimeId: 'rt_round' });
-    assert.deepStrictEqual(listed, JSON.parse(JSON.stringify(event)));
+    // list() now carries receivedAt too (issue #65): checked separately, then the rest must round-trip exactly.
+    const { receivedAt, ...rest } = listed;
+    assert.equal(typeof receivedAt, 'number');
+    assert.deepStrictEqual(rest, JSON.parse(JSON.stringify(event)));
     assert.equal(listed.source, 'runtime:rt_round');
   } finally {
     await store.close();
@@ -700,8 +703,10 @@ for (const [label, create] of STORE_FACTORIES) {
         seq: first.seq,
         duplicate: false,
         accepted: true,
+        receivedAt: first.receivedAt,
       });
       assert.equal(typeof first.seq, 'number', 'an accepted event gets a seq (issue #54)');
+      assert.equal(typeof first.receivedAt, 'number', 'an accepted event gets a server receive time (issue #65)');
 
       const retry = await store.append(JSON.parse(JSON.stringify(original)));
       assert.deepEqual(retry, {
@@ -712,6 +717,7 @@ for (const [label, create] of STORE_FACTORIES) {
         duplicate: true,
         accepted: true,
         duplicateReason: 'event_id',
+        receivedAt: first.receivedAt,
       });
 
       const before = await store.snapshot();
@@ -736,7 +742,8 @@ for (const [label, create] of STORE_FACTORIES) {
       assert.deepStrictEqual({ ...after, timestamp: 0 }, { ...before, timestamp: 0 }, 'totals unchanged after conflicts');
       const listed = await store.list({ limit: 10 });
       assert.equal(listed.length, 1);
-      assert.deepStrictEqual(JSON.parse(JSON.stringify(listed[0])), JSON.parse(JSON.stringify(original)));
+      const { receivedAt: _listedReceivedAt, ...listedRest } = JSON.parse(JSON.stringify(listed[0]));
+      assert.deepStrictEqual(listedRest, JSON.parse(JSON.stringify(original)));
       assert.deepEqual(store.ingestionCounters(), { conflicts: variants.length, legacyUnverifiedDuplicates: 0 });
 
       const conflictLines = warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('conflicting duplicate'));
@@ -914,6 +921,7 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
       'request-key-dedup',
       'events-seq',
       'telemetry-metrics',
+      'usage-ledger',
     ]);
     const db = new DatabaseSync(file);
     const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();
@@ -933,7 +941,8 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
     assert.equal(conflict.storedFingerprint, rows[0].content_hash);
     assert.deepEqual(store.ingestionCounters(), { conflicts: 1, legacyUnverifiedDuplicates: 0 });
     const listed = (await store.list({ limit: 100 })).find(({ id }) => id === stored.id);
-    assert.deepStrictEqual(listed, stored, 'the stored row is unchanged');
+    const { receivedAt: _listedReceivedAt, ...listedRest } = listed;
+    assert.deepStrictEqual(listedRest, stored, 'the stored row is unchanged');
   } finally {
     await store.close();
     fs.rmSync(dir, { recursive: true, force: true });

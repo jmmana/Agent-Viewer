@@ -5,6 +5,7 @@ import { contentHash } from './migrations/0002-content-hash';
 import { requestKeyDedup } from './migrations/0003-request-key-dedup';
 import { eventsSeq } from './migrations/0004-events-seq';
 import { telemetryMetrics } from './migrations/0005-telemetry-metrics';
+import { usageLedger } from './migrations/0006-usage-ledger';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -15,7 +16,7 @@ export interface Migration {
   up(db: DatabaseSync): void;
 }
 
-export const MIGRATIONS: readonly Migration[] = [baseline, contentHash, requestKeyDedup, eventsSeq, telemetryMetrics];
+export const MIGRATIONS: readonly Migration[] = [baseline, contentHash, requestKeyDedup, eventsSeq, telemetryMetrics, usageLedger];
 
 export interface MigrationOptions {
   appVersion: string;

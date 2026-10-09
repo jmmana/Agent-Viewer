@@ -5,3 +5,10 @@
  * constant instead of hard-coding the path a second time.
  */
 export const OTLP_LOGS_PATH = '/v1/logs';
+
+/**
+ * Same role as `OTLP_LOGS_PATH`, for OTLP metrics (issue #73): Claude Code's OTLP exporter posts to
+ * `OTEL_EXPORTER_OTLP_ENDPOINT` + this path when `OTEL_METRICS_EXPORTER=otlp` is set. Wiring that env var into
+ * `install claude-code --telemetry` is a follow-up to issue #60, not this constant's concern.
+ */
+export const OTLP_METRICS_PATH = '/v1/metrics';

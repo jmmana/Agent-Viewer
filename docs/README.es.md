@@ -446,7 +446,8 @@ Madurez honesta, para que sepas qué te llevas:
 |---|---|---|
 | **API REST, lotes, SSE** | [`server/`](../server/index.ts) | ✅ **Estable.** Cubierta por pruebas de integración, de SSE y de seguridad del webhook en CI. |
 | **Claude Code** | [`agent-viewer install claude-code`](claude-code.md) | ✅ **Estable.** Hooks oficiales de Claude Code: sesiones, subagentes como agentes propios, herramientas y esperas. Pruebas con fixtures de cada tipo de hook demuestran que no salen argumentos ni contenido. |
-| **Tokens de Claude Code (logs OTLP)** | [`agent-viewer install claude-code --telemetry`](claude-code.md#tokens-and-cost) | ✅ **Estable.** `POST /v1/logs` recibe la exportación OpenTelemetry nativa de Claude Code y convierte `claude_code.api_request`/`claude_code.api_error` en `llm.usage`/`llm.failed` sobre el agente principal. Opcional, desactivado por defecto. Referencia (en inglés): [otlp.md](otlp.md). |
+| **Tokens de Claude Code (logs OTLP)** | [`agent-viewer install claude-code --telemetry`](claude-code.md#tokens-and-cost) | ✅ **Estable.** `POST /v1/logs` recibe la exportación OpenTelemetry nativa de Claude Code (`http/json` y `http/protobuf`) y convierte `claude_code.api_request`/`claude_code.api_error` en `llm.usage`/`llm.failed` sobre el agente principal. Opcional, desactivado por defecto. Referencia (en inglés): [otlp.md](otlp.md). |
+| **Métricas de Claude Code (métricas OTLP)** | `POST /v1/metrics` | ✅ **Ingesta estable.** Guarda `claude_code.token.usage`/`claude_code.cost.usage` como evidencia propia, separada a propósito del ledger, el snapshot, SSE y cualquier agregado: es una segunda medición independiente del mismo consumo, pensada para una futura verificación cruzada. El endpoint `GET /api/v1/usage/reconciliation` que compara ambas fuentes todavía no existe (necesita un accesor al ledger de consumo que sigue en desarrollo). Referencia (en inglés): [otlp.md](otlp.md#otlp-metrics-post-v1metrics). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](cli.md) | ✅ **Estable.** Servidor y oficina en un comando, y `send` para eventos rápidos. Prueba de punta a punta en CI. |
 | **Webhook genérico** | `POST /api/v1/webhooks/generic` | ✅ **Estable.** Cuerpo plano, firma HMAC-SHA256 opcional con ventana anti repetición de 5 minutos. |
 | **SDK de Python** | [`sdk/python/`](../sdk/python/agent_viewer.py) | ✅ **Estable.** Solo biblioteca estándar, probado contra un servidor real en CI. `pip install agent-viewer`. |
@@ -829,6 +830,8 @@ Los valores por defecto están pensados para desarrollo local. Antes de exponer 
 
 Agent Viewer no necesita claves de proveedores de modelos: las cifras de consumo las reporta tu runtime. Reporta vulnerabilidades en privado con [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) o en `jmmana@gmail.com`, nunca en un issue público. Política completa: [SECURITY.md](../.github/SECURITY.md) (en inglés).
 
+`POST /v1/logs` y `POST /v1/metrics` respetan `AGENT_VIEWER_API_TOKEN` igual que `/api/v1` (abierto si no está definido, con la misma advertencia al iniciar). El receptor de métricas solo guarda una lista explícita de atributos permitidos (id de sesión con hash, `model`, `type`, `service.name`/`service.version`); `user.email`, `user.account_uuid`, `organization.id` y el `session.id` sin hash nunca se guardan. Su clave de serie interna es un `HMAC-SHA256` con clave (secreto aleatorio, persistido en modo SQLite), no un hash simple, para que un atributo de baja entropía nunca pueda recuperarse de ella por fuerza bruta. Referencia completa (en inglés): [otlp.md](otlp.md).
+
 ---
 
 ## 🧭 Hoja de ruta
@@ -837,6 +840,7 @@ Ya incluido en la [0.2.0](../CHANGELOG.md): la librería integrable, los modos p
 
 Planeado, todavía no disponible:
 
+- [ ] `GET /api/v1/usage/reconciliation`: comparar las métricas OTLP guardadas por `POST /v1/metrics` contra el ledger de consumo, cuando exista un accesor al ledger con la hora de recepción del servidor.
 - [ ] Importar trazas OTLP (OpenTelemetry).
 - [ ] Más adaptadores, empaquetados y probados contra los frameworks reales.
 - [ ] Un servidor MCP, para que los agentes reporten directamente a la oficina.

@@ -773,7 +773,13 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
   fs.copyFileSync(path.join(sqliteFixtures, 'agent-viewer-0.2.1.db'), file);
   const store = new SQLiteEventStore(file, { backup: 'off' });
   try {
-    assert.deepEqual(store.migration.applied.map(({ name }) => name), ['baseline', 'content-hash', 'request-key-dedup', 'events-seq']);
+    assert.deepEqual(store.migration.applied.map(({ name }) => name), [
+      'baseline',
+      'content-hash',
+      'request-key-dedup',
+      'events-seq',
+      'telemetry-metrics',
+    ]);
     const db = new DatabaseSync(file);
     const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();
     db.close();
@@ -1793,6 +1799,201 @@ test('SQLiteEventStore: resolveCursor, headSeq, countBetween and listBetween nev
     assert.equal(await store.countBetween(originalResult.seq, marker.seq), 1);
   } finally {
     await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -------------------------------------------------------------
+// Telemetry (issue #73): appendTelemetryPoints, listTelemetryPoints, telemetryStats, getTelemetryHmacSecret.
+// Both stores must behave the same way for idempotency and queries; only the capacity cap is memory-only, and
+// only persistence across a restart is SQLite-only.
+// -------------------------------------------------------------
+
+function telemetryPoint(overrides) {
+  return {
+    receivedAt: 1700000000000,
+    metricName: 'claude_code.token.usage',
+    metricKind: 'tokens',
+    tokenType: 'input',
+    unit: 'tokens',
+    currency: null,
+    temporality: 'delta',
+    seriesKey: 'series-1',
+    sessionId: 'claude-code-aaaaaaaaaaaa',
+    runtimeId: 'claude-code',
+    model: 'claude-sonnet-4-5',
+    serviceName: 'claude-code',
+    serviceVersion: null,
+    startTimeUnixNano: '1000000000000000000',
+    timeUnixNano: '1000000000000000000',
+    timeMs: 1000000000000,
+    value: 100,
+    wireFormat: 'json',
+    ...overrides,
+  };
+}
+
+for (const [label, makeStore] of [
+  ['MemoryEventStore', () => ({ store: new MemoryEventStore(50), cleanup: async () => {} })],
+  [
+    'SQLiteEventStore',
+    () => {
+      const { dir, file } = tempDbPath('telemetry');
+      return { store: new SQLiteEventStore(file), cleanup: async () => fs.rmSync(dir, { recursive: true, force: true }) };
+    },
+  ],
+]) {
+  test(`${label}: appendTelemetryPoints accepts new points, dedupes identical retries, and reports conflicts`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const first = await store.appendTelemetryPoints([telemetryPoint({ value: 10 })]);
+      assert.deepEqual(first, { accepted: 1, duplicates: 0, conflicts: 0, rejectedCapacity: 0, messages: [] });
+
+      const retry = await store.appendTelemetryPoints([telemetryPoint({ value: 10 })]);
+      assert.deepEqual(retry, { accepted: 0, duplicates: 1, conflicts: 0, rejectedCapacity: 0, messages: [] });
+
+      const conflicting = await store.appendTelemetryPoints([telemetryPoint({ value: 999 })]);
+      assert.equal(conflicting.accepted, 0);
+      assert.equal(conflicting.conflicts, 1);
+      assert.match(conflicting.messages[0], /conflicting duplicate/);
+
+      const stored = await store.listTelemetryPoints();
+      assert.equal(stored.length, 1);
+      assert.equal(stored[0].value, 10, 'the first value is kept, a conflicting retry never overwrites it');
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: appendTelemetryPoints never touches events, the ledger or the snapshot`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const eventsBefore = await store.list({ limit: 100 });
+      const usageBefore = await store.usageSummary();
+
+      await store.appendTelemetryPoints([telemetryPoint({})]);
+
+      const eventsAfter = await store.list({ limit: 100 });
+      const usageAfter = await store.usageSummary();
+      assert.deepEqual(eventsAfter, eventsBefore);
+      assert.deepEqual(usageAfter, usageBefore);
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: listTelemetryPoints filters by sessionId and runtimeId`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.appendTelemetryPoints([
+        telemetryPoint({ seriesKey: 's1', sessionId: 'sess-a', runtimeId: 'claude-code' }),
+        telemetryPoint({ seriesKey: 's2', sessionId: 'sess-b', runtimeId: 'claude-code' }),
+        telemetryPoint({ seriesKey: 's3', sessionId: null, runtimeId: null }),
+      ]);
+      const byAnySession = await store.listTelemetryPoints();
+      assert.equal(byAnySession.length, 3);
+      const onlyA = await store.listTelemetryPoints({ sessionId: 'sess-a' });
+      assert.equal(onlyA.length, 1);
+      assert.equal(onlyA[0].sessionId, 'sess-a');
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: telemetryStats reports pointsStored and pointsWithoutSession`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.appendTelemetryPoints([
+        telemetryPoint({ seriesKey: 's1', sessionId: 'sess-a' }),
+        telemetryPoint({ seriesKey: 's2', sessionId: null }),
+      ]);
+      const stats = await store.telemetryStats();
+      assert.equal(stats.pointsStored, 2);
+      assert.equal(stats.pointsWithoutSession, 1);
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: getTelemetryHmacSecret returns the same 32-byte secret on every call`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const a = await store.getTelemetryHmacSecret();
+      const b = await store.getTelemetryHmacSecret();
+      assert.equal(a.length, 32);
+      assert.ok(a.equals(b));
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+}
+
+test('MemoryEventStore: AGENT_VIEWER_TELEMETRY_MAX_POINTS rejects further points through capacity, never silently', async () => {
+  const store = new MemoryEventStore({ maxEvents: 50, telemetryMaxPoints: 2 });
+  try {
+    const first = await store.appendTelemetryPoints([
+      telemetryPoint({ seriesKey: 's1', timeUnixNano: '1' }),
+      telemetryPoint({ seriesKey: 's2', timeUnixNano: '2' }),
+    ]);
+    assert.equal(first.accepted, 2);
+
+    const overflow = await store.appendTelemetryPoints([telemetryPoint({ seriesKey: 's3', timeUnixNano: '3' })]);
+    assert.equal(overflow.accepted, 0);
+    assert.equal(overflow.rejectedCapacity, 1);
+    assert.match(overflow.messages[0], /TELEMETRY_MAX_POINTS/);
+
+    const stats = await store.telemetryStats();
+    assert.equal(stats.pointsStored, 2);
+    assert.equal(stats.truncated, true);
+  } finally {
+    await store.close();
+  }
+});
+
+test('SQLiteEventStore: the telemetry HMAC secret survives a restart, so retries still dedupe against the same series keys', async () => {
+  const { dir, file } = tempDbPath('telemetry-secret-restart');
+  try {
+    const first = new SQLiteEventStore(file);
+    const secret1 = await first.getTelemetryHmacSecret();
+    await first.appendTelemetryPoints([telemetryPoint({ value: 42 })]);
+    await first.close();
+
+    const second = new SQLiteEventStore(file);
+    const secret2 = await second.getTelemetryHmacSecret();
+    assert.ok(secret1.equals(secret2));
+
+    // The same point, submitted again after the restart, is still recognized as a duplicate.
+    const retry = await second.appendTelemetryPoints([telemetryPoint({ value: 42 })]);
+    assert.deepEqual(retry, { accepted: 0, duplicates: 1, conflicts: 0, rejectedCapacity: 0, messages: [] });
+
+    const stats = await second.telemetryStats();
+    assert.equal(stats.pointsStored, 1);
+    await second.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: telemetry_metric_points survives a restart and sumTelemetryBySession reads the persisted rows', async () => {
+  const { dir, file } = tempDbPath('telemetry-persist-restart');
+  try {
+    const first = new SQLiteEventStore(file);
+    await first.appendTelemetryPoints([
+      telemetryPoint({ seriesKey: 's1', sessionId: 'claude-code-bbbbbbbbbbbb', tokenType: 'input', value: 500 }),
+    ]);
+    await first.close();
+
+    const second = new SQLiteEventStore(file);
+    const rows = await second.listTelemetryPoints({ sessionId: 'claude-code-bbbbbbbbbbbb' });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].value, 500);
+    await second.close();
+  } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

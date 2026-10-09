@@ -1,10 +1,20 @@
-# OTLP/HTTP logs receiver
+# OTLP/HTTP receivers: logs and metrics
 
 `POST /v1/logs` is a server-side OpenTelemetry logs receiver. It is the only documented way Claude Code
 reports per-request tokens and cost (see [Tokens and cost](claude-code.md#tokens-and-cost) for how to turn it
 on with `agent-viewer install claude-code --telemetry`), so this item turns that telemetry into the same
 `llm.usage` and `llm.failed` canonical events every other ingestion route produces. It never computes a price
 or invents a figure: everything stored here comes straight from what Claude Code reported.
+
+`POST /v1/metrics` (issue #73) is a second, independent OpenTelemetry receiver for Claude Code's metric
+counters (`claude_code.token.usage`, `claude_code.cost.usage`). It is the cheapest cross-check an audit tool
+can have: the logs receiver above turns each `api_request` into a ledger row, and the metrics receiver stores
+the same consumption as reported by a second, independent counter. The two are kept strictly apart: a metric
+point is never turned into a canonical event, never added to the ledger, the snapshot totals, SSE or any
+rollup. See [OTLP metrics](#otlp-metrics-post-v1metrics) below.
+
+Both routes accept `http/json` and, since issue #73, `http/protobuf` (see
+[http/protobuf](#httpprotobuf-issue-73)); gRPC is not supported.
 
 This is server-side ingestion only. The embeddable library is unaffected: it still never invents, sums or
 prices usage, and keeps receiving figures from the host through props.
@@ -13,24 +23,25 @@ prices usage, and keeps receiving figures from the host through props.
 
 ```
 POST /v1/logs
+POST /v1/metrics
 ```
 
 At the server root, not under `/api/v1`: this is the default OTLP/HTTP path, so
-`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://127.0.0.1:8787/v1/logs` (or whatever host and port the office runs
-on) works with the CLI, `npm run server` and the Docker image alike without any extra configuration.
-`src/integrations/otelConstants.ts` exports this path as `OTLP_LOGS_PATH`, shared with the Claude Code
-telemetry installer (`cli/claudeInstall.ts`, which writes the matching `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`), so
-the two sides cannot drift apart.
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:8787` (or whatever host and port the office runs on) works with
+the CLI, `npm run server` and the Docker image alike without any extra configuration; exporters append
+`/v1/logs` and `/v1/metrics` to that base themselves. `src/integrations/otelConstants.ts` exports both paths
+as `OTLP_LOGS_PATH` and `OTLP_METRICS_PATH`, shared with the Claude Code telemetry installer
+(`cli/claudeInstall.ts`, which writes the matching endpoint variables), so the sides cannot drift apart.
 
 ## Middleware order
 
-Mounted before the server's global body parser, with its own chain, in this exact order:
+Mounted before the server's global body parser, with its own chain per route, in this exact order:
 
 1. Rate limiter (same per-IP, per-minute window as `/api/v1`).
 2. Token check (same decision as `/api/v1`, see Auth below).
 3. Content-Type and Content-Encoding check.
-4. This route's own size- and record-limited body parser.
-5. Shape and record-count check.
+4. This route's own size-limited body parser (JSON or protobuf, picked by Content-Type).
+5. Shape and count check.
 6. The handler.
 
 This order is deliberate: a request with a wrong token and a malformed body gets `401`, not `400`, and an
@@ -39,20 +50,22 @@ unauthenticated request's body is never parsed at all.
 ## Auth
 
 Shares the exact same decision as `/api/v1` (`isRequestAuthorized` in `server/index.ts`, factored out of the
-original `/api/v1` check so both routes stay identical): `Authorization: Bearer <AGENT_VIEWER_API_TOKEN>` only. A
-`token` or `api_key` query parameter never authenticates (issue #71). OTLP exporters set it through
-`OTEL_EXPORTER_OTLP_LOGS_HEADERS="Authorization=Bearer <token>"`. Without a configured token the route is
-open, exactly like `/api/v1` (the office prints a loud startup warning in that case, see
-[the open-API warning](../README.md)). The response shape differs by route: `/v1/logs` answers OTLP-style
-(`{"code":16,"message":"Valid Bearer token required"}`), `/api/v1` keeps its own `{"error":"unauthorized",...}`
-body.
+original `/api/v1` check so every OTLP route stays identical): `Authorization: Bearer <AGENT_VIEWER_API_TOKEN>`
+only. A `token` or `api_key` query parameter never authenticates, on either route (issue #71). OTLP exporters
+set it through `OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>"` (or the per-signal
+`OTEL_EXPORTER_OTLP_LOGS_HEADERS`/`OTEL_EXPORTER_OTLP_METRICS_HEADERS`). Without a configured token the route
+is open, exactly like `/api/v1` (the office prints a loud startup warning in that case, see
+[the open-API warning](../README.md)). The response shape differs by route: `/v1/logs` and `/v1/metrics` answer
+OTLP-style (`{"code":16,"message":"Valid Bearer token required"}`, or the protobuf `google.rpc.Status`
+equivalent for a protobuf request), `/api/v1` keeps its own `{"error":"unauthorized",...}` body.
 
 ## Limits
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AGENT_VIEWER_OTLP_MAX_BODY` | `5mb` | Any size string `body-parser` accepts (for example `10mb`, `512kb`). Applies to the decoded size: a gzip body can be much larger on the wire. An invalid value falls back to the default. |
-| `AGENT_VIEWER_OTLP_MAX_RECORDS` | `5000` | Maximum log records per request, counted across every `resourceLogs[].scopeLogs[].logRecords[]`. An invalid or non-positive value falls back to the default. |
+| `AGENT_VIEWER_OTLP_MAX_BODY` | `5mb` | Any size string `body-parser` accepts (for example `10mb`, `512kb`). Applies to the decoded size: a gzip body can be much larger on the wire. Shared by `/v1/logs` and `/v1/metrics`. An invalid value falls back to the default. |
+| `AGENT_VIEWER_OTLP_MAX_RECORDS` | `5000` | Maximum log records per `/v1/logs` request (every `resourceLogs[].scopeLogs[].logRecords[]`), or data points per `/v1/metrics` request (every `resourceMetrics[].scopeMetrics[].metrics[].sum.dataPoints[]`). An invalid or non-positive value falls back to the default. |
+| `AGENT_VIEWER_TELEMETRY_MAX_POINTS` | `100000` | Memory-mode cap on stored `/v1/metrics` points (SQLite mode is bounded by disk, not by this). Once full, further points are rejected through `partialSuccess`, never dropped silently. |
 
 gzip and deflate request bodies are decoded automatically; brotli (`content-encoding: br`) is also accepted by
 the underlying `body-parser` version this server uses. Anything else gets `415`.
@@ -60,22 +73,23 @@ the underlying `body-parser` version this server uses. Anything else gets `415`.
 ## Status codes
 
 Exporters only retry `429`, `502`, `503` and `504`, so everything else is final from the exporter's point of
-view:
+view. `/v1/metrics` follows the exact same table, with `resourceMetrics`/`rejectedDataPoints` in place of
+`resourceLogs`/`rejectedLogRecords` and its own unsupported-media message naming `/v1/metrics`:
 
 | Case | Status | Body |
 |---|---|---|
-| Accepted, including a request where every record was ignored or unknown, and `{"resourceLogs":[]}` | `200` | `{}` |
+| Accepted, including a request where every record was ignored or unknown, and `{"resourceLogs":[]}` | `200` | `{}` (or an empty protobuf message for a protobuf request) |
 | Some records invalid or unattributed | `200` | `{"partialSuccess":{"rejectedLogRecords":"2","errorMessage":"..."}}` |
-| Malformed JSON, a corrupt compressed body, or JSON without a `resourceLogs` array | `400` | `{"code":3,"message":"Expected an OTLP ExportLogsServiceRequest with resourceLogs"}` |
+| Malformed JSON, malformed protobuf, a corrupt compressed body, or a body without the expected top-level array | `400` | `{"code":3,"message":"Expected an OTLP ExportLogsServiceRequest with resourceLogs"}` (protobuf `google.rpc.Status` for a protobuf request) |
 | Missing or wrong token | `401` | `{"code":16,"message":"Valid Bearer token required"}` |
 | Body over `AGENT_VIEWER_OTLP_MAX_BODY` (decoded size) or over `AGENT_VIEWER_OTLP_MAX_RECORDS` | `413` | `{"code":3,"message":"OTLP request exceeds <limit> or <n> log records"}` |
-| `Content-Type` other than `application/json`, or an unsupported `Content-Encoding` | `415` | `{"code":3,"message":"Agent Viewer accepts OTLP http/json on /v1/logs, uncompressed or gzip. Set OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json."}` |
+| `Content-Type` other than `application/json` or `application/x-protobuf`, or an unsupported `Content-Encoding` | `415` | `{"code":3,"message":"Agent Viewer accepts OTLP http/json or http/protobuf on /v1/logs, uncompressed or gzip. Set OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json or http/protobuf."}` |
 | Rate limited | `429` + `Retry-After` | The same body the rate limiter always sends (`{"error":"rate_limit_exceeded",...}`); the header is what matters to an exporter. |
 | The store failed to write | `503` | `{"code":14,"message":"Storage unavailable, retry"}` |
 
-`rejectedLogRecords` is a string, matching OTLP's own int64-as-string convention. Every error and
-`partialSuccess` message is built only from fixed text, known event names and counts: it never repeats
-request content, so it is always safe to log or display.
+`rejectedLogRecords`/`rejectedDataPoints` is a string, matching OTLP's own int64-as-string convention. Every
+error and `partialSuccess` message is built only from fixed text, known event or metric names and counts: it
+never repeats request content, so it is always safe to log or display.
 
 ## Mapping
 
@@ -213,11 +227,98 @@ process start time. `unknownEventNames` holds at most 50 distinct names, each cu
 nothing else from the record; with `AGENT_VIEWER_DEBUG=1` the server also logs one line per newly observed
 unknown name, never record content.
 
+## http/protobuf (issue #73)
+
+Real OpenTelemetry exporters, Claude Code included, commonly default to `http/protobuf`. Both routes accept
+`Content-Type: application/x-protobuf` (OTLP's wire format for `ExportLogsServiceRequest` and
+`ExportMetricsServiceRequest`), decoded by a small zero-dependency reader
+(`server/otlp/protobufWire.ts`, `server/otlp/otlpProtobuf.ts`) built directly from the
+`opentelemetry-proto` v1 field-number table, not from a protobuf library: Agent Viewer's runtime dependencies
+stay at `express`, `lucide-react` and `zod`. The decoder understands varint, 64-bit, length-delimited and
+32-bit wire types, skips unknown fields, rejects wire types 3/4 (protobuf groups), rejects a truncated field,
+and caps message nesting at 16 levels.
+
+Once decoded, a protobuf body is normalized into the exact same shape the JSON mapper already reads
+(lowerCamelCase keys, `int64`/`fixed64` as decimal strings, enums as integers), so `server/otlp/logs.ts` and
+`server/otlp/metrics.ts` have exactly one code path regardless of which wire format arrived; a committed test
+(`tests/otlp-protobuf.test.mjs`) asserts the JSON and protobuf fixtures under `tests/fixtures/otlp/` normalize
+to the same result. A protobuf request gets a protobuf response (`Content-Type: application/x-protobuf`),
+including for `partialSuccess` and error bodies.
+
+gRPC is not supported: point `OTEL_EXPORTER_OTLP_PROTOCOL` (or the per-signal
+`OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`/`OTEL_EXPORTER_OTLP_METRICS_PROTOCOL`) at `http/protobuf` or `http/json`.
+
+## OTLP metrics: `POST /v1/metrics` (issue #73)
+
+Claude Code's OTLP metrics stream is a second, independent measurement of the same consumption `/v1/logs`
+turns into `llm.usage`/`llm.failed`: the cheapest cross-check an audit tool can have. Only two metric names are
+stored; every other metric Claude Code exports (session counts, lines of code, active time, and so on) is
+ignored without error:
+
+| OTLP metric | Stored as | Notes |
+|---|---|---|
+| `claude_code.token.usage` | a `tokens` point | The `type` attribute selects which token kind (see the mapping table below). |
+| `claude_code.cost.usage` | a `cost` point | Unit `USD` stores `currency: "USD"`; any other unit stores `currency: null` and the point is excluded from a future cost comparison, though it is still stored. |
+
+`type` attribute mapping (`server/otlp/metricsMap.ts`, normalized lowercase with `_` stripped before matching):
+
+| `type` | Field |
+|---|---|
+| `input` | `input` |
+| `output` | `output` |
+| `cacheread` (also `cache_read`) | `cacheRead` |
+| `cachecreation` (also `cache_creation`) | `cacheCreation` |
+| anything else, or missing | stored as given, listed in the unmapped-types count, never summed |
+
+**Only a monotonic `Sum` is accepted.** A `Gauge`, `Histogram`, `ExponentialHistogram`, `Summary`, or a
+non-monotonic `Sum`, for either tracked name, is rejected (counted in `partialSuccess`, never stored).
+`aggregationTemporality` must be `1` (delta) or `2` (cumulative); `0` (unspecified) or anything else is
+rejected. A point with the no-recorded-value flag (`flags` bit 0) is ignored, not rejected: it is simply not
+stored, and does not count against `partialSuccess`. A value must be a non-negative number at or below 2^53,
+finite, and (for a token count) a whole number; anything else is rejected, while the rest of the request is
+still processed.
+
+**Idempotency.** The unique key is `(series_key, start_time_unix_nano, time_unix_nano)`. A retried point with
+the same value is a harmless duplicate (not re-counted, not reported as rejected). The same key reported again
+with a *different* value is a conflicting duplicate: the first value is kept, and the retry is counted in
+`partialSuccess.rejectedDataPoints` with a message, the same spirit as the logs receiver's own
+`conflicting_duplicate` handling.
+
+**Temporality.** Points are stored raw and resolved at query time: a `delta` series totals the sum of its
+points, a `cumulative` series totals the latest value of each counter lifetime (grouped by
+`start_time_unix_nano`), so a process restart (a new lifetime starting lower than the old one ended) adds the
+new epoch's total instead of ever producing a negative number. This math lives in `server/telemetry.ts`
+(`sumSeriesValue`, covered by a property test against random delta and cumulative sequences in
+`tests/telemetry.test.mjs`) and is the one place a future reconciliation endpoint will read from.
+
+**Privacy and the series key.** Only an allowlist is stored: the hashed session id (same identity as the hooks
+and the logs receiver), `model`, `type`, and the resource's `service.name`/`service.version`. The raw
+`session.id`, `user.email`, `user.account_uuid`, `organization.id` and any other attribute never reach storage
+or a response. `series_key` (used only for deduplication and series identity, never returned by any endpoint)
+is an `HMAC-SHA256` of the metric name and *every* resource and point attribute (not just the stored ones), so
+two series that differ only in a dropped attribute are never merged into one. The HMAC secret is a random
+32-byte value generated on first use and persisted (SQLite: a `telemetry_meta` row; memory mode: per process),
+so it is never recoverable from the key and survives a restart.
+
+**Kept apart from the ledger, on purpose.** A metric point never becomes a canonical event, is never summed
+into `GET /api/v1/snapshot`, never appears on `GET /api/v1/events/stream` (SSE) or in a `--record` capture, and
+never changes `store.usageSummary()`. Storage is its own table (`telemetry_metric_points`, `telemetry_meta`,
+added by migration 5), queried through `EventStore.appendTelemetryPoints`/`listTelemetryPoints`, never through
+the event-store's own append path.
+
+**Deferred: `GET /api/v1/usage/reconciliation`.** The original proposal for this item also adds an endpoint
+that compares the ledger's per-session totals against these metric totals and reports `match`/`drift`/
+`incomplete`/etc. per field. That endpoint needs the usage ledger accessor from issue #65 (a ledger table with
+the server receive time), which was still open, unmerged, when this item was built: building a reconciliation
+endpoint against a ledger accessor that does not exist would mean guessing its shape twice. `sumTelemetryBySession`
+in `server/telemetry.ts` is the metrics-side half that endpoint will consume once #65 lands; nothing about it
+should need to change to support that.
+
 ## Out of scope
 
-- `http/protobuf` and gRPC, and `POST /v1/metrics`.
+- gRPC transport (see [http/protobuf](#httpprotobuf-issue-73) above).
 - OTLP traces (`/v1/traces`).
-- Offline import of OTLP logs or metrics files in `parseEventLog`.
+- Offline import of OTLP logs or metrics files in `parseEventLog` (issue #74).
 - Attribution per subagent, per prompt or per skill.
-- A usage ledger table with the server receive time.
+- `GET /api/v1/usage/reconciliation` (see "Deferred" above; depends on issue #65).
 - Pricing or re-estimating cost on the server: the figures stored here are exactly what Claude Code reported.

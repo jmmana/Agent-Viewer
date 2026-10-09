@@ -446,7 +446,8 @@ Honest maturity, so you know what you are getting:
 |---|---|---|
 | **REST API, batch, SSE** | [`server/`](server/index.ts) | ✅ **Stable.** Covered by integration, SSE and webhook security tests in CI. |
 | **Claude Code** | [`agent-viewer install claude-code`](docs/claude-code.md) | ✅ **Stable.** Official Claude Code hooks: sessions, subagents as their own agents, tools, waiting for you. Fixture tests for every hook type prove no arguments or content leave the machine. |
-| **Claude Code tokens (OTLP logs)** | [`agent-viewer install claude-code --telemetry`](docs/claude-code.md#tokens-and-cost) | ✅ **Stable.** `POST /v1/logs` receives Claude Code's native OpenTelemetry export and turns `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed` on the main agent. Opt-in, off by default. Reference: [docs/otlp.md](docs/otlp.md). |
+| **Claude Code tokens (OTLP logs)** | [`agent-viewer install claude-code --telemetry`](docs/claude-code.md#tokens-and-cost) | ✅ **Stable.** `POST /v1/logs` receives Claude Code's native OpenTelemetry export (`http/json` and `http/protobuf`) and turns `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed` on the main agent. Opt-in, off by default. Reference: [docs/otlp.md](docs/otlp.md). |
+| **Claude Code metrics (OTLP metrics)** | `POST /v1/metrics` | ✅ **Stable ingestion.** Stores `claude_code.token.usage`/`claude_code.cost.usage` as their own evidence, kept apart from the ledger, the snapshot, SSE and every rollup on purpose: a second, independent measurement of the same consumption for a future cross-check. The `GET /api/v1/usage/reconciliation` endpoint that compares the two is not built yet (needs a usage ledger accessor still in progress). Reference: [docs/otlp.md](docs/otlp.md#otlp-metrics-post-v1metrics). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. |
@@ -829,6 +830,8 @@ The defaults favor local development. Before you expose the server:
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).
 
+`POST /v1/logs` and `POST /v1/metrics` honor `AGENT_VIEWER_API_TOKEN` exactly like `/api/v1` (open when unset, the same startup warning). The metrics receiver stores only an explicit attribute allowlist (hashed session id, `model`, `type`, `service.name`/`service.version`); `user.email`, `user.account_uuid`, `organization.id` and the raw `session.id` are never stored. Its internal series key is a keyed `HMAC-SHA256` (random secret, persisted in SQLite mode), not a plain hash, so a low-entropy attribute can never be recovered from it by dictionary attack. See [docs/otlp.md](docs/otlp.md) for the full reference.
+
 ---
 
 ## 🧭 Roadmap
@@ -837,6 +840,7 @@ Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showc
 
 Planned, not available yet:
 
+- [ ] `GET /api/v1/usage/reconciliation`: compare the OTLP metrics stored by `POST /v1/metrics` against the usage ledger, once a ledger accessor with the server receive time lands.
 - [ ] Import OTLP (OpenTelemetry) traces.
 - [ ] More adapters, packaged and tested against the real frameworks.
 - [ ] An MCP server, so agents can report into the office directly.

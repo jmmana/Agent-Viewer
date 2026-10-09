@@ -652,17 +652,27 @@ test('HTTP: with AGENT_VIEWER_API_TOKEN set, a missing or wrong token gets 401, 
   });
 });
 
-test('HTTP: application/x-protobuf and an unsupported Content-Encoding get 415 with the http/json hint', async () => {
+test('HTTP: application/x-protobuf is now accepted (issue #73); an unsupported Content-Type or Content-Encoding still gets 415', async () => {
   await withEnv(NO_AUTH_ENV, async () => {
     const { server, baseUrl } = await startTestServer();
     try {
+      // Issue #73 adds http/protobuf support to this same route: application/x-protobuf is no longer an
+      // unsupported media type. Three garbage bytes are not a valid ExportLogsServiceRequest though, so this
+      // is now a 400 (malformed body), not a 415.
       const protobuf = await fetch(`${baseUrl}${OTLP_LOGS_PATH}`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-protobuf' },
         body: Buffer.from([1, 2, 3]),
       });
-      assert.equal(protobuf.status, 415);
-      assert.match((await protobuf.json()).message, /http\/json/);
+      assert.equal(protobuf.status, 400);
+
+      const unsupportedType = await fetch(`${baseUrl}${OTLP_LOGS_PATH}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/xml' },
+        body: Buffer.from('<x/>'),
+      });
+      assert.equal(unsupportedType.status, 415);
+      assert.match((await unsupportedType.json()).message, /http\/json or http\/protobuf/);
 
       // body-parser understands gzip, deflate and brotli; something else entirely still has to get a clean
       // 415, not a decompression crash.

@@ -45,6 +45,23 @@ analyst.done("Summary delivered")
 
 The agent registers itself on its first call. Requests retry with exponential backoff on network errors, `429` and `5xx` responses; other `4xx` responses raise `AgentViewerError` right away.
 
+## Event ids and conflicts
+
+An event sent without `event_id` (or a batch item without `id`) gets `evt_<32 hex characters>`, the full 128 bits of `uuid.uuid4()`. The id is the idempotency key, so one id must name exactly one event. The server answers a true retry (same id, same content) as a duplicate, and rejects the same id with different content with HTTP 409. `AgentViewerError` has `status_code` and `code`, the `error` field of the response body:
+
+```python
+from agent_viewer import AgentViewerError
+
+try:
+    viewer.emit("tool.started", "Searching", {"tool": "search"}, agent_id="analyst", event_id="evt_call_42")
+except AgentViewerError as err:
+    if err.code == "conflicting_duplicate":
+        # Another event already uses this id. It was not applied, and the SDK does not retry a 409.
+        ...
+```
+
+`emit_batch()` returns the server response: it answers 202 even when some items were not applied, so read `conflicts` and each item's `status` (`"accepted"`, `"duplicate"` or `"conflict"`) in `results`. To retry, resend the identical event, with the same `timestamp`.
+
 `usage()` sends only the figures you give it. A token count you leave out (or pass as `None`) is left out of the event, never sent as `0`; an explicit `0` is kept. Calling `usage()` without a `cost` reports the cost as unknown instead of zero. The SDK never decides where a cost comes from: pass `cost_source="provider-reported"` when the provider returned the cost, or `"estimated"` when you computed it. A cost passed without `cost_source` is sent as `costSource="unknown"`, and the client logs one warning on the `agent_viewer` logger (once per `AgentViewer` instance). Any other `cost_source` value raises `ValueError` before anything is sent. `currency` is forwarded as given, with no default, and `task_id` links the call to a task through the event's `taskId`.
 
 ## API overview

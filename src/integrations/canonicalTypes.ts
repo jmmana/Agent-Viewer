@@ -154,13 +154,25 @@ export interface CanonicalEventInput<T = Record<string, unknown>> {
 }
 
 /**
+ * Id for an event that arrived without one: `crypto.randomUUID()` when the platform has it, and the older
+ * clock plus `Math.random` form otherwise, so the library still runs in browsers without `randomUUID`.
+ */
+function generatedEventId(now: number): string {
+  const cryptoApi = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    return `evt_${cryptoApi.randomUUID()}`;
+  }
+  return `evt_${now}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
  * Normalizes any loose input into a valid CanonicalEvent V1, generating missing IDs or timestamps if needed.
  */
 export function normalizeCanonicalEvent(input: any): CanonicalEvent {
   const now = Date.now();
   const id = input?.id && typeof input.id === 'string' && input.id.length > 0
     ? input.id
-    : `evt_${now}_${Math.random().toString(36).slice(2, 9)}`;
+    : generatedEventId(now);
 
   const rawType = typeof input?.type === 'string' ? input.type : 'agent.status.changed';
   const type: CanonicalEventType = EVENT_TYPE_ALIASES[rawType] ?? (

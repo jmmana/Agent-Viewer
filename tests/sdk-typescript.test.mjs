@@ -309,3 +309,83 @@ test('TypeScript SDK usage: new fields go to the payload and taskId to the envel
   // Currency is forwarded as given; the server checks the format.
   assert.equal(rawCurrency.payload.currency, 'usd');
 });
+
+// -------------------------------------------------------------
+// Ingestion integrity (issue #47)
+// -------------------------------------------------------------
+
+test('TypeScript SDK: default event ids are 128-bit random UUIDs', async (t) => {
+  const { requests } = stubFetch(t);
+  const viewer = new AgentViewer({ url: 'http://sdk.test' });
+  await viewer.emit({ type: 'agent.status.changed', payload: { status: 'IDLE' } });
+  await viewer.emit({ type: 'agent.status.changed', payload: { status: 'IDLE' } });
+  await viewer.emitBatch([{ type: 'tool.started', payload: { tool: 'a' } }, { type: 'tool.started', payload: { tool: 'b' } }]);
+  const ids = [requests[0].body.id, requests[1].body.id, ...requests[2].body.events.map(({ id }) => id)];
+  for (const id of ids) {
+    assert.match(id, /^evt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(id.length, 40);
+  }
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test('TypeScript SDK: a 409 conflicting_duplicate rejects with code and status after exactly one attempt', async (t) => {
+  let attempts = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    attempts++;
+    return new Response(
+      JSON.stringify({
+        error: 'conflicting_duplicate',
+        message: 'An event with id "evt_x" was already stored with different content. The new event was not applied.',
+        id: 'evt_x',
+        fingerprint: 'sha256:b',
+        storedFingerprint: 'sha256:a',
+      }),
+      { status: 409, headers: { 'content-type': 'application/json' } }
+    );
+  });
+  const viewer = new AgentViewer({ url: 'http://sdk.test', maxRetries: 3 });
+  await assert.rejects(
+    viewer.emit({ id: 'evt_x', type: 'agent.status.changed', payload: { status: 'IDLE' } }),
+    (err) =>
+      err instanceof AgentViewerError &&
+      err.status === 409 &&
+      err.code === 'conflicting_duplicate' &&
+      err.message.includes('already stored with different content')
+  );
+  assert.equal(attempts, 1);
+});
+
+test('TypeScript SDK: emitBatch surfaces conflicts and per-item status from a live server', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl, runtimeId: 'sdk-integrity' });
+    const a = { id: 'evt_sdk_ts_a', type: 'tool.started', timestamp: 1_700_000_000_000, agentId: 'ts', payload: { tool: 'grep' } };
+    const first = await viewer.emitBatch([a, { ...a }, { ...a, payload: { tool: 'sed' } }, { ...a, id: 'evt_sdk_ts_b' }]);
+    assert.equal(first.accepted, 2);
+    assert.equal(first.duplicates, 1);
+    assert.equal(first.conflicts, 1);
+    assert.deepEqual(first.results.map(({ status }) => status), ['accepted', 'duplicate', 'conflict', 'accepted']);
+    assert.equal(first.results[2].error, 'conflicting_duplicate');
+    assert.equal(first.results[2].storedFingerprint, first.results[0].fingerprint);
+
+    // A single emit of a conflicting event is a 409 for the caller.
+    await assert.rejects(
+      viewer.emit({ ...a, payload: { tool: 'awk' } }),
+      (err) => err instanceof AgentViewerError && err.code === 'conflicting_duplicate' && err.status === 409
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('TypeScript SDK: emitBatch against a 0.2.x server reports conflicts as 0 and passes results through', async (t) => {
+  const legacyResults = [{ id: 'evt_old', duplicate: false }];
+  t.mock.method(globalThis, 'fetch', async () =>
+    new Response(JSON.stringify({ accepted: 1, duplicates: 0, total: 1, results: legacyResults }), {
+      status: 202,
+      headers: { 'content-type': 'application/json' },
+    })
+  );
+  const result = await new AgentViewer({ url: 'http://sdk.test' }).emitBatch([{ id: 'evt_old', type: 'tool.started', payload: { tool: 'x' } }]);
+  assert.deepEqual(result, { accepted: 1, duplicates: 0, conflicts: 0, results: legacyResults });
+});

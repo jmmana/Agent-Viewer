@@ -1,7 +1,9 @@
+import http.server
 import json
 import logging
 import os
 import sys
+import threading
 import time
 import socket
 import subprocess
@@ -53,7 +55,72 @@ class LogCapture(logging.Handler):
         return False
 
 
+class _ConflictHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every POST with a 409 conflicting_duplicate and counts the attempts."""
+
+    attempts = 0
+
+    def do_POST(self):  # noqa: N802 (http.server naming)
+        type(self).attempts += 1
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        body = json.dumps({
+            "error": "conflicting_duplicate",
+            "message": 'An event with id "evt_x" was already stored with different content. The new event was not applied.',
+            "id": "evt_x",
+            "fingerprint": "sha256:b",
+            "storedFingerprint": "sha256:a",
+        }).encode("utf-8")
+        self.send_response(409)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
 class TestPythonSDK(unittest.TestCase):
+    def test_default_event_ids_are_full_uuid4_hex(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        viewer.emit("agent.status.changed", "s", {"status": "IDLE"})
+        viewer.emit("agent.status.changed", "s", {"status": "IDLE"})
+        viewer.emit_batch([{"type": "tool.started", "payload": {"tool": "a"}}, {"type": "tool.started", "payload": {"tool": "b"}}])
+        ids = [viewer.captured[0]["id"], viewer.captured[1]["id"]] + [e["id"] for e in viewer.captured[2]["events"]]
+        for event_id in ids:
+            self.assertRegex(event_id, r"^evt_[0-9a-f]{32}$")
+            self.assertEqual(len(event_id), 36)
+        self.assertEqual(len(set(ids)), len(ids))
+
+    def test_conflicting_duplicate_raises_with_code_after_one_attempt(self):
+        _ConflictHandler.attempts = 0
+        httpd = http.server.HTTPServer(("127.0.0.1", 0), _ConflictHandler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            viewer = AgentViewer(url=f"http://127.0.0.1:{httpd.server_address[1]}", max_retries=3, timeout=5.0)
+            with self.assertRaises(AgentViewerError) as ctx:
+                viewer.emit("agent.status.changed", "s", {"status": "IDLE"}, event_id="evt_x")
+            self.assertEqual(ctx.exception.status_code, 409)
+            self.assertEqual(ctx.exception.code, "conflicting_duplicate")
+            self.assertEqual(_ConflictHandler.attempts, 1)
+
+            _ConflictHandler.attempts = 0
+            with self.assertRaises(AgentViewerError) as batch_ctx:
+                viewer.emit_batch([{"id": "evt_x", "type": "tool.started", "payload": {"tool": "a"}}])
+            self.assertEqual(batch_ctx.exception.code, "conflicting_duplicate")
+            self.assertEqual(_ConflictHandler.attempts, 1)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_agent_viewer_error_code_defaults_to_none(self):
+        err = AgentViewerError("boom", 400)
+        self.assertIsNone(err.code)
+        self.assertEqual(err.status_code, 400)
+
     def test_agent_handle_initialization(self):
         viewer = AgentViewer(url="http://localhost:8787", runtime_id="py-test")
         agent = viewer.agent("researcher", name="Research Agent")
@@ -334,6 +401,20 @@ class TestPythonSDK(unittest.TestCase):
             ):
                 self.assertEqual(full["payload"][key], value, key)
             self.assertNotIn("cachedTokens", full["payload"])
+
+            # Batch: an identical copy is a duplicate and the same id with other content is a conflict.
+            item = {"id": "evt_py_batch_a", "type": "tool.started", "timestamp": 1700000000000, "agentId": "py_bot", "payload": {"tool": "grep"}}
+            batch = viewer.emit_batch([item, dict(item), dict(item, payload={"tool": "sed"}), dict(item, id="evt_py_batch_b")])
+            self.assertEqual((batch["accepted"], batch["duplicates"], batch["conflicts"]), (2, 1, 1))
+            self.assertEqual([r["status"] for r in batch["results"]], ["accepted", "duplicate", "conflict", "accepted"])
+            self.assertEqual(batch["results"][2]["error"], "conflicting_duplicate")
+            self.assertEqual(batch["results"][2]["storedFingerprint"], batch["results"][0]["fingerprint"])
+
+            # A single event that reuses a stored id with other content is a 409 with the code.
+            with self.assertRaises(AgentViewerError) as conflict:
+                viewer.emit("tool.started", "again", {"tool": "awk"}, agent_id="py_bot", event_id="evt_py_batch_a")
+            self.assertEqual(conflict.exception.status_code, 409)
+            self.assertEqual(conflict.exception.code, "conflicting_duplicate")
 
             # Verify snapshot contains the agent
             snapshot = viewer.snapshot()

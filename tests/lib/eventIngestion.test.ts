@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyExternalEvent,
   DEFAULT_BUBBLE_MS,
   type ApplyEventOptions,
 } from '../../src/integrations/eventIngestion';
+import { normalizeCanonicalEvent } from '../../src/integrations/canonicalTypes';
 import { createLiveSimulationState, type SimulationState } from '../../src/engine/officeState';
 import { WORKSPACE_ANCHORS } from '../../src/engine/livingOfficeEngine';
 import type { CanonicalEvent } from '../../src/lib/index';
@@ -361,5 +362,41 @@ describe('llm.failed', () => {
     expect(stored).toBeDefined();
     expect(state.events.some((event) => event.type === 'agent.status.changed')).toBe(false);
     expect(agentIn(state, 'ana').status).toBe('IDLE');
+  });
+});
+
+describe('normalizeCanonicalEvent: generated ids', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('uses crypto.randomUUID when the platform has it', () => {
+    const randomUUID = vi.fn(() => '0b9f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4');
+    vi.stubGlobal('crypto', { randomUUID });
+    const event = normalizeCanonicalEvent({ type: 'agent.status.changed', payload: { status: 'IDLE' } });
+    expect(event.id).toBe('evt_0b9f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4');
+    expect(randomUUID).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a UUID id with the real platform crypto', () => {
+    const event = normalizeCanonicalEvent({ type: 'agent.status.changed' });
+    expect(event.id).toMatch(/^evt_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+
+  it('falls back to the clock and Math.random when randomUUID is not available', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    for (const replacement of [undefined, {}]) {
+      vi.stubGlobal('crypto', replacement);
+      const event = normalizeCanonicalEvent({ type: 'agent.status.changed' });
+      expect(event.id).toMatch(/^evt_1700000000000_[0-9a-z]{1,7}$/);
+    }
+  });
+
+  it('keeps an id the caller gave', () => {
+    const randomUUID = vi.fn(() => 'unused');
+    vi.stubGlobal('crypto', { randomUUID });
+    expect(normalizeCanonicalEvent({ id: 'evt_given', type: 'agent.status.changed' }).id).toBe('evt_given');
+    expect(randomUUID).not.toHaveBeenCalled();
   });
 });

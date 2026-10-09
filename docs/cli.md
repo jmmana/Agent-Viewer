@@ -87,12 +87,15 @@ See [Claude Code in the office](claude-code.md).
 The same command, packaged:
 
 ```bash
-docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer
+docker run --rm -p 127.0.0.1:8787:8787 \
+  -e AGENT_VIEWER_API_TOKEN="$(openssl rand -base64 32)" \
+  -v agent-viewer-data:/app/data \
+  ghcr.io/jmmana/agent-viewer
 ```
 
-Open the office URL the container prints. Inside the container the server listens on every interface (`AGENT_VIEWER_HOST=0.0.0.0` in the image) so the published port works; `-p 127.0.0.1:8787:8787` keeps it on your machine. Set `-e AGENT_VIEWER_API_TOKEN=...` to choose the token, and mount `/app/data` to keep the SQLite database.
+Open the office URL the container prints. The published port binds to this machine only; drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. The server listens on every interface inside the container (`AGENT_VIEWER_HOST=0.0.0.0`). The example sets a token and keeps the SQLite database in a named volume.
 
-Flags after the image name are added to the image defaults, not swapped for them: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer --token my-token --demo` still listens on every interface and never tries to open a browser. Change the port with `-e PORT=9000 -p 9000:9000` (or `--port 9000`; the health check follows the port the server really uses). Other commands run as given, for example `docker run --rm ghcr.io/jmmana/agent-viewer --version`.
+Flags after the image name are added to the image defaults, not swapped for them: `docker run --rm -p 127.0.0.1:8787:8787 ghcr.io/jmmana/agent-viewer --token my-token --demo` still listens on every interface inside the container and never tries to open a browser. Change the port with `-e PORT=9000 -p 127.0.0.1:9000:9000` (or `--port 9000`; the health check follows the port the server really uses). Other commands run as given, for example `docker run --rm ghcr.io/jmmana/agent-viewer --version`.
 
 Images are published on every release tag:
 

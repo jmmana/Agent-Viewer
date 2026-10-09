@@ -212,6 +212,8 @@ test('CLI end to end: start, send an event, read it back from the API and the li
 
     const health = await (await fetch(`${base}/health`)).json();
     assert.equal(health.ok, true);
+    assert.equal(health.auth, 'token');
+    assert.doesNotMatch(output, /WARNING: AGENT_VIEWER_API_TOKEN is not set/);
     assert.equal((await fetch(`${base}/api/v1/events`)).status, 401, 'the API needs the token');
     assert.equal((await fetch(`${base}/api/v1/snapshot`)).status, 401, 'the API needs the token');
     const session = JSON.parse(readFileSync(path.join(home, 'session.json'), 'utf8'));

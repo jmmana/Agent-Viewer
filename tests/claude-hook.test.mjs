@@ -135,6 +135,38 @@ test('Claude hook: tool events get stable ids so a repeated hook is deduplicated
   assert.notEqual(first.id, translate(fixture('post-tool-use'))[0].id);
 });
 
+test('Claude hook: the same tool call sent twice with a different timestamp is stored once and counted as a conflict', async () => {
+  const { app } = await import('../server/index.ts');
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const send = (events) =>
+    fetch(`${base}/api/v1/events/batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(events) });
+  try {
+    // Hooks installed in both user and project settings fire twice, each run with its own clock.
+    const first = translate(fixture('pre-tool-use'), { now: 1_767_225_600_000 });
+    const second = translate(fixture('pre-tool-use'), { now: 1_767_225_600_250 });
+    assert.equal(first[0].id, second[0].id);
+    assert.notEqual(first[0].timestamp, second[0].timestamp);
+
+    const firstRes = await send(first);
+    assert.equal(firstRes.status, 202);
+    assert.equal((await firstRes.json()).accepted, first.length);
+    const secondRes = await send(second);
+    assert.equal(secondRes.status, 202);
+    const secondJson = await secondRes.json();
+    assert.equal(secondJson.conflicts, 1);
+    assert.equal(secondJson.results.find(({ id }) => id === first[0].id).status, 'conflict');
+
+    const listed = await (await fetch(`${base}/api/v1/events?limit=1000`)).json();
+    const stored = listed.events.filter(({ id }) => id === first[0].id);
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].timestamp, first[0].timestamp, 'the office keeps the first copy');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 /** Runs the hook as Claude Code does: a new process with the hook JSON on stdin. */
 function runHook(args, input, env = {}) {
   return new Promise((resolve) => {

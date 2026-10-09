@@ -20,6 +20,9 @@ import { readPackageVersion } from '../server/version.ts';
 
 const fixtures = path.join(import.meta.dirname, 'fixtures/sqlite');
 const appVersion = readPackageVersion();
+/** Every known migration as [version, name], the history a fully migrated file records. */
+const ALL_MIGRATIONS = MIGRATIONS.map(({ version, name }) => [version, name]);
+const LATEST_VERSION = MIGRATIONS.at(-1).version;
 const fixtureNames = [
   'agent-viewer-0.1.x-2b00789.db',
   'agent-viewer-0.2.0.db',
@@ -164,7 +167,7 @@ for (const fixtureName of fixtureNames) {
       assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
       assert.deepEqual(
         db.prepare('SELECT version, name FROM schema_migrations').all().map(({ version, name }) => [version, name]),
-        [[1, 'baseline']]
+        ALL_MIGRATIONS
       );
       db.close();
       assert.equal(store.migration.applied[0].version, 1);
@@ -201,13 +204,11 @@ test('unknown schema versions and inconsistent or foreign schemas are rejected w
     const db = new DatabaseSync(file);
     db.exec(`
       CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, app_version TEXT NOT NULL);
-      INSERT INTO schema_migrations VALUES (${name === 'gap' ? 2 : 1}, '${name === 'gap' ? 'usage-request-id-index' : 'renamed'}', 1, '0.3.0');
+      INSERT INTO schema_migrations VALUES (${name === 'gap' ? 2 : 1}, '${name === 'gap' ? 'content-hash' : 'renamed'}', 1, '0.3.0');
     `);
     db.close();
     const before = hashFile(file);
-    const migrations = name === 'gap'
-      ? [...MIGRATIONS, { version: 2, name: 'usage-request-id-index', up() {} }]
-      : MIGRATIONS;
+    const migrations = MIGRATIONS;
     assert.throws(
       () => new SQLiteEventStore(file, { backup: 'off', migrations }),
       (error) => error instanceof SchemaHistoryMismatchError && error.code === 'schema_history_mismatch'
@@ -235,7 +236,7 @@ test('a failed migration rolls back its DDL and closes the database', () => {
   const migrations = [
     ...MIGRATIONS,
     {
-      version: 2,
+      version: LATEST_VERSION + 1,
       name: 'failing-test',
       up(db) {
         db.exec('CREATE TABLE partial_change (id INTEGER)');
@@ -255,7 +256,7 @@ test('a failed migration rolls back its DDL and closes the database', () => {
       (error) =>
         error instanceof MigrationFailedError &&
         error.code === 'migration_failed' &&
-        error.version === 2 &&
+        error.version === LATEST_VERSION + 1 &&
         error.cause.message === 'expected failure'
     );
     assert.equal(storeHandleCloseCount, 1);
@@ -263,7 +264,10 @@ test('a failed migration rolls back its DDL and closes the database', () => {
     DatabaseSync.prototype.close = originalClose;
   }
   const db = new DatabaseSync(file);
-  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations').all().map(({ version }) => version), [1]);
+  assert.deepEqual(
+    db.prepare('SELECT version FROM schema_migrations').all().map(({ version }) => version),
+    MIGRATIONS.map(({ version }) => version)
+  );
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'partial_change'").get(), undefined);
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -305,7 +309,7 @@ test('a failed VACUUM INTO removes partial backup files and throws SchemaBackupE
   const db = new DatabaseSync(file);
   const originalExec = db.exec.bind(db);
   const stamp = 1791500000000;
-  const backupPath = `${file}.pre-v0-to-v1.${stamp}.bak`;
+  const backupPath = `${file}.pre-v0-to-v${LATEST_VERSION}.${stamp}.bak`;
   db.exec = (sql) => {
     if (sql.startsWith('VACUUM INTO ')) {
       fs.writeFileSync(backupPath, 'partial backup');
@@ -361,7 +365,7 @@ test('four concurrent processes can migrate a fresh file', async () => {
   const db = new DatabaseSync(file);
   assert.deepEqual(
     db.prepare('SELECT version, name FROM schema_migrations').all().map(({ version, name }) => [version, name]),
-    [[1, 'baseline']]
+    ALL_MIGRATIONS
   );
   db.close();
   assert.equal(fs.readdirSync(dir).some((name) => name.endsWith('.bak')), false);
@@ -419,7 +423,7 @@ test('direct server startup reports a too-new database in one line and exits wit
     .split(/\r?\n/)
     .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
   assert.deepEqual(relevantLines, [
-    `The database ${file} has schema version 3, but this server (${appVersion}) only knows up to version 1. Upgrade agent-viewer, or set AGENT_VIEWER_SQLITE_PATH to another file. The file was not modified.`,
+    `The database ${file} has schema version 3, but this server (${appVersion}) only knows up to version ${LATEST_VERSION}. Upgrade agent-viewer, or set AGENT_VIEWER_SQLITE_PATH to another file. The file was not modified.`,
   ]);
   fs.rmSync(dir, { recursive: true, force: true });
 });

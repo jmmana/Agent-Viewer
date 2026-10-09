@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { baseline } from './migrations/0001-baseline';
+import { contentHash } from './migrations/0002-content-hash';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -11,7 +12,7 @@ export interface Migration {
   up(db: DatabaseSync): void;
 }
 
-export const MIGRATIONS: readonly Migration[] = [baseline];
+export const MIGRATIONS: readonly Migration[] = [baseline, contentHash];
 
 export interface MigrationOptions {
   appVersion: string;
@@ -213,18 +214,21 @@ export function runMigrations(db: DatabaseSync, options: MigrationOptions): Migr
     try {
       const hasHistory = tableExists(db, 'schema_migrations');
       const hasEvents = tableExists(db, 'events');
+      // A file whose events table is still empty holds nothing a backup could save. This also keeps a process that
+      // starts while another one is half way through the migrations of a fresh file from writing a backup of it.
+      const hasEventRows = hasEvents && Boolean(db.prepare('SELECT 1 FROM events LIMIT 1').get());
       if (!hasHistory) {
         if (hasEvents) {
           const columns = eventColumns(db);
           const missingColumns = LEGACY_EVENT_COLUMNS.filter((column) => !columns.has(column));
           if (missingColumns.length > 0) throw new SchemaShapeError(missingColumns);
         }
-        return { hasEvents, rows: [] as MigrationRow[] };
+        return { hasEventRows, rows: [] as MigrationRow[] };
       }
       const rows = readHistory(db);
       validateHistory(rows, migrations, options);
       if ((rows.at(-1)?.version ?? 0) >= 1) assertEventShape(db, CURRENT_EVENT_COLUMNS);
-      return { hasEvents, rows };
+      return { hasEventRows, rows };
     } finally {
       db.exec('ROLLBACK');
     }
@@ -235,7 +239,7 @@ export function runMigrations(db: DatabaseSync, options: MigrationOptions): Migr
   let backupPath: string | null = null;
   if (
     pending.length > 0 &&
-    initial.hasEvents &&
+    initial.hasEventRows &&
     options.filePath !== ':memory:' &&
     options.filePath !== '' &&
     fs.existsSync(options.filePath) &&

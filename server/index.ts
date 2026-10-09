@@ -9,7 +9,8 @@ import {
   ValidationIssue,
 } from '../src/integrations/canonicalContract';
 import type { AgentStatus } from '../src/types/agent';
-import { createEventStore, type EventStore } from './store';
+import { serverEventId } from './ids';
+import { createEventStore, type AppendResult, type EventStore } from './store';
 import { readPackageVersion } from './version';
 
 /**
@@ -233,6 +234,8 @@ app.get('/ready', async (_req, res) => {
       ready: true,
       storage: storageType,
       ...(database ? { database } : {}),
+      // Per process, reset on restart: conflicting duplicates rejected and legacy rows matched by id only.
+      ingestion: store.ingestionCounters(),
     });
   } catch (err: any) {
     res.status(503).json({ ok: false, ready: false, error: err?.message || 'Storage error' });
@@ -274,6 +277,32 @@ function broadcastEvent(event: CanonicalEvent) {
   }
 }
 
+/** Body of a `409 conflicting_duplicate`, also used for conflicting items of a batch. */
+function conflictMessage(id: string): string {
+  return `An event with id "${id}" was already stored with different content. The new event was not applied.`;
+}
+
+/**
+ * Stores an event the server built itself and broadcasts it only when the store accepted it. Any other outcome
+ * means a server-generated id was reused, which is a server bug: it is logged at error and answered with
+ * `500 internal_id_collision` instead of being hidden. Returns false when the response was already sent.
+ */
+async function appendServerEvent(event: CanonicalEvent, res: express.Response): Promise<boolean> {
+  const result: AppendResult = await store.append(event);
+  if (result.outcome === 'accepted') {
+    broadcastEvent(event);
+    return true;
+  }
+  console.error(
+    `[agent-viewer] Server-generated event id collided: ${JSON.stringify({ id: event.id, type: event.type, outcome: result.outcome })}`
+  );
+  res.status(500).json({
+    error: 'internal_id_collision',
+    message: `The server generated event id "${event.id}", which was already stored. The event was not applied.`,
+  });
+  return false;
+}
+
 // -------------------------------------------------------------
 // Event Ingestion (Single)
 // -------------------------------------------------------------
@@ -282,8 +311,19 @@ app.post('/api/v1/events', async (req, res) => {
   // Express 5 leaves req.body undefined when the request has no JSON body (Express 4 set it to {}).
   let body = req.body ?? {};
 
-  if (idempotencyKey && !body.id) {
-    body = { ...body, id: idempotencyKey };
+  if (idempotencyKey) {
+    // The header and the body id name the same event. When both are given and differ, nothing is stored.
+    const bodyId: unknown = typeof body === 'object' && body !== null ? body.id : undefined;
+    if (typeof bodyId === 'string' && bodyId.length > 0 && bodyId !== idempotencyKey) {
+      res.status(400).json({
+        error: 'idempotency_key_mismatch',
+        message: `Idempotency-Key "${idempotencyKey}" does not match the event id "${bodyId}".`,
+      });
+      return;
+    }
+    if (!body.id) {
+      body = { ...body, id: idempotencyKey };
+    }
   }
 
   const validation = validateCanonicalEvent(body);
@@ -298,11 +338,24 @@ app.post('/api/v1/events', async (req, res) => {
   const event = validation.data;
   const result = await store.append(event);
 
-  if (result.duplicate) {
+  if (result.outcome === 'conflict') {
+    // Same id, different content: not applied, not stored, not broadcast. The stored event stays as it was.
+    res.status(409).json({
+      error: 'conflicting_duplicate',
+      message: conflictMessage(event.id),
+      id: event.id,
+      fingerprint: result.fingerprint,
+      storedFingerprint: result.storedFingerprint,
+    });
+    return;
+  }
+
+  if (result.outcome === 'duplicate') {
     res.status(200).json({
       accepted: true,
       duplicate: true,
       id: event.id,
+      fingerprint: result.fingerprint,
     });
     return;
   }
@@ -313,6 +366,7 @@ app.post('/api/v1/events', async (req, res) => {
     accepted: true,
     duplicate: false,
     id: event.id,
+    fingerprint: result.fingerprint,
   });
 });
 
@@ -367,20 +421,30 @@ app.post('/api/v1/events/batch', async (req, res) => {
     return;
   }
 
-  const { accepted, duplicates, acceptedEvents } = await store.appendBatch(validatedEvents);
+  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(validatedEvents);
 
   for (const event of acceptedEvents) {
     broadcastEvent(event);
   }
 
+  // 202 even when every item is a conflict, so existing clients keep working: read `conflicts` and each `status`.
   res.status(202).json({
     accepted,
     duplicates,
+    conflicts,
     total: rawEvents.length,
-    results: validatedEvents.map((e) => ({
-      id: e.id,
-      duplicate: !acceptedEvents.some((acc) => acc.id === e.id),
-    })),
+    results: results.map((result) =>
+      result.outcome === 'conflict'
+        ? {
+            id: result.id,
+            status: result.outcome,
+            duplicate: false,
+            fingerprint: result.fingerprint,
+            error: 'conflicting_duplicate',
+            storedFingerprint: result.storedFingerprint,
+          }
+        : { id: result.id, status: result.outcome, duplicate: result.duplicate, fingerprint: result.fingerprint }
+    ),
   });
 });
 
@@ -479,7 +543,7 @@ app.post('/api/v1/agents', async (req, res) => {
 
   const regEvent: CanonicalEvent = {
     schemaVersion: '1.0',
-    id: `evt_reg_${id}_${Date.now()}`,
+    id: serverEventId('reg'),
     type: 'agent.registered',
     timestamp: Date.now(),
     source: `agent:${id}`,
@@ -489,8 +553,7 @@ app.post('/api/v1/agents', async (req, res) => {
     payload: { id, name, roleTitle, provider, model, workspace },
   };
 
-  await store.append(regEvent);
-  broadcastEvent(regEvent);
+  if (!(await appendServerEvent(regEvent, res))) return;
 
   res.status(201).json(agent);
 });
@@ -602,7 +665,7 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
     if (Object.keys(profilePayload).length > 0) {
       const updatedEvent: CanonicalEvent = {
         schemaVersion: '1.0',
-        id: `evt_upd_${agentId}_${crypto.randomUUID()}`,
+        id: serverEventId('upd'),
         type: 'agent.updated',
         timestamp: statusEventTimestamp,
         source: `agent:${agentId}`,
@@ -611,13 +674,12 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
         summary: `${agentId} profile updated`,
         payload: profilePayload,
       };
-      await store.append(updatedEvent);
-      broadcastEvent(updatedEvent);
+      if (!(await appendServerEvent(updatedEvent, res))) return;
     }
 
     const statusEvent: CanonicalEvent = {
       schemaVersion: '1.0',
-      id: `evt_status_${agentId}_${crypto.randomUUID()}`,
+      id: serverEventId('status'),
       type: 'agent.status.changed',
       timestamp: statusEventTimestamp,
       source: `agent:${agentId}`,
@@ -626,12 +688,11 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
       summary: `${agentId} status updated to ${status}`,
       payload: statusPayload,
     };
-    await store.append(statusEvent);
-    broadcastEvent(statusEvent);
+    if (!(await appendServerEvent(statusEvent, res))) return;
   } else {
     const updatedEvent: CanonicalEvent = {
       schemaVersion: '1.0',
-      id: `evt_upd_${agentId}_${crypto.randomUUID()}`,
+      id: serverEventId('upd'),
       type: 'agent.updated',
       timestamp: Date.now(),
       source: `agent:${agentId}`,
@@ -640,8 +701,7 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
       summary: `${agentId} profile updated`,
       payload: { ...profilePayload, ...statusPayload },
     };
-    await store.append(updatedEvent);
-    broadcastEvent(updatedEvent);
+    if (!(await appendServerEvent(updatedEvent, res))) return;
   }
 
   res.json(await store.getAgent(agentId));
@@ -660,7 +720,7 @@ app.post('/api/v1/runtimes', async (req, res) => {
   const runtime = await store.upsertRuntime({ id, name, framework, version, metadata });
   const event: CanonicalEvent = {
     schemaVersion: '1.0',
-    id: `evt_rt_${id}_${Date.now()}`,
+    id: serverEventId('rt'),
     type: 'runtime.connected',
     timestamp: Date.now(),
     runtimeId: id,
@@ -669,8 +729,7 @@ app.post('/api/v1/runtimes', async (req, res) => {
     summary: `Runtime ${id} connected`,
     payload: { id, name, framework, version, metadata },
   };
-  await store.append(event);
-  broadcastEvent(event);
+  if (!(await appendServerEvent(event, res))) return;
 
   res.status(201).json(runtime);
 });
@@ -825,7 +884,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   // Generate status changed event
   generatedEvents.push(
     normalizeCanonicalEvent({
-      id: `evt_wh_status_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      id: serverEventId('wh_status'),
       type: 'agent.status.changed',
       agentId: agentName,
       source: `agent:${agentName}`,
@@ -838,7 +897,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   if (message) {
     generatedEvents.push(
       normalizeCanonicalEvent({
-        id: `evt_wh_msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: serverEventId('wh_msg'),
         type: 'agent.message.sent',
         agentId: agentName,
         source: `agent:${agentName}`,
@@ -852,7 +911,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   if (tool) {
     generatedEvents.push(
       normalizeCanonicalEvent({
-        id: `evt_wh_tool_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: serverEventId('wh_tool'),
         type: 'tool.started',
         agentId: agentName,
         source: `agent:${agentName}`,
@@ -866,7 +925,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   if (usage && typeof usage === 'object') {
     generatedEvents.push(
       normalizeCanonicalEvent({
-        id: `evt_wh_usage_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: serverEventId('wh_usage'),
         type: 'llm.usage',
         agentId: agentName,
         source: `agent:${agentName}`,
@@ -876,15 +935,22 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     );
   }
 
-  const { accepted, acceptedEvents } = await store.appendBatch(generatedEvents);
+  const { accepted, duplicates, conflicts, results, acceptedEvents } = await store.appendBatch(generatedEvents);
   for (const evt of acceptedEvents) {
     broadcastEvent(evt);
+  }
+  if (duplicates > 0 || conflicts > 0) {
+    // Webhook ids are random UUIDs, so a repeat is a server bug, never a client retry.
+    const collided = results.filter((result) => result.outcome !== 'accepted').map(({ id, outcome }) => ({ id, outcome }));
+    console.error(`[agent-viewer] Webhook event ids collided: ${JSON.stringify(collided)}`);
   }
 
   res.status(202).json({
     accepted: true,
     eventsGenerated: generatedEvents.length,
     acceptedCount: accepted,
+    duplicateCount: duplicates,
+    conflictCount: conflicts,
     eventIds: generatedEvents.map((e) => e.id),
   });
 });

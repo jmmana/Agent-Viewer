@@ -112,3 +112,53 @@ test('SSE: token authentication works via query parameter for EventSource compat
     server.close();
   }
 });
+
+test('SSE: no frame is emitted for a duplicate or a conflicting event', async () => {
+  const { server, baseUrl } = await startTestServer();
+  const post = (body) =>
+    fetch(`${baseUrl}/api/v1/events`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const original = {
+    schemaVersion: '1.0',
+    id: 'evt_sse_integrity',
+    type: 'agent.message.sent',
+    timestamp: 1_700_000_000_000,
+    source: 'agent:tester',
+    summary: 'Original',
+    payload: { text: 'original text' },
+  };
+  const marker = { ...original, id: 'evt_sse_integrity_marker', summary: 'Marker', payload: { text: 'marker' } };
+
+  const response = await fetch(`${baseUrl}/api/v1/events/stream`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    text += decoder.decode((await reader.read()).value);
+    assert.ok(text.includes('connected'));
+
+    assert.equal((await post(original)).status, 202);
+    assert.equal((await post(original)).status, 200);
+    assert.equal((await post({ ...original, payload: { text: 'different text' } })).status, 409);
+    const batch = await fetch(`${baseUrl}/api/v1/events/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([original, { ...original, summary: 'Changed' }]),
+    });
+    assert.equal(batch.status, 202);
+    assert.deepEqual((await batch.json()).results.map(({ status }) => status), ['duplicate', 'conflict']);
+    // The marker is sent last, so once it arrives every earlier frame has arrived too.
+    assert.equal((await post(marker)).status, 202);
+
+    while (!text.includes('id: evt_sse_integrity_marker')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value);
+    }
+    const frames = text.split('\n\n').filter((block) => block.startsWith('id: evt_sse_integrity'));
+    assert.deepEqual(frames.map((block) => block.split('\n')[0]), ['id: evt_sse_integrity', 'id: evt_sse_integrity_marker']);
+    assert.ok(!text.includes('different text') && !text.includes('Changed'), 'the rejected content never reaches the stream');
+  } finally {
+    await reader.cancel();
+    server.close();
+  }
+});

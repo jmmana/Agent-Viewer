@@ -74,3 +74,21 @@ test('pinch táctil real a 320px y cancelación sin contaminar otra sala', async
   await expect.poll(camera).toEqual(saved);
   await context.close();
 });
+
+test('enfoca escritorios y limita paneo incluso tras reducir el viewport', async ({ page }, testInfo) => {
+  await page.setViewportSize({width:1920,height:1080});
+  await page.goto('/');
+  await page.getByRole('button', {name:'Crew · Beta',exact:true}).click();
+  await page.locator('#crew-focus').selectOption('ceo-desk');
+  await expect(page.getByText('150%',{exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath('ceo-desk-focus.png')});
+  const canvas = page.locator('canvas');
+  await canvas.focus();
+  for (let i=0;i<50;i++) await page.keyboard.press('ArrowRight');
+  await page.setViewportSize({width:320,height:800});
+  await expect.poll(async () => page.evaluate(key => JSON.parse(localStorage.getItem(key) || '{}').ceo.pan.x, storageKey)).toBeLessThanOrEqual(128);
+  await page.locator('#crew-room').selectOption('development');
+  await expect(page.locator('#crew-focus option[value="ceo-desk"]')).toHaveCount(0);
+  await page.locator('#crew-focus').selectOption('dev-display');
+  await expect(page.getByText('150%',{exact:true})).toBeVisible();
+});

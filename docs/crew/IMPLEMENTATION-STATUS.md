@@ -1,12 +1,13 @@
 # Estado de implementación de Crew
 
 Actualizado: 2026-10-08 (America/Bogota).
-Último issue trabajado: #171, persistencia de navegación Crew. Epic: #114.
+Último issue trabajado: #156, foco de objetos y límites de paneo Crew. Epic: #114.
 
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-navigation-persistence-171`, basada en `0b513ea` de #182.
+- Rama actual: `feat/crew-camera-focus-156`, basada en `1e1e591` de #183.
+- Persistencia: `feat/crew-navigation-persistence-171`, basada en `0b513ea` de #182.
 - Rama anterior: `feat/crew-camera-gestures-156`, basada en `3e18d2a` de #177.
 - PR #175 y #177: abiertos, borrador, checks anteriores verdes. No fusionados.
 - #174 y #176: fusionados en main. #162, #163 y #164: fusionados solamente en la rama de #43.
@@ -78,7 +79,7 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 | [#153](https://github.com/jmmana/Agent-Viewer/issues/153) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#154](https://github.com/jmmana/Agent-Viewer/issues/154) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#155](https://github.com/jmmana/Agent-Viewer/issues/155) | Adaptador de presencia de solo lectura en #177; bridge completo pendiente. |
-| [#156](https://github.com/jmmana/Agent-Viewer/issues/156) | Gestos táctiles, rueda y teclado implementados en esta rama; foco y pan acotado pendientes. |
+| [#156](https://github.com/jmmana/Agent-Viewer/issues/156) | Gestos, rueda y teclado en #182; foco de escritorios/monitores y pan acotado en esta rama. Foco de actores y arte final pendientes. |
 | [#157](https://github.com/jmmana/Agent-Viewer/issues/157) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#158](https://github.com/jmmana/Agent-Viewer/issues/158) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#159](https://github.com/jmmana/Agent-Viewer/issues/159) | Dos E2E de cámara y regresión básica de cambio de modo en esta rama. |
@@ -95,9 +96,9 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 ## Próximos tres pasos
 
-1. #156: foco de escritorio/agente y pan acotado al viewport; arte multivista sigue pendiente.
+1. #159: ampliar QA LIVE/DEMO/REPLAY, lifecycle y cuatro tamaños; gate G1 aún pendiente.
 2. #171: reset general y navegación accesible; deep links y API embebida.
-3. #159: ampliar LIVE/DEMO/REPLAY, limpieza de lifecycle y matriz responsive antes del gate G1.
+3. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
 
 ## Riesgos y decisiones
 
@@ -110,4 +111,10 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 Modo y oficina elegidos sobreviven a recarga y a la salida/regreso desde Caricatura. La clave `agent-viewer-crew-navigation-v1` contiene solamente versión, modo y sala. La clave de cámaras existente se conserva sin migración destructiva. JSON corrupto, versiones futuras y salas eliminadas usan valores seguros. Fallos de almacenamiento no bloquean las funciones de preferencias.
 
-Validación: typecheck; 61 pruebas node y 446 Vitest; 4 E2E Chrome aprobados, incluyendo recarga en Development/back/120%, regreso desde Caricatura y sala eliminada. Builds app/lib y validación de paquete ejecutados. La recuperación de almacenamiento bloqueado está probada a nivel del módulo, no de toda la aplicación. No se cerró #171: quedan reset general, deep links y API embebida. Implementación `b563258`, [PR #183](https://github.com/jmmana/Agent-Viewer/pull/183), abierto sobre #182. CI pendiente al publicar.
+Validación: typecheck; 61 pruebas node y 446 Vitest; 4 E2E Chrome aprobados, incluyendo recarga en Development/back/120%, regreso desde Caricatura y sala eliminada. Builds app/lib y validación de paquete ejecutados. La recuperación de almacenamiento bloqueado está probada a nivel del módulo, no de toda la aplicación. No se cerró #171: quedan reset general, deep links y API embebida. Implementación `b563258`, [PR #183](https://github.com/jmmana/Agent-Viewer/pull/183), abierto sobre #182. [CI](https://github.com/jmmana/Agent-Viewer/actions/runs/37869062554) aprobado en el último commit, con Docker y navegador.
+
+## Continuación #156: foco y límites
+
+Selector de escritorios/monitores de la sala actual, con foco basado en la misma proyección y escala de encuadre del renderer. Un ID de otra sala no cambia la cámara. El paneo conserva el centro de la geometría local dentro del viewport con 32 píxeles de margen; esto prioriza poder recuperar la sala sobre un paneo ilimitado. ResizeObserver corrige también la cámara persistida al reducir la ventana. El zoom por botones conserva el centro de vista.
+
+Validación local: typecheck; 61 pruebas node y 449 Vitest; 5 E2E Chrome aprobados; build app aprobado. Nuevas pruebas verifican foco en cuatro vistas, aislamiento de IDs, paneo extremo y resize 1920→320. [Captura de foco CEO](evidence/camera-156/ceo-desk-focus.png). Foco de agentes pendiente hasta disponer de anclajes visuales reales en Crew. PR/SHA de esta continuación pendientes de publicación.

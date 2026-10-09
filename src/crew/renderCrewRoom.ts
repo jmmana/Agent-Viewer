@@ -68,13 +68,18 @@ const color = {
   screen: { top: '#4bb8d7', side: '#1c3548', front: '#214b64' },
 } as const;
 
+/** Escala compartida por encuadre y foco, expresada en píxeles CSS. */
+export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: number, height: number): number {
+  const bounds = crewGeometryBounds(room, view);
+  return Math.max(.15, Math.min((width - 72) / bounds.width, (height - 72) / bounds.height, 2));
+}
+
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
 export function renderCrewRoom({ ctx, width, height, room, camera, locale = 'es' }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
-  const padding = 36;
-  const fit = Math.max(.15, Math.min((width-padding*2)/bounds.width, (height-padding*2)/bounds.height, 2));
+  const fit = crewFitScale(room, view, width, height);
   ctx.save();
   ctx.fillStyle = '#142339'; ctx.fillRect(0,0,width,height);
   ctx.translate(width/2+pan.x,height/2+pan.y);

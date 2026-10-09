@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { renderCrewRoom } from './renderCrewRoom';
 import { crewAgentsInRoom } from './crewEvents';
+import { constrainCrewPan, focusCrewFurniture } from './crewViewport';
 import { CrewGestures } from './crewGestures';
 import type { Agent } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
@@ -32,14 +33,18 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   });
   const camera = cameraByRoom[roomId] ?? defaultCrewCamera();
   const { view, zoom } = camera;
-  const patchCamera = (update: Partial<CrewCamera>) => setCameraByRoom(prev => ({
-    ...prev, [roomId]: { ...(prev[roomId] ?? defaultCrewCamera()), ...update },
-  }));
-  const setView = (value: CrewView) => patchCamera({ view: value });
-  const setZoom = (fn: (prev: number) => number) => patchCamera({ zoom: fn(zoom) });
   const updateCamera = useCallback((update: (camera: CrewCamera) => CrewCamera) => {
-    setCameraByRoom(prev => ({ ...prev, [roomId]: update(prev[roomId] ?? defaultCrewCamera()) }));
+    const viewport = canvasRef.current?.getBoundingClientRect();
+    setCameraByRoom(prev => {
+      const current = prev[roomId] ?? defaultCrewCamera();
+      const next = update(viewport ? constrainCrewPan(current, viewport) : current);
+      const constrained = viewport ? constrainCrewPan(next, viewport) : next;
+      return constrained === current ? prev : { ...prev, [roomId]: constrained };
+    });
   }, [roomId]);
+  const patchCamera = (update: Partial<CrewCamera>) => updateCamera(current => ({ ...current, ...update }));
+  const setView = (value: CrewView) => patchCamera({ view: value });
+  const setZoom = (fn: (prev: number) => number) => updateCamera(current => zoomCrewCameraAt(current, fn(current.zoom), { x: 0, y: 0 }));
   useEffect(() => {
     const canvas = canvasRef.current;
     const reset = () => gestures.current.clear();
@@ -87,17 +92,20 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera, locale });
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), locale });
   }, [room, camera, locale]);
 
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(render) : null;
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      updateCamera(current => current);
+      render();
+    }) : null;
     observer?.observe(el);
     frameRef.current = requestAnimationFrame(render);
     return () => { observer?.disconnect(); cancelAnimationFrame(frameRef.current); };
-  }, [render]);
+  }, [render, updateCamera]);
 
   return <section aria-label={isEs ? 'Modo Crew: oficina independiente' : 'Crew mode: independent office'}
     style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', background: '#101a2b', color: '#f1f5f9' }}>
@@ -118,6 +126,18 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       <button type="button" onClick={() => patchCamera(defaultCrewCamera())}>
         {isEs ? 'Ajustar' : 'Fit room'}
       </button>
+      <label htmlFor="crew-focus">{isEs ? 'Enfocar' : 'Focus'}</label>
+      <select id="crew-focus" value="" onChange={event => {
+        const viewport = canvasRef.current?.getBoundingClientRect();
+        const id = event.target.value;
+        if (viewport) updateCamera(current => focusCrewFurniture(current, room, id, viewport));
+      }} style={{ color: '#111827', background: '#fff', padding: 6, maxWidth: '100%' }}>
+        <option value="">{isEs ? 'Elegir objeto' : 'Choose object'}</option>
+        {room.furniture.filter(item => item.type === 'desk' || item.type === 'screen').map((item, index) =>
+          <option key={item.id} value={item.id}>
+            {item.type === 'desk' ? (isEs ? 'Escritorio' : 'Desk') : (isEs ? 'Monitor' : 'Monitor')} {index + 1}
+          </option>)}
+      </select>
     </div>
     <div aria-live="polite" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 10px', fontSize: 12 }}>
       <span>{isEs ? 'Agentes en esta oficina:' : 'Agents in this room:'} {visibleAgents.length}</span>

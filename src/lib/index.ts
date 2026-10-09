@@ -73,7 +73,13 @@ export type {
   ValidationIssue,
   ValidationResult,
 } from '../integrations/canonicalTypes';
-export { validateCanonicalEvent } from '../integrations/canonicalContract';
+export {
+  validateCanonicalEvent,
+  CORRELATION_ID_MAX_LENGTH,
+  USAGE_TAGS_MAX,
+  USAGE_TAG_MAX_LENGTH,
+} from '../integrations/canonicalContract';
+export type { UsageCorrelation, LlmUsagePayload, LlmFailedPayload } from '../integrations/canonicalContract';
 
 // Usage tally (portal display only)
 export type {

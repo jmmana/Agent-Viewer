@@ -602,6 +602,8 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 - Las mismas reglas valen para cada agente en `byAgent`, con solo los eventos de ese agente: si a un agente le falta una cifra, solo ese agente y el total de la ejecución quedan como desconocidos.
 - Sin ningún evento `llm.usage`, todas las cifras son `null` (se muestran como "desconocido"), no cero, y `byAgent` es `{}`.
 
+**Campos de correlación de uso (issue #64).** Los payloads de `llm.usage` y `llm.failed` pueden traer `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` y `tags` (ver [integration.md](integration.md#correlation-and-attribution-fields-issue-64), en inglés, para las reglas de validación). `summarizeUsage` no los lee: su resultado es idéntico tenga o no un evento estos campos, y nunca agrupa por ellos. Ningún componente de la librería muestra `userId` ni `tags`, ya que `userId` es una atribución seudónima y `tags` puede usarse para etiquetas internas, ninguno pensado para la vista embebida. La librería exporta los límites y el tipo correspondientes, solo como valores y tipo, sin ningún comportamiento nuevo: `CORRELATION_ID_MAX_LENGTH` (128), `USAGE_TAGS_MAX` (20), `USAGE_TAG_MAX_LENGTH` (64) y el tipo `UsageCorrelation`.
+
 ### Cifras del servidor de Agent Viewer
 
 Si tu app está conectada al servidor de Agent Viewer, lee `GET /api/v1/usage` (`usageSummary()` en el SDK de TypeScript) y pasa sus cifras tal cual. La librería sigue sin hacer cuentas: el host traduce cada grupo, y solo las cifras conocidas por completo se vuelven números.

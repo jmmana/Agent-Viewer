@@ -585,6 +585,47 @@ A conflicting alias gets this response:
 }
 ```
 
+### Correlation and attribution fields (issue #64)
+
+`llm.usage` and `llm.failed` share one correlation block, so a call can be linked to a trace, a tool call, a meeting or a user without Agent Viewer having to guess from timing. Every field is optional, lives in the payload (never the envelope) and means "not reported" when absent or `null`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `traceId` | string or `null` | Id of the trace or run in the caller's own tracing system (a W3C trace id, an OpenAI Agents `trace_...`, a LangChain root run id, and so on). Opaque to Agent Viewer. |
+| `parentId` | string or `null` | Id of the span, run or step in that same tracing system that issued this model call. Not an Agent Viewer event id. |
+| `toolCallId` | string or `null` | The tool call during whose execution this model call was made (for example a sub-agent call started by a tool). Same value space as `toolCallId` on `tool.*` events. It is **not** the id of a tool call the model is requesting. |
+| `meetingId` | string or `null` | The office meeting during which the call happened. Same value as `payload.meetingId` on `meeting.*` events. |
+| `userId` | string or `null` | Opaque, pseudonymous id of the user or account the work was done for. Client-asserted, not authenticated. **Must never be an email address or a person's name.** |
+| `tags` | string array or `null` | Free-form labels for attribution, for example `env:prod`, `feature:quote-builder`, `tier:pro`. **Must never hold prompt text, names or emails.** |
+
+Validation, applied by the server and mirrored by both SDKs:
+
+- `traceId`, `parentId`, `toolCallId`, `meetingId` and `userId` must be 1 to 128 characters, contain no control characters (U+0000 to U+001F, U+007F) and have no leading or trailing whitespace. The exact whitespace set matches ECMAScript's `String.prototype.trim` (U+0009 to U+000D, U+0020, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF); length is counted in UTF-16 code units (JavaScript `String.length`), and the Python SDK counts the same way (`len(s.encode("utf-16-le")) // 2`) so a value accepted locally is never rejected by the server.
+- An empty string is rejected (`payload.<field>`), never silently treated as "not reported". Nothing is ever truncated.
+- `tags` allows at most 20 items, each 1 to 64 characters with the same control-character and whitespace rules. The 20-item limit applies to the array as sent, before deduplication. Exact duplicate tags are removed, keeping the first occurrence and the original order; an empty array is treated as "not reported" and omitted.
+- There are no referential checks: the server never requires that a `toolCallId` or `meetingId` already exists, because events can arrive out of order.
+
+A full example:
+
+```json
+{
+  "payload": {
+    "provider": "OpenAI",
+    "model": "gpt-4.1",
+    "inputTokens": 1200,
+    "outputTokens": 400,
+    "traceId": "trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4",
+    "parentId": "span_7c1d2e3f4a5b6c7d8e9f0a1b",
+    "toolCallId": "call_Ab12Cd34",
+    "meetingId": "meeting-pricing-review",
+    "userId": "usr_5e1b",
+    "tags": ["env:prod", "feature:quote-builder", "env:prod"]
+  }
+}
+```
+
+After validation, `tags` is stored as `["env:prod", "feature:quote-builder"]` (deduplicated). These fields travel through `POST /api/v1/events` and `POST /api/v1/events/batch`, the generic webhook's `usage` object, `GET /api/v1/events`, `parseEventLog` (JSONL import) and the SSE stream (`GET /api/v1/events/stream`): whatever was stored is exactly what gets replayed or streamed. They add no aggregation and no UI: `summarizeUsage` and the embedded library never read, sum or display `userId` or `tags`. A 0.4.0 or later server is required to keep these fields; an older server accepts the event and silently drops them (see [Compatibility notes](#compatibility-notes) below).
+
 ### Usage from the SDKs
 
 The Python and TypeScript SDKs send each figure exactly as the caller gives it, and never sum or price anything:
@@ -592,7 +633,8 @@ The Python and TypeScript SDKs send each figure exactly as the caller gives it, 
 - A token count or `currency` that is not given (or is `None` / `null`) is left out of the payload; an explicit `0` is kept. The SDKs never work out `cachedTokens` from `cacheReadTokens` and `cacheWriteTokens`, or the reverse.
 - `costSource` is exactly what the caller states. A cost given without it is sent as `"unknown"`, and each client (`AgentViewer` instance) prints one warning. With no cost, `costSource` is the stated value or `"unknown"`. A value other than `provider-reported`, `estimated` or `unknown` fails before anything is sent (`ValueError` in Python, a rejected promise with `TypeError` in TypeScript).
 - `currency` is never defaulted to `USD` and never rewritten; the server checks the ISO 4217 format.
-- `task_id` / `taskId` goes to the envelope `taskId`, not to the payload:
+- `task_id` / `taskId` goes to the envelope `taskId`, not to the payload.
+- `trace_id` / `traceId`, `parent_id` / `parentId`, `tool_call_id` / `toolCallId`, `meeting_id` / `meetingId`, `user_id` / `userId` and `tags` (issue #64) are keyword-only arguments on `usage()`, the `llmFailed()` / `llm_failed()` helper and the legacy `llm_usage()`. Both SDKs validate them locally with the exact limits above before sending anything: Python raises `ValueError` naming the argument (`TypeError` for a wrong type, for example `tags="env:prod"`, since a `str` is itself a sequence and would otherwise be split into one tag per character); TypeScript rejects with `AgentViewerError` whose `issues` use the same `{ path, message }` shape the server returns. `tool_started` / `toolStarted`, `tool_completed` / `toolCompleted` and `tool_failed` / `toolFailed` accept a `tool_call_id` / `toolCallId` option, sent as `payload.toolCallId`.
 
 ```json
 {
@@ -688,6 +730,7 @@ The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, 
 | `latencyMs` | No | Non-negative integer or `null`. |
 | `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. Same meaning as in `llm.usage`. No default. |
 | `cost`, `costSource`, `currency` | No | Same rules as in `llm.usage`. |
+| `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId`, `tags` | No | Same [correlation and attribution block](#correlation-and-attribution-fields-issue-64) as `llm.usage`, validated and normalized the same way. |
 
 Token and cost fields are filled only when the provider actually billed the failed attempt (for example, a stream cut off after output started). Otherwise leave them out. Consumers must never read a missing value as `0`. The subset check of `llm.usage` applies only when `inputTokens` is sent.
 

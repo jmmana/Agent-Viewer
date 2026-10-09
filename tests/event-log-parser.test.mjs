@@ -113,6 +113,40 @@ test('Event log parser: accepts llm.failed lines and keeps unknown figures absen
   assert.equal('reasoningTokens' in usage.payload, false);
 });
 
+test('Event log parser: keeps the usage correlation fields, tags deduplicated (issue #64)', async () => {
+  const jsonl = JSON.stringify({
+    schemaVersion: '1.0',
+    id: 'evt_usage_correlation_log',
+    type: 'llm.usage',
+    timestamp: 1000,
+    source: 'agent:researcher',
+    summary: 'Usage report with correlation',
+    payload: {
+      provider: 'Anthropic',
+      model: 'claude-sonnet',
+      inputTokens: 1200,
+      outputTokens: 80,
+      traceId: 'trace_log_parser',
+      parentId: 'span_log_parser',
+      toolCallId: 'call_log_parser',
+      meetingId: 'meeting_log_parser',
+      userId: 'usr_log_parser',
+      tags: ['env:prod', 'env:prod'],
+    },
+  });
+
+  const res = await parseEventLog(jsonl);
+  assert.equal(res.issues.length, 0);
+  assert.equal(res.events.length, 1);
+  const [event] = res.events;
+  assert.equal(event.payload.traceId, 'trace_log_parser');
+  assert.equal(event.payload.parentId, 'span_log_parser');
+  assert.equal(event.payload.toolCallId, 'call_log_parser');
+  assert.equal(event.payload.meetingId, 'meeting_log_parser');
+  assert.equal(event.payload.userId, 'usr_log_parser');
+  assert.deepEqual(event.payload.tags, ['env:prod']);
+});
+
 test('Event log parser: rejects payloads exceeding 25 MB limit', async () => {
   // Create an artificial oversized string
   const giant = 'a'.repeat(MAX_EVENT_LOG_SIZE_BYTES + 10);

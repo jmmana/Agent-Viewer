@@ -56,17 +56,24 @@ class AutoGenViewerAdapter:
         # Display observable message bubble
         sender.message(content, target_agent_name=recipient_name)
 
-    def on_function_call(self, agent_name: str, function_name: str, arguments_summary: Optional[str] = None) -> None:
-        """Called when an agent invokes a function/tool."""
+    def on_function_call(
+        self, agent_name: str, function_name: str, arguments_summary: Optional[str] = None, call_id: Optional[str] = None
+    ) -> None:
+        """Called when an agent invokes a function/tool. ``call_id`` is AutoGen's own function call id
+        (the ``id`` field of the ``tool_calls`` entry on the assistant message), never invented when AutoGen
+        does not surface one for the model in use.
+        """
         self.ensure_agent(agent_name)
         agent = self.viewer.agent(agent_name)
-        agent.tool_started(function_name, arguments_summary)
+        agent.tool_started(function_name, arguments_summary, tool_call_id=call_id)
 
-    def on_function_return(self, agent_name: str, function_name: str, result_summary: Optional[str] = None) -> None:
-        """Called when function returns result."""
+    def on_function_return(
+        self, agent_name: str, function_name: str, result_summary: Optional[str] = None, call_id: Optional[str] = None
+    ) -> None:
+        """Called when function returns result. Same call id as ``on_function_call`` for the matching call."""
         self.ensure_agent(agent_name)
         agent = self.viewer.agent(agent_name)
-        agent.tool_completed(function_name, result_summary)
+        agent.tool_completed(function_name, result_summary, tool_call_id=call_id)
 
     def on_llm_response(
         self,
@@ -75,8 +82,19 @@ class AutoGenViewerAdapter:
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
+        trace_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        tags: Optional[list] = None,
     ) -> None:
-        """Called when LLM completes generation."""
+        """Called when LLM completes generation.
+
+        ``trace_id`` is forwarded only when the caller passes one: AutoGen has no built-in run or trace id
+        at this layer, so this adapter never invents one. AutoGen likewise exposes no parent span id, so no
+        ``parent_id`` is ever sent. ``tool_call_id`` is forwarded here only when this usage was itself
+        produced inside a function call's execution, not the id of a function the model is about to call.
+        ``tags`` is never read from AutoGen's own metadata: it is only ever an explicit value the host
+        chooses to pass.
+        """
         self.ensure_agent(agent_name)
         agent = self.viewer.agent(agent_name)
         agent.usage(
@@ -86,4 +104,7 @@ class AutoGenViewerAdapter:
             output_tokens=completion_tokens,
             cost=None,
             cost_source="unknown",
+            trace_id=trace_id,
+            tool_call_id=tool_call_id,
+            tags=tags,
         )

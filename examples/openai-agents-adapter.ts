@@ -59,27 +59,28 @@ export class OpenAIAgentsViewerAdapter {
   }
 
   /**
-   * Called when the agent invokes a tool/function.
+   * Called when the agent invokes a tool/function. `callId` is the Agents SDK function tool call id
+   * (`FunctionToolCall.call_id` in the OpenAI Agents SDK), never invented when the framework omits it.
    */
-  async onToolCall(toolName: string, argsSummary?: string): Promise<void> {
+  async onToolCall(toolName: string, argsSummary?: string, callId?: string): Promise<void> {
     const agent = this.viewer.agent(this.currentAgentId);
-    await agent.toolStarted(toolName, argsSummary);
+    await agent.toolStarted(toolName, argsSummary, { toolCallId: callId });
   }
 
   /**
-   * Called when a tool returns output.
+   * Called when a tool returns output. Same `call_id` as `onToolCall` for the matching call.
    */
-  async onToolResult(toolName: string, outputSummary?: string): Promise<void> {
+  async onToolResult(toolName: string, outputSummary?: string, callId?: string): Promise<void> {
     const agent = this.viewer.agent(this.currentAgentId);
-    await agent.toolCompleted(toolName, outputSummary);
+    await agent.toolCompleted(toolName, outputSummary, { toolCallId: callId });
   }
 
   /**
-   * Called when tool fails.
+   * Called when tool fails. Same `call_id` as `onToolCall` for the matching call.
    */
-  async onToolError(toolName: string, error: string): Promise<void> {
+  async onToolError(toolName: string, error: string, callId?: string): Promise<void> {
     const agent = this.viewer.agent(this.currentAgentId);
-    await agent.toolFailed(toolName, error);
+    await agent.toolFailed(toolName, error, { toolCallId: callId });
   }
 
   /**
@@ -96,6 +97,13 @@ export class OpenAIAgentsViewerAdapter {
    * `costSource` says where `totalCost` comes from and defaults to `unknown`: pass
    * `provider-reported` only when the provider returned the cost, or `estimated` when the
    * host app computed it. A `totalCost` of 0 is a real cost and is kept.
+   *
+   * `traceId` is the Agents SDK run trace id (`trace_...`, see the Agents SDK tracing docs) and
+   * `parentId` the parent span id in the same trace; both are forwarded only when the host passes them,
+   * never invented. `toolCallId` is forwarded here only when the usage was itself produced inside a tool
+   * call (a sub-agent run started by a tool), not the id of a tool the model is about to call. `tags` is
+   * never read from the framework's own metadata (unbounded, can carry prompt text): it is only ever an
+   * explicit value the host chooses to pass.
    */
   async onUsage(usage: {
     promptTokens: number;
@@ -103,6 +111,10 @@ export class OpenAIAgentsViewerAdapter {
     model?: string;
     totalCost?: number | null;
     costSource?: CostSource;
+    traceId?: string;
+    parentId?: string;
+    toolCallId?: string;
+    tags?: readonly string[];
   }): Promise<void> {
     const agent = this.viewer.agent(this.currentAgentId);
     await agent.usage({
@@ -112,6 +124,10 @@ export class OpenAIAgentsViewerAdapter {
       outputTokens: usage.completionTokens,
       cost: usage.totalCost ?? null,
       costSource: usage.costSource ?? 'unknown',
+      traceId: usage.traceId,
+      parentId: usage.parentId,
+      toolCallId: usage.toolCallId,
+      tags: usage.tags,
     });
   }
 

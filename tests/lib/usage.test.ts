@@ -30,6 +30,33 @@ describe('summarizeUsage', () => {
     expect(usage.byAgent?.bruno).toMatchObject({ totalTokens: 1000, cost: 0.0075, currency: 'USD' });
   });
 
+  it('gives an identical result whether or not events carry the usage correlation fields (issue #64)', () => {
+    const without = summarizeUsage([
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      llmUsage('ana', { inputTokens: 1200, outputTokens: 300, cost: 0.0125, currency: 'USD' }, { at: T0 + 1 }),
+    ]);
+    const withCorrelation = summarizeUsage([
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      llmUsage(
+        'ana',
+        {
+          inputTokens: 1200,
+          outputTokens: 300,
+          cost: 0.0125,
+          currency: 'USD',
+          traceId: 'trace_1',
+          parentId: 'span_1',
+          toolCallId: 'call_1',
+          meetingId: 'meeting_1',
+          userId: 'usr_1',
+          tags: ['env:prod', 'feature:x'],
+        },
+        { at: T0 + 1 },
+      ),
+    ]);
+    expect(withCorrelation).toEqual(without);
+  });
+
   it('makes the total cost unknown when any event lacks a cost', () => {
     const usage = summarizeUsage([
       llmUsage('ana', { inputTokens: 1000, outputTokens: 100, cost: 0.5, currency: 'USD' }, { at: T0 }),

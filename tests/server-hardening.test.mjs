@@ -162,9 +162,11 @@ test('startServer prints the loopback warning once after listening', async () =>
     const server = startServer(0, '127.0.0.1');
     try {
       await new Promise((resolve) => server.once('listening', resolve));
+      const port = server.address().port;
       assert.equal(warning.mock.callCount(), 6);
-      assert.match(warning.mock.calls[1].arguments[0], /Listening on 127\.0\.0\.1 only/);
+      assert.match(warning.mock.calls[1].arguments[0], new RegExp(`Listening on 127\\.0\\.0\\.1 only, port ${port}`));
       assert.match(warning.mock.calls[2].arguments[0], /Webhooks are open too/);
+      assert.doesNotMatch(warning.mock.calls[1].arguments[0], /port 0/);
     } finally {
       warning.mock.restore();
       server.close();

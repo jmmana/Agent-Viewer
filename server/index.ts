@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -853,7 +854,7 @@ const isDirectRun =
 /** Starts listening. Without `host` it binds every interface, as before; the CLI passes `127.0.0.1`. */
 export function startServer(portToListen = port, host?: string): Server {
   const server = host ? app.listen(portToListen, host) : app.listen(portToListen);
-  server.once('listening', () => warnIfApiOpen(portToListen, host));
+  server.once('listening', () => warnIfApiOpen((server.address() as AddressInfo).port, host));
   return server;
 }
 
@@ -861,7 +862,7 @@ if (isDirectRun && process.env.NODE_ENV !== 'test') {
   // Express 5 passes listen errors (for example EADDRINUSE) to this callback instead of emitting them unhandled.
   serverInstance = app.listen(port, (err?: Error) => {
     if (err) throw err;
-    warnIfApiOpen(port);
+    warnIfApiOpen((serverInstance.address() as AddressInfo).port);
     console.log(`Agent Viewer ingestion server listening on every interface, port ${port} (http://localhost:${port} from this machine)`);
   });
 }

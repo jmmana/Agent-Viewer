@@ -97,7 +97,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <span className="text-xs text-slate-400 hidden 2xl:inline">
           {t(locale, 'app.subtitle')}
         </span>
-        {isLiveConnected || openApi ? (
+        {isLiveConnected ? (
           <span
             className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide flex items-center gap-1.5 ${
               openApi

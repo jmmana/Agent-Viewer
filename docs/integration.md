@@ -208,11 +208,29 @@ Base URL: `http://localhost:8787`
 The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or `open`. These fields never include the token:
 
 ```json
-{ "auth": "open", "webhookAuth": "open" }
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "open",
+  "webhookAuth": "open"
+}
 ```
 
 ```json
-{ "auth": "token", "webhookAuth": "signature" }
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "token",
+  "webhookAuth": "signature"
+}
 ```
 
 ### Events

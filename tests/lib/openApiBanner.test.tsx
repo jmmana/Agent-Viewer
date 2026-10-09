@@ -39,7 +39,7 @@ describe('TopBar open API pill', () => {
     activeMeetingCount: 0,
     onChangeLocale: () => {},
     isLiveMode: true,
-    isLiveConnected: false,
+    isLiveConnected: true,
   };
 
   it.each([
@@ -53,5 +53,11 @@ describe('TopBar open API pill', () => {
 
     rerender(<TopBar {...props} locale={locale} openApi={false} />);
     expect(screen.queryByText(label)).toBeNull();
+  });
+
+  it('keeps the connecting pill while the stream is disconnected even when the API is open', () => {
+    render(<TopBar {...props} locale="en" isLiveConnected={false} openApi />);
+    expect(screen.getByText('CONNECTING')).toBeTruthy();
+    expect(screen.queryByText('OPEN API')).toBeNull();
   });
 });

@@ -56,8 +56,8 @@ describe('useServerAuthState', () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ auth: 'open' }))
-      .mockResolvedValueOnce(response({ auth: 'token' }))
-      .mockRejectedValueOnce(new Error('temporary failure'));
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce(response({ auth: 'token' }));
     vi.stubGlobal('fetch', fetchMock);
     const { result } = renderHook(() => useServerAuthState('http://api.test/'));
     await flushPromises();
@@ -69,11 +69,33 @@ describe('useServerAuthState', () => {
 
     await act(async () => vi.advanceTimersByTimeAsync(SERVER_HEALTH_POLL_MS));
     await flushPromises();
-    expect(result.current).toBe('token');
+    expect(result.current).toBe('open');
     await act(async () => vi.advanceTimersByTimeAsync(SERVER_HEALTH_POLL_MS));
     await flushPromises();
     expect(result.current).toBe('token');
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('resets to unknown when the API base changes', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ auth: 'open' }))
+      .mockResolvedValueOnce(response({ auth: 'token' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { result, rerender } = renderHook(({ apiBase }) => useServerAuthState(apiBase), {
+      initialProps: { apiBase: 'http://first.test' },
+    });
+    await flushPromises();
+    expect(result.current).toBe('open');
+
+    rerender({ apiBase: 'http://second.test' });
+    expect(result.current).toBe('unknown');
+    await flushPromises();
+    expect(result.current).toBe('token');
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'http://first.test/health',
+      'http://second.test/health',
+    ]);
   });
 
   it('skips overlapping polls and aborts the request when unmounted', async () => {

@@ -28,7 +28,7 @@ Crew sigue en Beta. G1 no está certificado: faltan arte final de salas, animaci
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
-- Rama actual: `feat/crew-facing-118`, basada en main `c32113e`.
+- Rama actual: `feat/crew-facing-118`, basada en main `30c0514`.
 - Controlador y parpadeo: #205, integrado en main.
 - Piloto estático anterior: `feat/crew-character-assets-118`, integrado mediante #195.
 - Banco: `feat/crew-asset-bank-172`, basado en `5cb4643` de #191.
@@ -232,3 +232,5 @@ La integración `6583a3f` incorpora main `8218153` sin conflictos. Se repitieron
 La proyección de presencia conserva facing como dato de solo lectura. El renderer resuelve la pose por actor; una misma sala puede mostrar varios CEO con diferentes direcciones. La carga se comparte para cada orientación necesaria y conserva las imágenes aún utilizadas cuando cambian otros actores. Valores ausentes usan SE y valores inválidos conservan marcador.
 
 Se corrigió la equivalencia previa entre nombre de cámara y nombre de imagen: cámara right lleva +X a +Y, cuya proyección corresponde al lateral izquierdo. Las pruebas y las capturas reflejan esa convención. El parpadeo se habilita por rostro visible, no por el nombre de la cámara. No se cambian contratos de eventos ni se generan estados de trabajo.
+
+Orientación integrada mediante [PR #206](https://github.com/jmmana/Agent-Viewer/pull/206), merge `4f8f079`, implementación `81928a3`. [CI del PR](https://github.com/jmmana/Agent-Viewer/actions/runs/37966265396) aprobado, incluidos navegador, CLI y contenedores.

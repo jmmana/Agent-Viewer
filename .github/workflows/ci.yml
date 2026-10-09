@@ -36,6 +36,13 @@ jobs:
       - name: Crew asset bank integrity
         run: npm run crew:assets:check
 
+      - name: No doc recommends the removed token/api_key query parameter (issue #71)
+        run: |
+          if grep -RnE '\?(token|api_key)=' README.md docs .github/SECURITY.md; then
+            echo "Found a '?token=' or '?api_key=' reference: it stopped authenticating in issue #71. Describe the token query parameter in words instead of the literal pattern." >&2
+            exit 1
+          fi
+
       - name: Typecheck
         run: npm run lint
 

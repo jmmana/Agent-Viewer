@@ -17,6 +17,8 @@ import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
 import { createEventStore, type AppendResult, type AppendBatchResult, type EventSeq, type EventStore } from './store';
 import { readPackageVersion } from './version';
 import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from './otlp/logs';
+import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
+import { createStreamTicketStore } from './stream-tickets';
 
 /**
  * Set by the `agent-viewer` CLI before it imports this module. The CLI configures the server through its own
@@ -225,33 +227,37 @@ const otlpStats = {
 };
 
 /**
- * The same Bearer-token-or-query-token decision `/api/v1` has always used, factored out so `/v1/logs` can
- * reuse it (issue #59: "extract the token check ... so the decision logic is identical"). Reads `getApiToken`
- * and `safeEqual`, both defined later in this module as hoisted `function` declarations.
+ * The Bearer-token decision `/api/v1` and `/v1/logs` both use, factored out so the two stay identical (issue
+ * #59). Since issue #71 this is Bearer-only: a `token` or `api_key` query parameter never authenticates
+ * anything, on any route, so a leaked URL cannot grant access (that case is rejected even earlier, by
+ * `rejectQueryToken`, with its own `query_token_not_supported` response). Reads `getApiToken` and `safeEqual`,
+ * both defined later in this module as hoisted `function` declarations.
  */
 function isRequestAuthorized(req: express.Request): boolean {
   const expectedToken = getApiToken();
   if (!expectedToken) return true;
 
   const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
-  const queryToken =
-    typeof req.query.token === 'string'
-      ? req.query.token
-      : typeof req.query.api_key === 'string'
-        ? req.query.api_key
-        : undefined;
-
-  const headerOk = bearerMatch ? safeEqual(bearerMatch[1], expectedToken) : false;
-  const queryOk = queryToken !== undefined ? safeEqual(queryToken, expectedToken) : false;
-  return headerOk || queryOk;
+  return bearerMatch ? safeEqual(bearerMatch[1], expectedToken) : false;
 }
 
 /**
  * Named token-check middleware (issue #59), parameterized so `/api/v1` keeps its own response shape and
  * webhook HMAC exemption while `/v1/logs` gets an OTLP-style 401. The authorization decision itself
  * (`isRequestAuthorized`) is identical on both routes.
+ *
+ * `streamTicketRoute` (issue #71) is the one exception to "Bearer only": when set (only `/api/v1` passes it,
+ * with `/events/stream`), a `GET` request to exactly that path, relative to the mount, may authenticate with a
+ * single-use `ticket` query parameter instead, because `EventSource` cannot send an `Authorization` header. A
+ * valid Bearer header is still checked first and always wins, leaving the ticket unconsumed. Any other method,
+ * any other route, or a missing/repeated/array `ticket` all fall through to `invalid_stream_ticket` once a
+ * `ticket` key is present, or to the normal `onUnauthorized` otherwise.
  */
-function requireApiToken(options: { webhookBypass?: boolean; onUnauthorized: (res: express.Response) => void }) {
+function requireApiToken(options: {
+  webhookBypass?: boolean;
+  streamTicketRoute?: string;
+  onUnauthorized: (res: express.Response) => void;
+}) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (options.webhookBypass && req.path.startsWith('/webhooks') && process.env.AGENT_VIEWER_WEBHOOK_SECRET) {
       next();
@@ -261,8 +267,122 @@ function requireApiToken(options: { webhookBypass?: boolean; onUnauthorized: (re
       next();
       return;
     }
+    if (options.streamTicketRoute && req.method === 'GET' && req.path === options.streamTicketRoute && 'ticket' in req.query) {
+      const ticketValue = req.query.ticket;
+      if (typeof ticketValue === 'string' && streamTicketStore.consume(ticketValue)) {
+        next();
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(401).json({ error: 'invalid_stream_ticket' });
+      return;
+    }
     options.onUnauthorized(res);
   };
+}
+
+/** `sha256(getApiToken())`, hex, or `''` in open mode. Lets a stream ticket store detect a token rotation. */
+function currentTokenFingerprint(): string {
+  const token = getApiToken();
+  return token ? crypto.createHash('sha256').update(token).digest('hex') : '';
+}
+
+const streamTicketStore = createStreamTicketStore({ tokenFingerprint: currentTokenFingerprint });
+
+/**
+ * Rejects any `/api/v1` request carrying `token` or `api_key` in the query string, including the `token[]=`
+ * array form some query parsers produce (issue #71). Runs right after the rate limiter, before the webhook
+ * bypass and the Bearer check, in every auth mode, so a leaked `?token=` URL never authenticates even by
+ * accident, even when the value is correct. Reads the raw URL rather than `req.query`, because a query parser
+ * can turn a repeated or array-style key into a shape that no longer looks like `token`/`api_key` by the time
+ * `req.query` is built.
+ */
+function rejectQueryToken(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  let hasForbiddenKey = false;
+  try {
+    for (const key of new URL(req.originalUrl, 'http://placeholder').searchParams.keys()) {
+      if (key === 'token' || key === 'api_key' || key.startsWith('token[') || key.startsWith('api_key[')) {
+        hasForbiddenKey = true;
+        break;
+      }
+    }
+  } catch {
+    // An unparsable URL cannot carry a recognizable token key either.
+  }
+  if (!hasForbiddenKey) {
+    next();
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(401).json({
+    error: 'query_token_not_supported',
+    message: 'Send the token in an Authorization: Bearer header. EventSource clients use POST /api/v1/stream-tickets.',
+  });
+}
+
+/**
+ * Defense in depth for the no-token state (issue #71). `assertSafeBind` already refuses to *bind* a
+ * non-loopback interface without a token, but an embedder that calls `app.listen` itself bypasses that, and so
+ * does a DNS-rebinding page even on a loopback bind. This blocks the *requests* too, for as long as the server
+ * actually has no token and the operator has not opted in with `AGENT_VIEWER_ALLOW_OPEN=1`. Mirrors the
+ * webhook HMAC bypass so a signed webhook from another host keeps working; the signature itself is still
+ * checked by the route.
+ */
+function openModeGuard(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (getApiToken() || isOpenModeAllowed()) {
+    next();
+    return;
+  }
+  if (req.path.startsWith('/webhooks') && process.env.AGENT_VIEWER_WEBHOOK_SECRET) {
+    next();
+    return;
+  }
+
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(403).json({ error: 'open_api_loopback_only' });
+    return;
+  }
+
+  const hostHeader = (req.header('host') ?? '').trim();
+  const hostOnly = hostHeader.startsWith('[')
+    ? hostHeader.slice(1, Math.max(hostHeader.indexOf(']'), 1))
+    : hostHeader.split(':')[0];
+  if (!isLoopbackHost(hostOnly)) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(403).json({ error: 'open_api_host_not_allowed' });
+    return;
+  }
+
+  const origin = req.header('origin');
+  if (origin) {
+    let originHost = '';
+    try {
+      originHost = new URL(origin).hostname;
+    } catch {
+      originHost = '';
+    }
+    const explicitOrigins = (process.env.AGENT_VIEWER_CORS_ORIGIN ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value !== '' && value !== '*');
+    const allowed =
+      isLoopbackHost(originHost) ||
+      explicitOrigins.some((value) => {
+        try {
+          return new URL(value).hostname === originHost;
+        } catch {
+          return value === origin;
+        }
+      });
+    if (!allowed) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(403).json({ error: 'open_api_origin_not_allowed' });
+      return;
+    }
+  }
+
+  next();
 }
 
 app.use(OTLP_LOGS_PATH, rateLimiter);
@@ -460,7 +580,6 @@ function getApiToken(): string | undefined {
 export type AuthMode = 'token' | 'open';
 /** How webhooks authenticate right now. */
 export type WebhookAuthMode = 'signature' | 'token' | 'open';
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 export function currentAuthMode(): AuthMode {
   return getApiToken() ? 'token' : 'open';
@@ -480,7 +599,7 @@ export function openApiWarning(input: {
 }): string[] {
   if (input.tokenSet) return [];
 
-  const loopback = input.host !== undefined && LOOPBACK_HOSTS.has(input.host);
+  const loopback = input.host !== undefined && isLoopbackHost(input.host);
   const lines = [
     '[agent-viewer] WARNING: AGENT_VIEWER_API_TOKEN is not set, so /api/v1 is OPEN.',
     loopback
@@ -521,17 +640,29 @@ function safeEqual(provided: string, expected: string): boolean {
 // Rate limiting runs before authentication so failed token guesses count toward the limit.
 app.use('/api/v1', rateLimiter);
 
+// A leaked `?token=`/`?api_key=` must never authenticate, in any mode, even in the open-mode window below
+// (issue #71). Runs before the open-mode guard and the Bearer check so the response is always the same.
+app.use('/api/v1', rejectQueryToken);
+
+// Defense in depth for the no-token state: blocks non-loopback requests, non-loopback Host headers and
+// cross-origin pages even when the open-mode guard at bind time (assertSafeBind) was itself bypassed by an
+// embedder calling app.listen() directly (issue #71). A no-op once a token is set or AGENT_VIEWER_ALLOW_OPEN=1.
+app.use('/api/v1', openModeGuard);
+
 // Authentication middleware for /api/v1/*. With a webhook secret configured, webhooks authenticate with
 // their HMAC signature (checked in the route) instead of the token; every other /api/v1 route, and
 // OTLP_LOGS_PATH above, share the same isRequestAuthorized decision through requireApiToken (issue #59).
+// GET /events/stream additionally accepts a single-use ticket in place of the Bearer header (issue #71),
+// because EventSource cannot send one.
 app.use(
   '/api/v1',
   requireApiToken({
     webhookBypass: true,
+    streamTicketRoute: '/events/stream',
     onUnauthorized: (res) =>
       res.status(401).json({
         error: 'unauthorized',
-        message: 'Valid Bearer token or token query parameter required',
+        message: 'Valid Bearer token required',
       }),
   })
 );
@@ -892,6 +1023,33 @@ app.get('/api/v1/usage/duplicates', async (req, res) => {
     schemaVersion: '1.0',
     count: duplicates.length,
     duplicates,
+  });
+});
+
+/**
+ * Issues a single-use stream ticket (issue #71). Requires a Bearer token: a ticket cannot mint tickets, since
+ * `requireApiToken`'s ticket branch only ever applies to `GET /events/stream`. Empty body or `{}`; any other
+ * field is rejected so a later `scope` field (#108) can be added without ambiguity about old clients.
+ */
+const StreamTicketRequestSchema = z.object({}).strict();
+
+app.post('/api/v1/stream-tickets', (req, res) => {
+  const parsed = StreamTicketRequestSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'validation_failed' });
+    return;
+  }
+  const result = streamTicketStore.issue();
+  res.setHeader('Cache-Control', 'no-store');
+  if (!result.ok) {
+    res.status(429).json({ error: 'stream_ticket_limit' });
+    return;
+  }
+  res.status(201).json({
+    ticket: result.ticket,
+    expiresAt: new Date(result.expiresAt).toISOString(),
+    ttlMs: result.ttlMs,
+    streamPath: `/api/v1/events/stream?ticket=${result.ticket}`,
   });
 });
 
@@ -1742,19 +1900,42 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 
 let serverInstance: any = null;
 
-/** Starts listening. Without `host` it binds every interface, as before; the CLI passes `127.0.0.1`. */
-export function startServer(portToListen = port, host?: string): Server {
-  const server = host ? app.listen(portToListen, host) : app.listen(portToListen);
+/** The real bound address for a listen() log line: IPv6 wrapped in brackets, never a hard-coded `localhost`. */
+function boundUrl(address: AddressInfo): string {
+  const host = address.address.includes(':') ? `[${address.address}]` : address.address;
+  return `http://${host}:${address.port}`;
+}
+
+/**
+ * Starts listening. Without an explicit `host` this reads `AGENT_VIEWER_HOST`, defaulting to loopback (issue
+ * #71: this default used to be "every interface"). The CLI always passes its own `command.host`. Throws
+ * `OpenApiRefusedError` before binding when `host` is not loopback, no token is configured and the operator has
+ * not set `AGENT_VIEWER_ALLOW_OPEN=1`.
+ */
+export function startServer(portToListen = port, host: string = envHost()): Server {
+  assertSafeBind(host, portToListen, { hasToken: Boolean(getApiToken()) });
+  const server = app.listen(portToListen, host);
   server.once('listening', () => warnIfApiOpen((server.address() as AddressInfo).port, host));
   return server;
 }
 
 if (isDirectRun && process.env.NODE_ENV !== 'test') {
+  const directRunHost = envHost();
+  try {
+    assertSafeBind(directRunHost, port, { hasToken: Boolean(getApiToken()) });
+  } catch (error) {
+    if (error instanceof OpenApiRefusedError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
   // Express 5 passes listen errors (for example EADDRINUSE) to this callback instead of emitting them unhandled.
-  serverInstance = app.listen(port, (err?: Error) => {
+  serverInstance = app.listen(port, directRunHost, (err?: Error) => {
     if (err) throw err;
-    warnIfApiOpen((serverInstance.address() as AddressInfo).port);
-    console.log(`Agent Viewer ingestion server listening on every interface, port ${port} (http://localhost:${port} from this machine)`);
+    const address = serverInstance.address() as AddressInfo;
+    warnIfApiOpen(address.port, directRunHost);
+    console.log(`Agent Viewer ingestion server listening on ${directRunHost}, port ${address.port} (${boundUrl(address)})`);
   });
 }
 

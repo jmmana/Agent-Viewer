@@ -39,8 +39,8 @@ unauthenticated request's body is never parsed at all.
 ## Auth
 
 Shares the exact same decision as `/api/v1` (`isRequestAuthorized` in `server/index.ts`, factored out of the
-original `/api/v1` check so both routes stay identical): `Authorization: Bearer <AGENT_VIEWER_API_TOKEN>`, or
-`?token=`/`?api_key=` on the query string. OTLP exporters set it through
+original `/api/v1` check so both routes stay identical): `Authorization: Bearer <AGENT_VIEWER_API_TOKEN>` only. A
+`token` or `api_key` query parameter never authenticates (issue #71). OTLP exporters set it through
 `OTEL_EXPORTER_OTLP_LOGS_HEADERS="Authorization=Bearer <token>"`. Without a configured token the route is
 open, exactly like `/api/v1` (the office prints a loud startup warning in that case, see
 [the open-API warning](../README.md)). The response shape differs by route: `/v1/logs` answers OTLP-style

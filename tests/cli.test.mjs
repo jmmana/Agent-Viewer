@@ -247,8 +247,19 @@ test('CLI end to end: start, send an event, read it back from the API and the li
     const refused = await fetch(`${base}/api/cli/launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"code":"nope"}' });
     assert.equal(refused.status, 404);
 
-    // What the office receives: the live stream.
-    const stream = await fetch(`${base}/api/v1/events/stream?token=${encodeURIComponent(token)}`);
+    // A token in the query string never authenticates (issue #71): EventSource clients mint a ticket instead.
+    const queryAttempt = await fetch(`${base}/api/v1/events/stream?token=${encodeURIComponent(token)}`);
+    assert.equal(queryAttempt.status, 401);
+    assert.equal((await queryAttempt.json()).error, 'query_token_not_supported');
+
+    // What the office receives: the live stream, opened with a single-use ticket.
+    const mintedTicket = await (
+      await fetch(`${base}/api/v1/stream-tickets`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    ).json();
+    const stream = await fetch(`${base}/api/v1/events/stream?ticket=${mintedTicket.ticket}`);
     assert.equal(stream.status, 200);
     const reader = stream.body.getReader();
 

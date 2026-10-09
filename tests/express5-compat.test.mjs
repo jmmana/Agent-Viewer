@@ -187,13 +187,16 @@ test('Async handlers: a rejected cursor lookup during an SSE reconnect closes th
 });
 
 test('Startup: a port that is already in use stops the server with EADDRINUSE', async () => {
+  // Bound to the same loopback interface the direct run now defaults to (issue #71): a wildcard bind here would
+  // not necessarily collide with a later bind to the specific loopback address on every platform.
   const blocker = http.createServer();
-  await new Promise((resolve) => blocker.listen(0, resolve));
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
   const address = blocker.address();
   const busyPort = typeof address === 'object' && address ? address.port : 0;
   try {
     const env = { ...process.env, PORT: String(busyPort) };
     delete env.NODE_ENV;
+    delete env.AGENT_VIEWER_HOST;
     const result = spawnSync(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
       cwd: repoRoot,
       env,

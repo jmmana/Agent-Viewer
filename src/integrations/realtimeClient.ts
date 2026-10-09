@@ -26,8 +26,9 @@ export interface RealtimeReplayed {
 export interface RealtimeConnectionOptions {
   /**
    * API token. Sent in an `Authorization: Bearer` header over a fetch-based stream, so it stays out of URLs
-   * and access logs. Only where `fetch` cannot stream (no `ReadableStream`) does it fall back to EventSource
-   * with a `token` query parameter, since EventSource cannot send headers.
+   * and access logs. Only where `fetch` cannot stream (no `ReadableStream`) does it fall back to `EventSource`,
+   * which cannot send headers: a fresh single-use ticket is minted with `POST /api/v1/stream-tickets` before
+   * every connect and reconnect, so the token itself never appears in a URL (issue #71).
    */
   token?: string;
   /** `fetch` for the token stream. Default: the global `fetch`. */
@@ -313,31 +314,10 @@ export function connectEventStream(
     resetHeartbeatWatchdog();
   }
 
-  function connect() {
-    if (isClosedByUser) return;
-    cleanupCurrent();
-
-    updateStatus(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
-
-    // Build URL with optional lastEventId; the token goes in a header when the browser can stream with fetch.
-    let streamUrl = `${cleanBaseUrl}/api/v1/events/stream`;
-    const params = new URLSearchParams();
-    if (lastEventId) {
-      params.set('lastEventId', lastEventId);
-    }
-    if (options.token && !canStreamWithHeaders) {
-      params.set('token', options.token);
-    }
+  /** The plain `EventSource` transport: no token (open mode) or a `ticket` already in `params`. */
+  function connectWithEventSource(params: URLSearchParams) {
     const queryString = params.toString();
-    if (queryString) {
-      streamUrl += `?${queryString}`;
-    }
-
-    if (canStreamWithHeaders) {
-      connectWithHeaders(streamUrl);
-      return;
-    }
-
+    const streamUrl = `${cleanBaseUrl}/api/v1/events/stream${queryString ? `?${queryString}` : ''}`;
     try {
       const source = new EventSource(streamUrl);
       activeEventSource = source;
@@ -382,6 +362,77 @@ export function connectEventStream(
     } catch {
       scheduleReconnect();
     }
+  }
+
+  /**
+   * `EventSource` cannot send headers and a `token` must never appear in a URL (issue #71): this mints a
+   * single-use ticket with the token over `fetch`, then opens `EventSource` with that ticket instead. Called
+   * fresh on every connect and reconnect, so a new ticket backs every attempt. A failed mint (expired token,
+   * network error, rate limit) is treated like any other failed attempt and goes through the normal backoff;
+   * it never falls back to putting the token itself in the URL.
+   */
+  async function connectWithTicket(params: URLSearchParams) {
+    try {
+      const response = await fetchImpl!(`${cleanBaseUrl}/api/v1/stream-tickets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${options.token}` },
+        body: '{}',
+        cache: 'no-store',
+      });
+      if (isClosedByUser) return;
+      if (!response.ok) {
+        cleanupCurrent();
+        scheduleReconnect();
+        return;
+      }
+      const body = await response.json().catch(() => undefined);
+      const ticket = typeof body?.ticket === 'string' ? body.ticket : undefined;
+      if (isClosedByUser) return;
+      if (!ticket) {
+        cleanupCurrent();
+        scheduleReconnect();
+        return;
+      }
+      const ticketParams = new URLSearchParams(params);
+      ticketParams.set('ticket', ticket);
+      connectWithEventSource(ticketParams);
+    } catch {
+      if (isClosedByUser) return;
+      cleanupCurrent();
+      scheduleReconnect();
+    }
+  }
+
+  function connect() {
+    if (isClosedByUser) return;
+    cleanupCurrent();
+
+    updateStatus(reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+
+    const params = new URLSearchParams();
+    if (lastEventId) {
+      params.set('lastEventId', lastEventId);
+    }
+
+    if (canStreamWithHeaders) {
+      const queryString = params.toString();
+      connectWithHeaders(`${cleanBaseUrl}/api/v1/events/stream${queryString ? `?${queryString}` : ''}`);
+      return;
+    }
+
+    if (options.token) {
+      // fetch cannot stream here either: EventSource is the only option, and it cannot send a header, so a
+      // ticket stands in for the token (issue #71). Without any fetch at all there is no way to mint one, and
+      // the token must never go in the URL, so the connection simply stops.
+      if (!fetchImpl) {
+        updateStatus('error');
+        return;
+      }
+      void connectWithTicket(params);
+      return;
+    }
+
+    connectWithEventSource(params);
   }
 
   connect();

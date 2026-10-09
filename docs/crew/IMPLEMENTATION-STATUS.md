@@ -3,6 +3,19 @@
 Actualizado: 2026-10-08 (America/Bogota).
 Último issue trabajado: #159, QA de continuidad de dominio y lifecycle Crew. Epic: #114.
 
+## Resumen de la ejecución
+
+| PR abierto | Commits de implementación | CI verificado |
+| --- | --- | --- |
+| [#182](https://github.com/jmmana/Agent-Viewer/pull/182), gestos | `75f2da7` | Aprobado, run 37868883704 |
+| [#183](https://github.com/jmmana/Agent-Viewer/pull/183), persistencia | `b563258` | Aprobado, run 37869062554 |
+| [#185](https://github.com/jmmana/Agent-Viewer/pull/185), foco/pan | `e337f33` | Aprobado, run 37869312615 |
+| [#186](https://github.com/jmmana/Agent-Viewer/pull/186), QA y corrección móvil | `0e46a0f`, `ded4717` | Aprobado, [run 37869699546](https://github.com/jmmana/Agent-Viewer/actions/runs/37869699546) |
+
+Ramas publicadas, commits conservados, PR sin fusionar. Dependencias #175/#177 continúan en borrador; main no se modificó. Epic #114 e issues #156/#171/#159 actualizados con evidencia. Ningún issue cerrado. Servidor local de validación detenido al terminar; no hay desarrollo autónomo ejecutándose fuera de esta sesión.
+
+Validación acumulada: 61 node, 449 Vitest, 9 E2E y 3 SDK Python; typecheck, app/lib/paquete, audit y Docker en CI. Capturas revisadas y MP4 de runtime de 10,16 segundos. No se certifica arte final, personajes, animaciones, dispositivos físicos ni cumplimiento total de G1.
+
 ## Base verificada
 
 - Repositorio: jmmana/Agent-Viewer. Main observado: `637b1f5`.
@@ -97,9 +110,9 @@ Todos siguen abiertos. Registrar una sala o aprobar CI no satisface los criterio
 
 ## Próximos tres pasos
 
-1. #159: ampliar QA LIVE/DEMO/REPLAY, lifecycle y cuatro tamaños; gate G1 aún pendiente.
-2. #171: reset general y navegación accesible; deep links y API embebida.
-3. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
+1. #171: reset general y navegación accesible; deep links y API embebida.
+2. #155/#156: posiciones locales de actores y foco de agente sin inventar presencia; arte multivista pendiente.
+3. #159: servidor SSE real, reproducción temporal, rendimiento y dispositivos físicos antes de aprobar G1.
 
 ## Riesgos y decisiones
 
@@ -130,7 +143,7 @@ Playwright conserva vídeos WebM de las pruebas en test-results, publicados por 
 
 Reproducción: ejecutar `npm run dev` y, en otra terminal, `PLAYWRIGHT_CHANNEL=chrome npm run crew:capture` (o instalar Chromium con `npx playwright install chromium` y omitir la variable). Genera `test-results/crew-demo/runtime.webm`. Conversión opcional con ffmpeg: `ffmpeg -i test-results/crew-demo/runtime.webm -c:v libx264 -pix_fmt yuv420p -movflags +faststart runtime-navigation.mp4`.
 
-Validación de esta continuación: `npm run lint` y nueve E2E; código de producción sin cambios respecto a #185, cuyas 61 pruebas node, 449 Vitest y builds están aprobados. Implementación inicial `0e46a0f`, [PR #186](https://github.com/jmmana/Agent-Viewer/pull/186), abierto sobre #185.
+Validación final de esta continuación, incluida la corrección móvil: `npm run lint`, 61 pruebas node, 449 Vitest, nueve E2E y build app aprobados. Builds lib/paquete y Docker aprobados previamente en la base #185; CI reejecuta los checks tras la corrección. Implementación inicial `0e46a0f`, [PR #186](https://github.com/jmmana/Agent-Viewer/pull/186), abierto sobre #185.
 
 
 ### Hallazgo de QA visual móvil

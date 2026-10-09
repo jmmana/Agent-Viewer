@@ -648,7 +648,7 @@ export default function App() {
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
             <div className="flex-1 h-full relative overflow-hidden">
               {visualMode === 'crew' ? (
-                <CrewStage locale={locale} />
+                <CrewStage locale={locale} agents={canvasAgents} />
               ) : currentFloor === 1 ? (
                 <>
                   <OfficeCanvas

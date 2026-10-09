@@ -1,5 +1,7 @@
 import type { Agent, Meeting, SocialActivity, Task, ViewerEvent } from '../types/agent';
 import type { RoomReservation } from './livingOfficeEngine';
+import type { UsageTally } from '../integrations/usageTally';
+import { emptyUsageTally } from '../integrations/usageTally';
 
 /**
  * Everything the office knows at one point in time. Built only from events; it never imports the demo
@@ -21,6 +23,7 @@ export interface SimulationState {
     reasoning: number;
   };
   totalCost: number;
+  usage: UsageTally;
 }
 
 /**
@@ -44,5 +47,6 @@ export function createLiveSimulationState(): SimulationState {
       reasoning: 0,
     },
     totalCost: 0,
+    usage: emptyUsageTally(),
   };
 }

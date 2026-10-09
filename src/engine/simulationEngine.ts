@@ -1,6 +1,7 @@
 import { Agent, Meeting, Task, WorkspaceZone } from '../types/agent';
 import { INITIAL_AGENTS } from './officeModel';
 import type { SimulationState } from './officeState';
+import { emptyUsageTally } from '../integrations/usageTally';
 export { createLiveSimulationState, type SimulationState } from './officeState';
 import { AGENT_DESK_ANCHORS, MEETING_ROOM_POLICIES, WORKSPACE_ANCHORS, routeAgent } from './livingOfficeEngine';
 import { DEMO_SCRIPT, demoText, type DemoScriptKey } from '../content/demoScript';
@@ -68,6 +69,7 @@ export function createInitialSimulationState(agents: Agent[] = INITIAL_AGENTS, l
       reasoning: 16800,
     },
     totalCost: 0.881,
+    usage: emptyUsageTally(),
   };
 }
 

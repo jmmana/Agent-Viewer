@@ -3,6 +3,7 @@
  */
 
 import type { MessageKind } from '../integrations/canonicalTypes';
+import type { UsageTally } from '../integrations/usageTally';
 
 export type { MessageKind };
 
@@ -116,6 +117,8 @@ export interface Agent {
   cachedTokens: number;
   reasoningTokens: number;
   cost: number;
+  /** Filled only by the demo app. The embedded component never fills it; pass usage through the `usage` prop. */
+  usage?: UsageTally;
   startedAt: number;
   mood?: AgentMood;
   socialActivityId?: string | null;
@@ -152,6 +155,8 @@ export interface Task {
   toolsUsed: string[];
   artifacts: Artifact[];
   blockerReason?: string;
+  /** Filled only by the demo app. The embedded component never fills it. */
+  usage?: UsageTally;
 }
 
 export interface Artifact {

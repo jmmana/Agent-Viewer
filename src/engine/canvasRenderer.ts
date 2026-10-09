@@ -1,6 +1,7 @@
 import { bubbleExitStyle, cameraCenter, fitBubbleNames, isSpeechActive, placeOverlay, wrapText, type OverlayRect } from './visualLayout';
 import type { Agent } from '../types/agent';
 import type { OfficeCrewAssets } from './officeCrewAssets';
+import type { OfficeFurnitureAssets } from './officeFurnitureAssets';
 import { isOfficeMessageKey, type OfficeTranslate } from '../content/officeMessages';
 import { aggregateModelUsage, compactTokens } from './modelOps';
 import {
@@ -43,6 +44,8 @@ export interface RenderContext {
   reducedMotion?: boolean;
   /** Optional per-canvas sprite cache; absent keeps the procedural renderer. */
   crewAssets?: OfficeCrewAssets;
+  /** Opt-in original illustrated props. Existing geometry and work displays remain unchanged. */
+  furnitureAssets?: OfficeFurnitureAssets;
 }
 
 /** Text settings shared by every drawing helper. */
@@ -98,7 +101,7 @@ export function renderOfficeScene(rc: RenderContext) {
   drawArchitecturalWalls(ctx, rot, theme);
 
   // 4. Depth-sorted Entities (Furniture and Agents rendered in 2.5D perspective)
-  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs, scene, rc.crewAssets, rc.reducedMotion);
+  drawDepthSortedEntities(ctx, rot, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs, scene, rc.crewAssets, rc.reducedMotion, rc.furnitureAssets);
   // Room plaques are intentionally rendered after furniture/agents so static decoration can never cover them.
   drawRoomPlaques(ctx, rot, theme, scene.translate);
 
@@ -516,7 +519,8 @@ function drawDepthSortedEntities(
   nowMs: number,
   scene: SceneText,
   crewAssets?: OfficeCrewAssets,
-  reducedMotion = false
+  reducedMotion = false,
+  furnitureAssets?: OfficeFurnitureAssets,
 ) {
   type DepthEntity =
     | { kind: 'furniture'; item: FurnitureItem; depth: number }
@@ -541,7 +545,7 @@ function drawDepthSortedEntities(
 
   for (const ent of entities) {
     if (ent.kind === 'furniture') {
-      renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId, scene, agents);
+      renderFurnitureItem(ctx, ent.item, rot, timeMs, theme, activeMeetingId, scene, agents, furnitureAssets);
     } else {
       const offset = visualOffsets.get(ent.agent.id) ?? { ox: 0, oy: 0 };
       renderAgentItem(ctx, ent.agent, rot, selectedAgentId, hoveredAgentId, timeMs, theme, nowMs, offset, crewAssets, reducedMotion);
@@ -557,7 +561,8 @@ function renderFurnitureItem(
   theme: 'dark' | 'light',
   activeMeetingId: string | null,
   scene: SceneText,
-  agents: Agent[] = []
+  agents: Agent[] = [],
+  furnitureAssets?: OfficeFurnitureAssets,
 ) {
   const { x, y } = gridToScreen(item.gridX, item.gridY, rot);
   ctx.save();
@@ -567,6 +572,12 @@ function renderFurnitureItem(
   ctx.translate(cx, cy);
   ctx.scale(scale, scale);
   ctx.translate(-cx, -cy);
+  // Only replace selected static props. Desks and monitors remain procedural, so
+  // their live operational screens are not replaced with static illustration.
+  if (furnitureAssets?.draw(ctx, item, x, y, TILE_SIZE)) {
+    ctx.restore();
+    return;
+  }
   // Ground contact gives every object a place in the room.
   ctx.fillStyle = 'rgba(0,0,0,0.16)';
   ctx.beginPath();

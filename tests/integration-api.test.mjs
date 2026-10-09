@@ -218,6 +218,44 @@ test('REST API: /api/v1/snapshot contains aggregated state', async () => {
   }
 });
 
+test('REST API: GET /api/v1/snapshot and GET /api/v1/events report retention (issue #53)', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const before = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(before.retention.storage, 'memory');
+    assert.equal(before.retention.maxEvents, 10000);
+    assert.equal(typeof before.retention.totalsSince, 'number');
+    assert.equal(before.retention.acceptedEvents, before.retention.retainedEvents + before.retention.droppedEvents);
+
+    const retentionEvent = {
+      id: 'evt_retention_api',
+      type: 'agent.message.sent',
+      timestamp: Date.now(),
+      source: 'agent:retention-tester',
+      summary: 'Retention test',
+      payload: { text: 'hi' },
+    };
+    const postRes = await postEvent(baseUrl, retentionEvent);
+    assert.equal(postRes.status, 202);
+
+    const eventsBody = await (await fetch(`${baseUrl}/api/v1/events`)).json();
+    assert.equal(eventsBody.retention.storage, 'memory');
+    assert.equal(eventsBody.retention.acceptedEvents, before.retention.acceptedEvents + 1);
+
+    const after = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(after.retention.acceptedEvents, before.retention.acceptedEvents + 1);
+
+    // A retry of the same id and content is a duplicate: it must not move acceptedEvents.
+    const retryRes = await postEvent(baseUrl, retentionEvent);
+    assert.equal(retryRes.status, 200);
+    const afterRetry = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(afterRetry.retention.acceptedEvents, after.retention.acceptedEvents);
+  } finally {
+    server.close();
+  }
+});
+
 async function postEvent(baseUrl, event) {
   return fetch(`${baseUrl}/api/v1/events`, {
     method: 'POST',

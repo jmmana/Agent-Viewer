@@ -222,3 +222,33 @@ test('SSE: a request_id duplicate is never broadcast and never replayed on Last-
     server.close();
   }
 });
+
+test('SSE: the first chunk after connect carries ": connected" and a heartbeat whose data parses to { retention } (issue #53)', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/events/stream`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    const initial = await reader.read();
+    const text = decoder.decode(initial.value);
+    assert.ok(text.includes(': connected'));
+    assert.ok(text.includes('event: heartbeat'));
+
+    const match = text.match(/event: heartbeat\ndata: (\{.*\})\n\n/);
+    assert.ok(match, `expected a heartbeat frame in: ${JSON.stringify(text)}`);
+    const payload = JSON.parse(match[1]);
+    assert.ok(payload.retention, 'the first heartbeat must carry retention, not an empty payload');
+    assert.equal(payload.retention.storage, 'memory');
+    assert.equal(payload.retention.maxEvents, 10000);
+    assert.equal(typeof payload.retention.retainedEvents, 'number');
+    assert.equal(typeof payload.retention.acceptedEvents, 'number');
+    assert.equal(typeof payload.retention.droppedEvents, 'number');
+    assert.equal(typeof payload.retention.totalsSince, 'number');
+
+    await reader.cancel();
+  } finally {
+    server.close();
+  }
+});

@@ -55,6 +55,28 @@ function getDatabaseSync(): any {
   return _DatabaseSync;
 }
 
+/**
+ * Retention and completeness state of one store, so a reader never mistakes a truncated event list or a capped
+ * `eventsCount` for the full history (issue #53). `storage: 'memory'` carries a real `maxEvents`; `'sqlite'`
+ * always reports `maxEvents: null` because the database keeps every row.
+ */
+export interface SnapshotRetention {
+  /** Store backend that produced this snapshot. */
+  storage: 'memory' | 'sqlite';
+  /** Cap on events kept for listing and replay. `null` when the store keeps every event. */
+  maxEvents: number | null;
+  /** Events currently available to `GET /api/v1/events` and SSE replay. */
+  retainedEvents: number;
+  /** Events accepted since `totalsSince`, including dropped ones. Duplicates are never counted. */
+  acceptedEvents: number;
+  /** Accepted events no longer retained. `0` means the event list is complete since `totalsSince`. */
+  droppedEvents: number;
+  /** Server receive time (ms) of the oldest retained event when `droppedEvents > 0`; `null` when nothing was dropped. */
+  since: number | null;
+  /** Server time (ms) from which totals and per-agent figures are counted. */
+  totalsSince: number;
+}
+
 export interface ViewerSnapshot {
   schemaVersion: '1.0';
   timestamp: number;
@@ -77,8 +99,11 @@ export interface ViewerSnapshot {
   };
   /** @deprecated Use usage.total.byCurrency. Null unless every call reported a cost in one single currency with one single costSource. */
   totalCost: number | null;
+  /** Retained window size: capped in memory mode, the true row count in SQLite mode. See `retention` for the rest. */
   eventsCount: number;
   events: CanonicalEvent[];
+  /** No silent loss, no double counting (issue #53): tells a reader whether the list above is complete. */
+  retention: SnapshotRetention;
 }
 
 export interface ListEventsOptions {
@@ -263,6 +288,8 @@ export interface EventStore {
   /** Never includes a duplicate reference: only originals and events with no request key. */
   list(options?: ListEventsOptions): Promise<CanonicalEvent[]>;
   snapshot(): Promise<ViewerSnapshot>;
+  /** Retention and completeness state (issue #53), without building a full snapshot. */
+  retention(): Promise<SnapshotRetention>;
   getSchemaInfo?(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } | undefined;
   /** Usage aggregates of every accepted `llm.usage` and `llm.failed` event. */
   usageSummary(): Promise<UsageSummary>;
@@ -344,30 +371,135 @@ export interface SQLiteStoreOptions {
 // -------------------------------------------------------------
 // In-Memory Event Store
 // -------------------------------------------------------------
+/** One retained event plus the server clock value at which it was accepted (issue #53). */
+interface RetainedEntry {
+  event: CanonicalEvent;
+  receivedAt: number;
+}
+
+/**
+ * Append-only ring buffer for the retained event window (issue #53). The backing array grows lazily with `push`
+ * until it reaches `capacity`, so it is never preallocated: a cap like `AGENT_VIEWER_MAX_EVENTS=1000000000` does
+ * not allocate a proportional array at startup. `push` and eviction are O(1); `forEachNewestToOldest` lets a
+ * caller stop early instead of copying the whole window.
+ */
+class RetainedWindow {
+  private buf: RetainedEntry[] = [];
+  private writeIndex = 0;
+
+  constructor(private readonly capacity: number) {}
+
+  get size(): number {
+    return this.buf.length;
+  }
+
+  /** Appends one entry. Returns the evicted entry, or `null` when the window was not yet full. */
+  push(entry: RetainedEntry): RetainedEntry | null {
+    let evicted: RetainedEntry | null = null;
+    if (this.buf.length < this.capacity) {
+      this.buf.push(entry);
+    } else {
+      const slot = this.writeIndex % this.capacity;
+      evicted = this.buf[slot];
+      this.buf[slot] = entry;
+    }
+    this.writeIndex++;
+    return evicted;
+  }
+
+  /** The oldest retained entry, or `undefined` when the window is empty. */
+  oldest(): RetainedEntry | undefined {
+    if (this.buf.length === 0) return undefined;
+    const idx = this.buf.length < this.capacity ? 0 : this.writeIndex % this.capacity;
+    return this.buf[idx];
+  }
+
+  /** The most recently pushed entry, or `undefined` when the window is empty. */
+  newest(): RetainedEntry | undefined {
+    if (this.buf.length === 0) return undefined;
+    // writeIndex is always >= 1 here (something was pushed), so writeIndex - 1 is never negative.
+    return this.buf[(this.writeIndex - 1) % this.capacity];
+  }
+
+  /**
+   * Walks entries newest to oldest. `fn` returns `false` to stop early, so a caller with a small limit never
+   * forces a copy of the whole window.
+   */
+  forEachNewestToOldest(fn: (entry: RetainedEntry) => boolean | void): void {
+    const n = this.buf.length;
+    if (n === 0) return;
+    let idx = (this.writeIndex - 1) % this.capacity;
+    for (let i = 0; i < n; i++) {
+      const keepGoing = fn(this.buf[idx]);
+      if (keepGoing === false) return;
+      idx = (idx - 1 + this.capacity) % this.capacity;
+    }
+  }
+}
+
+export interface MemoryEventStoreOptions {
+  /** Cap on the retained window. Default `10000`; must be an integer >= 1. */
+  maxEvents?: number;
+  /**
+   * When `false`, an evicted event's id is forgotten from the dedup index. Default `true`: a long-running memory
+   * mode server must never double count a retry of an evicted id.
+   */
+  rememberEvictedIds?: boolean;
+  /** Server clock, injected so tests can pin `receivedAt`. Default `Date.now`. */
+  now?: () => number;
+}
+
+const DEFAULT_MAX_EVENTS = 10000;
+/** `knownIds.size` threshold at which a single one-time memory-cost warning is logged. */
+const KNOWN_IDS_WARNING_THRESHOLD = 1_000_000;
+
 export class MemoryEventStore implements EventStore {
-  private events: CanonicalEvent[] = [];
-  /** Id to fingerprint of every event in the ring. Eviction removes the entry. */
+  /** Retained window: what `list()`, `snapshot().events` and SSE replay can see. Eviction here never erases dedup state. */
+  private window: RetainedWindow;
+  /**
+   * Id to fingerprint of every event accepted since the process started. Eviction from the retained window never
+   * deletes an entry here (unless `rememberEvictedIds` is false), so a retry of an evicted id is still recognized
+   * as a duplicate instead of being counted twice (issue #53).
+   */
   private eventHashes = new Map<string, string>();
   /**
    * Original event id (plus its usage-relevant fields, for the fingerprint comparison) seen so far for each
-   * `(provider, requestId)` key. On purpose never evicted when the original falls off the ring: a late retry
-   * after eviction must still be recognized as a duplicate (issue #48). #53 sets the final bound.
+   * `(provider, requestId)` key. On purpose never evicted when the original falls off the retained window: a late
+   * retry after eviction must still be recognized as a duplicate (issue #48, finalized by #53).
    */
   private requestIndex = new Map<string, { id: string; fields: UsageFingerprintFields }>();
   /**
    * Duplicate references, keyed by the duplicate's own submitted event id, insertion ordered and capped at
-   * `maxEvents` like the event ring. Never pushed into `this.events`, so `list()`, `snapshot().events` and SSE
-   * replay never see them.
+   * `maxEvents` like the event ring. Never pushed into the retained window, so `list()`, `snapshot().events` and
+   * SSE replay never see them.
    */
   private duplicateRefs = new Map<string, DuplicateReference>();
   private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
   /** Agents, runtimes, sessions, tasks, meetings and usage: everything `applyEvent` (`serverState.ts`) owns. */
   private state: ServerState = createServerState();
   private maxEvents: number;
+  private rememberEvictedIds: boolean;
+  private now: () => number;
+  /** Server time (ms) when the store was created. Totals cover events from here (issue #53). */
+  private startedAt: number;
   private readonly createdAt = Date.now();
+  /** Events accepted (not duplicates) since `startedAt`, including evicted ones. */
+  private acceptedEvents = 0;
+  /** Accepted events evicted from the retained window. */
+  private droppedEvents = 0;
+  private warnedKnownIdsSize = false;
 
-  constructor(maxEvents = 10000) {
+  constructor(options?: number | MemoryEventStoreOptions) {
+    const opts: MemoryEventStoreOptions = typeof options === 'number' ? { maxEvents: options } : (options ?? {});
+    const maxEvents = opts.maxEvents ?? DEFAULT_MAX_EVENTS;
+    if (!Number.isInteger(maxEvents) || maxEvents < 1) {
+      throw new Error(`MemoryEventStore maxEvents must be a positive integer, got ${maxEvents}`);
+    }
     this.maxEvents = maxEvents;
+    this.rememberEvictedIds = opts.rememberEvictedIds ?? true;
+    this.now = opts.now ?? Date.now;
+    this.startedAt = this.now();
+    this.window = new RetainedWindow(maxEvents);
   }
 
   /** Nothing to replay: a `MemoryEventStore` starts empty and is ready as soon as it is constructed. */
@@ -448,7 +580,16 @@ export class MemoryEventStore implements EventStore {
     }
 
     this.eventHashes.set(event.id, fingerprint);
-    this.events.unshift(event);
+    this.acceptedEvents++;
+    const receivedAt = this.now();
+    const evicted = this.window.push({ event, receivedAt });
+    if (evicted) {
+      this.droppedEvents++;
+      // Eviction never forgets a dedup id, except when `rememberEvictedIds` is false (not used by the default
+      // constructor; kept for a future store that delegates its dedup authority elsewhere).
+      if (!this.rememberEvictedIds) this.eventHashes.delete(evicted.event.id);
+    }
+    this.maybeWarnKnownIdsSize();
     this.processEventSideEffects(event);
     if (requestKey) {
       this.requestIndex.set(requestKey.key, { id: event.id, fields: extractUsageFingerprintFields(event) });
@@ -456,14 +597,16 @@ export class MemoryEventStore implements EventStore {
     return appendResult('accepted', event.id, fingerprint);
   }
 
-  private evictOverflow(): void {
-    while (this.events.length > this.maxEvents) {
-      const removed = this.events.pop();
-      if (removed) this.eventHashes.delete(removed.id);
-    }
+  /** One warning, the first time the dedup index crosses the documented memory-cost threshold. */
+  private maybeWarnKnownIdsSize(): void {
+    if (this.warnedKnownIdsSize || this.eventHashes.size < KNOWN_IDS_WARNING_THRESHOLD) return;
+    this.warnedKnownIdsSize = true;
+    console.warn(
+      `[agent-viewer] memory store has seen ${KNOWN_IDS_WARNING_THRESHOLD} event ids; use AGENT_VIEWER_STORAGE=sqlite for long-running servers.`
+    );
   }
 
-  /** Mirrors `evictOverflow` for duplicate references. A resend of a dropped reference's id is simply a new request_id duplicate again. */
+  /** Mirrors the retained window's eviction for duplicate references. A resend of a dropped reference's id is simply a new request_id duplicate again. */
   private evictDuplicateOverflow(): void {
     while (this.duplicateRefs.size > this.maxEvents) {
       const oldestKey = this.duplicateRefs.keys().next().value;
@@ -473,9 +616,7 @@ export class MemoryEventStore implements EventStore {
   }
 
   async append(event: CanonicalEvent): Promise<AppendResult> {
-    const result = this.classifyAndApply(event);
-    this.evictOverflow();
-    return result;
+    return this.classifyAndApply(event);
   }
 
   async appendBatch(events: CanonicalEvent[], options?: { atomic?: boolean; ignoreTimestamp?: boolean }): Promise<AppendBatchResult> {
@@ -504,13 +645,12 @@ export class MemoryEventStore implements EventStore {
           return summarizeBatch(results, events);
         }
       }
-      // All checks passed, now insert
+      // All checks passed, now insert. Each item evicts through the ring as it is pushed, in order, so a batch
+      // larger than maxEvents still retains exactly the newest maxEvents events (issue #53).
       const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp));
-      this.evictOverflow();
       return summarizeBatch(results, events);
     } else {
       const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp));
-      this.evictOverflow();
       return summarizeBatch(results, events);
     }
   }
@@ -559,33 +699,56 @@ export class MemoryEventStore implements EventStore {
     return { count: this.duplicateRefs.size, mismatched, unverified };
   }
 
+  /**
+   * Same ordering and filter semantics as the previous array implementation (newest first; `runtimeId`,
+   * `sessionId`, `agentId`, `type`, `since` filter on `event.timestamp`; `afterId` is exclusive and applied after
+   * the other filters; an `afterId` not found, or filtered out, applies no cut; default limit 100). Walks the
+   * ring newest to oldest and stops as soon as `limit` entries are collected, instead of copying the whole
+   * window per call (issue #53).
+   */
   async list(options: ListEventsOptions = {}): Promise<CanonicalEvent[]> {
-    let result = [...this.events];
-
-    if (options.runtimeId) {
-      result = result.filter((e) => e.runtimeId === options.runtimeId);
-    }
-    if (options.sessionId) {
-      result = result.filter((e) => e.sessionId === options.sessionId);
-    }
-    if (options.agentId) {
-      result = result.filter((e) => e.agentId === options.agentId);
-    }
-    if (options.type) {
-      result = result.filter((e) => e.type === options.type);
-    }
-    if (options.since !== undefined) {
-      result = result.filter((e) => e.timestamp >= options.since!);
-    }
-    if (options.afterId) {
-      const index = result.findIndex((e) => e.id === options.afterId);
-      if (index >= 0) {
-        result = result.slice(0, index);
-      }
-    }
-
     const limit = options.limit && options.limit > 0 ? options.limit : 100;
-    return result.slice(0, limit);
+    const matches = (event: CanonicalEvent): boolean => {
+      if (options.runtimeId && event.runtimeId !== options.runtimeId) return false;
+      if (options.sessionId && event.sessionId !== options.sessionId) return false;
+      if (options.agentId && event.agentId !== options.agentId) return false;
+      if (options.type && event.type !== options.type) return false;
+      if (options.since !== undefined && event.timestamp < options.since) return false;
+      return true;
+    };
+
+    const result: CanonicalEvent[] = [];
+    this.window.forEachNewestToOldest(({ event }) => {
+      if (!matches(event)) return true;
+      // Mirrors `result.slice(0, index)` on the equivalent array implementation: everything from the cursor
+      // onward (older, in this walk order) is excluded, whether or not `limit` was reached yet.
+      if (options.afterId && event.id === options.afterId) return false;
+      result.push(event);
+      return result.length < limit;
+    });
+    return result;
+  }
+
+  /** The newest `limit` retained events, with no filter. Used by `snapshot().events`. */
+  private topEvents(limit: number): CanonicalEvent[] {
+    const result: CanonicalEvent[] = [];
+    this.window.forEachNewestToOldest(({ event }) => {
+      result.push(event);
+      return result.length < limit;
+    });
+    return result;
+  }
+
+  async retention(): Promise<SnapshotRetention> {
+    return {
+      storage: 'memory',
+      maxEvents: this.maxEvents,
+      retainedEvents: this.window.size,
+      acceptedEvents: this.acceptedEvents,
+      droppedEvents: this.droppedEvents,
+      since: this.droppedEvents > 0 ? (this.window.oldest()?.receivedAt ?? null) : null,
+      totalsSince: this.startedAt,
+    };
   }
 
   async snapshot(): Promise<ViewerSnapshot> {
@@ -593,7 +756,7 @@ export class MemoryEventStore implements EventStore {
     return {
       schemaVersion: '1.0',
       timestamp: Date.now(),
-      lastEventId: this.events[0]?.id ?? null,
+      lastEventId: this.window.newest()?.event.id ?? null,
       runtimes: Array.from(this.state.runtimes.values()),
       sessions: Array.from(this.state.sessions.values()),
       agents: Array.from(this.state.agents.values(), (agent) => toAgentRecord(this.state, agent)),
@@ -603,8 +766,9 @@ export class MemoryEventStore implements EventStore {
       usageDuplicates: this.usageDuplicateStats(),
       totalTokens: legacy.tokens,
       totalCost: legacy.cost,
-      eventsCount: this.events.length,
-      events: this.events.slice(0, 100),
+      eventsCount: this.window.size,
+      events: this.topEvents(100),
+      retention: await this.retention(),
     };
   }
 
@@ -709,6 +873,14 @@ export class SQLiteEventStore implements EventStore {
   private nextSeq = 1;
   /** Count of stored rows with `duplicate_of IS NULL`, kept so `snapshot().eventsCount` never scans the table. */
   private eventsCountCache = 0;
+  /**
+   * Server receive time of the oldest stored event; `null` only until the first event is ever accepted by this
+   * database (issue #53). Set from the real stored `created_at` of that first row, never from a fresh `Date.now()`
+   * taken before anything existed, so this value is bit-for-bit identical before and after a restart
+   * (`tests/sqlite-restart.test.mjs`). Since the startup rebuild makes `this.state` cover every stored row, this
+   * is also when the totals it holds start covering, and that start point never moves as new events arrive.
+   */
+  private totalsSinceCache: number | null = null;
   private readonly rebuildOptions: {
     pageSize: number;
     pageDelayMs: number;
@@ -776,6 +948,10 @@ export class SQLiteEventStore implements EventStore {
     this.nextSeq = maxSeqRow.maxSeq + 1;
     const countRow = this.db.prepare('SELECT COUNT(*) AS count FROM events WHERE duplicate_of IS NULL').get() as { count: number };
     this.eventsCountCache = countRow.count;
+    const earliestRow = this.db.prepare('SELECT MIN(created_at) AS earliest FROM events WHERE duplicate_of IS NULL').get() as {
+      earliest: number | null;
+    };
+    if (earliestRow.earliest !== null) this.totalsSinceCache = earliestRow.earliest;
 
     // Kicked off here (not only from `server/index.ts`) so a store built directly, as many tests do, never needs
     // an explicit `init()` call: for a file with no backlog beyond one page, every row is applied synchronously
@@ -1119,6 +1295,7 @@ export class SQLiteEventStore implements EventStore {
     this.recordOutcome(pending);
     if (pending.result.outcome === 'accepted') {
       this.eventsCountCache++;
+      this.ensureTotalsSinceCache();
       // While a startup rebuild is running (or failed), the event is persisted only: the rebuild loop (or a
       // restart) is the one that applies it, so it is never applied twice (issue #52).
       if (this.rebuild.state === 'done') applyEvent(this.state, event);
@@ -1183,7 +1360,10 @@ export class SQLiteEventStore implements EventStore {
 
     for (const entry of pending) this.recordOutcome(entry);
     const summary = summarizeBatch(pending.map(({ result }) => result), events);
-    this.eventsCountCache += summary.acceptedEvents.length;
+    if (summary.acceptedEvents.length > 0) {
+      this.eventsCountCache += summary.acceptedEvents.length;
+      this.ensureTotalsSinceCache();
+    }
     if (this.rebuild.state === 'done') {
       for (const accepted of summary.acceptedEvents) applyEvent(this.state, accepted);
     }
@@ -1305,6 +1485,40 @@ export class SQLiteEventStore implements EventStore {
   }
 
   /**
+   * Sets `totalsSinceCache` from the real stored `created_at` of the first accepted row, the first time this
+   * database ever goes from zero to one accepted event. One extra query, run at most once per database file for
+   * its entire lifetime (every call after the first is a no-op check); never the fresh `Date.now()` of whichever
+   * process happens to insert first, so a restart reads back the exact same value (issue #53).
+   */
+  private ensureTotalsSinceCache(): void {
+    if (this.totalsSinceCache !== null) return;
+    const row = this.db.prepare('SELECT MIN(created_at) AS earliest FROM events WHERE duplicate_of IS NULL').get() as {
+      earliest: number | null;
+    };
+    this.totalsSinceCache = row.earliest ?? Date.now();
+  }
+
+  /**
+   * `storage: 'sqlite'`, `maxEvents: null` (the database keeps every row) and `droppedEvents: 0`. Since issue
+   * #52's startup rebuild makes `this.state` cover every stored row once ready, `acceptedEvents` is simply the
+   * row count here too (unlike before #52, when it could lag behind `retainedEvents` after a restart).
+   * `retainedEvents` reads the counter kept in memory, never `SELECT COUNT(*)` (issue #53: the SSE heartbeat
+   * calls this for every connected client every 15 s).
+   */
+  async retention(): Promise<SnapshotRetention> {
+    this.ensureTotalsSinceCache();
+    return {
+      storage: 'sqlite',
+      maxEvents: null,
+      retainedEvents: this.eventsCountCache,
+      acceptedEvents: this.eventsCountCache,
+      droppedEvents: 0,
+      since: null,
+      totalsSince: this.totalsSinceCache ?? Date.now(),
+    };
+  }
+
+  /**
    * `lastEventId`, `eventsCount` and `events` come from SQLite (issue #52): they must be correct for the whole
    * stored history, not only for whatever a ring buffer happened to keep. Every other field comes from
    * `this.state`, built by `applyEvent` on the live path and by the startup rebuild.
@@ -1332,6 +1546,7 @@ export class SQLiteEventStore implements EventStore {
       totalCost: legacy.cost,
       eventsCount: this.eventsCountCache,
       events: recentRows.map((r) => this.rowToEvent(r)),
+      retention: await this.retention(),
     };
   }
 
@@ -1396,12 +1611,41 @@ export class SQLiteEventStore implements EventStore {
 /**
  * Factory for creating the active EventStore based on configuration.
  */
+/** Only digits, no leading zero (so "0", "007", "-1", "1e3" and "10.5" are all rejected). */
+const MAX_EVENTS_PATTERN = /^[1-9][0-9]*$/;
+
+/**
+ * Parses `AGENT_VIEWER_MAX_EVENTS` (issue #53). Unset, empty or whitespace-only gives the default (`10000`).
+ * Otherwise the trimmed value must be a plain positive integer, no larger than `Number.MAX_SAFE_INTEGER`; any
+ * other value throws instead of silently falling back to the default, so a typo is never ignored at startup.
+ * A standalone, env-free function so a test can exercise every case without importing the server.
+ */
+export function parseMaxEvents(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_MAX_EVENTS;
+  const trimmed = raw.trim();
+  if (trimmed === '') return DEFAULT_MAX_EVENTS;
+  const value = Number(trimmed);
+  if (!MAX_EVENTS_PATTERN.test(trimmed) || !Number.isSafeInteger(value)) {
+    throw new Error(`AGENT_VIEWER_MAX_EVENTS must be a positive integer, got "${raw}"`);
+  }
+  return value;
+}
+
 export function createEventStore(): EventStore {
   const storageType = (process.env.AGENT_VIEWER_STORAGE || 'memory').toLowerCase();
+  const rawMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
+  const maxEvents = parseMaxEvents(rawMaxEvents);
+  const maxEventsWasSet = rawMaxEvents !== undefined && rawMaxEvents.trim() !== '';
+
   if (storageType === 'sqlite') {
+    // Since issue #52, SQLite mode has no capped in-memory window to limit: every event is persisted and the
+    // startup rebuild replays the whole table. AGENT_VIEWER_MAX_EVENTS only applies to the memory store.
+    if (maxEventsWasSet) {
+      console.log(`[agent-viewer] AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode; every event is stored and never capped.`);
+    }
     const dbPath = process.env.AGENT_VIEWER_SQLITE_PATH || './data/agent-viewer.db';
     const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
     return new SQLiteEventStore(dbPath, { backup });
   }
-  return new MemoryEventStore();
+  return new MemoryEventStore({ maxEvents });
 }

@@ -301,9 +301,25 @@ The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or 
 ### Events
 - `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header. Answers `202` (accepted), `200` (duplicate: same id, same content) or `409 conflicting_duplicate` (same id, different content, not applied), each with the event `fingerprint`. A header that differs from a non-empty body `id` is a `400 idempotency_key_mismatch`.
 - `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch). Each result has a `status` of `accepted`, `duplicate` or `conflict`.
-- `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`).
-- `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay.
-- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block, `usageDuplicates: { count, mismatched, unverified }` (request-id duplicate references, see [Idempotency & Replays](#-5-idempotency--replays)) and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
+- `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`). The body also carries `retention` (see below), so a caller can tell whether the list is complete.
+- `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay. The first frames after `: connected` are a heartbeat whose `data` carries `{ "retention": {...} }`, and every later heartbeat (every 15s) carries it too; a client that does not read `data` on the `heartbeat` event is unaffected.
+- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block, `usageDuplicates: { count, mismatched, unverified }` (request-id duplicate references, see [Idempotency & Replays](#-5-idempotency--replays)), `retention` (see below) and the deprecated `totalTokens`, `totalCost` and `eventsCount`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
+
+`retention` (added by issue #53) tells a reader whether the event list is complete, so a truncated history is never mistaken for the full one:
+
+```json
+{
+  "storage": "memory",
+  "maxEvents": 10000,
+  "retainedEvents": 10000,
+  "acceptedEvents": 10250,
+  "droppedEvents": 250,
+  "since": 1791459731000,
+  "totalsSince": 1791452400000
+}
+```
+
+`maxEvents` is `null` in `sqlite` mode (the database keeps every row). `retainedEvents` is how many events `GET /api/v1/events` and SSE replay can currently return; `acceptedEvents` is how many were accepted since `totalsSince` (duplicates never counted), including any that no longer fit in the retained window; `droppedEvents` is the difference, `0` meaning the list is complete. `since` is the server receive time of the oldest retained event, or `null` before anything was dropped. `totalsSince` is when the totals and per-agent figures started counting (the process start time; after a future SQLite rebuild, issue #52, it becomes the receive time of the oldest stored event). In memory mode, a retry of an event id (or, for `llm.usage`/`llm.failed`, a `(provider, requestId)` pair) is still recognized as a duplicate after the event itself falls out of the retained window: the dedup index is never trimmed by eviction, so totals never double count a late retry.
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
 - `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
 
@@ -808,8 +824,8 @@ Events are tagged with `runtimeId` and `sessionId`, and queryable via:
 
 Agent Viewer supports two persistence backends:
 
-1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events), derived state included.
-2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses (see [Health & Readiness](#health--readiness) above). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer ships with the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug.
+1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer, capped by `AGENT_VIEWER_MAX_EVENTS` (default 10,000 events), derived state included.
+2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). `AGENT_VIEWER_MAX_EVENTS` has no effect here. Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses (see [Health & Readiness](#health--readiness) above). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer ships with the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug.
 
 To enable SQLite persistence:
 ```env
@@ -821,6 +837,8 @@ AGENT_VIEWER_REBUILD_PAGE_DELAY_MS=0
 ```
 
 `AGENT_VIEWER_REBUILD_PAGE_SIZE` (default `2000`) controls how many rows the startup rebuild replays per page; `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` (default `0`) adds an extra delay after each page, useful for tests and diagnostics. The server yields to the event loop between pages, so `/health` and `/ready` keep answering during a long rebuild.
+
+**No silent loss, no double counting (issue #53).** In memory mode, evicting an event from the retained window never forgets its id (or its `(provider, requestId)` key): a retry of an evicted event is still answered as `200 { duplicate: true }`, never counted again in totals. `AGENT_VIEWER_MAX_EVENTS` (default `10000`, must be a positive integer) raises or lowers the retained window; an invalid value stops the server at startup instead of silently falling back to the default. Remembering every accepted id costs roughly 100-150 bytes per event for the process lifetime; the server logs one warning when it crosses 1,000,000 known ids. `GET /api/v1/snapshot`, `GET /api/v1/events` and the SSE heartbeat all carry a `retention` block reporting `maxEvents`, `retainedEvents`, `acceptedEvents`, `droppedEvents` and `since`, so a reader can tell when the event list is truncated even though the totals still cover everything. `AGENT_VIEWER_MAX_EVENTS` has no effect in `sqlite` mode (a one-time startup log says so if it is set): every event is stored and replayed by the rebuild above, so `snapshot.retention` there reports `maxEvents: null`, `droppedEvents: 0` and `acceptedEvents` equal to `retainedEvents`, the true row count.
 
 SQLite schema migrations run automatically at startup. Existing databases are backed up next to the file before migration by default. Backups contain the same events, are never pruned automatically, and can delay startup for large databases. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if backups are managed separately. A server refuses a database with a newer schema. For rollback, stop the server and restore the `.bak` file before starting an older version.
 

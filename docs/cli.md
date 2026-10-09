@@ -48,7 +48,7 @@ Requires Node.js 22.13 or later (the package declares it in `engines`, so npm wa
 
 ### Environment
 
-The server keeps events in memory. Set `AGENT_VIEWER_STORAGE=sqlite` (and optionally `AGENT_VIEWER_SQLITE_PATH`) to persist them. The other server variables in the [README](../README.md#-configuration) apply too (`AGENT_VIEWER_CORS_ORIGIN`, `AGENT_VIEWER_MAX_BATCH_SIZE`, `AGENT_VIEWER_RATE_LIMIT`, `AGENT_VIEWER_WEBHOOK_SECRET`), with these differences:
+The server keeps events in memory by default, capped at `AGENT_VIEWER_MAX_EVENTS` (10,000 unless set); a retry of an event evicted from that window is still recognized as a duplicate, never double counted (issue #53). Set `AGENT_VIEWER_STORAGE=sqlite` (and optionally `AGENT_VIEWER_SQLITE_PATH`) to persist every event instead, raise `AGENT_VIEWER_MAX_EVENTS` for a bigger in-process window, or leave both and read `retention` on `GET /api/v1/snapshot` to see whether anything has been dropped. The other server variables in the [README](../README.md#-configuration) apply too (`AGENT_VIEWER_CORS_ORIGIN`, `AGENT_VIEWER_MAX_BATCH_SIZE`, `AGENT_VIEWER_RATE_LIMIT`, `AGENT_VIEWER_WEBHOOK_SECRET`), with these differences:
 
 - `PORT` and `AGENT_VIEWER_HOST` are the defaults of `--port` and `--host`; the flags win.
 - `AGENT_VIEWER_API_TOKEN` (or the deprecated `AGENT_VIEWER_API_KEY`, read with a warning) chooses the token. Unlike `npm run server`, an empty value never means "open": the CLI generates a token.

@@ -563,10 +563,12 @@ app.get('/api/v1/events', async (req, res) => {
   const type = typeof req.query.type === 'string' ? req.query.type : undefined;
 
   const events = await store.list({ limit, since, afterId, runtimeId, sessionId, agentId, type });
+  const retention = await store.retention();
   res.json({
     schemaVersion: '1.0',
     count: events.length,
     events,
+    retention,
   });
 });
 
@@ -627,15 +629,36 @@ app.get('/api/v1/events/stream', async (req, res) => {
     }
   }
 
-  res.write(': connected\n\n');
+  // Read retention before the first write and send ": connected" plus the first heartbeat in one write (issue
+  // #53), so a client knows the retention state as soon as it connects and no live event can land between the
+  // two frames. A rejected retention() falls back to the old empty heartbeat instead of failing the connection.
+  let initialRetentionData = '{}';
+  try {
+    initialRetentionData = JSON.stringify({ retention: await store.retention() });
+  } catch {
+    // Keep the empty-payload fallback; the client watchdog only needs a frame to arrive, not its content.
+  }
+  res.write(`: connected\n\n: heartbeat\nevent: heartbeat\ndata: ${initialRetentionData}\n\n`);
   clients.add(res);
 
   const heartbeat = setInterval(() => {
-    try {
-      res.write(': heartbeat\nevent: heartbeat\ndata: {}\n\n');
-    } catch {
-      // client disconnected
-    }
+    if (res.writableEnded || res.destroyed) return;
+    store.retention().then(
+      (retention) => {
+        try {
+          res.write(`: heartbeat\nevent: heartbeat\ndata: ${JSON.stringify({ retention })}\n\n`);
+        } catch {
+          // client disconnected
+        }
+      },
+      () => {
+        try {
+          res.write(': heartbeat\nevent: heartbeat\ndata: {}\n\n');
+        } catch {
+          // client disconnected
+        }
+      }
+    );
   }, 15000);
 
   req.on('close', () => {

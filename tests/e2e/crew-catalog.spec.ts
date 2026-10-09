@@ -12,6 +12,10 @@ const events = [
 
 test('catálogo aislado, búsqueda, cambios rápidos y conservación con eventos de otras salas', async ({page}, testInfo) => {
   await page.emulateMedia({reducedMotion:'reduce'});
+  // El portal carga el historial del servidor antes de suscribirse al stream (issue #72); un snapshot vacío
+  // mantiene este fixture igual que antes de ese cambio, incluso tras el page.reload() de más abajo.
+  await page.route('**/api/v1/snapshot',route=>route.fulfill({contentType:'application/json',
+    body:JSON.stringify({lastEventId:null,events:[],agents:[],totalTokens:{input:0,output:0,cached:0,reasoning:0},totalCost:0})}));
   await page.route('**/api/v1/events/stream*',route => route.fulfill({contentType:'text/event-stream',
     body:events.map(event=>`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`).join('')}));
   await page.goto('/?mode=live&visualMode=crew&crewRoom=development');

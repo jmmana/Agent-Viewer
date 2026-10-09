@@ -43,6 +43,15 @@ interface TopBarProps {
   isLiveMode?: boolean;
   isLiveConnected?: boolean;
   openApi?: boolean;
+  /**
+   * Load phase of the live portal (issue #72): `loading` while the history fetch is in flight, `subscribing`
+   * once it finished and the stream is being opened, `live` once the stream reports `connected`, `reconnecting`
+   * after a drop and `error` when the history could not be loaded. Defaults to `live` so a caller not yet passing
+   * this prop keeps the previous `isLiveConnected`-only behavior.
+   */
+  livePhase?: 'loading' | 'subscribing' | 'live' | 'reconnecting' | 'error';
+  /** Retries the history load after `livePhase` is `error`. */
+  onRetryHistory?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -69,6 +78,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   isLiveMode = false,
   isLiveConnected = false,
   openApi = false,
+  livePhase = 'live',
+  onRetryHistory,
 }) => {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled());
 
@@ -97,23 +108,54 @@ export const TopBar: React.FC<TopBarProps> = ({
         <span className="text-xs text-slate-400 hidden 2xl:inline">
           {t(locale, 'app.subtitle')}
         </span>
-        {isLiveConnected ? (
-          <span
-            className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide flex items-center gap-1.5 ${
-              openApi
-                ? 'border-amber-400/50 bg-amber-400/10 text-amber-200'
-                : 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
-            }`}
-            title={t(locale, 'live.title')}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${openApi ? 'bg-amber-400' : 'bg-emerald-400'}`} aria-hidden="true" />
-            {t(locale, 'live.badge')}
-            {openApi && <span>{t(locale, 'security.openApi.label')}</span>}
-          </span>
-        ) : isLiveMode ? (
-          <span className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-300">
-            {t(locale, 'live.connecting')}
-          </span>
+        {isLiveMode ? (
+          livePhase === 'loading' ? (
+            <span
+              data-testid="live-phase"
+              data-phase="loading"
+              className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-300"
+              title={t(locale, 'live.loadingHistoryTitle')}
+            >
+              {t(locale, 'live.loadingHistory')}
+            </span>
+          ) : livePhase === 'error' ? (
+            <span
+              data-testid="live-phase"
+              data-phase="error"
+              className="rounded-full border border-rose-400/40 bg-rose-400/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-rose-200 flex items-center gap-1.5"
+              title={t(locale, 'live.historyErrorTitle')}
+            >
+              {t(locale, 'live.historyError')}
+              {onRetryHistory && (
+                <button type="button" onClick={onRetryHistory} className="underline underline-offset-2">
+                  {t(locale, 'live.retry')}
+                </button>
+              )}
+            </span>
+          ) : livePhase === 'live' ? (
+            <span
+              data-testid="live-phase"
+              data-phase="live"
+              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide flex items-center gap-1.5 ${
+                openApi
+                  ? 'border-amber-400/50 bg-amber-400/10 text-amber-200'
+                  : 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
+              }`}
+              title={t(locale, 'live.title')}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${openApi ? 'bg-amber-400' : 'bg-emerald-400'}`} aria-hidden="true" />
+              {t(locale, 'live.badge')}
+              {openApi && <span>{t(locale, 'security.openApi.label')}</span>}
+            </span>
+          ) : (
+            <span
+              data-testid="live-phase"
+              data-phase={livePhase}
+              className="rounded-full border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-300"
+            >
+              {t(locale, 'live.connecting')}
+            </span>
+          )
         ) : (
           <span className="rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-200" title={t(locale, 'demo.title')}>
             {t(locale, 'demo.label')}

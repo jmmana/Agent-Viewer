@@ -16,6 +16,10 @@ test('CEO estático en cuatro vistas, carga aislada por sala y regreso a Caricat
       return original.apply(this,args as any);
     };
   });
+  // El portal carga el historial del servidor antes de suscribirse al stream (issue #72); un snapshot vacío
+  // mantiene este fixture igual que antes de ese cambio.
+  await page.route('**/api/v1/snapshot',route=>route.fulfill({contentType:'application/json',
+    body:JSON.stringify({lastEventId:null,events:[],agents:[],totalTokens:{input:0,output:0,cached:0,reasoning:0},totalCost:0})}));
   await page.route('**/api/v1/events/stream*',route=>route.fulfill({contentType:'text/event-stream',
     body:`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`}));
   await page.goto('/?mode=live&visualMode=crew&crewRoom=development');
@@ -41,6 +45,8 @@ test('CEO estático en cuatro vistas, carga aislada por sala y regreso a Caricat
 
 test('un PNG no disponible conserva el agente y su marcador',async({page})=>{
   await page.route('**/idle-front.png',route=>route.abort());
+  await page.route('**/api/v1/snapshot',route=>route.fulfill({contentType:'application/json',
+    body:JSON.stringify({lastEventId:null,events:[],agents:[],totalTokens:{input:0,output:0,cached:0,reasoning:0},totalCost:0})}));
   await page.route('**/api/v1/events/stream*',route=>route.fulfill({contentType:'text/event-stream',
     body:`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`}));
   await page.goto('/?mode=live&visualMode=crew&crewRoom=ceo');

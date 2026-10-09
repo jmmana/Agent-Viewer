@@ -791,6 +791,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | none | Demo app: `live` boots in live mode, like `?mode=live`. `npm run dev:full` sets it for you. |
+| `VITE_AGENT_VIEWER_HISTORY_LIMIT` | `1000` | Demo app, live mode: upper bound (1 to 5000) of events the portal loads on open, beyond the snapshot's own newest 100, through `GET /api/v1/events?beforeId=...`. Only the activity timeline goes this deep; the token and cost figures always come from the snapshot's own totals. An invalid value falls back to the default. |
 
 ---
 
@@ -812,7 +813,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Language | `EN` / `ES` selector |
 | Replay a log without a server | Drop a JSONL V1 file onto the window |
 
-The demo saves its state in the browser so a refresh picks up where you were; Reset clears it ([details](docs/session-persistence.md)). Live mode starts clean and skips the saved demo state.
+The demo saves its state in the browser so a refresh picks up where you were; Reset clears it ([details](docs/session-persistence.md)). Live mode skips the saved demo state; instead, on open it loads the office, the recent activity and the token/cost figures from the server itself (`GET /api/v1/snapshot` and a paged `GET /api/v1/events`) before subscribing to the stream, so a reload or a second tab opened mid-run shows the same figures, never zero (issue #72). Run `npm run test:e2e` to exercise this and the rest of the browser flows with Playwright.
 
 ---
 

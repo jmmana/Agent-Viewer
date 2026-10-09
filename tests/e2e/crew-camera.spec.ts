@@ -95,6 +95,10 @@ test('enfoca escritorios y limita paneo incluso tras reducir el viewport', async
 
 test('Caricatura recupera exactamente su cámara después de usar Crew', async ({page},testInfo) => {
   await page.emulateMedia({reducedMotion:'reduce'});
+  // El portal carga el historial del servidor antes de suscribirse al stream (issue #72); un snapshot vacío
+  // mantiene este fixture igual que antes de ese cambio.
+  await page.route('**/api/v1/snapshot', route=>route.fulfill({contentType:'application/json',
+    body:JSON.stringify({lastEventId:null,events:[],agents:[],totalTokens:{input:0,output:0,cached:0,reasoning:0},totalCost:0})}));
   await page.route('**/api/v1/events/stream*', route=>route.abort());
   await page.goto('/?mode=live');
   await page.getByRole('button',{name:'Rotate office right',exact:true}).click();

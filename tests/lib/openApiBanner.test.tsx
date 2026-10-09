@@ -56,8 +56,36 @@ describe('TopBar open API pill', () => {
   });
 
   it('keeps the connecting pill while the stream is disconnected even when the API is open', () => {
-    render(<TopBar {...props} locale="en" isLiveConnected={false} openApi />);
+    render(<TopBar {...props} locale="en" isLiveConnected={false} livePhase="reconnecting" openApi />);
     expect(screen.getByText('CONNECTING')).toBeTruthy();
     expect(screen.queryByText('OPEN API')).toBeNull();
+  });
+
+  it('shows a loading pill while history is loading, driven by livePhase and not by event arrival (issue #72)', () => {
+    render(<TopBar {...props} locale="en" isLiveConnected={false} livePhase="loading" />);
+    expect(screen.getByTestId('live-phase').getAttribute('data-phase')).toBe('loading');
+    expect(screen.getByText(t('en', 'live.loadingHistory'))).toBeTruthy();
+  });
+
+  it('shows an error pill with a retry control when the history load fails (issue #72)', () => {
+    let retried = false;
+    render(
+      <TopBar
+        {...props}
+        locale="en"
+        isLiveConnected={false}
+        livePhase="error"
+        onRetryHistory={() => { retried = true; }}
+      />
+    );
+    expect(screen.getByTestId('live-phase').getAttribute('data-phase')).toBe('error');
+    screen.getByRole('button', { name: t('en', 'live.retry') }).click();
+    expect(retried).toBe(true);
+  });
+
+  it('shows the live pill once livePhase is live, even before isLiveConnected turns true (issue #72)', () => {
+    render(<TopBar {...props} locale="en" isLiveConnected={false} livePhase="live" />);
+    expect(screen.getByTestId('live-phase').getAttribute('data-phase')).toBe('live');
+    expect(screen.getByText(t('en', 'live.badge'))).toBeTruthy();
   });
 });

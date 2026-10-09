@@ -103,7 +103,16 @@ Starts the ingestion server and the office together on `http://127.0.0.1:8787`, 
 npx @warlockcode/agent-viewer send --agent demo --status working --message "Hello"
 ```
 
-Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). The same with Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (flags after the image name are added to its defaults; image tags and tokens in the [CLI guide](docs/cli.md#docker)). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
+Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). To run the Docker image on this machine:
+
+```bash
+docker run --rm -p 127.0.0.1:8787:8787 \
+  -e AGENT_VIEWER_API_TOKEN="$(openssl rand -base64 32)" \
+  -v agent-viewer-data:/app/data \
+  ghcr.io/jmmana/agent-viewer
+```
+
+Drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. Flags after the image name are added to its defaults; image tags and tokens are in the [CLI guide](docs/cli.md#docker). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
 
 ### Watch Claude Code work
 
@@ -177,7 +186,7 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
+This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. Compose publishes both ports on `127.0.0.1` only. To reach the office from other machines, restore the port mappings to `"8787:8787"` and `"3000:3000"`, update `AGENT_VIEWER_CORS_ORIGIN` and `VITE_AGENT_VIEWER_API_URL`, and put the services behind TLS. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
 
 > **Maintainers:** GitHub Container Registry creates the `ghcr.io/jmmana/agent-viewer` package as private, and the release workflow cannot change that. After the first release that publishes it, make it public once in the package page: **Package settings > Danger Zone > Change visibility > Public**. The release run summary shows the current visibility.
 
@@ -471,7 +480,7 @@ analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client.
+The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client. Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
 
 ### TypeScript SDK
 
@@ -489,7 +498,7 @@ await builder.message('Handler is ready for review.', 'Nova');
 await builder.done('Pull request opened');
 ```
 
-Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md).
+Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md). Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
 
 ---
 
@@ -585,7 +594,7 @@ flowchart LR
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/health` | Status, version, schema version and connected SSE clients. |
+| `GET` | `/health` | Status, version, schema version, connected SSE clients, and current `auth` / `webhookAuth` mode. |
 | `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
@@ -635,7 +644,7 @@ The event id is the idempotency key, and the content decides what a repeated id 
 The first send returns `202` with the fingerprint, and a true retry returns HTTP 200 with the same fingerprint instead of a second copy:
 
 ```json
-{ "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
+{ "accepted": true, "duplicate": true, "duplicateReason": "event_id", "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
 ```
 
 The same id with any different stored field (a token count, the cost, a cost that was `0` and is now missing, or the `timestamp`) is rejected with HTTP 409:
@@ -675,6 +684,40 @@ A batch answers `202` whenever validation passes, even if no item was applied, s
 }
 ```
 
+`llm.usage` and `llm.failed` have a second, independent dedup key: `(provider, requestId)`. The event id above tells a retry of the exact same request from a conflicting one; the request key tells whether two different event ids actually name the same provider call (the application called `usage()` again, a process replayed its own buffer with fresh ids, two layers reported the same call, or a webhook delivery was retried). Provider matching ignores case and surrounding whitespace; `requestId` matches exactly after trimming; a missing or blank `requestId` means the event has no request key and behaves exactly as above. `llm.usage` and `llm.failed` share one key space, so a call reported as failed and then as used is not counted twice.
+
+A new event id with an already-used `(provider, requestId)` is a `200` duplicate too, but `duplicateReason` says which key matched, `id` is always the id the figure is held under (the original), and `submittedId` appears whenever it differs from `id`:
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "duplicateReason": "request_id",
+  "id": "evt_req_9921",
+  "submittedId": "evt_req_9988",
+  "matchesOriginal": true,
+  "fingerprint": "sha256:9b0e..."
+}
+```
+
+`matchesOriginal` appears only for a `request_id` duplicate: whether its usage-relevant fields (`model`, every token field, `cost`, `currency`, `costSource`) match the original. Unknown is never equal to zero: a `cost` of `null` against a stored `0` (or the reverse) is `matchesOriginal: false`. A mismatch also writes one `warn` log line with both event ids, the provider and a truncated request id, never payload text. The duplicate is stored with its full content for audit, but it is never added to any total, never changes the agent's status, provider or model, is never broadcast over the live stream or replayed on `Last-Event-ID`, and never appears in `GET /api/v1/events`. List every duplicate reference with `GET /api/v1/usage/duplicates` (optional `limit`, `provider`, `requestId`, `duplicateOf` query filters, same auth as the rest of `/api/v1`), and read the running counts from `GET /api/v1/snapshot`'s `usageDuplicates: { count, mismatched, unverified }` (`unverified` is a reference migrated from before this existed, whose legacy content was never compared).
+
+A batch applies the same two keys in input order, so two items of one batch can resolve against each other:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 2,
+  "conflicts": 0,
+  "total": 3,
+  "results": [
+    { "id": "evt_b1", "status": "accepted",  "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b1", "submittedId": "evt_b2", "status": "duplicate", "duplicate": true, "duplicateReason": "request_id", "matchesOriginal": false, "fingerprint": "sha256:bb..." },
+    { "id": "evt_b1", "status": "duplicate", "duplicate": true, "duplicateReason": "event_id", "fingerprint": "sha256:aa..." }
+  ]
+}
+```
+
 Each conflict also writes one `warn` log line with the id, type, source, agent and both fingerprints (never the payload), and `GET /ready` counts them since the process started:
 
 ```json
@@ -709,9 +752,11 @@ The signature is compared in constant time. Expired timestamps and bad signature
 
 </details>
 
-**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer. `sqlite` uses Node's built-in `node:sqlite` and persists events to `./data/agent-viewer.db`; runtime, session and agent state remains in memory.
+**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer, derived state included. `sqlite` uses Node's built-in `node:sqlite` and persists every event to `./data/agent-viewer.db`. Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses. The state after a restart is identical to the state before it, events that cannot be read are skipped and reported, and `/ready` answers `503` until the rebuild finishes (see below). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer is part of the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug.
 
 SQLite schema migrations run automatically at startup. Before upgrading an existing database, the default `AGENT_VIEWER_SQLITE_BACKUP=auto` writes a `.bak` file beside it. Backups contain the same event data, are never pruned automatically, and can make the first startup take longer for large files. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if you manage backups yourself. A server refuses a database with a newer schema; to roll back, stop the server and restore the `.bak` file before starting an older version. `/ready` reports `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt` in SQLite mode. These are database migration details; `/health`'s `schemaVersion` is the event contract version (`1.0`).
+
+**Readiness during a SQLite rebuild:** `GET /ready` answers `503` with `Retry-After: 1` and `rebuild.state: "running"` until the replay finishes, then `200` with `rebuild.state: "done"` and `rebuild.durationMs`. `GET /health` (the liveness probe) answers `200` the whole time. While the rebuild runs, `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:id` and `POST /api/v1/runtimes` answer `503 store_rebuilding`; `POST /api/v1/events` and `/events/batch` stay open, are stored, and are applied once the rebuild (or a later restart) reaches them. Point container health checks at `/health` and readiness checks at `/ready`. Memory storage has nothing to replay: `/ready` answers `200` immediately.
 
 ---
 
@@ -722,11 +767,13 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Server port. |
-| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development with `npm run server`; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
+| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open: the server warns at startup, `/health` reports `auth: "open"` and the live portal shows a banner; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
 | `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
 | `AGENT_VIEWER_SQLITE_BACKUP` | `auto` | Back up an existing SQLite database before migration, or set to `off` when backups are managed separately. |
+| `AGENT_VIEWER_REBUILD_PAGE_SIZE` | `2000` | Rows replayed per page of the SQLite startup rebuild. |
+| `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` | `0` | Extra delay awaited after each rebuild page, for tests and diagnostics. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Maximum events per batch request. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |
@@ -763,10 +810,10 @@ The defaults favor local development. Before you expose the server:
 
 | Area | Default | Production |
 |---|---|---|
-| API token | unset, `/api/v1/*` open | Set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. |
+| API token | unset, `/api/v1/*` open | Check with `curl -s localhost:8787/health \| jq .auth`; set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. |
 | Webhooks | unsigned when no secret | Set `AGENT_VIEWER_WEBHOOK_SECRET` to require HMAC signatures. |
 | CORS | `*` | Set `AGENT_VIEWER_CORS_ORIGIN` to your exact frontend origin. |
-| Network | binds `0.0.0.0` | Put it behind a reverse proxy with TLS. |
+| Network | server binds `0.0.0.0`; Docker Compose ports bind `127.0.0.1` | To expose Compose remotely, restore `"8787:8787"` / `"3000:3000"` and put it behind a reverse proxy with TLS. |
 | Storage | in memory | `AGENT_VIEWER_STORAGE=sqlite` on a protected volume. |
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).

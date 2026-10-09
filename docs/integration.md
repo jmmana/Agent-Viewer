@@ -235,16 +235,77 @@ Validation rules enforced:
 Base URL: `http://localhost:8787`
 
 ### Health & Readiness
-- `GET /health`: Health status, server version, connected SSE client count.
-- `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`).
+- `GET /health`: Health status, server version, connected SSE client count, and current `auth` / `webhookAuth` modes. An open server still returns HTTP 200 with `ok: true`, including during a SQLite startup rebuild: point container liveness probes here.
+- `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`). With SQLite storage, `/ready` also answers `503` with `Retry-After: 1` and a `rebuild` object until the server finishes replaying the stored events into derived state; point container and orchestrator readiness probes here, not at `/health`.
+
+**SQLite startup rebuild.** On startup, a `sqlite`-backed server replays every stored event, in insertion order, through the same reducer the live path uses, rebuilding agents, runtimes, sessions, tasks, meetings and usage totals from scratch. The state after a restart is identical to the state before it. `GET /ready` reports progress:
+
+```json
+{
+  "ok": false,
+  "ready": false,
+  "storage": "sqlite",
+  "rebuild": {
+    "state": "running",
+    "totalEvents": 100000,
+    "processedEvents": 42000,
+    "skippedEvents": 0,
+    "skippedEventIds": [],
+    "startedAt": 1791460800000,
+    "finishedAt": null,
+    "durationMs": null
+  }
+}
+```
+
+`rebuild.state` is `"done"` once the replay finishes (`/ready` then answers `200`), or `"failed"` with a `rebuild.error` message if the replay could not complete (`/ready` stays `503`). A stored row that cannot be parsed or applied is skipped, counted in `rebuild.skippedEvents`, and its id listed in `rebuild.skippedEventIds` (first 20); the rest of the rebuild still completes. Memory storage has nothing to replay: `/ready` answers `200` immediately with `rebuild.state: "done"`.
+
+While the rebuild runs, routes that read or write derived state answer `503 store_rebuilding` (or `503 store_rebuild_failed` if the rebuild failed) with a `rebuild` object in the body and a `Retry-After: 1` header:
+
+| Route | Behavior during the rebuild |
+|---|---|
+| `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:agentId`, `POST /api/v1/runtimes` | `503 store_rebuilding` (or `store_rebuild_failed`). |
+| `POST /api/v1/events`, `POST /api/v1/events/batch`, `POST /api/v1/webhooks/generic` | Accepted, stored and broadcast as usual; the rebuild (or a later restart) applies them to derived state once it reaches them. |
+| `GET /api/v1/events`, `GET /api/v1/events/stream` | Unchanged: these read SQLite directly. |
+
+Both SDKs only write through the events routes, which stay open during the rebuild, and both already retry `5xx` responses on writes; no SDK change is needed. A client calling `snapshot()` during a rebuild sees the `503` as an error, which is the correct signal to retry after `Retry-After`.
+
+The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or `open`. These fields never include the token:
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "open",
+  "webhookAuth": "open"
+}
+```
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "token",
+  "webhookAuth": "signature"
+}
+```
 
 ### Events
 - `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header. Answers `202` (accepted), `200` (duplicate: same id, same content) or `409 conflicting_duplicate` (same id, different content, not applied), each with the event `fingerprint`. A header that differs from a non-empty body `id` is a `400 idempotency_key_mismatch`.
 - `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch). Each result has a `status` of `accepted`, `duplicate` or `conflict`.
 - `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`).
 - `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay.
-- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
+- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block, `usageDuplicates: { count, mismatched, unverified }` (request-id duplicate references, see [Idempotency & Replays](#-5-idempotency--replays)) and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
+- `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
 
 ### Agents
 - `POST /api/v1/agents`: Register or upsert an agent profile.
@@ -367,6 +428,28 @@ Each conflict writes one `warn` log line on the server with the id, type, source
 
 Ids the server generates itself (`POST /api/v1/agents`, `PATCH /api/v1/agents/:agentId`, `POST /api/v1/runtimes` and the generic webhook) are `evt_<kind>_<uuid>`, for example `evt_reg_0b9f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4`, so two requests in the same millisecond never collide. The generic webhook response adds `duplicateCount` and `conflictCount` next to `acceptedCount`; both are `0` in normal operation.
 
+### A second dedup key: `(provider, requestId)`
+
+The event id above tells a retry of the exact same request from a conflicting one, but a provider call can still reach the server twice under two different event ids: the application calls `usage()` again after giving up, a process replays its own buffer with fresh ids, two layers (a framework adapter and hand-written code) report the same call, or a webhook delivery is retried. `llm.usage` and `llm.failed` have a second, independent key for this: `payload.provider` (normalized: trimmed, lowercased) and `payload.requestId` (trimmed). They share one key space, so a call reported as failed and then as used is not counted twice. An event without a usable `requestId` (missing, not a string, or blank after trimming) has no request key and behaves exactly as described above, event-id dedup only.
+
+A new event id that reports an already-used `(provider, requestId)` is accepted as a **duplicate reference**: stored with its full content for audit, `duplicateOf` pointing at the original, but with no side effects at all. It is never added to any total (agent or global), never changes the agent's status, provider, model or last-seen time, is never broadcast over SSE or passed to a `--record` listener, is excluded from `GET /api/v1/events` and from `Last-Event-ID` replay, and its own event id is remembered too (resending it resolves to the original as an ordinary `event_id` duplicate). The response says which key matched:
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "duplicateReason": "request_id",
+  "id": "evt_req_9921",
+  "submittedId": "evt_req_9988",
+  "matchesOriginal": true,
+  "fingerprint": "sha256:9b0e..."
+}
+```
+
+`id` is always the id the figure is held under (the original for a `request_id` duplicate), `submittedId` is the id the client actually sent (present only when it differs from `id`), and `matchesOriginal` appears only for a `request_id` duplicate: whether its usage-relevant fields (`model`, every token field, `cost`, `currency`, `costSource`) match the original's, compared null-safe (`null` equals `null`, a field absent on both sides is equal, but `null` never equals `0`: unknown is never zero). A mismatch writes one `warn` log line with both event ids, the provider and a request id truncated to 80 characters, never payload text. `POST /api/v1/events/batch` applies both keys in input order, so two items of the same batch can resolve against each other; `GET /api/v1/usage/duplicates` lists every reference, and `GET /api/v1/snapshot`'s `usageDuplicates` gives the running counts (`unverified` is a reference migrated from a database written before this existed, whose legacy content was never compared).
+
+This should be the provider's own request or response id, the same one that appears on the provider side or in an invoice or usage export, never a synthetic counter such as `"1"` reused across sessions: the server would then treat two different calls as the same one and drop the second from the figures.
+
 ---
 
 ## 🔒 6. Webhook Security (HMAC-SHA256)
@@ -435,7 +518,7 @@ With these rules, "total tokens = `inputTokens` + `outputTokens`" stays correct,
 | `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. No default. |
 | `cachedTokens` | No | **Deprecated**, see below. Non-negative integer or `null`. No default. |
 | `latencyMs` | No | Non-negative integer or `null`. |
-| `requestId` | No | String or `null`. |
+| `requestId` | No | String or `null`. Should be the provider's own request or response id: the server deduplicates on `(provider, requestId)` (see [Idempotency & Replays](#-5-idempotency--replays)). Never reuse a synthetic counter such as `"1"` across sessions, or the server will treat two different calls as the same one and drop the second from the figures. |
 | `cost` | No | Non-negative number or `null`. Defaults to `null` (unknown). |
 | `costSource` | No | `provider-reported`, `estimated` or `unknown`. Defaults to `unknown`. |
 | `currency` | No | ISO 4217 code such as `USD`, or `null`. |
@@ -557,7 +640,7 @@ The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, 
 | `errorKind` | No | One of the kinds below. Defaults to `unknown` when absent; `null` or an unlisted value is rejected with HTTP 400. |
 | `httpStatus` | No | Integer from 100 to 599, or `null`. |
 | `retryable` | No | Boolean or `null`. No default. |
-| `requestId` | No | String of up to 200 characters, or `null`. |
+| `requestId` | No | String of up to 200 characters, or `null`. Same dedup rule as `llm.usage.requestId`: it shares one key space with `llm.usage`, so a call reported as failed and then as used under the same `(provider, requestId)` is counted once. |
 | `providerErrorCode` | No | The provider's error code (for example `insufficient_quota`), up to 100 characters. A code, never a message. |
 | `latencyMs` | No | Non-negative integer or `null`. |
 | `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. Same meaning as in `llm.usage`. No default. |
@@ -725,17 +808,25 @@ Events are tagged with `runtimeId` and `sessionId`, and queryable via:
 
 Agent Viewer supports two persistence backends:
 
-1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events).
-2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Runtime, session, and agent state remains in memory.
+1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events), derived state included.
+2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses (see [Health & Readiness](#health--readiness) above). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer ships with the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug.
 
 To enable SQLite persistence:
 ```env
 AGENT_VIEWER_STORAGE=sqlite
 AGENT_VIEWER_SQLITE_PATH=./data/agent-viewer.db
 AGENT_VIEWER_SQLITE_BACKUP=auto
+AGENT_VIEWER_REBUILD_PAGE_SIZE=2000
+AGENT_VIEWER_REBUILD_PAGE_DELAY_MS=0
 ```
 
+`AGENT_VIEWER_REBUILD_PAGE_SIZE` (default `2000`) controls how many rows the startup rebuild replays per page; `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` (default `0`) adds an extra delay after each page, useful for tests and diagnostics. The server yields to the event loop between pages, so `/health` and `/ready` keep answering during a long rebuild.
+
 SQLite schema migrations run automatically at startup. Existing databases are backed up next to the file before migration by default. Backups contain the same events, are never pruned automatically, and can delay startup for large databases. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if backups are managed separately. A server refuses a database with a newer schema. For rollback, stop the server and restore the `.bak` file before starting an older version.
+
+Migration 3 (`request-key-dedup`) adds the `(provider, requestId)` dedup key described in [Idempotency & Replays](#-5-idempotency--replays). It backfills `request_provider` and `request_id` from every stored `llm.usage` and `llm.failed` row and marks pre-existing rows that already shared a key as duplicates of the earliest one (`matchesOriginal` stays unknown for those: the legacy content was never compared under this rule). Because SQLite totals before this release lived only in the in-memory fallback and reset on restart, this migration itself changes no persisted figure; but totals rebuilt from an upgraded database by migration 4 are lower wherever such duplicates existed, and that is the correction, not data loss. Downgrading to an older release is not supported for exact figures: it ignores the new columns and counts the duplicate rows again.
+
+Migration 4 (`events-seq`) adds `events.seq`, a durable insertion-order counter independent of `rowid` (`events.id` is a `TEXT PRIMARY KEY`, so SQLite is free to renumber `rowid` on `VACUUM`). It is backfilled from `rowid`, the true insertion order at the moment the migration runs; new rows get their `seq` from an in-memory counter seeded from the stored maximum. The startup rebuild replays events in `seq` order, and the `afterId` cursor used by `GET /api/v1/events` moved from `rowid` to `seq`.
 
 ---
 

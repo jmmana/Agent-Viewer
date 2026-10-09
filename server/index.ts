@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { z } from 'zod';
 import {
@@ -83,6 +84,32 @@ try {
   if (process.env.DEBUG && error instanceof Error && error.stack) console.error(error.stack);
   process.exit(1);
 }
+// Starts the SQLite startup rebuild without blocking the server from listening (issue #52). Memory storage
+// resolves at once. `init()` is safe to call more than once: `SQLiteEventStore` already started it from its own
+// constructor, so this just lets callers await the same promise if they need to.
+void store.init();
+
+/** Blocks a route that reads or writes derived state until the startup rebuild has finished. */
+// Generic over the route's own params/body/query types, so mixing this in as an extra handler before a typed
+// route (for example one with a `:agentId` param) never widens that route's own handler to `ParamsDictionary`.
+function requireReady<P = Record<string, string>, ResBody = any, ReqBody = any, ReqQuery = any>(
+  _req: express.Request<P, ResBody, ReqBody, ReqQuery>,
+  res: express.Response<ResBody>,
+  next: express.NextFunction
+): void {
+  const readiness = store.readiness();
+  if (readiness.ready) {
+    next();
+    return;
+  }
+  res.setHeader('Retry-After', '1');
+  res.status(503).json({
+    error: readiness.rebuild.state === 'failed' ? 'store_rebuild_failed' : 'store_rebuilding',
+    message: 'Server state is being rebuilt from storage',
+    rebuild: readiness.rebuild,
+  } as ResBody);
+}
+
 const clients = new Set<express.Response>();
 
 // Rate limiter storage
@@ -172,6 +199,61 @@ function getApiToken(): string | undefined {
   return undefined;
 }
 
+/** Whether /api/v1 asks for a token right now. Read per request, like getApiToken(). */
+export type AuthMode = 'token' | 'open';
+/** How webhooks authenticate right now. */
+export type WebhookAuthMode = 'signature' | 'token' | 'open';
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+export function currentAuthMode(): AuthMode {
+  return getApiToken() ? 'token' : 'open';
+}
+
+export function currentWebhookAuthMode(): WebhookAuthMode {
+  if (process.env.AGENT_VIEWER_WEBHOOK_SECRET) return 'signature';
+  return currentAuthMode();
+}
+
+/** Lines printed at start when /api/v1 is open. Empty when a token is set. Never contains the token. */
+export function openApiWarning(input: {
+  port: number;
+  host?: string;
+  webhookSecret: boolean;
+  tokenSet: boolean;
+}): string[] {
+  if (input.tokenSet) return [];
+
+  const loopback = input.host !== undefined && LOOPBACK_HOSTS.has(input.host);
+  const lines = [
+    '[agent-viewer] WARNING: AGENT_VIEWER_API_TOKEN is not set, so /api/v1 is OPEN.',
+    loopback
+      ? `[agent-viewer]   Listening on ${input.host} only, port ${input.port}. Any process on this machine can send events, change the token and cost figures you see, and read every agent, task and usage record.`
+      : `[agent-viewer]   Listening on every interface, port ${input.port}. Anyone who can reach it can send events,`,
+    ...(!loopback
+      ? ['[agent-viewer]   change the token and cost figures you see, and read every agent, task and usage record.']
+      : []),
+  ];
+  if (!input.webhookSecret) lines.push('[agent-viewer]   Webhooks are open too (no AGENT_VIEWER_WEBHOOK_SECRET).');
+  lines.push(
+    '[agent-viewer]   Fix: set AGENT_VIEWER_API_TOKEN to a long random value (for example: openssl rand -base64 32)',
+    '[agent-viewer]   and restart, or use `agent-viewer start`, which always runs with a token.',
+    '[agent-viewer]   A future release will refuse to start without a token.',
+  );
+  return lines;
+}
+
+/** Prints openApiWarning() to stderr, reading the live env state at call time. */
+function warnIfApiOpen(portToListen: number, host?: string): void {
+  for (const line of openApiWarning({
+    port: portToListen,
+    host,
+    webhookSecret: Boolean(process.env.AGENT_VIEWER_WEBHOOK_SECRET),
+    tokenSet: currentAuthMode() === 'token',
+  })) {
+    console.warn(line);
+  }
+}
+
 /** Constant-time string comparison. Hashing first gives equal-length buffers, so length does not leak or throw. */
 function safeEqual(provided: string, expected: string): boolean {
   const a = crypto.createHash('sha256').update(provided).digest();
@@ -224,20 +306,25 @@ app.get('/health', (_req, res) => {
     version: SERVER_VERSION,
     schemaVersion: '1.0',
     clientsConnected: clients.size,
+    auth: currentAuthMode(),
+    webhookAuth: currentWebhookAuthMode(),
   });
 });
 
-app.get('/ready', async (_req, res) => {
+app.get('/ready', (_req, res) => {
   try {
-    const storageType = process.env.AGENT_VIEWER_STORAGE || 'memory';
+    const readiness = store.readiness();
     const database = store.getSchemaInfo?.();
-    res.json({
-      ok: true,
-      ready: true,
-      storage: storageType,
+    if (!readiness.ready) res.setHeader('Retry-After', '1');
+    res.status(readiness.ready ? 200 : 503).json({
+      ok: readiness.ready,
+      ready: readiness.ready,
+      storage: readiness.storage,
       ...(database ? { database } : {}),
       // Per process, reset on restart: conflicting duplicates rejected and legacy rows matched by id only.
       ingestion: store.ingestionCounters(),
+      // Startup rebuild from SQLite (issue #52): 'done' at once for memory storage, nothing to replay.
+      rebuild: readiness.rebuild,
     });
   } catch (err: any) {
     res.status(503).json({ ok: false, ready: false, error: err?.message || 'Storage error' });
@@ -353,10 +440,15 @@ app.post('/api/v1/events', async (req, res) => {
   }
 
   if (result.outcome === 'duplicate') {
+    // `id` is the id the figure is held under: the original event id for a request_id duplicate, the same id
+    // sent for an event_id duplicate. `submittedId` and `matchesOriginal` appear only when they apply (#48).
     res.status(200).json({
       accepted: true,
       duplicate: true,
-      id: event.id,
+      duplicateReason: result.duplicateReason,
+      id: result.id,
+      ...(result.submittedId !== undefined ? { submittedId: result.submittedId } : {}),
+      ...(result.matchesOriginal !== undefined ? { matchesOriginal: result.matchesOriginal } : {}),
       fingerprint: result.fingerprint,
     });
     return;
@@ -445,7 +537,15 @@ app.post('/api/v1/events/batch', async (req, res) => {
             error: 'conflicting_duplicate',
             storedFingerprint: result.storedFingerprint,
           }
-        : { id: result.id, status: result.outcome, duplicate: result.duplicate, fingerprint: result.fingerprint }
+        : {
+            id: result.id,
+            status: result.outcome,
+            duplicate: result.duplicate,
+            fingerprint: result.fingerprint,
+            ...(result.duplicateReason ? { duplicateReason: result.duplicateReason } : {}),
+            ...(result.submittedId !== undefined ? { submittedId: result.submittedId } : {}),
+            ...(result.matchesOriginal !== undefined ? { matchesOriginal: result.matchesOriginal } : {}),
+          }
     ),
   });
 });
@@ -473,7 +573,7 @@ app.get('/api/v1/events', async (req, res) => {
 // -------------------------------------------------------------
 // Snapshot
 // -------------------------------------------------------------
-app.get('/api/v1/snapshot', async (_req, res) => {
+app.get('/api/v1/snapshot', requireReady, async (_req, res) => {
   const snapshot = await store.snapshot();
   res.json(snapshot);
 });
@@ -481,6 +581,29 @@ app.get('/api/v1/snapshot', async (_req, res) => {
 // Usage aggregates only (the snapshot's `usage` block), without the event list.
 app.get('/api/v1/usage', async (_req, res) => {
   res.json(await store.usageSummary());
+});
+
+/** `limit` on a list endpoint: default 100, clamped to 1..1000. A non-numeric value falls back to the default. */
+function clampedLimit(raw: unknown, fallback: number, max: number): number {
+  const value = typeof raw === 'string' ? Number(raw) : NaN;
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.trunc(value), 1), max);
+}
+
+// Audit view of request-id duplicate references (issue #48): same auth and rate limit as every /api/v1 route,
+// and the same payload shape as GET /api/v1/events, so it exposes nothing new to a token holder.
+app.get('/api/v1/usage/duplicates', async (req, res) => {
+  const limit = clampedLimit(req.query.limit, 100, 1000);
+  const provider = typeof req.query.provider === 'string' ? req.query.provider : undefined;
+  const requestId = typeof req.query.requestId === 'string' ? req.query.requestId : undefined;
+  const duplicateOf = typeof req.query.duplicateOf === 'string' ? req.query.duplicateOf : undefined;
+
+  const duplicates = await store.listDuplicates({ limit, provider, requestId, duplicateOf });
+  res.json({
+    schemaVersion: '1.0',
+    count: duplicates.length,
+    duplicates,
+  });
 });
 
 // -------------------------------------------------------------
@@ -524,25 +647,17 @@ app.get('/api/v1/events/stream', async (req, res) => {
 // -------------------------------------------------------------
 // Agent Management
 // -------------------------------------------------------------
-app.post('/api/v1/agents', async (req, res) => {
+app.post('/api/v1/agents', requireReady, async (req, res) => {
   const { id, name, roleTitle, role, provider, model, workspace, status, statusText } = req.body ?? {};
   if (!id || typeof id !== 'string' || !name || typeof name !== 'string') {
     res.status(400).json({ error: 'validation_failed', message: 'Fields "id" and "name" are required' });
     return;
   }
 
-  const agent = await store.upsertAgent({
-    id,
-    name,
-    roleTitle,
-    role,
-    provider,
-    model,
-    workspace,
-    status: status || 'IDLE',
-    statusText: statusText || 'Registered',
-  });
-
+  // Every default this route would once have passed straight to `store.upsertAgent` now goes into the event
+  // payload instead (issue #52): the record below is read back from `ServerState` after the event is applied,
+  // the same state a startup rebuild reaches by replaying this same event.
+  const resolvedStatus = typeof status === 'string' && status.trim() ? status.trim().toUpperCase() : 'IDLE';
   const regEvent: CanonicalEvent = {
     schemaVersion: '1.0',
     id: serverEventId('reg'),
@@ -552,28 +667,30 @@ app.post('/api/v1/agents', async (req, res) => {
     agentId: id,
     severity: 'normal',
     summary: `Registered ${name}`,
-    payload: { id, name, roleTitle, provider, model, workspace },
+    payload: {
+      id,
+      name,
+      roleTitle: roleTitle || 'AI Agent',
+      role: role || 'custom',
+      provider: provider || 'Custom',
+      model: model || 'Custom',
+      workspace: workspace || 'development',
+      status: resolvedStatus,
+      statusText: statusText || 'Registered',
+    },
   };
 
   if (!(await appendServerEvent(regEvent, res))) return;
 
-  res.status(201).json(agent);
+  res.status(201).json(await store.getAgent(id));
 });
 
-app.patch('/api/v1/agents/:agentId', async (req, res) => {
+app.patch('/api/v1/agents/:agentId', requireReady, async (req, res) => {
   const agentId = req.params.agentId;
-  const existing = await store.getAgent(agentId);
-  if (!existing) {
-    res.status(404).json({ error: 'agent_not_found', message: `Agent "${agentId}" not found` });
-    return;
-  }
 
-  const body: unknown = req.body ?? {};
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    res.status(400).json({ error: 'validation_failed', message: 'Request body must be a JSON object' });
-    return;
-  }
-
+  // Checked before the existence lookup: `resolveEventAgentId` (issue #52's reducer, `serverState.ts`) never
+  // files these ids under an agent in the first place, so one would otherwise see 404 here instead of the
+  // dedicated reserved-id error.
   if (agentId === 'system' || agentId === 'external-runtime' || agentId.startsWith('runtime:')) {
     res.status(400).json({
       error: 'validation_failed',
@@ -584,6 +701,18 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
         message: 'Reserved agent ids cannot be updated through PATCH',
       }],
     });
+    return;
+  }
+
+  const existing = await store.getAgent(agentId);
+  if (!existing) {
+    res.status(404).json({ error: 'agent_not_found', message: `Agent "${agentId}" not found` });
+    return;
+  }
+
+  const body: unknown = req.body ?? {};
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    res.status(400).json({ error: 'validation_failed', message: 'Request body must be a JSON object' });
     return;
   }
 
@@ -712,14 +841,17 @@ app.patch('/api/v1/agents/:agentId', async (req, res) => {
 // -------------------------------------------------------------
 // Runtimes & Sessions
 // -------------------------------------------------------------
-app.post('/api/v1/runtimes', async (req, res) => {
+app.post('/api/v1/runtimes', requireReady, async (req, res) => {
   const { id, name, framework, version, metadata } = req.body ?? {};
   if (!id || typeof id !== 'string') {
     res.status(400).json({ error: 'validation_failed', message: 'Field "id" is required' });
     return;
   }
 
-  const runtime = await store.upsertRuntime({ id, name, framework, version, metadata });
+  // The route resolves the 'custom' default itself and puts it in the event payload (issue #52), so the reducer
+  // never has to guess a runtime's framework from an event it only auto-created: `runtime.connected` always
+  // carries every field it sets, for a new runtime and for one that already exists.
+  const resolvedFramework = typeof framework === 'string' && framework.trim() ? framework.trim() : 'custom';
   const event: CanonicalEvent = {
     schemaVersion: '1.0',
     id: serverEventId('rt'),
@@ -729,24 +861,25 @@ app.post('/api/v1/runtimes', async (req, res) => {
     source: `runtime:${id}`,
     severity: 'normal',
     summary: `Runtime ${id} connected`,
-    payload: { id, name, framework, version, metadata },
+    payload: { id, name, framework: resolvedFramework, version, metadata },
   };
   if (!(await appendServerEvent(event, res))) return;
 
+  const runtime = (await store.listRuntimes()).find((r) => r.id === id) ?? null;
   res.status(201).json(runtime);
 });
 
-app.get('/api/v1/runtimes', async (_req, res) => {
+app.get('/api/v1/runtimes', requireReady, async (_req, res) => {
   const runtimes = await store.listRuntimes();
   res.json({ runtimes });
 });
 
-app.get('/api/v1/sessions', async (_req, res) => {
+app.get('/api/v1/sessions', requireReady, async (_req, res) => {
   const sessions = await store.listSessions();
   res.json({ sessions });
 });
 
-app.get('/api/v1/sessions/:sessionId', async (req, res) => {
+app.get('/api/v1/sessions/:sessionId', requireReady, async (req, res) => {
   const session = await store.getSession(req.params.sessionId);
   if (!session) {
     res.status(404).json({ error: 'session_not_found', message: `Session ${req.params.sessionId} not found` });
@@ -1141,14 +1274,17 @@ let serverInstance: any = null;
 
 /** Starts listening. Without `host` it binds every interface, as before; the CLI passes `127.0.0.1`. */
 export function startServer(portToListen = port, host?: string): Server {
-  return host ? app.listen(portToListen, host) : app.listen(portToListen);
+  const server = host ? app.listen(portToListen, host) : app.listen(portToListen);
+  server.once('listening', () => warnIfApiOpen((server.address() as AddressInfo).port, host));
+  return server;
 }
 
 if (isDirectRun && process.env.NODE_ENV !== 'test') {
   // Express 5 passes listen errors (for example EADDRINUSE) to this callback instead of emitting them unhandled.
   serverInstance = app.listen(port, (err?: Error) => {
     if (err) throw err;
-    console.log(`Agent Viewer ingestion server listening on http://localhost:${port}`);
+    warnIfApiOpen((serverInstance.address() as AddressInfo).port);
+    console.log(`Agent Viewer ingestion server listening on every interface, port ${port} (http://localhost:${port} from this machine)`);
   });
 }
 

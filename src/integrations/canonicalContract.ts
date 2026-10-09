@@ -82,6 +82,12 @@ export const LlmUsagePayloadSchema = z.object({
   cachedTokens: tokenCount.nullish(),
   reasoningTokens: tokenCount.nullish(),
   latencyMs: tokenCount.nullish(),
+  /**
+   * The provider's own request or response id. The server deduplicates `llm.usage` and `llm.failed` on
+   * `(provider, requestId)`, so this should be the id that also appears on the provider side or in an invoice
+   * or usage export, never a synthetic counter such as `"1"` reused across sessions: that would make two
+   * different calls collide and hide one of them from the figures.
+   */
   requestId: z.string().nullish(),
   cost: costSchema,
   costSource: costSourceSchema,
@@ -101,6 +107,7 @@ export const LlmFailedPayloadSchema = z.object({
   errorKind: z.enum(LLM_ERROR_KINDS).default('unknown'),
   httpStatus: z.number().int().min(100).max(599).nullish(),
   retryable: z.boolean().nullish(),
+  /** Same dedup rule and warning as `LlmUsagePayloadSchema.requestId`: it shares one key space with `llm.usage`. */
   requestId: z.string().max(200).nullish(),
   providerErrorCode: z.string().max(100).nullish(),
   latencyMs: tokenCount.nullish(),

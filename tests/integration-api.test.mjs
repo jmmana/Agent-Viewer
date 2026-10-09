@@ -28,17 +28,33 @@ test('REST API: /health and /ready endpoints', async () => {
     assert.equal(healthJson.ok, true);
     assert.equal(healthJson.service, 'agent-viewer');
     assert.equal(healthJson.schemaVersion, '1.0');
+    assert.ok(['open', 'token'].includes(healthJson.auth));
+    assert.ok(['open', 'token', 'signature'].includes(healthJson.webhookAuth));
 
     const readyRes = await fetch(`${baseUrl}/ready`);
     assert.equal(readyRes.status, 200);
     const readyJson = await readyRes.json();
+    // Memory storage has nothing to replay (issue #52): the rebuild is reported 'done' at once, with
+    // zero events and zero duration.
     assert.deepEqual(readyJson, {
       ok: true,
       ready: true,
       storage: 'memory',
       ingestion: { conflicts: readyJson.ingestion.conflicts, legacyUnverifiedDuplicates: 0 },
+      rebuild: {
+        state: 'done',
+        totalEvents: 0,
+        processedEvents: 0,
+        skippedEvents: 0,
+        skippedEventIds: [],
+        startedAt: readyJson.rebuild.startedAt,
+        finishedAt: readyJson.rebuild.finishedAt,
+        durationMs: 0,
+      },
     });
     assert.equal(typeof readyJson.ingestion.conflicts, 'number');
+    assert.equal(typeof readyJson.rebuild.startedAt, 'number');
+    assert.equal(readyJson.rebuild.finishedAt, readyJson.rebuild.startedAt);
   } finally {
     server.close();
   }
@@ -68,8 +84,8 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.ok, true);
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
-      schemaVersion: 2,
-      latestKnownSchemaVersion: 2,
+      schemaVersion: 4,
+      latestKnownSchemaVersion: 4,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');
@@ -746,7 +762,13 @@ test('REST API: re-sending an event returns 200 duplicate with the fingerprint o
 
     const second = await postEvent(baseUrl, event);
     assert.equal(second.status, 200);
-    assert.deepEqual(await second.json(), { accepted: true, duplicate: true, id: event.id, fingerprint: firstJson.fingerprint });
+    assert.deepEqual(await second.json(), {
+      accepted: true,
+      duplicate: true,
+      duplicateReason: 'event_id',
+      id: event.id,
+      fingerprint: firstJson.fingerprint,
+    });
 
     // The same event with its keys in another order is still the same content.
     const reordered = Object.fromEntries(Object.entries(event).reverse());
@@ -1027,6 +1049,270 @@ test('REST API: a webhook whose generated ids conflict returns 409 and does not 
     assert.equal(json.conflictingIds.length, 1);
   } finally {
     store.appendBatch = realAppendBatch;
+    server.close();
+  }
+});
+
+// -------------------------------------------------------------
+// Request-id deduplication (issue #48)
+// -------------------------------------------------------------
+
+function usageWithRequest(id, requestId, payload = {}) {
+  return integrityEvent(id, { provider: 'openai', requestId, ...payload });
+}
+
+test('REST API: a new event id with the same (provider, requestId) is a 200 request_id duplicate pointing to the original', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = usageWithRequest('evt_reqdup_original', 'req-abc-1');
+    const firstRes = await postEvent(baseUrl, original);
+    assert.equal(firstRes.status, 202);
+
+    const before = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    const agentBefore = before.agents.find((agent) => agent.id === 'integrity');
+
+    const duplicate = usageWithRequest('evt_reqdup_second', 'req-abc-1', { inputTokens: 999 });
+    const secondRes = await postEvent(baseUrl, duplicate);
+    assert.equal(secondRes.status, 200);
+    const secondJson = await secondRes.json();
+    assert.equal(secondJson.accepted, true);
+    assert.equal(secondJson.duplicate, true);
+    assert.equal(secondJson.duplicateReason, 'request_id');
+    assert.equal(secondJson.id, 'evt_reqdup_original');
+    assert.equal(secondJson.submittedId, 'evt_reqdup_second');
+    assert.equal(secondJson.matchesOriginal, false, 'inputTokens differs from the original');
+
+    const after = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    // usageDuplicates is expected to grow by the duplicate itself; every other figure must stay identical.
+    assert.deepEqual(
+      { ...after, timestamp: 0, usageDuplicates: null },
+      { ...before, timestamp: 0, usageDuplicates: null },
+      'totals and agent fields unchanged by the duplicate'
+    );
+    assert.deepEqual(after.usageDuplicates, { count: before.usageDuplicates.count + 1, mismatched: before.usageDuplicates.mismatched + 1, unverified: before.usageDuplicates.unverified });
+    assert.equal(after.agents.find((agent) => agent.id === 'integrity').provider, agentBefore.provider);
+
+    // Never returned by GET /api/v1/events.
+    const listed = await listEvents(baseUrl, 'limit=100');
+    assert.ok(!listed.some((event) => event.id === 'evt_reqdup_second'));
+    assert.ok(listed.some((event) => event.id === 'evt_reqdup_original'));
+
+    // Re-sending the duplicate's own event id resolves to the original as an event_id duplicate.
+    const resend = await postEvent(baseUrl, duplicate);
+    assert.equal(resend.status, 200);
+    const resendJson = await resend.json();
+    assert.equal(resendJson.duplicateReason, 'event_id');
+    assert.equal(resendJson.id, 'evt_reqdup_original');
+    assert.equal(resendJson.submittedId, 'evt_reqdup_second');
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: provider matching ignores case and surrounding whitespace, requestId matches exactly after trim', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = integrityEvent('evt_reqdup_case_1', { provider: ' OpenAI ', requestId: 'req-case-1' });
+    assert.equal((await postEvent(baseUrl, original)).status, 202);
+
+    const sameKey = integrityEvent('evt_reqdup_case_2', { provider: 'openai', requestId: ' req-case-1 ' });
+    const dup = await postEvent(baseUrl, sameKey);
+    assert.equal(dup.status, 200);
+    const dupJson = await dup.json();
+    assert.equal(dupJson.duplicateReason, 'request_id');
+    assert.equal(dupJson.id, 'evt_reqdup_case_1');
+
+    // A different request id under the same normalized provider is a brand new original.
+    const otherRequest = integrityEvent('evt_reqdup_case_3', { provider: 'OPENAI', requestId: 'req-case-2' });
+    assert.equal((await postEvent(baseUrl, otherRequest)).status, 202);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: the same requestId under two different providers is counted twice', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const first = integrityEvent('evt_reqdup_provA', { provider: 'provider-a', requestId: 'shared-request-id' });
+    const second = integrityEvent('evt_reqdup_provB', { provider: 'provider-b', requestId: 'shared-request-id' });
+    assert.equal((await postEvent(baseUrl, first)).status, 202);
+    const res = await postEvent(baseUrl, second);
+    assert.equal(res.status, 202);
+    assert.equal((await res.json()).duplicate, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: llm.failed followed by llm.usage with the same key is a request_id duplicate with matchesOriginal false', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const failed = {
+      schemaVersion: '1.0',
+      id: 'evt_reqdup_failed',
+      type: 'llm.failed',
+      timestamp: 1_700_000_000_000,
+      source: 'agent:integrity',
+      agentId: 'integrity',
+      summary: 'Call failed',
+      payload: { provider: 'anthropic', model: 'claude', requestId: 'req-mixed-1', errorKind: 'rate_limited' },
+    };
+    assert.equal((await postEvent(baseUrl, failed)).status, 202);
+
+    const usage = integrityEvent('evt_reqdup_usage_after_failed', { provider: 'anthropic', requestId: 'req-mixed-1' });
+    const res = await postEvent(baseUrl, usage);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.duplicateReason, 'request_id');
+    assert.equal(json.id, 'evt_reqdup_failed');
+    assert.equal(json.matchesOriginal, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: cost null against cost 0 is a mismatch; unknown is never equal to zero', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = integrityEvent('evt_reqdup_cost_null', { provider: 'costprovider', requestId: 'req-cost-1', cost: null, currency: null, costSource: 'unknown' });
+    assert.equal((await postEvent(baseUrl, original)).status, 202);
+    const zeroCost = integrityEvent('evt_reqdup_cost_zero', { provider: 'costprovider', requestId: 'req-cost-1', cost: 0, currency: 'USD', costSource: 'provider-reported' });
+    const res = await postEvent(baseUrl, zeroCost);
+    assert.equal((await res.json()).matchesOriginal, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: events without requestId, or with a blank one, behave exactly as before (no request-key dedup)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const noRequestId = integrityEvent('evt_reqdup_none_1', { provider: 'noreq' });
+    const blankRequestId = integrityEvent('evt_reqdup_none_2', { provider: 'noreq', requestId: '   ' });
+    assert.equal((await postEvent(baseUrl, noRequestId)).status, 202);
+    const res = await postEvent(baseUrl, blankRequestId);
+    assert.equal(res.status, 202, 'a blank requestId never links two different ids');
+    assert.equal((await res.json()).duplicate, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: in a batch, two events sharing a key resolve as original then request_id duplicate, in input order', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const first = usageWithRequest('evt_reqdup_batch_1', 'req-batch-1');
+    const second = usageWithRequest('evt_reqdup_batch_2', 'req-batch-1', { inputTokens: 5 });
+    const plainDuplicate = { ...first };
+    const res = await fetch(`${baseUrl}/api/v1/events/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([first, second, plainDuplicate]),
+    });
+    assert.equal(res.status, 202);
+    const json = await res.json();
+    assert.equal(json.results.length, 3);
+    assert.equal(json.results[0].status, 'accepted');
+    assert.equal(json.results[0].duplicate, false);
+    assert.equal(json.results[1].status, 'duplicate');
+    assert.equal(json.results[1].duplicateReason, 'request_id');
+    assert.equal(json.results[1].id, 'evt_reqdup_batch_1');
+    assert.equal(json.results[1].submittedId, 'evt_reqdup_batch_2');
+    assert.equal(json.results[2].status, 'duplicate');
+    assert.equal(json.results[2].duplicateReason, 'event_id');
+    assert.equal(json.results[2].id, 'evt_reqdup_batch_1');
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/duplicates lists references, honors filters, and requires the token when configured', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = usageWithRequest('evt_reqdup_list_1', 'req-list-1');
+    const duplicate = usageWithRequest('evt_reqdup_list_2', 'req-list-1', { inputTokens: 7 });
+    await postEvent(baseUrl, original);
+    await postEvent(baseUrl, duplicate);
+
+    const res = await fetch(`${baseUrl}/api/v1/usage/duplicates?provider=openai&requestId=req-list-1`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.schemaVersion, '1.0');
+    assert.equal(json.count, 1);
+    const [ref] = json.duplicates;
+    assert.equal(ref.id, 'evt_reqdup_list_2');
+    assert.equal(ref.duplicateOf, 'evt_reqdup_list_1');
+    assert.equal(ref.provider, 'openai');
+    assert.equal(ref.requestId, 'req-list-1');
+    assert.equal(typeof ref.receivedAt, 'number');
+    assert.equal(ref.matchesOriginal, false);
+    assert.equal(ref.event.id, 'evt_reqdup_list_2');
+    assert.equal(ref.event.payload.inputTokens, 7);
+
+    const byDuplicateOf = await (await fetch(`${baseUrl}/api/v1/usage/duplicates?duplicateOf=evt_reqdup_list_1`)).json();
+    assert.equal(byDuplicateOf.count, 1);
+
+    const noMatch = await (await fetch(`${baseUrl}/api/v1/usage/duplicates?provider=someone-else`)).json();
+    assert.equal(noMatch.count, 0);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/duplicates requires the API token when one is configured', async () => {
+  process.env.AGENT_VIEWER_API_TOKEN = 'dup-endpoint-secret';
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const unauth = await fetch(`${baseUrl}/api/v1/usage/duplicates`);
+    assert.equal(unauth.status, 401);
+    const authed = await fetch(`${baseUrl}/api/v1/usage/duplicates`, {
+      headers: { Authorization: 'Bearer dup-endpoint-secret' },
+    });
+    assert.equal(authed.status, 200);
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('REST API: snapshot.usageDuplicates counts references, mismatched and unverified', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const before = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+
+    const original = usageWithRequest('evt_reqdup_snap_1', 'req-snap-1');
+    await postEvent(baseUrl, original);
+    const matching = usageWithRequest('evt_reqdup_snap_2', 'req-snap-1');
+    await postEvent(baseUrl, matching);
+    const mismatching = usageWithRequest('evt_reqdup_snap_3', 'req-snap-1', { inputTokens: 12345 });
+    await postEvent(baseUrl, mismatching);
+
+    const after = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(after.usageDuplicates.count, before.usageDuplicates.count + 2);
+    assert.equal(after.usageDuplicates.mismatched, before.usageDuplicates.mismatched + 1);
+    assert.equal(after.usageDuplicates.unverified, before.usageDuplicates.unverified);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: a mismatched request-id duplicate logs one warning with ids and provider only, never payload text', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = usageWithRequest('evt_reqdup_warn_1', 'req-warn-1');
+    await postEvent(baseUrl, original);
+    await postEvent(baseUrl, usageWithRequest('evt_reqdup_warn_2', 'req-warn-1', { inputTokens: 55555, model: 'super-secret-model-name' }));
+
+    const lines = warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('Request-id duplicate does not match'));
+    assert.equal(lines.length, 1, 'one warning line for the mismatch');
+    assert.ok(!lines[0].includes('\n'), 'a single line');
+    assert.ok(!lines[0].includes('super-secret-model-name'), 'never logs payload content');
+    const logged = JSON.parse(lines[0].slice(lines[0].indexOf('{')));
+    assert.deepEqual(Object.keys(logged).sort(), ['duplicateId', 'originalId', 'provider', 'requestId'].sort());
+    assert.equal(logged.originalId, 'evt_reqdup_warn_1');
+    assert.equal(logged.duplicateId, 'evt_reqdup_warn_2');
+  } finally {
     server.close();
   }
 });

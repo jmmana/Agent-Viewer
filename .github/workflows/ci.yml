@@ -87,6 +87,11 @@ jobs:
       - name: Docker Build (viewer image)
         run: docker build -f docker/Dockerfile --target viewer --build-arg VITE_AGENT_VIEWER_API_URL=http://localhost:8787 .
 
+      - name: Check Compose ports bind to loopback
+        run: |
+          docker compose -f docker/compose.yml config --format json > /tmp/compose.json
+          node -e "const c = require('/tmp/compose.json'); for (const [service, port] of [['api', 8787], ['viewer', 3000]]) { const binding = c.services[service].ports.find((entry) => entry.target === port); if (binding?.host_ip !== '127.0.0.1') throw new Error(service + ' port ' + port + ' is not loopback-bound'); }"
+
       # Each image answers /health, refuses /api/v1 without the token, accepts an event with it and reads it back.
       - name: Container smoke tests (app and API images)
         run: |

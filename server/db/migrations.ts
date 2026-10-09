@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { baseline } from './migrations/0001-baseline';
 import { contentHash } from './migrations/0002-content-hash';
+import { requestKeyDedup } from './migrations/0003-request-key-dedup';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -12,7 +13,7 @@ export interface Migration {
   up(db: DatabaseSync): void;
 }
 
-export const MIGRATIONS: readonly Migration[] = [baseline, contentHash];
+export const MIGRATIONS: readonly Migration[] = [baseline, contentHash, requestKeyDedup];
 
 export interface MigrationOptions {
   appVersion: string;

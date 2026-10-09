@@ -480,7 +480,7 @@ analista.message("El resumen está listo para revisión.", target_agent_name="No
 analista.done("Resumen entregado")
 ```
 
-El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido. Los tokens que no envías siguen desconocidos, nunca `0`. El SDK nunca supone `provider-reported`: un `cost` sin `cost_source` se envía como `unknown`, con un solo aviso por cliente.
+El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido. Los tokens que no envías siguen desconocidos, nunca `0`. El SDK nunca supone `provider-reported`: un `cost` sin `cost_source` se envía como `unknown`, con un solo aviso por cliente. Los reintentos de transporte reutilizan el mismo id de evento y el mismo `requestId`. Si tu código vuelve a llamar a `usage()` para la misma llamada al proveedor, pasa el mismo `requestId` y el servidor guarda una sola copia.
 
 ### SDK de TypeScript
 
@@ -498,7 +498,7 @@ await builder.message('El manejador está listo para revisión.', 'Nova');
 await builder.done('Pull request abierto');
 ```
 
-Varias crews pueden compartir un servidor: marca cada cliente con su propio `runtimeId` y `sessionId`, y filtra con `GET /api/v1/events?runtimeId=...`. Más detalles en la [guía de integración](integration.md) (en inglés).
+Varias crews pueden compartir un servidor: marca cada cliente con su propio `runtimeId` y `sessionId`, y filtra con `GET /api/v1/events?runtimeId=...`. Más detalles en la [guía de integración](integration.md) (en inglés). Los reintentos de transporte reutilizan el mismo id de evento y el mismo `requestId`. Si tu código vuelve a llamar a `usage()` para la misma llamada al proveedor, pasa el mismo `requestId` y el servidor guarda una sola copia.
 
 ---
 
@@ -644,7 +644,7 @@ El id del evento es la clave de idempotencia, y el contenido decide qué signifi
 El primer envío devuelve `202` con la huella, y un reintento real devuelve HTTP 200 con la misma huella en lugar de guardar una segunda copia:
 
 ```json
-{ "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
+{ "accepted": true, "duplicate": true, "duplicateReason": "event_id", "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
 ```
 
 El mismo id con cualquier campo guardado distinto (un conteo de tokens, el costo, un costo que era `0` y ahora falta, o el `timestamp`) se rechaza con HTTP 409:
@@ -680,6 +680,40 @@ Un lote responde `202` siempre que la validación pase, aunque no se haya aplica
     { "id": "evt_b2", "status": "duplicate", "duplicate": true,  "fingerprint": "sha256:bb..." },
     { "id": "evt_b3", "status": "conflict",  "duplicate": false, "fingerprint": "sha256:cc...",
       "error": "conflicting_duplicate", "storedFingerprint": "sha256:3f1c..." }
+  ]
+}
+```
+
+`llm.usage` y `llm.failed` tienen una segunda clave de deduplicación, independiente de la anterior: `(provider, requestId)`. El id del evento distingue un reintento exacto de la misma solicitud de uno conflictivo; la clave de solicitud dice si dos ids de evento distintos en realidad nombran la misma llamada al proveedor (la aplicación volvió a llamar a `usage()`, un proceso reprodujo su propio búfer con ids nuevos, dos capas reportaron la misma llamada, o se reintentó una entrega de webhook). La comparación de `provider` ignora mayúsculas y espacios alrededor; `requestId` coincide exactamente después de recortar espacios; un `requestId` ausente o en blanco significa que el evento no tiene clave de solicitud y se comporta exactamente como arriba. `llm.usage` y `llm.failed` comparten un solo espacio de claves, así que una llamada reportada como fallida y luego como usada no se cuenta dos veces.
+
+Un id de evento nuevo con un `(provider, requestId)` ya usado también es un duplicado `200`, pero `duplicateReason` dice qué clave coincidió, `id` siempre es el id bajo el que se guarda la cifra (el original), y `submittedId` aparece cuando es distinto de `id`:
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "duplicateReason": "request_id",
+  "id": "evt_req_9921",
+  "submittedId": "evt_req_9988",
+  "matchesOriginal": true,
+  "fingerprint": "sha256:9b0e..."
+}
+```
+
+`matchesOriginal` solo aparece en un duplicado `request_id`: si sus campos relevantes de uso (`model`, cada campo de tokens, `cost`, `currency`, `costSource`) coinciden con los del original. Lo desconocido nunca es igual a cero: un `cost` de `null` contra un `0` guardado (o al revés) es `matchesOriginal: false`. Una discrepancia también escribe una línea de registro `warn` con ambos ids de evento, el proveedor y un id de solicitud recortado, nunca el payload. El duplicado se guarda con su contenido completo para auditoría, pero nunca se suma a ningún total, nunca cambia el estado, el proveedor ni el modelo del agente, nunca se transmite por el flujo en vivo ni se repite en `Last-Event-ID`, y nunca aparece en `GET /api/v1/events`. Lista cada referencia duplicada con `GET /api/v1/usage/duplicates` (filtros opcionales `limit`, `provider`, `requestId`, `duplicateOf`, con la misma autenticación que el resto de `/api/v1`), y lee los contadores en `GET /api/v1/snapshot` bajo `usageDuplicates: { count, mismatched, unverified }` (`unverified` es una referencia migrada de antes de que esto existiera, cuyo contenido antiguo nunca se comparó).
+
+Un lote aplica las dos claves en el orden de entrada, así que dos elementos de un mismo lote pueden resolverse entre sí:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 2,
+  "conflicts": 0,
+  "total": 3,
+  "results": [
+    { "id": "evt_b1", "status": "accepted",  "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b1", "submittedId": "evt_b2", "status": "duplicate", "duplicate": true, "duplicateReason": "request_id", "matchesOriginal": false, "fingerprint": "sha256:bb..." },
+    { "id": "evt_b1", "status": "duplicate", "duplicate": true, "duplicateReason": "event_id", "fingerprint": "sha256:aa..." }
   ]
 }
 ```

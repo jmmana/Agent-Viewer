@@ -271,8 +271,9 @@ The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or 
 - `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch). Each result has a `status` of `accepted`, `duplicate` or `conflict`.
 - `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`).
 - `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay.
-- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
+- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block, `usageDuplicates: { count, mismatched, unverified }` (request-id duplicate references, see [Idempotency & Replays](#-5-idempotency--replays)) and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
+- `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
 
 ### Agents
 - `POST /api/v1/agents`: Register or upsert an agent profile.
@@ -395,6 +396,28 @@ Each conflict writes one `warn` log line on the server with the id, type, source
 
 Ids the server generates itself (`POST /api/v1/agents`, `PATCH /api/v1/agents/:agentId`, `POST /api/v1/runtimes` and the generic webhook) are `evt_<kind>_<uuid>`, for example `evt_reg_0b9f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4`, so two requests in the same millisecond never collide. The generic webhook response adds `duplicateCount` and `conflictCount` next to `acceptedCount`; both are `0` in normal operation.
 
+### A second dedup key: `(provider, requestId)`
+
+The event id above tells a retry of the exact same request from a conflicting one, but a provider call can still reach the server twice under two different event ids: the application calls `usage()` again after giving up, a process replays its own buffer with fresh ids, two layers (a framework adapter and hand-written code) report the same call, or a webhook delivery is retried. `llm.usage` and `llm.failed` have a second, independent key for this: `payload.provider` (normalized: trimmed, lowercased) and `payload.requestId` (trimmed). They share one key space, so a call reported as failed and then as used is not counted twice. An event without a usable `requestId` (missing, not a string, or blank after trimming) has no request key and behaves exactly as described above, event-id dedup only.
+
+A new event id that reports an already-used `(provider, requestId)` is accepted as a **duplicate reference**: stored with its full content for audit, `duplicateOf` pointing at the original, but with no side effects at all. It is never added to any total (agent or global), never changes the agent's status, provider, model or last-seen time, is never broadcast over SSE or passed to a `--record` listener, is excluded from `GET /api/v1/events` and from `Last-Event-ID` replay, and its own event id is remembered too (resending it resolves to the original as an ordinary `event_id` duplicate). The response says which key matched:
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "duplicateReason": "request_id",
+  "id": "evt_req_9921",
+  "submittedId": "evt_req_9988",
+  "matchesOriginal": true,
+  "fingerprint": "sha256:9b0e..."
+}
+```
+
+`id` is always the id the figure is held under (the original for a `request_id` duplicate), `submittedId` is the id the client actually sent (present only when it differs from `id`), and `matchesOriginal` appears only for a `request_id` duplicate: whether its usage-relevant fields (`model`, every token field, `cost`, `currency`, `costSource`) match the original's, compared null-safe (`null` equals `null`, a field absent on both sides is equal, but `null` never equals `0`: unknown is never zero). A mismatch writes one `warn` log line with both event ids, the provider and a request id truncated to 80 characters, never payload text. `POST /api/v1/events/batch` applies both keys in input order, so two items of the same batch can resolve against each other; `GET /api/v1/usage/duplicates` lists every reference, and `GET /api/v1/snapshot`'s `usageDuplicates` gives the running counts (`unverified` is a reference migrated from a database written before this existed, whose legacy content was never compared).
+
+This should be the provider's own request or response id, the same one that appears on the provider side or in an invoice or usage export, never a synthetic counter such as `"1"` reused across sessions: the server would then treat two different calls as the same one and drop the second from the figures.
+
 ---
 
 ## 🔒 6. Webhook Security (HMAC-SHA256)
@@ -463,7 +486,7 @@ With these rules, "total tokens = `inputTokens` + `outputTokens`" stays correct,
 | `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. No default. |
 | `cachedTokens` | No | **Deprecated**, see below. Non-negative integer or `null`. No default. |
 | `latencyMs` | No | Non-negative integer or `null`. |
-| `requestId` | No | String or `null`. |
+| `requestId` | No | String or `null`. Should be the provider's own request or response id: the server deduplicates on `(provider, requestId)` (see [Idempotency & Replays](#-5-idempotency--replays)). Never reuse a synthetic counter such as `"1"` across sessions, or the server will treat two different calls as the same one and drop the second from the figures. |
 | `cost` | No | Non-negative number or `null`. Defaults to `null` (unknown). |
 | `costSource` | No | `provider-reported`, `estimated` or `unknown`. Defaults to `unknown`. |
 | `currency` | No | ISO 4217 code such as `USD`, or `null`. |
@@ -585,7 +608,7 @@ The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, 
 | `errorKind` | No | One of the kinds below. Defaults to `unknown` when absent; `null` or an unlisted value is rejected with HTTP 400. |
 | `httpStatus` | No | Integer from 100 to 599, or `null`. |
 | `retryable` | No | Boolean or `null`. No default. |
-| `requestId` | No | String of up to 200 characters, or `null`. |
+| `requestId` | No | String of up to 200 characters, or `null`. Same dedup rule as `llm.usage.requestId`: it shares one key space with `llm.usage`, so a call reported as failed and then as used under the same `(provider, requestId)` is counted once. |
 | `providerErrorCode` | No | The provider's error code (for example `insufficient_quota`), up to 100 characters. A code, never a message. |
 | `latencyMs` | No | Non-negative integer or `null`. |
 | `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. Same meaning as in `llm.usage`. No default. |
@@ -764,6 +787,8 @@ AGENT_VIEWER_SQLITE_BACKUP=auto
 ```
 
 SQLite schema migrations run automatically at startup. Existing databases are backed up next to the file before migration by default. Backups contain the same events, are never pruned automatically, and can delay startup for large databases. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if backups are managed separately. A server refuses a database with a newer schema. For rollback, stop the server and restore the `.bak` file before starting an older version.
+
+Migration 3 (`request-key-dedup`) adds the `(provider, requestId)` dedup key described in [Idempotency & Replays](#-5-idempotency--replays). It backfills `request_provider` and `request_id` from every stored `llm.usage` and `llm.failed` row and marks pre-existing rows that already shared a key as duplicates of the earliest one (`matchesOriginal` stays unknown for those: the legacy content was never compared under this rule). Because SQLite totals before this release lived only in the in-memory fallback and reset on restart, this migration itself changes no persisted figure; but totals rebuilt from an upgraded database by a later item (#52) will be lower wherever such duplicates existed, and that is the correction, not data loss. Downgrading to an older release is not supported for exact figures: it ignores the new columns and counts the duplicate rows again.
 
 ---
 

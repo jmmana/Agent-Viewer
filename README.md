@@ -480,7 +480,7 @@ analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client.
+The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client. Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
 
 ### TypeScript SDK
 
@@ -498,7 +498,7 @@ await builder.message('Handler is ready for review.', 'Nova');
 await builder.done('Pull request opened');
 ```
 
-Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md).
+Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md). Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
 
 ---
 
@@ -644,7 +644,7 @@ The event id is the idempotency key, and the content decides what a repeated id 
 The first send returns `202` with the fingerprint, and a true retry returns HTTP 200 with the same fingerprint instead of a second copy:
 
 ```json
-{ "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
+{ "accepted": true, "duplicate": true, "duplicateReason": "event_id", "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
 ```
 
 The same id with any different stored field (a token count, the cost, a cost that was `0` and is now missing, or the `timestamp`) is rejected with HTTP 409:
@@ -680,6 +680,40 @@ A batch answers `202` whenever validation passes, even if no item was applied, s
     { "id": "evt_b2", "status": "duplicate", "duplicate": true,  "fingerprint": "sha256:bb..." },
     { "id": "evt_b3", "status": "conflict",  "duplicate": false, "fingerprint": "sha256:cc...",
       "error": "conflicting_duplicate", "storedFingerprint": "sha256:3f1c..." }
+  ]
+}
+```
+
+`llm.usage` and `llm.failed` have a second, independent dedup key: `(provider, requestId)`. The event id above tells a retry of the exact same request from a conflicting one; the request key tells whether two different event ids actually name the same provider call (the application called `usage()` again, a process replayed its own buffer with fresh ids, two layers reported the same call, or a webhook delivery was retried). Provider matching ignores case and surrounding whitespace; `requestId` matches exactly after trimming; a missing or blank `requestId` means the event has no request key and behaves exactly as above. `llm.usage` and `llm.failed` share one key space, so a call reported as failed and then as used is not counted twice.
+
+A new event id with an already-used `(provider, requestId)` is a `200` duplicate too, but `duplicateReason` says which key matched, `id` is always the id the figure is held under (the original), and `submittedId` appears whenever it differs from `id`:
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "duplicateReason": "request_id",
+  "id": "evt_req_9921",
+  "submittedId": "evt_req_9988",
+  "matchesOriginal": true,
+  "fingerprint": "sha256:9b0e..."
+}
+```
+
+`matchesOriginal` appears only for a `request_id` duplicate: whether its usage-relevant fields (`model`, every token field, `cost`, `currency`, `costSource`) match the original. Unknown is never equal to zero: a `cost` of `null` against a stored `0` (or the reverse) is `matchesOriginal: false`. A mismatch also writes one `warn` log line with both event ids, the provider and a truncated request id, never payload text. The duplicate is stored with its full content for audit, but it is never added to any total, never changes the agent's status, provider or model, is never broadcast over the live stream or replayed on `Last-Event-ID`, and never appears in `GET /api/v1/events`. List every duplicate reference with `GET /api/v1/usage/duplicates` (optional `limit`, `provider`, `requestId`, `duplicateOf` query filters, same auth as the rest of `/api/v1`), and read the running counts from `GET /api/v1/snapshot`'s `usageDuplicates: { count, mismatched, unverified }` (`unverified` is a reference migrated from before this existed, whose legacy content was never compared).
+
+A batch applies the same two keys in input order, so two items of one batch can resolve against each other:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 2,
+  "conflicts": 0,
+  "total": 3,
+  "results": [
+    { "id": "evt_b1", "status": "accepted",  "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b1", "submittedId": "evt_b2", "status": "duplicate", "duplicate": true, "duplicateReason": "request_id", "matchesOriginal": false, "fingerprint": "sha256:bb..." },
+    { "id": "evt_b1", "status": "duplicate", "duplicate": true, "duplicateReason": "event_id", "fingerprint": "sha256:aa..." }
   ]
 }
 ```

@@ -189,7 +189,7 @@ test('unknown schema versions and inconsistent or foreign schemas are rejected w
   const tooNewDb = new DatabaseSync(tooNew.file);
   tooNewDb.exec(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, app_version TEXT NOT NULL);
-    INSERT INTO schema_migrations VALUES (3, 'future', 1, '9.0.0');
+    INSERT INTO schema_migrations VALUES (${LATEST_VERSION + 1}, 'future', 1, '9.0.0');
   `);
   tooNewDb.close();
   const tooNewHash = hashFile(tooNew.file);
@@ -403,7 +403,7 @@ test('direct server startup reports a too-new database in one line and exits wit
   const db = new DatabaseSync(file);
   db.exec(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, app_version TEXT NOT NULL);
-    INSERT INTO schema_migrations VALUES (3, 'future', 1, '9.0.0');
+    INSERT INTO schema_migrations VALUES (${LATEST_VERSION + 1}, 'future', 1, '9.0.0');
   `);
   db.close();
   const result = spawnSync(process.execPath, ['--import', 'tsx', 'server/index.ts'], {
@@ -423,7 +423,7 @@ test('direct server startup reports a too-new database in one line and exits wit
     .split(/\r?\n/)
     .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
   assert.deepEqual(relevantLines, [
-    `The database ${file} has schema version 3, but this server (${appVersion}) only knows up to version ${LATEST_VERSION}. Upgrade agent-viewer, or set AGENT_VIEWER_SQLITE_PATH to another file. The file was not modified.`,
+    `The database ${file} has schema version ${LATEST_VERSION + 1}, but this server (${appVersion}) only knows up to version ${LATEST_VERSION}. Upgrade agent-viewer, or set AGENT_VIEWER_SQLITE_PATH to another file. The file was not modified.`,
   ]);
   fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -13,6 +13,9 @@ import { normalizeStatus } from '../cli/statuses.ts';
 import { resolveConnection, writeSessionFile } from '../cli/connection.ts';
 import { createLaunchCodes, curlExample, displayHost, exposureWarning, launchUrl, officeUrl, resolveStartToken } from '../cli/start.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
+import { MIGRATIONS } from '../server/db/migrations.ts';
+
+const LATEST_MIGRATION_VERSION = MIGRATIONS.at(-1).version;
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliEntry = path.join(repoRoot, 'cli', 'index.ts');
@@ -319,7 +322,7 @@ test('CLI end to end: a too-new SQLite database prints one error line and exits'
   const db = new DatabaseSync(dbPath);
   db.exec(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, app_version TEXT NOT NULL);
-    INSERT INTO schema_migrations VALUES (3, 'future', 1, '9.0.0');
+    INSERT INTO schema_migrations VALUES (${LATEST_MIGRATION_VERSION + 1}, 'future', 1, '9.0.0');
   `);
   db.close();
   try {
@@ -347,7 +350,10 @@ test('CLI end to end: a too-new SQLite database prints one error line and exits'
       .split(/\r?\n/)
       .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /^agent-viewer: The database .* has schema version 3, but this server \(.+\) only knows up to version 2\./);
+    assert.match(
+      lines[0],
+      new RegExp(`^agent-viewer: The database .* has schema version ${LATEST_MIGRATION_VERSION + 1}, but this server \\(.+\\) only knows up to version ${LATEST_MIGRATION_VERSION}\\.`)
+    );
     assert.doesNotMatch(result.stderr, /at .*server|MigrationFailedError/);
   } finally {
     rmSync(home, { recursive: true, force: true });

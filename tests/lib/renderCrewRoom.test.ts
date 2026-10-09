@@ -28,7 +28,7 @@ describe('Crew native 2.5D renderer', () => {
     });
     renderCrewRoom({ ctx, width: 900, height: 600, room: CREW_ROOMS[0],
       camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } }, locale: 'es' });
-    expect(calls.some(row => row[0]==='text' && String(row[1]).includes('PROTOTIPO'))).toBe(true);
+    expect(calls.filter(row => row[0] === 'text')).toHaveLength(0);
     expect(calls.filter(row => row[0]==='rect')).toHaveLength(1);
   });
 });

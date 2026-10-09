@@ -112,9 +112,4 @@ export function renderCrewRoom({ ctx, width, height, room, camera, locale = 'es'
     box(ctx,item.x,item.y,size[0],size[1],size[2],color[item.type]);
   }
   ctx.restore();
-  ctx.save();ctx.fillStyle='#e2e8f0';ctx.font='12px sans-serif';
-  ctx.fillText(locale.startsWith('es')
-    ? 'PROTOTIPO 2.5D — muebles y personajes finales pendientes'
-    : '2.5D PROTOTYPE — final furniture and characters pending',12,height-14);
-  ctx.restore();
 }

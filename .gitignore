@@ -15,3 +15,7 @@ data/
 # Library build output
 dist-lib/
 *.tgz
+
+# Evidencias locales de navegador
+/test-results/
+/playwright-report/

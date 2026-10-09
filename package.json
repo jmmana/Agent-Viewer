@@ -55,7 +55,8 @@
     "check:package": "publint --strict && attw --pack . --profile esm-only --exclude-entrypoints ./style.css",
     "prepack": "npm run build:lib",
     "server": "tsx server/index.ts",
-    "dev:full": "node scripts/dev-full.mjs"
+    "dev:full": "node scripts/dev-full.mjs",
+    "test:e2e": "playwright test"
   },
   "peerDependencies": {
     "react": "^19.0.0",
@@ -67,6 +68,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",

@@ -585,10 +585,22 @@ Si tu app no tiene un servicio de consumo, `summarizeUsage(events)` es una ayuda
 const usage = useMemo(() => summarizeUsage(events), [events]);
 ```
 
-- `totalTokens` es `inputTokens + outputTokens`. Los tokens que un evento no reporta cuentan como cero.
-- El `cost` es `null` (se muestra como "desconocido") si algún evento `llm.usage` no reporta costo, o si los eventos reportan monedas distintas. Nunca se muestra una suma parcial.
-- Las mismas reglas valen para cada agente en `byAgent`, con solo los eventos de ese agente.
-- Sin ningún evento `llm.usage`, todas las cifras son `null` (se muestran como "desconocido"), no cero.
+- Los eventos se deduplican por `id`, como lo hacen la oficina y el servidor: gana el primer evento con un id dado, sea cual sea su tipo o agente, y los siguientes con ese id se ignoran (las reconexiones SSE, los reintentos y los archivos de repetición combinados repiten eventos). Un evento sin `id` (o con uno vacío o que no es texto) no se puede emparejar, así que cada uno se cuenta; el mismo objeto pasado dos veces cuenta una sola vez.
+- Los tokens se leen del payload original. Un conteo está reportado solo si es un entero no negativo. Si algún evento no reporta `inputTokens`, la cifra `inputTokens` es `null` (se muestra como "desconocido"), y lo mismo pasa con `outputTokens`. `totalTokens` es `inputTokens + outputTokens` solo si ambos se conocen, y `null` en otro caso.
+- Un costo está reportado solo si es un número finito y no negativo, y una moneda cuenta solo si es un código ISO 4217 (`^[A-Z]{3}$`, como `USD`). Valores como `'usd'`, `'dollars'` o `''` cuentan como sin moneda. Los costos nunca se convierten:
+
+  | Costos vistos (tras deduplicar) | `cost` | `currency` |
+  |---|---|---|
+  | Ningún evento `llm.usage` | `null` | `undefined` |
+  | Algún evento sin costo reportado | `null` | `undefined` |
+  | Todos los costos en una sola moneda ISO, p. ej. todos en `USD` | suma | `'USD'` |
+  | Dos o más monedas ISO, p. ej. `USD` y `COP` | `null` | `undefined` |
+  | Al menos una moneda ISO y al menos un costo sin moneda | `null` | `undefined` |
+  | Todos los costos reportados, ninguno con moneda | suma | `undefined` (se muestra como número simple) |
+
+- `currency` se fija solo cuando `cost` se conoce, así que nunca aparece una moneda junto a un costo desconocido. Nunca se muestra una suma parcial.
+- Las mismas reglas valen para cada agente en `byAgent`, con solo los eventos de ese agente: si a un agente le falta una cifra, solo ese agente y el total de la ejecución quedan como desconocidos.
+- Sin ningún evento `llm.usage`, todas las cifras son `null` (se muestran como "desconocido"), no cero, y `byAgent` es `{}`.
 
 ### Cifras del servidor de Agent Viewer
 

@@ -376,7 +376,7 @@ export function OficinaConConsumo({ events }: { events: readonly OfficeEventInpu
 }
 ```
 
-`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`, y devuelve un costo desconocido antes que una suma parcial.
+`showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`: ignora los ids de evento repetidos, deja como desconocido un conteo de tokens que un evento no reporta y devuelve un costo desconocido antes que una suma parcial o una suma de monedas mezcladas o ausentes.
 
 </details>
 
@@ -466,12 +466,12 @@ analista = viewer.agent("analyst", name="Iris", role_title="Analista de mercado"
 analista.researching("Leyendo los informes trimestrales")
 analista.tool_started("lector_de_informes", input_summary="Formulario 10-K")
 analista.tool_completed("lector_de_informes", output_summary="42 páginas recuperadas")
-analista.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024)
+analista.usage("OpenAI", "gpt-4o", input_tokens=4200, output_tokens=320, cost=0.024, cost_source="provider-reported", currency="USD")
 analista.message("El resumen está listo para revisión.", target_agent_name="Nova")
 analista.done("Resumen entregado")
 ```
 
-El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido.
+El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido. Los tokens que no envías siguen desconocidos, nunca `0`. El SDK nunca supone `provider-reported`: un `cost` sin `cost_source` se envía como `unknown`, con un solo aviso por cliente.
 
 ### SDK de TypeScript
 
@@ -484,7 +484,7 @@ const builder = viewer.agent({ id: 'builder', name: 'Atlas', roleTitle: 'Desarro
 await builder.coding('Implementando el manejador del webhook');
 await builder.toolStarted('npm.test', 'pruebas unitarias');
 await builder.toolCompleted('npm.test', '128 aprobadas');
-await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012 });
+await builder.usage({ provider: 'Anthropic', model: 'claude-sonnet-4-5', inputTokens: 1800, outputTokens: 450, cost: 0.012, costSource: 'provider-reported', currency: 'USD' });
 await builder.message('El manejador está listo para revisión.', 'Nova');
 await builder.done('Pull request abierto');
 ```
@@ -552,7 +552,7 @@ Los alias como `message.sent`, `meeting.decision` o `approval.requested` se trad
 
 </details>
 
-**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés).
+**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los SDK nunca suponen `provider-reported`: un costo enviado sin `costSource` declarado sale como `unknown`. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés).
 
 ---
 

@@ -90,8 +90,14 @@ class CrewAIViewerAdapter:
         input_tokens: int,
         output_tokens: int,
         cost: Optional[float] = None,
+        cost_source: str = "unknown",
     ) -> None:
-        """Report token telemetry."""
+        """Report token telemetry.
+
+        ``cost_source`` says where ``cost`` comes from and defaults to ``"unknown"``: pass
+        ``"provider-reported"`` only when the provider returned the cost, or ``"estimated"``
+        when the host app computed it. A cost of 0 is a real cost and is kept.
+        """
         handle = self.agents.get(agent_id) or self.viewer.agent(agent_id)
         handle.usage(
             provider=provider,
@@ -99,7 +105,7 @@ class CrewAIViewerAdapter:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost=cost,
-            cost_source="provider-reported" if cost is not None else "unknown",
+            cost_source=cost_source,
         )
 
     def on_task_complete(self, agent_id: str, summary: str = "Task finished") -> None:

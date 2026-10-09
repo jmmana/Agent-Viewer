@@ -269,7 +269,10 @@ export function sameCall(a: LedgerRowInput, b: LedgerRowInput): boolean {
 // SQL helpers shared by the migration backfill and the startup catch-up (both run against a raw DatabaseSync).
 // -------------------------------------------------------------
 
-const LEDGER_COLUMNS = [
+/** Exported for `server/usage/calls.ts` (issue #67), which selects the same column list (plus `seq`) for its
+ * keyset query and reuses `dbRowToLedgerRowInput` to turn a raw row back into a `UsageLedgerRow`, instead of
+ * re-deriving the ledger's column list a second time. */
+export const LEDGER_COLUMNS = [
   'event_id', 'event_type', 'request_id', 'received_at', 'occurred_at', 'origin', 'legacy_contract',
   'ingest_channel', 'runtime_id', 'session_id', 'agent_id', 'task_id', 'provider', 'model', 'input_tokens',
   'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens', 'cost', 'currency',

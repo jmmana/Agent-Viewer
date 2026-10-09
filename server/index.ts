@@ -23,6 +23,9 @@ import {
   type TelemetryAppendOutcome,
 } from './store';
 import { readPackageVersion } from './version';
+import { parseUsageFilters } from './usage/filters';
+import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
+import type { UsageFilters } from './usage/types';
 import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from '../src/integrations/otlp/claudeCodeLogs';
 import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
 import { createStreamTicketStore } from './stream-tickets';
@@ -1238,6 +1241,71 @@ app.get('/api/v1/usage/ledger/status', async (_req, res) => {
   res.json(await store.usageLedgerStatus());
 });
 
+// -------------------------------------------------------------
+// Usage calls (issue #67): read-only, metadata-only listing of usage_ledger rows (#65), with the shared filters
+// from `parseUsageFilters` (server/usage/filters.ts) and a stable, opaque cursor (server/usage/calls.ts). Never
+// returns summary, payload, event_json, message text, tool input/output or a provider error message: the
+// serializer (`toCallRecord`) is an explicit allow-list over an already-typed ledger row, never "event minus
+// some keys". Sits under /api/v1, so it gets the same rate limit, query-token rejection and Bearer auth as
+// every other route registered above.
+app.get('/api/v1/usage/calls', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  const parsed = parseUsageFilters(req.query as Record<string, unknown>, { allowCallsOnly: true });
+  if (!parsed.ok) {
+    res.status(400).json({ error: 'invalid_filter', issues: parsed.issues });
+    return;
+  }
+  const { filters, order, limit, cursor } = parsed.value;
+
+  let after: { seq: number } | undefined;
+  if (cursor !== null) {
+    const decoded = decodeCursor(cursor);
+    if (!decoded.ok) {
+      res.status(400).json({ error: 'invalid_cursor', message: 'The cursor could not be decoded.' });
+      return;
+    }
+    const expectedFilterHash = filterHash(filters);
+    if (decoded.cursor.o !== order || decoded.cursor.f !== expectedFilterHash) {
+      res.status(400).json({
+        error: 'cursor_mismatch',
+        message: 'This cursor was issued for different filters or a different order. Changing only "limit" between pages is allowed.',
+      });
+      return;
+    }
+    if (decoded.cursor.e !== store.usageLedgerEpoch()) {
+      res.status(410).json({
+        error: 'cursor_expired',
+        message: 'This cursor was issued before a store restart and can no longer be resolved. Restart the walk without a cursor.',
+      });
+      return;
+    }
+    after = { seq: decoded.cursor.s };
+  }
+
+  const page = await store.listCalls({ filters, order, limit, after });
+
+  const epoch = store.usageLedgerEpoch();
+  const hash = filterHash(filters);
+  let nextCursor: string | null = null;
+  if (page.lastSeq !== null && (order === 'asc' || page.hasMore)) {
+    nextCursor = encodeCursor({ v: 1, e: epoch, s: page.lastSeq, o: order, f: hash });
+  }
+
+  if (page.hasMore && nextCursor) {
+    const query = buildCallsLinkQueryString(filters, order, limit, nextCursor);
+    res.setHeader('Link', `</api/v1/usage/calls?${query}>; rel="next"`);
+  }
+
+  res.json({
+    schemaVersion: '1.0',
+    asOf: Date.now(),
+    storage: store.readiness().storage,
+    data: page.rows,
+    page: { limit, order, hasMore: page.hasMore, nextCursor },
+  });
+});
+
 // OTLP/HTTP logs receiver counters (issue #59). Per-process, reset on restart like store.ingestionCounters().
 // Holds no token or cost sums: this is a shape/volume view of what the route did, never a usage figure.
 app.get('/api/v1/otlp/stats', (_req, res) => {
@@ -1267,6 +1335,35 @@ function clampedLimit(raw: unknown, fallback: number, max: number): number {
   const value = typeof raw === 'string' ? Number(raw) : NaN;
   if (!Number.isFinite(value)) return fallback;
   return Math.min(Math.max(Math.trunc(value), 1), max);
+}
+
+/**
+ * Builds the query string of the `Link: rel="next"` header for `GET /api/v1/usage/calls` (issue #67): the
+ * request's own filters plus `order`, `limit` and the new cursor, rebuilt from the already-validated filter
+ * object rather than echoed from `req.query`, so it can never carry `token`, `api_key`, an unknown parameter or
+ * a value in a shape the parser would have rejected. The caller turns this into a relative reference (never
+ * built from the `Host` header), per the issue's own rule.
+ */
+function buildCallsLinkQueryString(filters: UsageFilters, order: 'desc' | 'asc', limit: number, cursor: string): string {
+  const params = new URLSearchParams();
+  if (filters.from !== null) params.set('from', String(filters.from));
+  if (filters.to !== null) params.set('to', String(filters.to));
+  if (filters.timeBasis !== 'received') params.set('timeBasis', filters.timeBasis);
+  for (const value of filters.agentId) params.append('agentId', value);
+  for (const value of filters.sessionId) params.append('sessionId', value);
+  for (const value of filters.runtimeId) params.append('runtimeId', value);
+  for (const value of filters.taskId) params.append('taskId', value);
+  for (const value of filters.provider) params.append('provider', value);
+  for (const value of filters.model) params.append('model', value);
+  for (const value of filters.status) params.append('status', value);
+  for (const value of filters.costSource) params.append('costSource', value);
+  for (const value of filters.currency) params.append('currency', value);
+  for (const value of filters.requestId) params.append('requestId', value);
+  if (filters.traceId !== null) params.set('traceId', filters.traceId);
+  params.set('order', order);
+  params.set('limit', String(limit));
+  params.set('cursor', cursor);
+  return params.toString();
 }
 
 // Audit view of request-id duplicate references (issue #48): same auth and rate limit as every /api/v1 route,

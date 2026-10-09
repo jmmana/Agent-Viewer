@@ -29,6 +29,7 @@ import {
   type LedgerSkipReason,
   type UsageLedgerRow,
 } from './usageLedger';
+import { buildListCallsQuery, listCallsInMemory, sqliteRowToCallRecord, type CallsPage, type CallsQuery } from './usage/calls';
 import { type UsageSummary } from './usageAggregates';
 import {
   applyEvent,
@@ -433,6 +434,12 @@ export interface EventStore {
   usageSummary(): Promise<UsageSummary>;
   /** Counts and time bounds of the usage ledger (issue #65), never a sum of tokens or cost. */
   usageLedgerStatus(): Promise<UsageLedgerStatus>;
+  /** Read-only, metadata-only keyset page over the usage ledger (issue #67), ordered by `seq`. Never sums,
+   * never counts, never touches `events`. */
+  listCalls(query: CallsQuery): Promise<CallsPage>;
+  /** A persistent random id for SQLite (survives a restart, issue #67's cursor "store epoch"), a new one every
+   * process for memory mode. A cursor whose `e` differs from this is a 410 `cursor_expired`. */
+  usageLedgerEpoch(): string;
 
   /** The original event id already stored under this `(provider, requestId)` key, normalizing both arguments. */
   findByRequest(provider: string, requestId: string): Promise<{ id: string } | null>;
@@ -689,6 +696,10 @@ export class MemoryEventStore implements EventStore {
   private ledgerSkips = new Map<string, { reason: LedgerSkipReason; keptEventId: string | null; detectedAt: number }>();
   private ledgerSeq = 1;
   private usageLedgerMaxRows: number;
+  /** Issue #67's cursor "store epoch": minted once per process, never persisted. A cursor from a previous
+   * process (or another `MemoryEventStore` instance) always fails the epoch check, so it is reported
+   * `cursor_expired` instead of resuming a walk against an unrelated `seq` space. */
+  private readonly ledgerEpoch = crypto.randomBytes(16).toString('hex');
   /** `false` once `usageLedgerMaxRows` has dropped at least one ledger row or skip (issue #53's rule, applied to
    * the ledger: never lost silently, always reported). */
   private ledgerComplete = true;
@@ -932,6 +943,19 @@ export class MemoryEventStore implements EventStore {
       complete: this.ledgerComplete,
       migration: null,
     };
+  }
+
+  /** Read-only keyset page over `this.ledger` (issue #67). Pure delegation to `listCallsInMemory`: `this.ledger`
+   * is append-only and therefore always seq-ascending (see its own field comment), which is exactly what that
+   * function assumes. */
+  async listCalls(query: CallsQuery): Promise<CallsPage> {
+    return listCallsInMemory(this.ledger, query);
+  }
+
+  /** A fresh random id every process (issue #67): memory mode never persists `seq`, so a cursor from an earlier
+   * process must never be mistaken for one from this one. */
+  usageLedgerEpoch(): string {
+    return this.ledgerEpoch;
   }
 
   /** One warning, the first time the dedup index crosses the documented memory-cost threshold. */
@@ -1340,6 +1364,9 @@ export class SQLiteEventStore implements EventStore {
    * is also when the totals it holds start covering, and that start point never moves as new events arrive.
    */
   private totalsSinceCache: number | null = null;
+  /** Issue #67's cursor "store epoch": the `usage_ledger_meta` row migration 7 (`usage-calls-indexes`) writes
+   * once, read back here so it survives a restart. Set in the constructor, right after migrations run. */
+  private ledgerEpoch = '';
   private readonly rebuildOptions: {
     pageSize: number;
     pageDelayMs: number;
@@ -1401,6 +1428,13 @@ export class SQLiteEventStore implements EventStore {
       }
       throw error;
     }
+
+    const epochRow = this.db.prepare("SELECT value FROM usage_ledger_meta WHERE key = 'store_epoch'").get() as
+      | { value: string }
+      | undefined;
+    // Always present once migration 7 has run (it inserts the row unconditionally when missing); the fallback
+    // only guards a store opened against a schema a future migration changes the shape of.
+    this.ledgerEpoch = epochRow?.value ?? crypto.randomBytes(16).toString('hex');
 
     this.backfillNullSeq();
     const maxSeqRow = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM events').get() as { maxSeq: number };
@@ -1880,6 +1914,25 @@ export class SQLiteEventStore implements EventStore {
         ? { id: `${String(migrationRow.version).padStart(4, '0')}_usage_ledger`, appliedAt: Number(migrationRow.applied_at) }
         : null,
     };
+  }
+
+  /** Read-only keyset page over `usage_ledger` (issue #67): one query, explicit column list, `LIMIT limit + 1`
+   * to detect `hasMore` without a `COUNT(*)`. */
+  async listCalls(query: CallsQuery): Promise<CallsPage> {
+    const { sql, params } = buildListCallsQuery(query);
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    const hasMore = rows.length > query.limit;
+    const sliced = hasMore ? rows.slice(0, query.limit) : rows;
+    const records = sliced.map(sqliteRowToCallRecord);
+    return {
+      rows: records,
+      hasMore,
+      lastSeq: records.length > 0 ? records[records.length - 1].seq : null,
+    };
+  }
+
+  usageLedgerEpoch(): string {
+    return this.ledgerEpoch;
   }
 
   /** Counters and log lines, applied only once the outcome is final (after the commit for a batch). */

@@ -9,8 +9,10 @@ import type {
 import type { LlmErrorKind } from '../../src/integrations/canonicalTypes';
 import type { ViewerSnapshot } from '../../server/store';
 import type { UsageSummary } from '../../server/usageAggregates';
+import type { CallRecord } from '../../server/usage/types';
 
 export type { ViewerSnapshot } from '../../server/store';
+export type { CallRecord, CallTokenFigures, CallTrace, CallStatus } from '../../server/usage/types';
 export type {
   UsageSummary,
   UsageAggregate,
@@ -258,6 +260,51 @@ export class AgentViewerError extends Error {
     this.issues = issues;
     this.code = code;
   }
+}
+
+// -------------------------------------------------------------
+// GET /api/v1/usage/calls (issue #67): metadata-only, cursor-paginated ledger rows.
+// -------------------------------------------------------------
+
+/**
+ * Filters for `listCalls` / `iterateCalls`, mapped to the query parameters `GET /api/v1/usage/calls` accepts
+ * (`server/usage/filters.ts`). `from`/`to` are passed through unmodified (epoch ms or an ISO 8601 date-time
+ * with an explicit offset): the SDK never reformats a date, so a caller's own offset is never silently dropped.
+ * Every repeatable filter accepts either one value or a list, sent as repeated query parameters.
+ */
+export interface ListCallsOptions {
+  from?: number | string;
+  to?: number | string;
+  timeBasis?: 'received' | 'occurred';
+  agentId?: string | readonly string[];
+  sessionId?: string | readonly string[];
+  runtimeId?: string | readonly string[];
+  taskId?: string | readonly string[];
+  provider?: string | readonly string[];
+  model?: string | readonly string[];
+  status?: string | readonly string[];
+  costSource?: CostSource | readonly CostSource[];
+  currency?: string | readonly string[];
+  requestId?: string | readonly string[];
+  traceId?: string;
+  order?: 'desc' | 'asc';
+  limit?: number;
+  cursor?: string;
+}
+
+export interface CallsPageInfo {
+  limit: number;
+  order: 'desc' | 'asc';
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+export interface CallsPageResult {
+  schemaVersion: string;
+  asOf: number;
+  storage: 'memory' | 'sqlite';
+  data: CallRecord[];
+  page: CallsPageInfo;
 }
 
 /** What the server did with one item of a batch. */
@@ -695,6 +742,131 @@ export class AgentViewer {
       throw new AgentViewerError(`Failed to fetch usage summary: ${response.status}`, response.status);
     }
     return (await response.json()) as UsageSummary;
+  }
+
+  /**
+   * One page of `GET /api/v1/usage/calls` (issue #67): metadata only (no prompt, completion, message or error
+   * text), `null` left as `null` (never defaulted to `0`), never summed or priced by the SDK.
+   */
+  async listCalls(options: ListCallsOptions = {}): Promise<CallsPageResult> {
+    const query = this.buildCallsQueryString(options);
+    return this.getWithRetry(`/api/v1/usage/calls${query ? `?${query}` : ''}`) as Promise<CallsPageResult>;
+  }
+
+  /**
+   * Walks every page of `listCalls` by following `page.nextCursor` until `hasMore` is `false`, yielding one
+   * `CallRecord` at a time. Guards against a server bug that would otherwise loop forever: if a response's
+   * `nextCursor` is identical to the cursor just used, this throws instead of repeating the same page.
+   */
+  async *iterateCalls(options: ListCallsOptions = {}): AsyncGenerator<CallRecord, void, undefined> {
+    let cursor = options.cursor;
+    while (true) {
+      const page = await this.listCalls({ ...options, cursor });
+      for (const call of page.data) yield call;
+      if (!page.page.hasMore) return;
+      const next = page.page.nextCursor;
+      if (!next || next === cursor) {
+        throw new AgentViewerError('Agent Viewer usage calls walk did not advance: the server returned the same cursor twice in a row.');
+      }
+      cursor = next;
+    }
+  }
+
+  private buildCallsQueryString(options: ListCallsOptions): string {
+    const params = new URLSearchParams();
+    const appendRepeatable = (key: string, value: string | readonly string[] | undefined) => {
+      if (value === undefined) return;
+      for (const v of Array.isArray(value) ? value : [value]) params.append(key, v as string);
+    };
+    if (options.from !== undefined) params.set('from', String(options.from));
+    if (options.to !== undefined) params.set('to', String(options.to));
+    if (options.timeBasis !== undefined) params.set('timeBasis', options.timeBasis);
+    appendRepeatable('agentId', options.agentId);
+    appendRepeatable('sessionId', options.sessionId);
+    appendRepeatable('runtimeId', options.runtimeId);
+    appendRepeatable('taskId', options.taskId);
+    appendRepeatable('provider', options.provider);
+    appendRepeatable('model', options.model);
+    appendRepeatable('status', options.status);
+    appendRepeatable('costSource', options.costSource as string | readonly string[] | undefined);
+    appendRepeatable('currency', options.currency);
+    appendRepeatable('requestId', options.requestId);
+    if (options.traceId !== undefined) params.set('traceId', options.traceId);
+    if (options.order !== undefined) params.set('order', options.order);
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    if (options.cursor !== undefined) params.set('cursor', options.cursor);
+    return params.toString();
+  }
+
+  /**
+   * Shared GET helper for read endpoints that need retry and error mapping (issue #67; `snapshot()` and
+   * `usageSummary()` predate it and keep their own simpler fetch). Sends the token only in the `Authorization`
+   * header, never in the URL. 400, 401 and 410 fail immediately (not retried); 429 and 5xx are retried with the
+   * same backoff as `postWithRetry`, since a GET is always safe to repeat.
+   */
+  private async getWithRetry(path: string): Promise<unknown> {
+    let attempt = 0;
+    let delay = 300;
+
+    while (true) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+        const response = await fetch(`${this.url}${path}`, {
+          method: 'GET',
+          headers: this.buildHeaders(),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        if (response.ok) return await response.json();
+
+        const responseText = await response.text();
+        let parsedJson: any = null;
+        try {
+          parsedJson = JSON.parse(responseText);
+        } catch {
+          // not json
+        }
+        const code = typeof parsedJson?.error === 'string' ? parsedJson.error : undefined;
+
+        if (response.status < 500 && response.status !== 429) {
+          throw new AgentViewerError(
+            parsedJson?.message || `Agent Viewer rejected request: ${response.status} ${responseText}`,
+            response.status,
+            parsedJson?.issues,
+            code
+          );
+        }
+
+        attempt++;
+        if (attempt > this.maxRetries) {
+          throw new AgentViewerError(
+            `Agent Viewer request failed after ${this.maxRetries} retries: ${response.status} ${responseText}`,
+            response.status,
+            undefined,
+            code
+          );
+        }
+        if (this.debug) {
+          console.warn(`[AgentViewer] Request failed with ${response.status}, retrying in ${delay}ms... (attempt ${attempt}/${this.maxRetries})`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay + Math.random() * 100));
+        delay = Math.min(delay * 2, 5000);
+      } catch (err: any) {
+        if (err instanceof AgentViewerError) throw err;
+
+        attempt++;
+        if (attempt > this.maxRetries) {
+          throw new AgentViewerError(`Agent Viewer network error after ${this.maxRetries} retries: ${err.message}`);
+        }
+        if (this.debug) {
+          console.warn(`[AgentViewer] Network error (${err.message}), retrying in ${delay}ms...`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay + Math.random() * 100));
+        delay = Math.min(delay * 2, 5000);
+      }
+    }
   }
 
   private buildHeaders(idempotencyKey?: string): Record<string, string> {

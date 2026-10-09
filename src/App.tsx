@@ -11,6 +11,8 @@ import {
 import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
 import { OfficeCanvas } from './components/OfficeCanvas';
+import { CrewStage } from './crew/CrewStage';
+import type { VisualMode } from './crew/crewModel';
 import { AgentInspector } from './components/AgentInspector';
 import { ActivityTimeline } from './components/ActivityTimeline';
 import { TaskBoard } from './components/TaskBoard';
@@ -57,6 +59,8 @@ export default function App() {
 
   // Active navigation tab
   const [currentTab, setCurrentTab] = useState<'office' | 'tasks' | 'meetings' | 'timeline'>('office');
+  // UI-only mode: does not alter event telemetry, simulation, replay or the legacy renderer.
+  const [visualMode, setVisualMode] = useState<VisualMode>('cartoon');
 
   // Collapsible vertical live timeline sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 1024);
@@ -627,13 +631,25 @@ export default function App() {
         isLiveConnected={isLiveConnected}
       />
 
+      {currentTab === 'office' && <div role="group" aria-label={locale.startsWith('es') ? 'Modo visual' : 'Visual mode'}
+        className="flex gap-2 items-center justify-center p-2 bg-slate-900 text-white">
+        <button type="button" aria-pressed={visualMode === 'cartoon'}
+          className={visualMode === 'cartoon' ? 'rounded bg-violet-700 px-3 py-1' : 'rounded bg-slate-700 px-3 py-1'}
+          onClick={() => setVisualMode('cartoon')}>{locale.startsWith('es') ? 'Caricatura' : 'Cartoon'}</button>
+        <button type="button" aria-pressed={visualMode === 'crew'}
+          className={visualMode === 'crew' ? 'rounded bg-violet-700 px-3 py-1' : 'rounded bg-slate-700 px-3 py-1'}
+          onClick={() => setVisualMode('crew')}>Crew · Beta</button>
+      </div>}
+
       {/* Main View Area */}
       <main className="flex-1 flex overflow-hidden relative">
         {/* Office View with Collapsible Vertical Live Timeline Sidebar */}
         {currentTab === 'office' && (
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
             <div className="flex-1 h-full relative overflow-hidden">
-              {currentFloor === 1 ? (
+              {visualMode === 'crew' ? (
+                <CrewStage locale={locale} />
+              ) : currentFloor === 1 ? (
                 <>
                   <OfficeCanvas
                     agents={canvasAgents}

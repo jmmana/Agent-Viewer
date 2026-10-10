@@ -371,3 +371,40 @@ test('SQLite: a retention run left "running" by a dead process is closed as erro
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('SQLite: purgedBefore, deletedTotal and run history survive a restart', async () => {
+  const { dir, file } = tempDbPath('restart-counters');
+  let store = new SQLiteEventStore(file, { backup: 'off' });
+  await store.init();
+  await store.append(usageEvent('evt_a'), { receivedAt: 1_000 });
+  await store.append(usageEvent('evt_b'), { receivedAt: 5_000 });
+  await store.purge({ eventsCutoffMs: 2_000 });
+  const id = await store.recordRetentionRun({ startedAt: 1_000, trigger: 'schedule' });
+  await store.finishRetentionRun(id, {
+    finishedAt: 1_010,
+    status: 'ok',
+    eventsWindowDays: 30,
+    eventsCutoffMs: 2_000,
+    eventsDeleted: 1,
+    ledgerWindowDays: null,
+    ledgerCutoffMs: null,
+    ledgerDeleted: 0,
+    error: null,
+  });
+  const before = await store.retentionStatus();
+  await store.close();
+
+  store = new SQLiteEventStore(file, { backup: 'off' });
+  await store.init();
+  try {
+    const after = await store.retentionStatus();
+    assert.equal(after.events.purgedBefore, before.events.purgedBefore);
+    assert.equal(after.events.deletedTotal, before.events.deletedTotal);
+    assert.equal(after.events.purgedBefore, 2_000);
+    assert.equal(after.events.deletedTotal, 1);
+    assert.deepEqual(after.runs, before.runs);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

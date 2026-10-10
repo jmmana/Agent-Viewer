@@ -70,6 +70,7 @@
     "crew:assets:import": "node scripts/crew-assets.mjs import",
     "crew:perf:bench": "tsx scripts/crew-perf-benchmark.mjs",
     "crew:perf:browser": "node scripts/crew-perf-browser.mjs",
+    "crew:palette:measure": "node scripts/crew-palette-measure.mjs",
     "cli": "tsx cli/index.ts"
   },
   "peerDependencies": {

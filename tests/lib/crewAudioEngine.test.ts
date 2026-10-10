@@ -204,4 +204,27 @@ describe('CrewAudioEngine (#150)', () => {
     mutedEngine.playCue();
     expect(mutedFake.oscillators).toHaveLength(0);
   });
+
+  it('playCue("phone-ring") (#145) sintetiza dos ráfagas de tono distinto, y respeta mute igual que el resto de cues', () => {
+    const fake = fakeContext();
+    const engine = new CrewAudioEngine({ muted: false, volume: 0.6, roomId: 'development', createContext: () => fake.ctx });
+    engine.playCue('phone-ring');
+    expect(fake.oscillators).toHaveLength(2);
+    expect(fake.oscillators.every(osc => osc.started)).toBe(true);
+    expect(fake.oscillators[0].frequency.value).toBeCloseTo(480);
+    expect(fake.oscillators[1].frequency.value).toBeCloseTo(620);
+
+    const mutedFake = fakeContext();
+    const mutedEngine = new CrewAudioEngine({ muted: true, volume: 0.6, roomId: 'development', createContext: () => mutedFake.ctx });
+    mutedEngine.playCue('phone-ring');
+    expect(mutedFake.oscillators).toHaveLength(0);
+  });
+
+  it('playCue() sin argumento sigue siendo el aviso genérico "ui-notification" (compatibilidad con #150)', () => {
+    const fake = fakeContext();
+    const engine = new CrewAudioEngine({ muted: false, volume: 0.6, roomId: 'development', createContext: () => fake.ctx });
+    engine.playCue();
+    expect(fake.oscillators).toHaveLength(1);
+    expect(fake.oscillators[0].frequency.value).toBeCloseTo(880);
+  });
 });

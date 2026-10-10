@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CrewAudioEngine, type CrewAudioState } from './crewAudioEngine';
-import { CREW_ROOM_MUSIC } from './crewAudioAssets';
+import { CREW_ROOM_MUSIC, type CrewAudioCueId } from './crewAudioAssets';
 
 export interface UseCrewAudioResult {
   /** Estado del motor: ver `CrewAudioState`. `unsupported` = sin Web Audio API (navegador o entorno de prueba). */
@@ -10,8 +10,8 @@ export interface UseCrewAudioResult {
   /** Inicia el audio de la sala. Llamar solo desde un manejador de clic/tecla del usuario. */
   play: () => void;
   pause: () => void;
-  /** Efecto corto de un disparo, independiente de la música de fondo. */
-  playCue: () => void;
+  /** Efecto corto de un disparo, independiente de la música de fondo. Por defecto, `ui-notification`. */
+  playCue: (id?: CrewAudioCueId) => void;
 }
 
 /**
@@ -75,6 +75,6 @@ export function useCrewAudio(options: { roomId: string; muted: boolean; volume: 
     roomHasTrack: CREW_ROOM_MUSIC[roomId] != null,
     play: () => { void engineRef.current?.play(); },
     pause: () => engineRef.current?.pause(),
-    playCue: () => engineRef.current?.playCue(),
+    playCue: (id?: CrewAudioCueId) => engineRef.current?.playCue(id),
   };
 }

@@ -7,6 +7,7 @@ import { drawCrewBackground, drawCrewDoors, drawCrewFloorGrid, drawCrewRoomShell
 import { drawCrewProp, type CrewPropImageSpec } from './crewPropsLayer';
 import { drawCrewSprite, type CrewSpriteBlink } from './crewSpriteLayer';
 import { drawCrewPresenceBadge } from './crewHudLayer';
+import { drawCrewCallOverlay, type CrewCallOverlayStyle } from './crewCallLayer';
 import { CREW_PROP_IMAGE_SIZE, CREW_ROOM_PROP_IMAGES, type CrewPropImageId } from './crewPropImages';
 
 /**
@@ -37,6 +38,10 @@ export interface CrewRenderInput {
   walks?: Readonly<Record<string, CrewSpriteBlink | undefined>>;
   /** Imágenes reales del banco Crew por mueble, alcance acotado de #115 (ver `CREW_ROOM_PROP_IMAGES`). */
   propImages?: Partial<Record<CrewPropImageId, HTMLImageElement>>;
+  /** Estilo de la superposición de llamada (#145) por id de marcador; sin entrada, no se dibuja nada. */
+  calls?: Readonly<Record<string, CrewCallOverlayStyle>>;
+  /** Icono compartido de llamada (`effects/call.svg`); sin él, la superposición usa su glifo de respaldo. */
+  callIcon?: HTMLImageElement;
 }
 
 /** Resuelve la imagen real (si existe y ya cargó) para un mueble puntual, sin mutar el input. */
@@ -81,7 +86,7 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, walks = {}, propImages }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, walks = {}, propImages, calls = {}, callIcon }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
@@ -112,6 +117,8 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
         const direction = crewSpriteView(marker, view);
         const spriteDrawn = drawCrewSprite(ctx, point, direction, sprites, blink, walks[marker.id]);
         drawCrewPresenceBadge(ctx, point, marker, spriteDrawn);
+        const call = calls[marker.id];
+        if (call) drawCrewCallOverlay(ctx, point, spriteDrawn, { ...call, icon: callIcon });
       }};
     }),
   ].sort((a,b)=>(a.x+a.y)-(b.x+b.y));

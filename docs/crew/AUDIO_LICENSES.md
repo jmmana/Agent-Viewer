@@ -16,6 +16,7 @@ sound needs an entry in both places before it ships.
 |---|---|---|---|---|
 | `lounge-ambient` | music (loop) | Lounge room background music | Synthesized at runtime by the Crew engine with Web Audio API oscillators (a four-note soft arpeggio, `LOUNGE_NOTES_HZ` in `crewAudioEngine.ts`). No recorded sample, no external audio file. | CC0 / public domain. Original code written for this repository; no third-party IP. |
 | `ui-notification` | cue (one-shot) | Generic visual+sound feedback, reusable by any room | Synthesized at runtime: a single sine oscillator with a short gain envelope. No recorded sample, no external audio file. | CC0 / public domain. Original code written for this repository; no third-party IP. |
+| `phone-ring` | cue (one-shot) | Phone/call overlay (issue [#145](https://github.com/jmmana/Agent-Viewer/issues/145)), played once per call Crew newly detects while visible in the active room | Synthesized at runtime: two sine-oscillator bursts at different frequencies (480Hz, then 620Hz), a two-beat ring pattern (`playPhoneRingCue` in `crewAudioEngine.ts`). No recorded sample, no external audio file. | CC0 / public domain. Original code written for this repository; no third-party IP. |
 
 ## Why synthesized sounds, not audio files
 
@@ -32,11 +33,12 @@ produced sound than a recorded track would give.
   Crew's final audio art direction. A future issue can replace either one with a
   licensed or commissioned track; when it does, update this table and the
   manifest with that asset's real, verifiable license.
-- The phone ring (issue #145) and the coffee sound (issue #146) are **separate
-  issues** and are deliberately **not wired to any room by this change**. The
-  engine already has the primitives (`playCue`, per-room `CREW_ROOM_MUSIC`) that
-  those issues can reuse; nothing here should need to change for them to add
-  their own cue and map it to their own room.
+- The phone ring (issue #145) now reuses this same engine and `playCue(id)`
+  (see the table above); it is opt-in like every other Crew sound and only
+  plays once per call Crew newly detects while visible in the active room,
+  never as a provider webhook or polling result. The coffee sound (issue #146)
+  is a **separate issue** and is still deliberately **not wired to any room**;
+  it can reuse the same `playCue(id)` primitive without changing this engine.
 - Only the Lounge room has background music today (`CREW_ROOM_MUSIC.lounge` in
   `src/crew/crewAudioAssets.ts`). Every other room maps to `null` (silence) on
   purpose, so Lounge music can never play by accident in another room (QA, the

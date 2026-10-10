@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   crewAgentActivity,
   crewActivityLine,
+  crewInPhoneCall,
   crewViewerModeLabel,
 } from '../../src/crew/crewEventBridge';
 import type { Meeting, Task } from '../../src/types/agent';
@@ -149,6 +150,12 @@ describe('Línea de actividad y rótulo de modo', () => {
 
   it('una actividad vacía produce una línea vacía, no texto inventado', () => {
     expect(crewActivityLine(crewAgentActivity(baseAgent, [], []), true)).toBe('');
+  });
+
+  it('crewInPhoneCall (#145) es verdadero solo con el status real PHONE_CALL, nunca por inferencia', () => {
+    expect(crewInPhoneCall({ status: 'PHONE_CALL' })).toBe(true);
+    expect(crewInPhoneCall({ status: 'IN_MEETING' })).toBe(false);
+    expect(crewInPhoneCall({ status: 'IDLE' })).toBe(false);
   });
 
   it('crewViewerModeLabel cubre los tres modos del vocabulario canónico de la app', () => {

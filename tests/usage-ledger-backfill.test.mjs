@@ -321,7 +321,8 @@ test('runUsageLedgerBackfill: paging over several small pages matches a single-p
           agent_id TEXT, task_id TEXT, provider TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER,
           cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER, cost REAL, currency TEXT,
           cost_source TEXT NOT NULL, latency_ms INTEGER, status TEXT NOT NULL, error_kind TEXT, trace_id TEXT,
-          parent_id TEXT, tool_call_id TEXT, meeting_id TEXT, user_id TEXT, tags TEXT NOT NULL DEFAULT '[]'
+          parent_id TEXT, tool_call_id TEXT, meeting_id TEXT, user_id TEXT, tags TEXT NOT NULL DEFAULT '[]',
+          summary TEXT
         );
         CREATE UNIQUE INDEX ux_usage_ledger_request ON usage_ledger(provider, request_id) WHERE request_id IS NOT NULL;
         CREATE TABLE usage_ledger_skips (

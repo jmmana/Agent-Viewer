@@ -58,6 +58,12 @@ export const usageLedger: Migration = {
         meeting_id          TEXT,
         user_id             TEXT,
         tags                TEXT    NOT NULL DEFAULT '[]',
+        -- Added retroactively for issue #69 (see migration usage-ledger-summary, version 10): a brand-new
+        -- database runs this migration's own backfill step (below) in the same transaction, which already needs
+        -- the column (toLedgerRow / LEDGER_COLUMNS, server/usageLedger.ts, both updated by #69) to exist here.
+        -- An existing database that already applied this migration before #69 gets the column from migration 10
+        -- instead, via ALTER TABLE (this CREATE TABLE body never re-runs once version 6 is recorded).
+        summary             TEXT,
         CHECK (cost IS NOT NULL OR (currency IS NULL AND cost_source = 'unknown'))
       );
 

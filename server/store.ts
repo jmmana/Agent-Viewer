@@ -2173,8 +2173,8 @@ export class SQLiteEventStore implements EventStore {
           event_id, event_type, request_id, received_at, occurred_at, origin, legacy_contract, ingest_channel,
           runtime_id, session_id, agent_id, task_id, provider, model, input_tokens, output_tokens,
           cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_source, latency_ms,
-          status, error_kind, trace_id, parent_id, tool_call_id, meeting_id, user_id, tags
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status, error_kind, trace_id, parent_id, tool_call_id, meeting_id, user_id, tags, summary
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(event_id) DO NOTHING`
       )
       .run(
@@ -2208,7 +2208,8 @@ export class SQLiteEventStore implements EventStore {
         ledgerRow.toolCallId,
         ledgerRow.meetingId,
         ledgerRow.userId,
-        JSON.stringify(ledgerRow.tags)
+        JSON.stringify(ledgerRow.tags),
+        ledgerRow.summary
       );
 
     const inserted = Number((insertResult as { changes?: number | bigint }).changes ?? 0) > 0;

@@ -9,10 +9,25 @@ import { crewSpriteView } from './crewSprites';
 import { useCrewBlink } from './useCrewBlink';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
-import { defaultCrewPreferences, validateCrewPreferences, type CrewPreferences } from './crewPreferences';
+import {
+  applyCrewAccessibilityPreset,
+  defaultCrewPreferences,
+  validateCrewPreferences,
+  CREW_HUD_SCALE,
+  type CrewAccessibilityPreset,
+  type CrewHudSize,
+  type CrewPreferences,
+} from './crewPreferences';
+import { crewTheme } from './crewContrast';
 import { CrewGestures } from './crewGestures';
 import type { Agent } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
+
+/** Oculta visualmente un texto sin quitarlo de la lectura por lector de pantalla. */
+const srOnlyStyle: React.CSSProperties = {
+  position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+  overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
+};
 
 /**
  * Escena Crew independiente con arte incremental y geometría provisional.
@@ -45,7 +60,20 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
   const [localRoomId, setLocalRoomId] = useState(CREW_ROOMS[0].id);
   const requestedRoom = selectedRoomId ?? localRoomId;
   const roomId = CREW_ROOMS.some(room => room.id === requestedRoom) ? requestedRoom : CREW_ROOMS[0].id;
-  const setRoomId = (id: string) => { setLocalRoomId(id); onRoomChange?.(id); };
+  // Subtítulos (#157): texto equivalente a cualquier aviso de cambio de sala/cámara,
+  // útil para quien no escucha audio o lo tiene desactivado. No depende de audio real.
+  const captionId = useRef(0);
+  const [captions, setCaptions] = useState<{ id: number; text: string }[]>([]);
+  const pushCaption = useCallback((text: string) => {
+    captionId.current += 1;
+    setCaptions(prev => [...prev.slice(-2), { id: captionId.current, text }]);
+  }, []);
+  const setRoomId = (id: string) => {
+    setLocalRoomId(id);
+    onRoomChange?.(id);
+    const nextRoom = CREW_ROOMS.find(item => item.id === id);
+    if (nextRoom) pushCaption(isEs ? `Sala: ${nextRoom.label.es}` : `Office: ${nextRoom.label.en}`);
+  };
   // Persist ONLY presentation state, not domain events; each room remembers its own camera.
   const [internalCameras, setInternalCameras] = useState<CrewCameraByRoom>(() => {
     if (!persistCamera || cameraState !== undefined || typeof window === 'undefined') return {};
@@ -78,7 +106,13 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     });
   }, [roomId, setCameraByRoom]);
   const patchCamera = (update: Partial<CrewCamera>) => updateCamera(current => ({ ...current, ...update }));
-  const setView = (value: CrewView) => patchCamera({ view: value });
+  const setView = (value: CrewView) => {
+    patchCamera({ view: value });
+    const label = isEs
+      ? { front: 'Frente', right: 'Derecha', back: 'Atrás', left: 'Izquierda' }
+      : { front: 'Front', right: 'Right', back: 'Back', left: 'Left' };
+    pushCaption(isEs ? `Cámara: ${label[value]}` : `Camera: ${label[value]}`);
+  };
   const setZoom = (fn: (prev: number) => number) => updateCamera(current => zoomCrewCameraAt(current, fn(current.zoom), { x: 0, y: 0 }));
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -133,8 +167,8 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, locale });
-  }, [room, camera, locale, presence, sprite.images, blink]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, locale, highContrast: visualPreferences.highContrast });
+  }, [room, camera, locale, presence, sprite.images, blink, visualPreferences.highContrast]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -148,13 +182,15 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
     return () => { observer?.disconnect(); cancelAnimationFrame(frameRef.current); };
   }, [render, updateCamera]);
 
+  const theme = crewTheme(visualPreferences.highContrast);
+  const hudScale = CREW_HUD_SCALE[visualPreferences.hudSize];
   return <section aria-label={isEs ? 'Modo Crew: oficina independiente' : 'Crew mode: independent office'}
-    style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0, overflowY: 'auto', background: '#101a2b', color: '#f1f5f9' }}>
+    style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0, overflowY: 'auto', background: theme.background, color: theme.text }}>
     {missingRoom && <p role="status" style={{ margin: 0, padding: '8px 12px' }}>
       {isEs ? 'La oficina del enlace no está disponible. Mostramos Dirección; puedes elegir otra oficina o volver a Caricatura.'
         : 'The linked office is unavailable. Showing CEO Office; choose another office or return to Cartoon.'}
     </p>}
-    <div style={{ display: 'flex', flexWrap: 'wrap', padding: 10, gap: 8, alignItems: 'center' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', padding: 10 * hudScale, gap: 8 * hudScale, alignItems: 'center', fontSize: 14 * hudScale }}>
       <CrewRoomSelector roomId={roomId} onChange={setRoomId} agents={agents} isEs={isEs} idPrefix={idPrefix} />
       <button type="button" disabled={roomId === CREW_ROOMS[0].id}
         onClick={() => setRoomId(CREW_ROOMS[Math.max(0, CREW_ROOMS.findIndex(item => item.id === roomId) - 1)].id)}>
@@ -193,13 +229,71 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
         changePreferences(defaultCrewPreferences());
         setRoomId(CREW_ROOMS[0].id);
       }}>{isEs ? 'Restablecer Crew' : 'Reset Crew preferences'}</button>
-      <label><input type="checkbox" checked={visualPreferences.reducedMotion}
-        onChange={event => changePreferences({ version: 1, reducedMotion: event.target.checked })} />
+      <label htmlFor={`${idPrefix}-reduced-motion`}><input id={`${idPrefix}-reduced-motion`} type="checkbox" checked={visualPreferences.reducedMotion}
+        onChange={event => changePreferences({ ...visualPreferences, reducedMotion: event.target.checked })} />
         {isEs ? 'Reducir movimiento' : 'Reduce motion'}
       </label>
       {showRoomLink && typeof window !== 'undefined' && <a href={crewRoomLink(window.location.href, roomId)}>
         {isEs ? 'Enlace a esta oficina' : 'Link to this office'}
       </a>}
+    </div>
+    {/* Colapsado por defecto: deja la barra principal utilizable en móvil
+      (320-390px) sin empujar el canvas fuera del viewport. <details>/<summary>
+      es nativamente operable con teclado (Enter/Espacio) y expone su estado
+      abierto/cerrado a lectores de pantalla sin JavaScript adicional. */}
+    <details style={{ padding: `0 ${12 * hudScale}px` }}>
+      <summary style={{ cursor: 'pointer', fontSize: 13 * hudScale, padding: `${4 * hudScale}px 0` }}>
+        {isEs ? 'Accesibilidad y audio de Crew' : 'Crew accessibility and audio'}
+      </summary>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 * hudScale, alignItems: 'center', padding: `${4 * hudScale}px 0`, fontSize: 13 * hudScale }}>
+        <label htmlFor={`${idPrefix}-high-contrast`}><input id={`${idPrefix}-high-contrast`} type="checkbox" checked={visualPreferences.highContrast}
+          onChange={event => changePreferences({ ...visualPreferences, highContrast: event.target.checked })} />
+          {isEs ? 'Alto contraste' : 'High contrast'}
+        </label>
+        <label htmlFor={`${idPrefix}-subtitles`}><input id={`${idPrefix}-subtitles`} type="checkbox" checked={visualPreferences.subtitles}
+          onChange={event => changePreferences({ ...visualPreferences, subtitles: event.target.checked })} />
+          {isEs ? 'Subtítulos de cambios de sala y cámara' : 'Room and camera change captions'}
+        </label>
+        <label htmlFor={`${idPrefix}-muted`}><input id={`${idPrefix}-muted`} type="checkbox" checked={visualPreferences.muted}
+          onChange={event => changePreferences({ ...visualPreferences, muted: event.target.checked })} />
+          {isEs ? 'Silenciar audio de Crew' : 'Mute Crew audio'}
+        </label>
+        <label htmlFor={`${idPrefix}-volume`}>{isEs ? 'Volumen de Crew' : 'Crew volume'}</label>
+        <input id={`${idPrefix}-volume`} type="range" min={0} max={1} step={0.05}
+          value={visualPreferences.volume} disabled={visualPreferences.muted}
+          aria-valuetext={`${Math.round(visualPreferences.volume * 100)}%`}
+          onChange={event => changePreferences({ ...visualPreferences, volume: Number(event.target.value) })} />
+        <span aria-hidden="true">{Math.round(visualPreferences.volume * 100)}%</span>
+        <label htmlFor={`${idPrefix}-hud-size`}>{isEs ? 'Tamaño de controles' : 'Controls size'}</label>
+        <select id={`${idPrefix}-hud-size`} value={visualPreferences.hudSize}
+          onChange={event => changePreferences({ ...visualPreferences, hudSize: event.target.value as CrewHudSize })}
+          style={{ color: '#111827', background: '#fff', padding: 6 }}>
+          <option value="compact">{isEs ? 'Compacto' : 'Compact'}</option>
+          <option value="standard">{isEs ? 'Estándar' : 'Standard'}</option>
+          <option value="large">{isEs ? 'Grande' : 'Large'}</option>
+        </select>
+        <label htmlFor={`${idPrefix}-a11y-preset`}>{isEs ? 'Preset de accesibilidad' : 'Accessibility preset'}</label>
+        <select id={`${idPrefix}-a11y-preset`} value={visualPreferences.accessibilityPreset}
+          onChange={event => changePreferences(applyCrewAccessibilityPreset(visualPreferences, event.target.value as CrewAccessibilityPreset))}
+          style={{ color: '#111827', background: '#fff', padding: 6 }}>
+          <option value="none">{isEs ? 'Ninguno' : 'None'}</option>
+          <option value="screenReader">{isEs ? 'Lector de pantalla' : 'Screen reader'}</option>
+          <option value="lowVision">{isEs ? 'Baja visión' : 'Low vision'}</option>
+        </select>
+      </div>
+      <p style={{ margin: '2px 0', fontSize: 11 * hudScale, opacity: .85 }}>
+        {isEs ? 'Aún no existe un motor de audio propio de Crew (#150): mute/volumen quedan listos pero sin sonido que controlar.'
+          : 'Crew has no audio engine yet (#150): mute/volume are wired but there is no sound to control.'}
+      </p>
+    </details>
+    {/* aria-live sin role explícito, igual que el listado de agentes de abajo:
+      evita chocar con el único role="status" del aviso de sala inexistente.
+      Sin texto que anunciar, no reserva alto incluso con subtítulos activos. */}
+    <div aria-live="polite" data-crew-captions="true" data-testid={`${idPrefix}-captions`}
+      style={visualPreferences.subtitles && captions.length > 0
+        ? { padding: '2px 12px', margin: 0, fontSize: 12 * hudScale }
+        : srOnlyStyle}>
+      {captions.map(caption => <p key={caption.id} style={{ margin: 0 }}>{caption.text}</p>)}
     </div>
     <div aria-live="polite" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '4px 10px', fontSize: 12, maxHeight: 96, overflowY: 'auto', flexShrink: 0 }}>
       {visibleAgents.length === 0 && <span>{isEs ? 'Oficina vacía. El mobiliario sigue disponible.' : 'Empty office. Furniture remains visible.'}</span>}

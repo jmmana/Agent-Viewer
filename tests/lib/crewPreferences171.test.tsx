@@ -23,7 +23,7 @@ describe('Preferencias y navegación #171', () => {
       localStorage.setItem(CREW_PREFERENCES_STORAGE_KEY, serialized);
       expect(readCrewPreferences()).toEqual(defaultCrewPreferences());
     }
-    saveCrewPreferences({version:1,reducedMotion:true});
+    saveCrewPreferences({...defaultCrewPreferences(),reducedMotion:true});
     expect(readCrewPreferences().reducedMotion).toBe(true);
     vi.spyOn(Storage.prototype,'getItem').mockImplementation(() => {throw Error('blocked');});
     vi.spyOn(Storage.prototype,'setItem').mockImplementation(() => {throw Error('blocked');});
@@ -87,10 +87,10 @@ describe('Preferencias y navegación #171', () => {
   });
   it('notifica preferencias controladas sin mutar props ni imponer el cambio al host', () => {
     const onChange=vi.fn();
-    const preferences={version:1 as const,reducedMotion:false};
+    const preferences={...defaultCrewPreferences(),reducedMotion:false};
     render(<AgentOffice visualMode="crew" crewPreferences={preferences} onCrewPreferencesChange={onChange} />);
     fireEvent.click(screen.getByRole('checkbox',{name:'Reduce motion'}));
-    expect(onChange).toHaveBeenCalledExactlyOnceWith({version:1,reducedMotion:true});
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({...defaultCrewPreferences(),reducedMotion:true});
     expect(preferences.reducedMotion).toBe(false);
     expect((screen.getByRole('checkbox',{name:'Reduce motion'}) as HTMLInputElement).checked).toBe(false);
   });

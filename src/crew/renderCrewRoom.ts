@@ -31,6 +31,8 @@ export interface CrewRenderInput {
   markers?: readonly CrewPresenceMarker[];
   sprites?: CrewSpriteImages;
   blink?: CrewSpriteBlink;
+  /** Tema de alto contraste de la preferencia de accesibilidad Crew (#157). */
+  highContrast?: boolean;
 }
 export const CREW_TILE_X = 34;
 export const CREW_TILE_Y = 18;
@@ -67,20 +69,20 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
   const fit = crewFitScale(room, view, width, height);
   ctx.save();
-  drawCrewBackground(ctx, width, height);
+  drawCrewBackground(ctx, width, height, highContrast);
   ctx.translate(width/2+pan.x,height/2+pan.y);
   ctx.scale(fit*zoom,fit*zoom);
   ctx.translate(-bounds.centerX,-bounds.centerY);
 
   const geometry: CrewSceneGeometry = { isoPoint: crewIsoPoint, wallHeight: CREW_WALL_HEIGHT };
-  drawCrewRoomShell(ctx, room, roomSize.width, roomSize.depth, geometry);
-  drawCrewFloorGrid(ctx, roomSize.width, roomSize.depth, geometry);
+  drawCrewRoomShell(ctx, room, roomSize.width, roomSize.depth, geometry, highContrast);
+  drawCrewFloorGrid(ctx, roomSize.width, roomSize.depth, geometry, highContrast);
   drawCrewDoors(ctx, room, view, geometry);
 
   // Project every furniture anchor and marker from ORIGINAL room-local coordinates;
@@ -88,7 +90,7 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
   const visible = [
     ...room.furniture.map(item => {
       const p = crewProject(item.x,item.y,room,view);
-      return {x:p.x,y:p.y,draw:()=>drawCrewProp(ctx, item, p.x, p.y, view, crewIsoPoint)};
+      return {x:p.x,y:p.y,draw:()=>drawCrewProp(ctx, item, p.x, p.y, view, crewIsoPoint, highContrast)};
     }),
     ...markers.map(marker => {
       const p = crewProject(marker.x,marker.y,room,view);

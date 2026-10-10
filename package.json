@@ -68,6 +68,8 @@
     "crew:capture": "node scripts/capture-crew-runtime.mjs",
     "crew:assets:check": "node scripts/crew-assets.mjs check",
     "crew:assets:import": "node scripts/crew-assets.mjs import",
+    "crew:perf:bench": "tsx scripts/crew-perf-benchmark.mjs",
+    "crew:perf:browser": "node scripts/crew-perf-browser.mjs",
     "cli": "tsx cli/index.ts"
   },
   "peerDependencies": {

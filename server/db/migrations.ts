@@ -7,6 +7,7 @@ import { eventsSeq } from './migrations/0004-events-seq';
 import { telemetryMetrics } from './migrations/0005-telemetry-metrics';
 import { usageLedger } from './migrations/0006-usage-ledger';
 import { usageCallsIndexes } from './migrations/0007-usage-calls-indexes';
+import { retention } from './migrations/0008-retention';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -25,6 +26,7 @@ export const MIGRATIONS: readonly Migration[] = [
   telemetryMetrics,
   usageLedger,
   usageCallsIndexes,
+  retention,
 ];
 
 export interface MigrationOptions {

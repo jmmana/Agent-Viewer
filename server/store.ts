@@ -225,6 +225,84 @@ export interface UsageLedgerStatus {
   migration: { id: string; appliedAt: number } | null;
 }
 
+// -------------------------------------------------------------
+// Retention (issue #70)
+// -------------------------------------------------------------
+
+/** What `EventStore.purge` deletes. Either cutoff is omitted entirely to leave that table untouched: there is no
+ * "purge everything" cutoff of `Infinity`, so a caller that forgets a field purges nothing for it, never
+ * everything. Deliberately has no `error` field: a thrown exception is how a failed purge is reported, by
+ * design (`server/retention.ts` is the one that catches it and records `status: 'error'`). */
+export interface PurgeOptions {
+  /** `events.created_at` cutoff (ms epoch, exclusive floor): rows strictly older are deleted. Omitted = keep. */
+  eventsCutoffMs?: number;
+  /** `usage_ledger.received_at` cutoff, independent of `eventsCutoffMs`. Omitted = keep. */
+  ledgerCutoffMs?: number;
+  /** Rows deleted per transaction. Default 5000 (the issue's own default); tests override it. */
+  batchSize?: number;
+}
+
+/** Result of one `purge()` call. The two `*OldestReceivedAt` fields are measured *after* the purge, so they
+ * reflect what is left, not what was removed. */
+export interface PurgeResult {
+  eventsDeleted: number;
+  ledgerDeleted: number;
+  eventsOldestReceivedAt: number | null;
+  ledgerOldestReceivedAt: number | null;
+}
+
+export type RetentionTrigger = 'startup' | 'schedule';
+export type RetentionRunStatus = 'running' | 'ok' | 'error' | 'skipped';
+
+/** One row of the purge audit log (`retention_runs`), or its in-memory equivalent. */
+export interface RetentionRunRecord {
+  id: number;
+  startedAt: number;
+  finishedAt: number | null;
+  trigger: RetentionTrigger;
+  status: RetentionRunStatus;
+  eventsWindowDays: number | null;
+  eventsCutoffMs: number | null;
+  eventsDeleted: number;
+  ledgerWindowDays: number | null;
+  ledgerCutoffMs: number | null;
+  ledgerDeleted: number;
+  /** Short, content-free reason (error code plus message, truncated): never event payloads, summaries or ids. */
+  error: string | null;
+}
+
+/** Everything `finishRetentionRun` sets once a run (or an immediate skip) is decided. */
+export type RetentionRunPatch = Omit<RetentionRunRecord, 'id' | 'startedAt' | 'trigger' | 'status'> & {
+  status: Exclude<RetentionRunStatus, 'running'>;
+};
+
+/** One scope ('events' or the usage ledger) inside `GET /api/v1/admin/retention`. `windowDays`/`policy` are not
+ * here: they come straight from the parsed config, which never changes while the process runs. */
+export interface RetentionScopeStatus {
+  /** `COUNT(*)` of the table, including rows a later item (duplicates, ledger skips) also tracks elsewhere. */
+  count: number;
+  /** `MIN` of the table's receive-time column. `null` only when the table is empty. */
+  oldestReceivedAt: number | null;
+  /** Largest cutoff under which rows were ever actually deleted (survives a restart and the 500-row prune). */
+  purgedBefore: number | null;
+  /** Cutoff of the most recent *finished* run that had a window configured for this scope. `null` until one has. */
+  lastCutoffMs: number | null;
+  /** Rows deleted by that same run. `null` until one has finished; a real `0` after that is not `null`. */
+  lastDeleted: number | null;
+  /** Lifetime rows deleted by retention for this scope (persisted, survives the 500-row prune). Real `0` allowed. */
+  deletedTotal: number;
+}
+
+/** What `EventStore.retentionStatus` returns; `server/index.ts` adds `schemaVersion`, `storage`, `now`,
+ * `intervalMinutes`, the per-scope `windowDays`/`policy` and `totalDeletedSinceStart` (process-local, owned by
+ * `server/retention.ts`, never the store) to build the full `GET /api/v1/admin/retention` response. */
+export interface RetentionStatus {
+  events: RetentionScopeStatus;
+  usageLedger: RetentionScopeStatus;
+  lastRun: RetentionRunRecord | null;
+  runs: RetentionRunRecord[];
+}
+
 /**
  * An auditable reference to a second (or later) report of a provider call already counted under `duplicateOf`.
  * Stored with full content so nothing is lost for audit, but never added to a total, never broadcast and never
@@ -485,6 +563,22 @@ export interface EventStore {
   /** The HMAC secret behind `series_key`. Generated once; persisted in SQLite mode, per-process in memory mode. */
   getTelemetryHmacSecret(): Promise<Buffer>;
 
+  /**
+   * Deletes events and/or ledger rows older than the given cutoffs (issue #70), in batches of `batchSize`
+   * (default 5000), each its own transaction, yielding to the event loop between batches. No cascade: the two
+   * cutoffs are independent, and purging events never touches the ledger or vice versa. Never throws away the
+   * `purged_before`/`deleted_total` coverage signal, even if it throws partway through a batch.
+   */
+  purge(opts?: PurgeOptions): Promise<PurgeResult>;
+  /** Counts, coverage signals and run history for `GET /api/v1/admin/retention` (issue #70). No sum of tokens or
+   * cost, same rule as `usageLedgerStatus`. */
+  retentionStatus(limit?: number): Promise<RetentionStatus>;
+  /** Starts one retention run: inserts a `running` row (or, when `skip` is true, an already-finished `skipped`
+   * one) and returns its id. Pair with `finishRetentionRun`. */
+  recordRetentionRun(input: { startedAt: number; trigger: RetentionTrigger; skip?: boolean }): Promise<number>;
+  /** Finishes a run started by `recordRetentionRun`, and prunes the run log to the latest 500 rows. */
+  finishRetentionRun(id: number, patch: RetentionRunPatch): Promise<void>;
+
   close(): Promise<void>;
 }
 
@@ -596,6 +690,34 @@ class RetainedWindow {
       idx = (idx - 1 + this.capacity) % this.capacity;
     }
   }
+
+  /**
+   * Removes every entry for which `remove` is true, preserving the relative order of what is kept (issue #70's
+   * time-based purge: a different path from the count-based eviction `push` does, and independent of it). Since
+   * what remains is never more than it was, this never triggers a `push` eviction while rebuilding. Returns the
+   * removed entries, oldest first, so the caller can clean up any index keyed by their ids; an empty array (and
+   * no rebuild at all) when nothing matched.
+   */
+  purgeWhere(remove: (entry: RetainedEntry) => boolean): RetainedEntry[] {
+    const oldestToNewest: RetainedEntry[] = [];
+    this.forEachNewestToOldest((entry) => {
+      oldestToNewest.push(entry);
+    });
+    oldestToNewest.reverse();
+
+    const removed: RetainedEntry[] = [];
+    const kept: RetainedEntry[] = [];
+    for (const entry of oldestToNewest) {
+      if (remove(entry)) removed.push(entry);
+      else kept.push(entry);
+    }
+    if (removed.length === 0) return removed;
+
+    this.buf = [];
+    this.writeIndex = 0;
+    for (const entry of kept) this.push(entry);
+    return removed;
+  }
 }
 
 export interface MemoryEventStoreOptions {
@@ -625,6 +747,11 @@ const DEFAULT_MAX_EVENTS = 10000;
 export const DEFAULT_TELEMETRY_MAX_POINTS = 100000;
 /** Default `AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS` (issue #65): memory-mode cap on stored ledger rows. */
 export const DEFAULT_USAGE_LEDGER_MAX_ROWS = 100000;
+/** Default `purge()` batch size (issue #70): rows deleted per transaction before yielding to the event loop. */
+export const DEFAULT_RETENTION_BATCH_SIZE = 5000;
+/** `retention_runs` / the in-memory run log keep at most this many rows (issue #70). Lifetime counts live in
+ * `retention_state` (SQLite) or the store's own counters (memory) precisely so pruning this loses nothing. */
+export const RETENTION_RUNS_MAX = 500;
 
 function telemetryPointKey(point: Pick<TelemetryPointInput, 'seriesKey' | 'startTimeUnixNano' | 'timeUnixNano'>): string {
   return `${point.seriesKey}|${point.startTimeUnixNano}|${point.timeUnixNano}`;
@@ -724,6 +851,15 @@ export class MemoryEventStore implements EventStore {
   private telemetryWithoutSessionCount = 0;
   /** Generated on first use (issue #73): per-process, never persisted in memory mode. */
   private telemetrySecret: Buffer | null = null;
+  /** Retention (issue #70): bounded in-process run log and the two coverage counters, the memory-mode equivalent
+   * of the SQLite `retention_runs`/`retention_state` tables (there is nothing to survive a restart here, since a
+   * fresh process starts this store from empty anyway). */
+  private retentionRuns: RetentionRunRecord[] = [];
+  private nextRetentionRunId = 1;
+  private retentionState: Record<'events' | 'usageLedger', { purgedBefore: number | null; deletedTotal: number }> = {
+    events: { purgedBefore: null, deletedTotal: 0 },
+    usageLedger: { purgedBefore: null, deletedTotal: 0 },
+  };
 
   constructor(options?: number | MemoryEventStoreOptions) {
     const opts: MemoryEventStoreOptions = typeof options === 'number' ? { maxEvents: options } : (options ?? {});
@@ -855,11 +991,14 @@ export class MemoryEventStore implements EventStore {
       if (!this.rememberEvictedIds) this.eventHashes.delete(evicted.event.id);
     }
     this.maybeWarnKnownIdsSize();
-    this.processEventSideEffects(event);
     if (requestKey) {
       this.requestIndex.set(requestKey.key, { id: event.id, fields: extractUsageFingerprintFields(event) });
     }
-    this.applyLedgerDecision(event, { receivedAt, origin: 'live', channel, legacyContract: false });
+    // Ledger decision first (issue #70): its outcome gates whether the usage figures below are applied, so a
+    // resent id whose event row was purged but whose ledger row was not never double counts (see `applyEvent`'s
+    // `skipUsage` doc comment in `server/serverState.ts`).
+    const ledgerSkipped = this.applyLedgerDecision(event, { receivedAt, origin: 'live', channel, legacyContract: false });
+    this.processEventSideEffects(event, ledgerSkipped);
     return appendResult('accepted', event.id, fingerprint, undefined, { seq, receivedAt });
   }
 
@@ -871,12 +1010,20 @@ export class MemoryEventStore implements EventStore {
    * live path, since the routes already validated the payload shape). Mirrors `SQLiteEventStore`'s transactional
    * write so both stores reach the same rows and skips for the same input (see `tests/usage-ledger.test.mjs`).
    */
+  /** Returns `true` when this call matched an existing ledger row (a `duplicate` or `conflict` skip) instead of
+   * inserting a new one, so the caller knows not to add this event's usage figures a second time (issue #70).
+   * Always `false` for a non-usage event (`toLedgerRow` returns `null`): there is nothing to double count. */
   private applyLedgerDecision(
     event: CanonicalEvent,
     ctx: { receivedAt: number; origin: LedgerOrigin; channel: IngestChannel; legacyContract: boolean }
-  ): void {
+  ): boolean {
     const ledgerRow = toLedgerRow(event, ctx);
-    if (ledgerRow === null) return;
+    if (ledgerRow === null) return false;
+
+    // Defensive, same as the SQLite half's `ON CONFLICT(event_id) DO NOTHING` check: a resent event id whose
+    // *event* was purged independently of the ledger (issue #70) but whose ledger row was kept must never insert
+    // a second row by id, even without a request key to match on.
+    if (this.ledgerByEventId.has(ledgerRow.eventId)) return true;
 
     const key = ledgerRequestKey(ledgerRow);
     if (key !== null) {
@@ -885,19 +1032,20 @@ export class MemoryEventStore implements EventStore {
         const existing = this.ledger[existingIndex];
         const reason: LedgerSkipReason = sameCall(existing, ledgerRow) ? 'duplicate' : 'conflict';
         this.recordLedgerSkip(ledgerRow.eventId, reason, existing.eventId, ctx.receivedAt);
-        return;
+        return true;
       }
     }
 
     if (this.ledger.length >= this.usageLedgerMaxRows) {
       this.ledgerComplete = false;
-      return;
+      return false;
     }
     const row: UsageLedgerRow = { ...ledgerRow, seq: this.ledgerSeq++ };
     const index = this.ledger.length;
     this.ledger.push(row);
     this.ledgerByEventId.set(row.eventId, index);
     if (key !== null) this.ledgerByRequestKey.set(key, index);
+    return false;
   }
 
   private recordLedgerSkip(eventId: string, reason: LedgerSkipReason, keptEventId: string | null, detectedAt: number): void {
@@ -1292,14 +1440,142 @@ export class MemoryEventStore implements EventStore {
     return this.telemetrySecret;
   }
 
+  /**
+   * Time-based purge (issue #70), independent of the count-based window eviction above: dropping an event here
+   * never touches `eventHashes`/`originalReceivedAt`/`requestIndex` (dedup memory), exactly like a capacity
+   * eviction does not, so a resent purged id is still classified as a duplicate and never reaches the ledger a
+   * second time. Dropping a ledger row never touches `events`. Synchronous work only: a memory-mode table is
+   * bounded by its own cap (`maxEvents`, `usageLedgerMaxRows`), so there is nothing here that needs batching or an
+   * event-loop yield the way the SQLite path does.
+   */
+  async purge(opts: PurgeOptions = {}): Promise<PurgeResult> {
+    let eventsDeleted = 0;
+    if (opts.eventsCutoffMs !== undefined) {
+      const cutoff = opts.eventsCutoffMs;
+      const removed = this.window.purgeWhere((entry) => entry.receivedAt < cutoff);
+      if (removed.length > 0) {
+        for (const entry of removed) this.eventSeqs.delete(entry.event.id);
+        this.droppedEvents += removed.length;
+        this.bumpRetentionState('events', cutoff, removed.length);
+      }
+      eventsDeleted = removed.length;
+    }
+
+    let ledgerDeleted = 0;
+    if (opts.ledgerCutoffMs !== undefined) {
+      const cutoff = opts.ledgerCutoffMs;
+      const kept: UsageLedgerRow[] = [];
+      let removedCount = 0;
+      for (const row of this.ledger) {
+        if (row.receivedAt < cutoff) removedCount++;
+        else kept.push(row);
+      }
+      if (removedCount > 0) {
+        this.ledger = kept;
+        this.ledgerByEventId.clear();
+        this.ledgerByRequestKey.clear();
+        for (let i = 0; i < this.ledger.length; i++) {
+          const row = this.ledger[i];
+          this.ledgerByEventId.set(row.eventId, i);
+          const key = ledgerRequestKey(row);
+          if (key !== null) this.ledgerByRequestKey.set(key, i);
+        }
+        this.bumpRetentionState('usageLedger', cutoff, removedCount);
+      }
+      ledgerDeleted = removedCount;
+    }
+
+    return {
+      eventsDeleted,
+      ledgerDeleted,
+      eventsOldestReceivedAt: this.window.oldest()?.receivedAt ?? null,
+      ledgerOldestReceivedAt: this.ledger.reduce<number | null>(
+        (min, row) => (min === null || row.receivedAt < min ? row.receivedAt : min),
+        null
+      ),
+    };
+  }
+
+  /** `purged_before` (max of existing and this cutoff, so it only ever moves forward) and `deleted_total`, for
+   * one scope. Always called with `count > 0`, so `deleted_total` only ever increases on an actual deletion. */
+  private bumpRetentionState(scope: 'events' | 'usageLedger', cutoffMs: number, count: number): void {
+    const state = this.retentionState[scope];
+    state.purgedBefore = state.purgedBefore === null ? cutoffMs : Math.max(state.purgedBefore, cutoffMs);
+    state.deletedTotal += count;
+  }
+
+  async retentionStatus(limit = 20): Promise<RetentionStatus> {
+    const runs = this.retentionRuns.slice(0, Math.max(1, Math.min(limit, RETENTION_RUNS_MAX)));
+    const lastRun = this.retentionRuns[0] ?? null;
+    const lastFinishedWith = (pick: (r: RetentionRunRecord) => boolean) =>
+      this.retentionRuns.find((r) => r.finishedAt !== null && pick(r)) ?? null;
+    const lastEventsRun = lastFinishedWith((r) => r.eventsWindowDays !== null);
+    const lastLedgerRun = lastFinishedWith((r) => r.ledgerWindowDays !== null);
+
+    let ledgerOldest: number | null = null;
+    for (const row of this.ledger) {
+      if (ledgerOldest === null || row.receivedAt < ledgerOldest) ledgerOldest = row.receivedAt;
+    }
+
+    return {
+      events: {
+        count: this.window.size,
+        oldestReceivedAt: this.window.oldest()?.receivedAt ?? null,
+        purgedBefore: this.retentionState.events.purgedBefore,
+        lastCutoffMs: lastEventsRun?.eventsCutoffMs ?? null,
+        lastDeleted: lastEventsRun ? lastEventsRun.eventsDeleted : null,
+        deletedTotal: this.retentionState.events.deletedTotal,
+      },
+      usageLedger: {
+        count: this.ledger.length,
+        oldestReceivedAt: ledgerOldest,
+        purgedBefore: this.retentionState.usageLedger.purgedBefore,
+        lastCutoffMs: lastLedgerRun?.ledgerCutoffMs ?? null,
+        lastDeleted: lastLedgerRun ? lastLedgerRun.ledgerDeleted : null,
+        deletedTotal: this.retentionState.usageLedger.deletedTotal,
+      },
+      lastRun,
+      runs,
+    };
+  }
+
+  async recordRetentionRun(input: { startedAt: number; trigger: RetentionTrigger; skip?: boolean }): Promise<number> {
+    const id = this.nextRetentionRunId++;
+    const record: RetentionRunRecord = {
+      id,
+      startedAt: input.startedAt,
+      finishedAt: input.skip ? input.startedAt : null,
+      trigger: input.trigger,
+      status: input.skip ? 'skipped' : 'running',
+      eventsWindowDays: null,
+      eventsCutoffMs: null,
+      eventsDeleted: 0,
+      ledgerWindowDays: null,
+      ledgerCutoffMs: null,
+      ledgerDeleted: 0,
+      error: null,
+    };
+    this.retentionRuns.unshift(record);
+    if (this.retentionRuns.length > RETENTION_RUNS_MAX) this.retentionRuns.length = RETENTION_RUNS_MAX;
+    return id;
+  }
+
+  async finishRetentionRun(id: number, patch: RetentionRunPatch): Promise<void> {
+    const record = this.retentionRuns.find((r) => r.id === id);
+    if (!record) return;
+    Object.assign(record, patch);
+  }
+
   async close(): Promise<void> {
     // In-memory does not require cleanup
   }
 
   /** Applies one accepted event's side effects. The reducer itself lives in `serverState.ts` (issue #52), shared
-   * with `SQLiteEventStore` so the live path and a rebuild from storage reach the same state. */
-  private processEventSideEffects(event: CanonicalEvent): void {
-    applyEvent(this.state, event);
+   * with `SQLiteEventStore` so the live path and a rebuild from storage reach the same state. `skipUsage` (issue
+   * #70) is forwarded to `applyEvent`: true when the ledger step just classified this as a resend of data it
+   * already holds (see `applyLedgerDecision`). */
+  private processEventSideEffects(event: CanonicalEvent, skipUsage = false): void {
+    applyEvent(this.state, event, { skipUsage });
   }
 }
 
@@ -1332,6 +1608,11 @@ interface PendingOutcome {
   legacyUnverified: boolean;
   /** Set when a request-id duplicate's fields do not match its original, so one warning is logged after commit. */
   requestKeyMismatch?: { originalId: string; duplicateId: string; provider: string; requestId: string };
+  /** Issue #70: true when `applyLedgerDecision` matched an existing ledger row instead of inserting a new one
+   * (reachable once events are purged independently of the ledger), so `append`/`appendBatch` must call
+   * `applyEvent` with `skipUsage: true` and never add this event's tokens and cost twice. `undefined`/`false` for
+   * every outcome other than a fresh 'accepted' usage/failed event, which is the only case it can ever be `true`. */
+  ledgerSkipped?: boolean;
 }
 
 const DEFAULT_REBUILD_PAGE_SIZE = 2000;
@@ -1459,10 +1740,28 @@ export class SQLiteEventStore implements EventStore {
       { log: (message) => this.rebuildOptions.logger.info(message) }
     );
 
+    // Retention (issue #70): a `retention_runs` row left `running` means the process died mid-purge. Closed as
+    // `error`/`interrupted` on the next open, so the audit log never silently claims a run is still in flight.
+    // Only reachable once migration 8 has created the table.
+    if (this.tableExists('retention_runs')) this.closeStaleRetentionRuns();
+
     // Kicked off here (not only from `server/index.ts`) so a store built directly, as many tests do, never needs
     // an explicit `init()` call: for a file with no backlog beyond one page, every row is applied synchronously
     // below, before this constructor returns (see `init()`).
     this.initPromise = this.init();
+  }
+
+  private tableExists(name: string): boolean {
+    return Boolean(this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
+  }
+
+  private closeStaleRetentionRuns(): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        "UPDATE retention_runs SET status = 'error', finished_at = ?, error = 'interrupted' WHERE status = 'running'"
+      )
+      .run(now);
   }
 
   /**
@@ -1795,19 +2094,33 @@ export class SQLiteEventStore implements EventStore {
     }
     // A newly accepted usage event gets exactly one ledger decision in this same insert step (issue #65), so it
     // is covered by whichever transaction the caller (`append`/`appendBatch`) already opened around this call.
-    this.applyLedgerDecision(event, { receivedAt, origin: 'live', channel, legacyContract: false });
-    return { result: appendResult('accepted', event.id, fingerprint, undefined, { seq, receivedAt }), event, legacyUnverified: false };
+    // Its result also gates whether `applyEvent` applies this event's usage figures (issue #70): see
+    // `applyLedgerDecision`'s doc comment.
+    const ledgerSkipped = this.applyLedgerDecision(event, { receivedAt, origin: 'live', channel, legacyContract: false });
+    return {
+      result: appendResult('accepted', event.id, fingerprint, undefined, { seq, receivedAt }),
+      event,
+      legacyUnverified: false,
+      ledgerSkipped,
+    };
   }
 
-  /** SQLite half of the ledger write (issue #65). See `MemoryEventStore.applyLedgerDecision` for the mirrored
+  /**
+   * SQLite half of the ledger write (issue #65). See `MemoryEventStore.applyLedgerDecision` for the mirrored
    * memory-mode logic; both must reach the same rows and skips for the same input sequence
-   * (`tests/usage-ledger.test.mjs`, "store parity"). */
+   * (`tests/usage-ledger.test.mjs`, "store parity").
+   *
+   * Returns `true` when this matched an existing ledger row (a `duplicate` or `conflict` skip) instead of
+   * inserting a new one (issue #70): the caller must then tell `applyEvent` to skip this event's usage figures,
+   * or a resent id whose `events` row was purged but whose ledger row was not would add its tokens and cost a
+   * second time. `false` for a non-usage event (nothing to double count) and for a genuinely new row.
+   */
   private applyLedgerDecision(
     event: CanonicalEvent,
     ctx: { receivedAt: number; origin: LedgerOrigin; channel: IngestChannel; legacyContract: boolean }
-  ): void {
+  ): boolean {
     const ledgerRow = toLedgerRow(event, ctx);
-    if (ledgerRow === null) return;
+    if (ledgerRow === null) return false;
 
     const key = ledgerRequestKey(ledgerRow);
     if (key !== null) {
@@ -1822,11 +2135,15 @@ export class SQLiteEventStore implements EventStore {
             'INSERT INTO usage_ledger_skips (event_id, reason, kept_event_id, detected_at, origin) VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id) DO NOTHING'
           )
           .run(ledgerRow.eventId, reason, existing.eventId, ctx.receivedAt, ctx.origin);
-        return;
+        return true;
       }
     }
 
-    this.db
+    // No request key (or one that found nothing above): the only remaining way this could already hold a row is
+    // a resent event id whose *event* row was purged independently of the ledger (issue #70) while its ledger
+    // row was kept. `event_id` is UNIQUE, so that insert is a silent `ON CONFLICT ... DO NOTHING` no-op; `changes`
+    // tells the two cases apart, which the caller needs to decide whether to skip this event's usage figures.
+    const insertResult = this.db
       .prepare(
         `INSERT INTO usage_ledger (
           event_id, event_type, request_id, received_at, occurred_at, origin, legacy_contract, ingest_channel,
@@ -1869,6 +2186,7 @@ export class SQLiteEventStore implements EventStore {
         ledgerRow.userId,
         JSON.stringify(ledgerRow.tags)
       );
+    return Number((insertResult as { changes?: number | bigint }).changes ?? 0) === 0;
   }
 
   async usageLedgerStatus(): Promise<UsageLedgerStatus> {
@@ -1990,7 +2308,7 @@ export class SQLiteEventStore implements EventStore {
       this.ensureTotalsSinceCache();
       // While a startup rebuild is running (or failed), the event is persisted only: the rebuild loop (or a
       // restart) is the one that applies it, so it is never applied twice (issue #52).
-      if (this.rebuild.state === 'done') applyEvent(this.state, event);
+      if (this.rebuild.state === 'done') applyEvent(this.state, event, { skipUsage: pending.ledgerSkipped });
     }
     return pending.result;
   }
@@ -2064,7 +2382,12 @@ export class SQLiteEventStore implements EventStore {
       this.ensureTotalsSinceCache();
     }
     if (this.rebuild.state === 'done') {
-      for (const accepted of summary.acceptedEvents) applyEvent(this.state, accepted);
+      // issue #70: `ledgerSkipped` per accepted event, keyed by id (unique among accepted events), so each one
+      // gets `applyEvent`'s `skipUsage` exactly like the single-event `append` path above.
+      const ledgerSkippedById = new Map(pending.map((entry) => [entry.event.id, entry.ledgerSkipped ?? false]));
+      for (const accepted of summary.acceptedEvents) {
+        applyEvent(this.state, accepted, { skipUsage: ledgerSkippedById.get(accepted.id) ?? false });
+      }
     }
     return summary;
   }
@@ -2510,6 +2833,265 @@ export class SQLiteEventStore implements EventStore {
       throw new Error('Could not read or write the telemetry series-key secret');
     }
     return secret;
+  }
+
+  /**
+   * Sets `retention_state.purged_before` for one scope to `max(existing, cutoffMs)`, in its own transaction,
+   * *before* the first delete batch of a run that actually has rows to remove (issue #70). This ordering is the
+   * whole point: if the process dies partway through the batches that follow, the coverage signal already
+   * reflects that data at or before this cutoff may be incomplete, which is the safe direction to be wrong in.
+   */
+  private setPurgedBefore(scope: 'events' | 'usage_ledger', cutoffMs: number): void {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare('UPDATE retention_state SET purged_before = MAX(COALESCE(purged_before, 0), ?) WHERE scope = ?')
+        .run(cutoffMs, scope);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // Already rolled back.
+      }
+      throw error;
+    }
+  }
+
+  /** Deletes up to `batchSize` rows of `events` older than `cutoffMs`, in one transaction, also keeping
+   * `eventsCountCache` and `retention_state.deleted_total` correct. Returns rows actually deleted this batch. */
+  private deleteEventsBatch(cutoffMs: number, batchSize: number): number {
+    let deleted = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const rows = this.db
+        .prepare(
+          'DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE created_at < ? ORDER BY rowid LIMIT ?) RETURNING duplicate_of'
+        )
+        .all(cutoffMs, batchSize) as Array<{ duplicate_of: string | null }>;
+      deleted = rows.length;
+      if (deleted > 0) {
+        const originals = rows.filter((r) => r.duplicate_of === null).length;
+        this.eventsCountCache -= originals;
+        this.db.prepare('UPDATE retention_state SET deleted_total = deleted_total + ? WHERE scope = ?').run(deleted, 'events');
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // Already rolled back.
+      }
+      throw error;
+    }
+    return deleted;
+  }
+
+  /** Same shape as `deleteEventsBatch`, for `usage_ledger`. The append-only trigger (migration 6) only blocks
+   * `UPDATE`; a `DELETE` is exactly how retention is meant to remove a ledger row. */
+  private deleteLedgerBatch(cutoffMs: number, batchSize: number): number {
+    let deleted = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = this.db
+        .prepare('DELETE FROM usage_ledger WHERE rowid IN (SELECT rowid FROM usage_ledger WHERE received_at < ? ORDER BY rowid LIMIT ?)')
+        .run(cutoffMs, batchSize);
+      deleted = Number((result as { changes?: number | bigint }).changes ?? 0);
+      if (deleted > 0) {
+        this.db
+          .prepare('UPDATE retention_state SET deleted_total = deleted_total + ? WHERE scope = ?')
+          .run(deleted, 'usage_ledger');
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // Already rolled back.
+      }
+      throw error;
+    }
+    return deleted;
+  }
+
+  /** Runs one table's purge to completion: sets `purged_before` once (only if there is anything to delete), then
+   * loops delete batches, yielding to the event loop between them, stopping once a batch comes back short. */
+  private async purgeTable(
+    scope: 'events' | 'usage_ledger',
+    deleteBatch: (cutoffMs: number, batchSize: number) => number,
+    existsOlderSql: string,
+    cutoffMs: number,
+    batchSize: number
+  ): Promise<number> {
+    const existsOlder = this.db.prepare(existsOlderSql).get(cutoffMs);
+    if (!existsOlder) return 0;
+    this.setPurgedBefore(scope, cutoffMs);
+
+    let total = 0;
+    while (!this.closed) {
+      const deleted = deleteBatch(cutoffMs, batchSize);
+      total += deleted;
+      if (deleted < batchSize) break;
+      // Yields the event loop between batches (issue #70), so the SSE heartbeat and a concurrently scheduled
+      // timer still fire while a large purge is in progress.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return total;
+  }
+
+  /**
+   * Deletes events and/or ledger rows older than their cutoffs (issue #70). The two cutoffs are independent and
+   * neither table has a foreign key to the other (migration 6, migration 8): purging one never touches the
+   * other, by construction, not by a check here. See `server/retention.ts` for the scheduler that calls this.
+   */
+  async purge(opts: PurgeOptions = {}): Promise<PurgeResult> {
+    const batchSize = opts.batchSize && opts.batchSize > 0 ? Math.trunc(opts.batchSize) : DEFAULT_RETENTION_BATCH_SIZE;
+
+    const eventsDeleted =
+      opts.eventsCutoffMs !== undefined
+        ? await this.purgeTable(
+            'events',
+            (cutoff, size) => this.deleteEventsBatch(cutoff, size),
+            'SELECT 1 FROM events WHERE created_at < ? LIMIT 1',
+            opts.eventsCutoffMs,
+            batchSize
+          )
+        : 0;
+
+    const ledgerDeleted =
+      opts.ledgerCutoffMs !== undefined
+        ? await this.purgeTable(
+            'usage_ledger',
+            (cutoff, size) => this.deleteLedgerBatch(cutoff, size),
+            'SELECT 1 FROM usage_ledger WHERE received_at < ? LIMIT 1',
+            opts.ledgerCutoffMs,
+            batchSize
+          )
+        : 0;
+
+    if (eventsDeleted > 0 || ledgerDeleted > 0) {
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch {
+        // Best effort: a checkpoint failure (for example a long-held read transaction elsewhere) never fails the
+        // purge itself. The WAL file shrinks on a later successful checkpoint instead.
+      }
+    }
+
+    const eventsOldest = this.db.prepare('SELECT MIN(created_at) AS v FROM events').get() as { v: number | null };
+    const ledgerOldest = this.db.prepare('SELECT MIN(received_at) AS v FROM usage_ledger').get() as { v: number | null };
+    return {
+      eventsDeleted,
+      ledgerDeleted,
+      eventsOldestReceivedAt: eventsOldest.v,
+      ledgerOldestReceivedAt: ledgerOldest.v,
+    };
+  }
+
+  async retentionStatus(limit = 20): Promise<RetentionStatus> {
+    const eventsCount = (this.db.prepare('SELECT COUNT(*) AS c FROM events').get() as { c: number }).c;
+    const eventsOldest = (this.db.prepare('SELECT MIN(created_at) AS v FROM events').get() as { v: number | null }).v;
+    const ledgerCount = (this.db.prepare('SELECT COUNT(*) AS c FROM usage_ledger').get() as { c: number }).c;
+    const ledgerOldest = (this.db.prepare('SELECT MIN(received_at) AS v FROM usage_ledger').get() as { v: number | null }).v;
+
+    const stateRows = this.db.prepare('SELECT scope, purged_before, deleted_total FROM retention_state').all() as Array<{
+      scope: string;
+      purged_before: number | null;
+      deleted_total: number;
+    }>;
+    const stateByScope = new Map(stateRows.map((r) => [r.scope, r]));
+    const eventsState = stateByScope.get('events');
+    const ledgerState = stateByScope.get('usage_ledger');
+
+    const runRows = this.db.prepare('SELECT * FROM retention_runs ORDER BY id DESC LIMIT ?').all(limit) as any[];
+    const runs = runRows.map((r) => this.rowToRetentionRun(r));
+    const lastRun = runs[0] ?? null;
+
+    const lastEventsRunRow = this.db
+      .prepare(
+        'SELECT events_cutoff_ms, events_deleted FROM retention_runs WHERE finished_at IS NOT NULL AND events_window_days IS NOT NULL ORDER BY id DESC LIMIT 1'
+      )
+      .get() as { events_cutoff_ms: number | null; events_deleted: number } | undefined;
+    const lastLedgerRunRow = this.db
+      .prepare(
+        'SELECT ledger_cutoff_ms, ledger_deleted FROM retention_runs WHERE finished_at IS NOT NULL AND ledger_window_days IS NOT NULL ORDER BY id DESC LIMIT 1'
+      )
+      .get() as { ledger_cutoff_ms: number | null; ledger_deleted: number } | undefined;
+
+    return {
+      events: {
+        count: eventsCount,
+        oldestReceivedAt: eventsOldest,
+        purgedBefore: eventsState?.purged_before ?? null,
+        lastCutoffMs: lastEventsRunRow?.events_cutoff_ms ?? null,
+        lastDeleted: lastEventsRunRow ? lastEventsRunRow.events_deleted : null,
+        deletedTotal: eventsState?.deleted_total ?? 0,
+      },
+      usageLedger: {
+        count: ledgerCount,
+        oldestReceivedAt: ledgerOldest,
+        purgedBefore: ledgerState?.purged_before ?? null,
+        lastCutoffMs: lastLedgerRunRow?.ledger_cutoff_ms ?? null,
+        lastDeleted: lastLedgerRunRow ? lastLedgerRunRow.ledger_deleted : null,
+        deletedTotal: ledgerState?.deleted_total ?? 0,
+      },
+      lastRun,
+      runs,
+    };
+  }
+
+  private rowToRetentionRun(r: any): RetentionRunRecord {
+    return {
+      id: Number(r.id),
+      startedAt: Number(r.started_at),
+      finishedAt: r.finished_at === null ? null : Number(r.finished_at),
+      trigger: r.trigger,
+      status: r.status,
+      eventsWindowDays: r.events_window_days === null ? null : Number(r.events_window_days),
+      eventsCutoffMs: r.events_cutoff_ms === null ? null : Number(r.events_cutoff_ms),
+      eventsDeleted: Number(r.events_deleted),
+      ledgerWindowDays: r.ledger_window_days === null ? null : Number(r.ledger_window_days),
+      ledgerCutoffMs: r.ledger_cutoff_ms === null ? null : Number(r.ledger_cutoff_ms),
+      ledgerDeleted: Number(r.ledger_deleted),
+      error: r.error,
+    };
+  }
+
+  async recordRetentionRun(input: { startedAt: number; trigger: RetentionTrigger; skip?: boolean }): Promise<number> {
+    const status = input.skip ? 'skipped' : 'running';
+    const finishedAt = input.skip ? input.startedAt : null;
+    const result = this.db
+      .prepare('INSERT INTO retention_runs (started_at, finished_at, trigger, status) VALUES (?, ?, ?, ?)')
+      .run(input.startedAt, finishedAt, input.trigger, status);
+    return Number(result.lastInsertRowid);
+  }
+
+  async finishRetentionRun(id: number, patch: RetentionRunPatch): Promise<void> {
+    this.db
+      .prepare(
+        `UPDATE retention_runs
+         SET finished_at = ?, status = ?, events_window_days = ?, events_cutoff_ms = ?, events_deleted = ?,
+             ledger_window_days = ?, ledger_cutoff_ms = ?, ledger_deleted = ?, error = ?
+         WHERE id = ?`
+      )
+      .run(
+        patch.finishedAt,
+        patch.status,
+        patch.eventsWindowDays,
+        patch.eventsCutoffMs,
+        patch.eventsDeleted,
+        patch.ledgerWindowDays,
+        patch.ledgerCutoffMs,
+        patch.ledgerDeleted,
+        patch.error,
+        id
+      );
+    // Self-pruning (issue #70): retention_runs keeps at most the latest 500 rows. Lifetime counts and
+    // `purged_before` live in `retention_state`, which this never touches, so pruning here loses no coverage
+    // signal, only old run history.
+    this.db
+      .prepare(`DELETE FROM retention_runs WHERE id NOT IN (SELECT id FROM retention_runs ORDER BY id DESC LIMIT ${RETENTION_RUNS_MAX})`)
+      .run();
   }
 
   async close(): Promise<void> {

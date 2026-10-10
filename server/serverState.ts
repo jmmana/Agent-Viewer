@@ -115,12 +115,20 @@ export function toAgentRecord(state: ServerState, agent: StoredAgent): AgentReco
 /**
  * Applies one accepted event's side effects to `state`. Deterministic: it reads `event.timestamp`, never
  * `Date.now()`, and nothing random, so the live path and a replay from storage reach the same state.
+ *
+ * `skipUsage` (issue #70): set by a caller that already knows this acceptance did not produce a new usage ledger
+ * row, because the id-based dedup an event store normally relies on cannot see past a retention purge. Once
+ * events are purged independently of the ledger (issue #70), a resent event id with a still-recognized
+ * `(provider, requestId)` key in the ledger is accepted again at the storage level (there is nothing left to
+ * recognize it by there) but must not add its tokens and cost a second time here. Every other side effect
+ * (runtimes, sessions, tasks, meetings, agent profile fields) still applies normally: only the usage figures are
+ * the ones a double application would corrupt.
  */
-export function applyEvent(state: ServerState, event: CanonicalEvent): void {
+export function applyEvent(state: ServerState, event: CanonicalEvent, options?: { skipUsage?: boolean }): void {
   const now = event.timestamp;
 
   // Usage figures: every accepted llm.usage and llm.failed event, with or without an agent.
-  state.usage.apply(event);
+  if (!options?.skipUsage) state.usage.apply(event);
 
   // Runtimes side effect. `runtime.connected` always sets the record's fields (issue #52), whether the runtime
   // is new or was auto-created earlier by an unrelated event; any other event with a runtimeId only bumps

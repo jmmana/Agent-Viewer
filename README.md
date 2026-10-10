@@ -624,6 +624,7 @@ flowchart LR
 | `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
 | `GET` | `/api/v1/usage/ledger/status` | Usage ledger health: row counts by origin (`live`/`backfill`), legacy rows, skip counts and the oldest/newest server receive time. Never a sum of tokens or cost. [Details](docs/usage-ledger.md). |
 | `GET` | `/api/v1/usage/calls` | Read-only, metadata-only listing of usage ledger rows (issue #67), with the same filters as `GET /api/v1/usage` and a stable, opaque cursor that can walk the full history in either direction. Never returns prompt, completion, message, tool or provider error text. [Details](docs/integration.md#usage-calls-get-apiv1usagecalls-issue-67). |
+| `GET` | `/api/v1/admin/retention` | Retention status: counts, coverage (`purgedBefore`, lifetime `deletedTotal`) and recent purge runs for events and the usage ledger. Read-only; no endpoint triggers a purge. [Details](docs/retention.md). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
 | `PATCH` | `/api/v1/agents/:agentId` | Update an agent's profile or status (descriptive fields only; usage is reported with `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |
@@ -809,6 +810,9 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
 | `AGENT_VIEWER_SSE_REPLAY_MAX` | `10000` | Maximum missed events a reconnect replays in full. `0` means any reconnect that missed something resyncs instead of replaying. An invalid value stops the server at startup. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |
+| `AGENT_VIEWER_RETENTION_DAYS` | unset (keep forever) | Raw events whose server receive time is older than this many days are purged by a scheduled job. Integer `1` to `36500`; `0` and any other invalid value refuse to start. See [docs/retention.md](docs/retention.md). |
+| `AGENT_VIEWER_USAGE_RETENTION_DAYS` | unset (keep forever) | Same, for the usage ledger (the audit record of tokens and cost), independently of `AGENT_VIEWER_RETENTION_DAYS`. Setting it logs a one-line startup warning. |
+| `AGENT_VIEWER_RETENTION_INTERVAL_MINUTES` | `60` | How often the purge job runs, once either window above is set. Integer `1` to `1440`. |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | none | Demo app: `live` boots in live mode, like `?mode=live`. `npm run dev:full` sets it for you. |
 | `VITE_AGENT_VIEWER_HISTORY_LIMIT` | `1000` | Demo app, live mode: upper bound (1 to 5000) of events the portal loads on open, beyond the snapshot's own newest 100, through `GET /api/v1/events?beforeId=...`. Only the activity timeline goes this deep; the token and cost figures always come from the snapshot's own totals. An invalid value falls back to the default. |
@@ -848,6 +852,7 @@ The defaults favor local development. Before you expose the server:
 | CORS | `*` | Set `AGENT_VIEWER_CORS_ORIGIN` to your exact frontend origin. |
 | Network | `npm run server` binds `127.0.0.1` by default; a non-loopback `AGENT_VIEWER_HOST` with no token refuses to start (`AGENT_VIEWER_ALLOW_OPEN=1` overrides this); with no token, a request from a non-loopback address, `Host` or `Origin` gets `403` even on a loopback bind. Docker Compose ports bind `127.0.0.1`. | Set `AGENT_VIEWER_API_TOKEN` before binding a non-loopback `AGENT_VIEWER_HOST`. To expose Compose remotely, restore `"8787:8787"` / `"3000:3000"` and put it behind a reverse proxy with TLS; a reverse proxy on the same host makes every request look local, so it still needs a token. |
 | Storage | in memory | `AGENT_VIEWER_STORAGE=sqlite` on a protected volume. |
+| Retention | keeps everything forever | Set `AGENT_VIEWER_RETENTION_DAYS` for a production deployment that must bound how long prompts-adjacent metadata (summaries, payloads) stays on disk; set `AGENT_VIEWER_USAGE_RETENTION_DAYS` separately only if the audit record of tokens and cost must also expire. This is a honest baseline, not tamper-evident: see [docs/retention.md](docs/retention.md). |
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).
 

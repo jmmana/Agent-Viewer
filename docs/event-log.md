@@ -82,3 +82,7 @@ An OTLP issue never sets `raw` (a log record can carry sensitive text); only a c
 ## Replaying a Log
 
 The parsed events are ready for `useEventReplay` and `<AgentOffice>`, or for `recordReplay` to export a video. See the [library guide](library.md).
+
+If you replay a log by posting its events to a server (rather than only loading the file in the browser), they are
+subject to retention by the server's own receive time, not by the old `timestamp` values inside the file: see
+[retention.md](retention.md).

@@ -5,5 +5,6 @@
   [4, "events-seq"],
   [5, "telemetry-metrics"],
   [6, "usage-ledger"],
-  [7, "usage-calls-indexes"]
+  [7, "usage-calls-indexes"],
+  [8, "retention"]
 ]

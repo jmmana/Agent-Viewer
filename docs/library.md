@@ -2,7 +2,7 @@
 
 `@warlockcode/agent-viewer` puts the Agent Viewer office inside your own React app. The office is a Canvas2D scene drawn only from the events you pass: the agents your runtime registers, their statuses, the tools they use, the messages they send and the meetings they hold.
 
-This guide covers version **0.2.0**. Leer en español: [library.es.md](library.es.md).
+This guide covers version **0.5.0**. Leer en español: [library.es.md](library.es.md).
 
 ## Contents
 
@@ -40,7 +40,7 @@ The runtime dependencies are `lucide-react` (icons), `zod` (strict event validat
 Publication on npm is coming soon. Until then, install the package from the GitHub release asset:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
 ```
 
 The package name is `@warlockcode/agent-viewer` in both cases, so your imports will not change when you switch to the npm registry.
@@ -307,7 +307,7 @@ const officeT = useCallback<HostTranslate>(
 
 ### Message keys
 
-There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` and `modelOps.*` keys belong to the demo app's Model Ops console and timeline; the embedded office does not show them. As of issue #79, Model Ops reads the server's usage ledger: that read client and its ledger-backed tab components live under `src/integrations/ledgerClient.ts` and `src/components/modelOps/`, both demo-app-only. `@warlockcode/agent-viewer` ships no ledger client, no usage-ledger endpoint reference and no Model Ops component (enforced by `tests/lib/libraryIsolation.test.ts`).
+There are 156 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline`, `modelOps.*` and `crew.*` keys belong to the demo app (the Model Ops console and timeline, and the separate Crew renderer under `src/crew/`); the embedded office does not show them. As of issue #79, Model Ops reads the server's usage ledger: that read client and its ledger-backed tab components live under `src/integrations/ledgerClient.ts` and `src/components/modelOps/`, both demo-app-only. `@warlockcode/agent-viewer` ships no ledger client, no usage-ledger endpoint reference and no Model Ops component (enforced by `tests/lib/libraryIsolation.test.ts`).
 
 #### `rooms.*` (10)
 
@@ -496,6 +496,23 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | `usage.meetingsHeading` | Meetings | Reuniones |
 | `usage.meetingLine` | {title}: {usage} | {title}: {usage} |
 
+#### `calls.*` (12)
+
+| Key | English | Spanish |
+|---|---|---|
+| `calls.title` | Call details: {name} | Detalle de llamadas: {name} |
+| `calls.close` | Close call details | Cerrar el detalle de llamadas |
+| `calls.empty` | No call details provided | No se proporcionó detalle de llamadas |
+| `calls.provider` | Provider | Proveedor |
+| `calls.model` | Model | Modelo |
+| `calls.status` | Status | Estado |
+| `calls.status.ok` | OK | Correcta |
+| `calls.status.failed` | Failed | Fallida |
+| `calls.status.rate_limited` | Rate limited | Limitada por frecuencia |
+| `calls.latency` | Latency | Latencia |
+| `calls.latencyValue` | {value} ms | {value} ms |
+| `calls.requestId` | Request id | Id de solicitud |
+
 #### `replay.*` (8)
 
 | Key | English | Spanish |
@@ -514,6 +531,16 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | Key | English | Spanish |
 |---|---|---|
 | `video.time` | Time: {time} | Hora: {time} |
+
+#### `crew.*` (3)
+
+| Key | English | Spanish |
+|---|---|---|
+| `crew.walkFallback` | Walk atlas unavailable; the original pose remains visible. | Atlas de caminar no disponible; se conserva la pose original. |
+| `crew.walkDemo` | DEMO: synthetic read-only CEO transit snapshot. | DEMO: snapshot sintético de tránsito del CEO, de solo lectura. |
+| `crew.walkPrototype` | 2.5D PROTOTYPE: CEO walk frames follow reported transit in four directions; final art and physical paths are pending. | PROTOTIPO 2.5D: los cuadros de caminar del CEO siguen el tránsito reportado en cuatro direcciones; arte final y trayectorias físicas pendientes. |
+
+Like `modelOps.*`, these keys belong to the demo app's separate Crew renderer (`src/crew/`), never `@warlockcode/agent-viewer`.
 
 ## Theming
 
@@ -579,8 +606,18 @@ Notes:
 - The toolbar (`role="toolbar"`) and the replay controls are real buttons with accessible names and a visible focus ring. The replay slider announces its progress, and the speed buttons use `aria-pressed`.
 - With `prefers-reduced-motion: reduce`, nothing animates: agents move to their destination without walking, animated details stay still and button transitions are off.
 - Keyboard selection: each agent in that list is a button (`aria-pressed` shows the selected one). Pressing it selects the agent and moves the camera to it, like a click on the canvas; pressing it again clears the selection. The office registers no global keyboard shortcuts, except `Escape` inside the open call details panel (`showCallDetails`), which only closes that panel.
+- The call details panel (`showCallDetails`) is a `<section>` named by `calls.title`; opening it does not move focus into it or trap it, so a keyboard user who opened it from the agent list keeps focus there and `Escape` closes it without any extra step. It has no `aria-live` region: it is not a notification, so neither opening it nor a new figure arriving while it is open is announced.
 
 ## Usage figures
+
+### The four rules
+
+These four rules hold for every usage-related prop (`showUsage`, `showUsageBadges`, `showCallDetails`, `meetingUsage` and the usage option of `recordReplay` alike). This is the one place that states them together; the rest of this chapter only explains the mechanics.
+
+1. **The host computes, the component displays.** Figures arrive through props. The component never sums, prices, converts currency or compares against a limit: there is no prop that makes the office add events up itself.
+2. **Hidden by default.** `showUsage`, `showUsageBadges` and `showCallDetails` are each `false` until the host opts in. Nothing about usage renders before then, whatever `usage`, `meetingUsage` or `agentCallDetails` carry.
+3. **Unknown is never zero.** A missing or `null` figure is shown as "unknown" (`usage.unknown`), never as `0`. A real reported `0` still shows `0`.
+4. **Metadata only.** The call detail panel shows model, provider, tokens, `requestId`, latency, status and cost. `AgentCallDetail` has no field for a prompt, a completion or tool arguments, and the panel reads only its named fields, never the whole object, so an extra key can never leak through.
 
 The office never computes, adds up or prices usage. It only displays the figures your app passes, and only when you ask:
 
@@ -996,6 +1033,8 @@ const connection = connectEventStream(base, (event) => setEvents((prev) => [...p
 
 - Two offices on the same page never share state: each `<AgentOffice>` owns its store.
 - Nothing is read from or written to `localStorage` or any other browser storage.
+- No usage figure is ever stored: `usage`, `meetingUsage` and `agentCallDetails` are read on each render and never copied into the store, `localStorage` or any other persistence; closing and reopening the office with the same props draws the same figures, nothing cached in between.
+- The usage badge, the per-agent panel and the call detail panel render nothing unless the host opts in with `showUsage`, `showUsageBadges` or `showCallDetails`: the props can carry every figure filled in and still produce no visible usage UI while these are `false`.
 - No timer invents data. The office checks every 250 ms whether walks finished and meetings can start; only `mode="showcase"` adds simulated activity, and it is marked as simulated.
 - No global keyboard shortcuts.
 - Nothing runs on import, and no styles are injected.
@@ -1006,3 +1045,5 @@ The demo app of this repository (`npm run dev`) is built separately with `npm ru
 ## Versioning
 
 The library follows [Semantic Versioning](https://semver.org/). While it is at 0.x, the API may still change: a minor release (0.3.0, 0.4.0...) can include breaking changes, and they are listed in the [CHANGELOG](../CHANGELOG.md). A range such as `^0.2.0` accepts only 0.2.x patch releases.
+
+0.5.0 adds `showUsageBadges`, `showCallDetails`, `meetingUsage` and their types (`UsageBadge`, `UsageCostSource`, `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource`, `MeetingUsage`, `MeetingUsageFigures`). Every one of them is additive and off by default: an app written against 0.2.x keeps working unchanged.

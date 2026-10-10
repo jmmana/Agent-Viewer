@@ -34,6 +34,7 @@ import { buildListCallsQuery, listCallsInMemory, sqliteRowToCallRecord, type Cal
 import { type UsageSummary } from './usageAggregates';
 import { buildWhere, computeMemoryRollup, computeSqliteRollup, rowMatchesFilters } from './usage/rollup';
 import type { RollupQuery, UsageFilters, UsageRollupResponse } from './usage/types';
+import { applyRollupAttributionSideEffect, ensureRollupAttributionTables, runRollupAttributionBackfill } from './rollupAttribution';
 import {
   applyEvent,
   createServerState,
@@ -1136,6 +1137,9 @@ export class MemoryEventStore implements EventStore {
         capComplete: this.ledgerComplete,
         purgedThrough: this.retentionState.usageLedger.purgedBefore,
       },
+      // Issue #80: `this.state` (built by `applyEvent`, `server/serverState.ts`) is the memory-mode equivalent of
+      // the SQLite `tool_calls`/`meeting_labels` tables, kept current on every accepted event.
+      attributionIndex: { toolCallNames: this.state.toolCallNames, meetingTitles: this.state.meetingTitles },
     });
   }
 
@@ -1792,6 +1796,14 @@ export class SQLiteEventStore implements EventStore {
       { log: (message) => this.rebuildOptions.logger.info(message) }
     );
 
+    // Rollup-attribution startup catch-up (issue #80): same shape as the usage ledger catch-up just above, run on
+    // every open, not only the first time migration 11 applies. `ensureRollupAttributionTables` recreates
+    // `tool_calls`/`meeting_labels`/the view if any was dropped (this item's own acceptance criterion:
+    // `schema_migrations` only remembers migration 11 ran, not that its tables still exist); the backfill that
+    // follows is then normally a no-op (idempotent inserts), filling only the gap an older server left behind.
+    ensureRollupAttributionTables(this.db);
+    runRollupAttributionBackfill(this.db, { log: (message) => this.rebuildOptions.logger.info(message) });
+
     // Retention (issue #70): a `retention_runs` row left `running` means the process died mid-purge. Closed as
     // `error`/`interrupted` on the next open, so the audit log never silently claims a run is still in flight.
     // Only reachable once migration 8 has created the table.
@@ -2149,6 +2161,9 @@ export class SQLiteEventStore implements EventStore {
     // Its result also gates whether `applyEvent` applies this event's usage figures (issue #70): see
     // `applyLedgerDecision`'s doc comment.
     const ledgerSkipped = this.applyLedgerDecision(event, { receivedAt, origin: 'live', channel, legacyContract: false });
+    // Issue #80: `tool.started`/`meeting.requested`/`meeting.started` get their rollup-attribution side effect
+    // (`tool_calls`/`meeting_labels`) in this same insert step, so it is covered by the same transaction too.
+    applyRollupAttributionSideEffect(this.db, event, receivedAt);
     return {
       result: appendResult('accepted', event.id, fingerprint, undefined, { seq, receivedAt }),
       event,

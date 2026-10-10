@@ -15,6 +15,7 @@ import {
   type LegacyUsageFields,
   type UsageReducer,
 } from './usageAggregates';
+import { toolCallScopeKey } from './usage/attribution';
 
 export interface RuntimeRecord {
   id: string;
@@ -84,6 +85,20 @@ export interface ServerState {
   meetings: Map<string, any>;
   /** The only place that turns usage events into figures. Fed once per accepted event, never decremented. */
   usage: UsageReducer;
+  /** Issue #80 (`tool` rollup dimension), memory-mode equivalent of the SQLite `tool_calls` table: distinct tool
+   * names seen on a `tool.started` event for each `toolCallScopeKey(sessionId, agentId, toolCallId)`. More than
+   * one name in one scope is what makes a usage row referencing it `ambiguous`. Only populated from `tool.started`
+   * events whose `toolCallId` and `tool` are both non-empty; `tool.completed`/`tool.failed` never resolve a name
+   * (out of scope, see the issue's "Out of scope" section). */
+  toolCallNames: Map<string, Set<string>>;
+  /** Issue #80 (`meeting` rollup dimension), memory-mode equivalent of the SQLite `meeting_labels` table: the
+   * latest accepted non-empty `title` for each `meetingId`, from `meeting.requested`/`meeting.started`. "Latest"
+   * means last applied here (insertion order live, `seq` order on an SQLite rebuild), never event `timestamp`,
+   * so ties are resolved the same deterministic way every time. Never keyed by the synthetic id `state.meetings`
+   * falls back to when a meeting event carries no `meetingId` (`event.payload?.meetingId || event.id` above):
+   * that synthetic id must never be used as an attribution key.
+   */
+  meetingTitles: Map<string, string>;
 }
 
 export function createServerState(): ServerState {
@@ -94,6 +109,8 @@ export function createServerState(): ServerState {
     tasks: new Map(),
     meetings: new Map(),
     usage: createUsageReducer(),
+    toolCallNames: new Map(),
+    meetingTitles: new Map(),
   };
 }
 
@@ -284,6 +301,32 @@ export function applyEvent(state: ServerState, event: CanonicalEvent, options?: 
       meeting.status = 'CONCLUDED';
     }
     state.meetings.set(meetingId, meeting);
+  }
+
+  // Tool-call attribution side effect (issue #80): only `tool.started` carries a name, and only a non-empty
+  // `toolCallId` is a link worth indexing. `tool.completed`/`tool.failed` are never read for this (out of scope).
+  if (event.type === 'tool.started') {
+    const toolCallId = event.payload?.toolCallId;
+    const toolName = event.payload?.tool;
+    if (typeof toolCallId === 'string' && toolCallId.length > 0 && typeof toolName === 'string' && toolName.length > 0) {
+      const scopeKey = toolCallScopeKey(event.sessionId ?? null, event.agentId ?? null, toolCallId);
+      let names = state.toolCallNames.get(scopeKey);
+      if (!names) {
+        names = new Set();
+        state.toolCallNames.set(scopeKey, names);
+      }
+      names.add(toolName);
+    }
+  }
+
+  // Meeting-title attribution side effect (issue #80): last accepted non-empty title wins. Never falls back to
+  // `event.id` like `state.meetings` above: a meeting event with no `meetingId` contributes nothing here.
+  if (event.type === 'meeting.requested' || event.type === 'meeting.started') {
+    const meetingId = event.payload?.meetingId;
+    const title = event.payload?.title;
+    if (typeof meetingId === 'string' && meetingId.length > 0 && typeof title === 'string' && title.length > 0) {
+      state.meetingTitles.set(meetingId, title);
+    }
   }
 }
 

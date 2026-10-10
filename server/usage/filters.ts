@@ -5,6 +5,10 @@
  * extras (issue #66 added `allowRollupOnly`, covering `userId`, `tag`, `asOfSeq` and `utcOffsetMinutes`, the
  * same way issue #67's own `allowCallsOnly` gates `requestId`, `traceId`, `order`, `limit` and `cursor`).
  *
+ * Issue #80 added five more rollup-only keys under the same `allowRollupOnly` gate: `meetingId`, `toolCallId`,
+ * `tool` (row-level equality filters) and `meetingAttribution`/`toolAttribution` (row-level equality on the
+ * resolved attribution state, see `server/usage/attribution.ts`).
+ *
  * Strict by design: every violation is a 400 `invalid_filter` with `issues[].path` naming the parameter,
  * never a silent fallback. `token` and `api_key` are accepted and ignored (consumed by the auth middleware in
  * `server/index.ts`); as of issue #71 that middleware is Bearer-only and `server/index.ts` already rejects any
@@ -15,6 +19,18 @@
  */
 import type { CostSource } from '../usageLedger';
 import { emptyUsageFilters, isCallStatus, isCostSource, type CallStatus, type TimeBasis, type UsageFilters } from './types';
+import type { MeetingAttributionState, ToolAttributionState } from './attribution';
+
+const MEETING_ATTRIBUTION_STATES: readonly MeetingAttributionState[] = ['attributed', 'unattributed'];
+const TOOL_ATTRIBUTION_STATES: readonly ToolAttributionState[] = ['attributed', 'unattributed', 'unresolved', 'ambiguous'];
+
+function isMeetingAttributionState(value: string): value is MeetingAttributionState {
+  return (MEETING_ATTRIBUTION_STATES as readonly string[]).includes(value);
+}
+
+function isToolAttributionState(value: string): value is ToolAttributionState {
+  return (TOOL_ATTRIBUTION_STATES as readonly string[]).includes(value);
+}
 
 export interface UsageFilterIssue {
   path: string;
@@ -62,7 +78,15 @@ const SHARED_SINGLE_KEYS = ['from', 'to', 'timeBasis'] as const;
 const CALLS_ONLY_REPEATABLE_KEYS = ['requestId'] as const;
 const CALLS_ONLY_SINGLE_KEYS = ['traceId', 'order', 'limit', 'cursor'] as const;
 
-const ROLLUP_ONLY_REPEATABLE_KEYS = ['userId', 'tag'] as const;
+const ROLLUP_ONLY_REPEATABLE_KEYS = [
+  'userId',
+  'tag',
+  'meetingId',
+  'toolCallId',
+  'tool',
+  'meetingAttribution',
+  'toolAttribution',
+] as const;
 const ROLLUP_ONLY_SINGLE_KEYS = ['asOfSeq', 'utcOffsetMinutes'] as const;
 
 const MAX_VALUES_PER_KEY = 100;
@@ -178,6 +202,11 @@ export function parseUsageFilters(
   if (options.allowRollupOnly) {
     filters.userId = readRepeatable(query, 'userId', issues);
     filters.tag = readRepeatable(query, 'tag', issues);
+    filters.meetingId = readRepeatable(query, 'meetingId', issues);
+    filters.toolCallId = readRepeatable(query, 'toolCallId', issues);
+    filters.tool = readRepeatable(query, 'tool', issues);
+    filters.meetingAttribution = readRepeatable(query, 'meetingAttribution', issues) as MeetingAttributionState[];
+    filters.toolAttribution = readRepeatable(query, 'toolAttribution', issues) as ToolAttributionState[];
   }
 
   for (const value of filters.status) {
@@ -189,6 +218,16 @@ export function parseUsageFilters(
   for (const value of filters.currency) {
     if (value !== 'none' && !CURRENCY_CODE_PATTERN.test(value)) {
       issues.push({ path: 'currency', message: `"${value}" must be an uppercase ISO 4217 code or "none"` });
+    }
+  }
+  for (const value of filters.meetingAttribution) {
+    if (!isMeetingAttributionState(value)) {
+      issues.push({ path: 'meetingAttribution', message: `"${value}" must be one of ${MEETING_ATTRIBUTION_STATES.join(', ')}` });
+    }
+  }
+  for (const value of filters.toolAttribution) {
+    if (!isToolAttributionState(value)) {
+      issues.push({ path: 'toolAttribution', message: `"${value}" must be one of ${TOOL_ATTRIBUTION_STATES.join(', ')}` });
     }
   }
 

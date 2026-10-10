@@ -34,6 +34,7 @@
  */
 import type { LedgerEventType, CostSource } from '../usageLedger';
 import { LLM_ERROR_KINDS, type LlmErrorKind } from '../../src/integrations/canonicalTypes';
+import type { MeetingAttributionState, ToolAttributionState } from './attribution';
 
 export type { CostSource } from '../usageLedger';
 
@@ -140,6 +141,18 @@ export interface UsageFilters {
   asOfSeq: number | null;
   /** Rollup-only (issue #66). -720..840, fixed offset (no DST), used for `day` bucketing. `0` when not given. */
   utcOffsetMinutes: number;
+  /** Rollup-only (issue #80). Row-level equality filter on the ledger's `meeting_id`, independent of `groupBy`. */
+  meetingId: string[];
+  /** Rollup-only (issue #80). Row-level equality filter on the ledger's `tool_call_id`, independent of `groupBy`. */
+  toolCallId: string[];
+  /** Rollup-only (issue #80). Row-level equality filter on the *resolved* tool name: matches only rows whose
+   * `tool` attribution is `attributed` with this name (an `unresolved`/`ambiguous`/`unattributed` row never has a
+   * name to match). */
+  tool: string[];
+  /** Rollup-only (issue #80). Row-level equality filter on the row's `meeting` attribution state. */
+  meetingAttribution: MeetingAttributionState[];
+  /** Rollup-only (issue #80). Row-level equality filter on the row's `tool` attribution state. */
+  toolAttribution: ToolAttributionState[];
   /** Export-only (issue #69). Only rows with ledger `seq > afterSeq`, for incremental pulls ("everything since my
    * last pull"). Never populated by `parseUsageFilters` (no route echoes it as a rollup query parameter): the
    * export route (`server/usage/export.ts`) parses its own `afterSeq`/`asOfSeq` pair and sets this directly, so
@@ -169,6 +182,11 @@ export function emptyUsageFilters(): UsageFilters {
     tag: [],
     asOfSeq: null,
     utcOffsetMinutes: 0,
+    meetingId: [],
+    toolCallId: [],
+    tool: [],
+    meetingAttribution: [],
+    toolAttribution: [],
     afterSeq: null,
   };
 }
@@ -190,6 +208,11 @@ export function filtersToEcho(filters: UsageFilters): Record<string, string[]> {
     ['status', filters.status],
     ['costSource', filters.costSource],
     ['currency', filters.currency],
+    ['meetingId', filters.meetingId],
+    ['toolCallId', filters.toolCallId],
+    ['tool', filters.tool],
+    ['meetingAttribution', filters.meetingAttribution],
+    ['toolAttribution', filters.toolAttribution],
   ];
   for (const [key, values] of repeatable) {
     if (values.length > 0) echo[key] = values;
@@ -201,7 +224,17 @@ export function filtersToEcho(filters: UsageFilters): Record<string, string[]> {
 // Rollup-specific types (issue #66). Pure additions: nothing above this point is changed by this endpoint.
 // -------------------------------------------------------------
 
-export type RollupDimension = 'agent' | 'model' | 'provider' | 'session' | 'task' | 'day' | 'user' | 'tag';
+export type RollupDimension =
+  | 'agent'
+  | 'model'
+  | 'provider'
+  | 'session'
+  | 'task'
+  | 'day'
+  | 'user'
+  | 'tag'
+  | 'meeting'
+  | 'tool';
 
 export const ROLLUP_DIMENSIONS: readonly RollupDimension[] = [
   'agent',
@@ -212,7 +245,18 @@ export const ROLLUP_DIMENSIONS: readonly RollupDimension[] = [
   'day',
   'user',
   'tag',
+  'meeting',
+  'tool',
 ];
+
+/** `meeting` and `tool` are the two "attribution" dimensions added by issue #80: unlike every other dimension,
+ * a row that cannot be grouped is kept (never dropped) in an explicit `unattributed`/`unresolved`/`ambiguous`
+ * bucket, and groups sort by attribution rank before anything else. */
+export const ATTRIBUTION_DIMENSIONS: readonly RollupDimension[] = ['meeting', 'tool'];
+
+export function isAttributionDimension(dim: RollupDimension): dim is 'meeting' | 'tool' {
+  return dim === 'meeting' || dim === 'tool';
+}
 
 export type RollupSort = 'key' | 'calls';
 
@@ -242,12 +286,30 @@ export interface UsageRollupTotals {
   lastAt: number | null;
 }
 
+/**
+ * A group's key. For every dimension except `meeting` it is `{ [dimensionName]: value }` (`value` is `null` for
+ * the no-value bucket of that dimension). `meeting` is the one exception (issue #80): its key field is named
+ * `meetingId`, not `meeting`, and carries a second field, `title`, only when `meetingId` is non-null (matching
+ * the issue's own response examples). The type is intentionally a plain string-keyed record rather than
+ * `Partial<Record<RollupDimension, ...>>` so it can hold `meetingId`/`title` alongside the dimension-named keys.
+ */
+export type RollupGroupKey = Record<string, string | null>;
+
 export interface UsageRollupGroup extends UsageRollupTotals {
-  key: Partial<Record<RollupDimension, string | null>>;
+  key: RollupGroupKey;
   /** Only present when `groupBy` includes `day`: epoch ms, inclusive, the local midnight expressed in UTC. */
   bucketStart?: number;
   /** Only present when `groupBy` includes `day`: epoch ms, exclusive, `bucketStart + 86400000`. */
   bucketEnd?: number;
+  /** Present when `groupBy` includes `meeting` and/or `tool` (issue #80): one entry per attribution dimension
+   * actually present in `groupBy`, always an object, never a bare string. */
+  attribution?: Partial<Record<'meeting' | 'tool', MeetingAttributionState | ToolAttributionState>>;
+  /** Present only when `groupBy` includes `meeting`: distinct session ids that contributed to this group,
+   * sorted, capped at `SESSION_IDS_CAP` (issue #80). */
+  sessionIds?: string[];
+  /** Present only when `groupBy` includes `meeting`: the true distinct session count, uncapped, so a cap (or a
+   * `meetingId` reused across sessions) is visible even when `sessionIds` itself was truncated. */
+  sessionCount?: number;
 }
 
 export interface UsageRollupQueryEcho {

@@ -644,6 +644,34 @@ const usage = {
 - `cost` and `currency` are sent only when the bucket has calls, `costUnknownCount` is `0` and `byCurrency` has exactly one entry (one currency, one cost source). Otherwise send `cost: null`, shown as "unknown".
 - The `agentId: null` bucket (calls without an agent) has no key in `byAgent`; it only counts in `total`. Failed calls (`failed`) are not part of these figures.
 
+### Feeding `usage` from the server (issue #66)
+
+`GET /api/v1/usage/rollup` ([full reference](integration.md#usage-rollup-get-apiv1usagerollup-issue-66)) answers a sharper question than `GET /api/v1/usage`: a time range, a time basis, and up to 3 grouping dimensions. The TypeScript SDK's `toUsageFigures()` does the same "only an exact figure becomes a number" mapping `toFigures()` does above, already written for a rollup group:
+
+```tsx
+import type { UsageFigures } from '@warlockcode/agent-viewer';
+import { toUsageFigures } from './sdk/typescript/index';
+
+const rollup = await viewer.usageRollup({
+  groupBy: ['agent'],
+  from: '2026-10-05T00:00:00Z',
+  to: '2026-10-12T00:00:00Z',
+});
+
+const usage = {
+  total: toUsageFigures(rollup.totals, { costSource: 'provider-reported' }),
+  byAgent: Object.fromEntries(
+    rollup.groups
+      .filter((group) => group.key.agent !== null)
+      .map((group) => [group.key.agent as string, toUsageFigures(group, { costSource: 'provider-reported' })]),
+  ),
+};
+
+<AgentOffice events={events} showUsage usage={usage} />
+```
+
+`toUsageFigures(group, { costSource })` returns `cost` as a number only when the group has exactly one cost entry, that entry's source matches the `costSource` you asked for, and `unknownCostCalls` is `0`; two currencies, a reported/estimated mix, or any unknown cost all give `cost: null`. `inputTokens`/`outputTokens` are `null` unless every call in the group reported that kind, and `totalTokens` is their sum (cache and reasoning tokens are excluded) only when both are known. This helper runs in your host backend, next to the SDK call: the component still only ever displays the `UsageFigures` you pass it, imported here as a type, never computed by `@warlockcode/agent-viewer` itself.
+
 ## Replay
 
 `useEventReplay` plays a recorded run at its own pace and returns the visible slice, ready for `<AgentOffice events>`. It only reveals events; it never creates any. `ReplayControls` is an optional bar for it: play and pause, back to start, a position slider and speed buttons.

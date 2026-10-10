@@ -84,8 +84,10 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.ok, true);
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
-      schemaVersion: 8,
-      latestKnownSchemaVersion: 8,
+      // Migration 7 (usage-calls-indexes, issue #67), 8 (retention, issue #70) and 9 (usage-rollup, issue #66):
+      // the usage_ledger_tags table and its indexes are the latest, from migration 9.
+      schemaVersion: 9,
+      latestKnownSchemaVersion: 9,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');
@@ -1637,6 +1639,98 @@ test('REST API: ingest_channel is tagged per route (events, events-batch, webhoo
     const webhookRow = store.ledger.find((row) => row.requestId === 'req-channel-webhook');
     assert.ok(webhookRow);
     assert.equal(webhookRow.ingestChannel, 'webhook');
+  } finally {
+    server.close();
+  }
+});
+
+// -------------------------------------------------------------
+// Usage rollup (issue #66)
+// -------------------------------------------------------------
+
+test('REST API: GET /api/v1/usage/rollup returns 200 with the documented shape and Cache-Control: no-store', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_1', { provider: 'anthropic', requestId: 'req-rollup-http-1' }));
+
+    const res = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&agentId=integrity`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    const json = await res.json();
+    assert.equal(json.schemaVersion, '1.0');
+    assert.ok(json.totals.calls.total >= 1);
+    assert.ok(Array.isArray(json.groups));
+    assert.equal(json.query.groupBy[0], 'agent');
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup returns 400 invalid_filter with a per-field issues array', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const missingGroupBy = await fetch(`${baseUrl}/api/v1/usage/rollup`);
+    assert.equal(missingGroupBy.status, 400);
+    const missingJson = await missingGroupBy.json();
+    assert.equal(missingJson.error, 'invalid_filter');
+    assert.ok(Array.isArray(missingJson.issues) && missingJson.issues.length > 0);
+    assert.ok(missingJson.issues.some((i) => i.path === 'groupBy'));
+
+    const unknownParam = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&agentid=typo`);
+    assert.equal(unknownParam.status, 400);
+    const unknownJson = await unknownParam.json();
+    assert.equal(unknownJson.error, 'invalid_filter');
+    assert.ok(unknownJson.issues.some((i) => i.path === 'agentid'));
+
+    const unknownDimension = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=bogus`);
+    assert.equal(unknownDimension.status, 400);
+
+    const tooManyDimensions = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent,model,provider,session`);
+    assert.equal(tooManyDimensions.status, 400);
+
+    const badRange = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&from=2000&to=1000`);
+    assert.equal(badRange.status, 400);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup requires the API token when one is configured, but tolerates ?token= per issue #71', async () => {
+  process.env.AGENT_VIEWER_API_TOKEN = 'rollup-endpoint-secret';
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const unauth = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent`);
+    assert.equal(unauth.status, 401);
+
+    const authed = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent`, {
+      headers: { Authorization: 'Bearer rollup-endpoint-secret' },
+    });
+    assert.equal(authed.status, 200);
+
+    // Issue #71 (merged after this issue's spec was written) rejects any `?token=`/`?api_key=` query key outright,
+    // even a correct one, so it can never leak into logs or referrers: this route is no exception.
+    const queryToken = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&token=rollup-endpoint-secret`);
+    assert.equal(queryToken.status, 401);
+    const queryTokenJson = await queryToken.json();
+    assert.equal(queryTokenJson.error, 'query_token_not_supported');
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup repeats a filter param for multiple values (OR), not a comma-split', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_or_a', { provider: 'anthropic', requestId: 'req-rollup-or-a', model: 'model-rollup-a' }));
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_or_b', { provider: 'anthropic', requestId: 'req-rollup-or-b', model: 'model-rollup-b' }));
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_or_c', { provider: 'anthropic', requestId: 'req-rollup-or-c', model: 'model-rollup-c' }));
+
+    const res = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=model&model=model-rollup-a&model=model-rollup-b`);
+    const json = await res.json();
+    const models = json.groups.map((g) => g.key.model).sort();
+    assert.deepEqual(models, ['model-rollup-a', 'model-rollup-b']);
+    assert.deepEqual(json.query.filters.model, ['model-rollup-a', 'model-rollup-b']);
   } finally {
     server.close();
   }

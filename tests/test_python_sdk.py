@@ -9,6 +9,7 @@ import time
 import socket
 import subprocess
 import unittest
+import unittest.mock
 import urllib.parse
 import urllib.request
 
@@ -630,6 +631,58 @@ class TestPythonSDK(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_usage_rollup_builds_the_right_url_and_header_and_rejects_unknown_kwargs(self):
+        viewer = AgentViewer(url="http://sdk.test", token="secret-token")
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+            def read(self_inner):
+                return json.dumps({"schemaVersion": "1.0", "groups": [], "totals": {}}).encode("utf-8")
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["method"] = req.get_method()
+            return FakeResponse()
+
+        with unittest.mock.patch("urllib.request.urlopen", fake_urlopen):
+            result = viewer.usage_rollup(
+                ["agent", "model"],
+                from_=1700000000000,
+                to="2026-10-12",
+                utc_offset_minutes=-300,
+                sort="calls",
+                limit=50,
+                agent_id=["a1", "a2"],
+                tag="solo-tag",
+            )
+
+        self.assertEqual(result["schemaVersion"], "1.0")
+        self.assertEqual(captured["method"], "GET")
+        parsed = urllib.parse.urlparse(captured["url"])
+        self.assertEqual(parsed.path, "/api/v1/usage/rollup")
+        query = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(query["groupBy"], ["agent,model"])
+        self.assertEqual(query["from"], ["1700000000000"])
+        self.assertEqual(query["to"], ["2026-10-12"])
+        self.assertEqual(query["utcOffsetMinutes"], ["-300"])
+        self.assertEqual(query["sort"], ["calls"])
+        self.assertEqual(query["limit"], ["50"])
+        self.assertEqual(sorted(query["agentId"]), ["a1", "a2"])
+        self.assertEqual(query["tag"], ["solo-tag"])
+        self.assertNotIn("token", query)
+        # The dict comes back with case-normalized header keys from http.client.
+        self.assertEqual(captured["headers"].get("Authorization"), "Bearer secret-token")
+
+        with self.assertRaises(TypeError):
+            viewer.usage_rollup("agent", not_a_real_filter="x")
+
     def test_live_server_integration(self):
         port = get_free_port()
         env = os.environ.copy()
@@ -757,6 +810,24 @@ class TestPythonSDK(unittest.TestCase):
             self.assertEqual(gpt["currencyMissingCount"], 0)
             # One call is provider-reported and the other estimated: two pairs, so no single legacy figure.
             self.assertIsNone(snapshot["totalCost"])
+
+            # usage_rollup() round trip (issue #66): grouped sums over the same ledger rows just appended.
+            rollup = viewer.usage_rollup(["agent", "model"], agent_id="py_bot")
+            self.assertEqual(rollup["schemaVersion"], "1.0")
+            self.assertEqual(rollup["query"]["groupBy"], ["agent", "model"])
+            self.assertEqual(rollup["query"]["filters"]["agentId"], ["py_bot"])
+            rollup_group = next(
+                g for g in rollup["groups"] if g["key"]["agent"] == "py_bot" and g["key"]["model"] == "gpt-4o"
+            )
+            self.assertEqual(rollup_group["calls"]["total"], 1)
+            self.assertEqual(rollup_group["tokens"]["input"]["sum"], 500)
+            self.assertEqual(
+                [(e["currency"], e["costSource"], e["sum"]) for e in rollup_group["cost"]["entries"]],
+                [("USD", "provider-reported", 0.005)],
+            )
+
+            with self.assertRaises(TypeError):
+                viewer.usage_rollup("agent", not_a_real_filter="x")
 
         finally:
             proc.terminate()

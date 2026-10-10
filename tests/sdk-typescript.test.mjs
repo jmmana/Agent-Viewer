@@ -4,7 +4,7 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { app } from '../server/index.ts';
-import { AgentViewer, AgentViewerError } from '../sdk/typescript/index.ts';
+import { AgentViewer, AgentViewerError, toUsageFigures } from '../sdk/typescript/index.ts';
 
 const vectorsPath = fileURLToPath(new URL('./fixtures/usage-correlation-vectors.json', import.meta.url));
 const vectors = JSON.parse(readFileSync(vectorsPath, 'utf8'));
@@ -653,6 +653,10 @@ test('TypeScript SDK: iterateCalls raises if the server returns the same cursor 
 
 test('TypeScript SDK: listCalls fails immediately on 400/410, never retried', async (t) => {
   for (const status of [400, 410]) {
+    // Re-mocking `fetch` a second time without restoring the first leaves `t.mock`'s teardown pointing at the
+    // first iteration's handler instead of the true original (observed leaking the 400/invalid_filter response
+    // into later tests' real HTTP calls); restoring before each re-mock keeps exactly one active mock at a time.
+    t.mock.restoreAll();
     let attempts = 0;
     t.mock.method(globalThis, 'fetch', async () => {
       attempts++;
@@ -686,4 +690,151 @@ test('TypeScript SDK: listCalls retries 429 and succeeds once the server recover
   const page = await viewer.listCalls({});
   assert.equal(page.data.length, 0);
   assert.equal(attempts, 3);
+});
+
+// -------------------------------------------------------------
+// usageRollup() / toUsageFigures() (issue #66)
+// -------------------------------------------------------------
+
+test('TypeScript SDK: usageRollup() builds the right URL, repeats array filters, and sends the token only in the header', async (t) => {
+  let capturedUrl;
+  let capturedHeaders;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    capturedUrl = url;
+    capturedHeaders = init?.headers;
+    return new Response(JSON.stringify({ schemaVersion: '1.0', groups: [], totals: {} }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  const viewer = new AgentViewer({ url: 'http://sdk.test', token: 'secret-token' });
+  await viewer.usageRollup({
+    groupBy: ['agent', 'model'],
+    from: new Date('2026-10-05T00:00:00.000Z'),
+    to: 1_700_000_000_000,
+    utcOffsetMinutes: -300,
+    sort: 'calls',
+    limit: 50,
+    agentId: ['a1', 'a2'],
+    tag: 'solo-tag',
+  });
+
+  const parsed = new URL(String(capturedUrl));
+  assert.equal(parsed.pathname, '/api/v1/usage/rollup');
+  assert.equal(parsed.searchParams.get('groupBy'), 'agent,model');
+  assert.equal(parsed.searchParams.get('from'), '2026-10-05T00:00:00.000Z');
+  assert.equal(parsed.searchParams.get('to'), '1700000000000');
+  assert.equal(parsed.searchParams.get('utcOffsetMinutes'), '-300');
+  assert.equal(parsed.searchParams.get('sort'), 'calls');
+  assert.equal(parsed.searchParams.get('limit'), '50');
+  assert.deepEqual(parsed.searchParams.getAll('agentId'), ['a1', 'a2']);
+  assert.deepEqual(parsed.searchParams.getAll('tag'), ['solo-tag']);
+  assert.equal(parsed.searchParams.has('token'), false);
+  assert.equal(capturedHeaders.authorization, 'Bearer secret-token');
+});
+
+test('TypeScript SDK: usageRollup() against a live server returns the real response and surfaces 400 issues', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl, runtimeId: 'sdk-rollup' });
+    await viewer.agent({ id: 'sdk-rollup-agent' }).usage({
+      provider: 'anthropic',
+      model: 'claude-sonnet',
+      inputTokens: 10,
+      outputTokens: 5,
+      cost: 1,
+      currency: 'USD',
+      costSource: 'provider-reported',
+    });
+
+    const result = await viewer.usageRollup({ groupBy: ['agent'] });
+    assert.equal(result.schemaVersion, '1.0');
+    assert.ok(result.totals.calls.total >= 1);
+
+    await assert.rejects(
+      viewer.usageRollup({ groupBy: ['not-a-real-dimension'] }),
+      (err) => err instanceof AgentViewerError && err.status === 400 && err.code === 'invalid_filter' && Array.isArray(err.issues)
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('toUsageFigures: a single matching entry with no unknown cost maps to a number and its currency', () => {
+  const group = {
+    key: { agent: 'a' },
+    calls: { total: 10, succeeded: 10, failed: 0 },
+    tokens: {
+      input: { sum: 100, reportedCalls: 10, unreportedCalls: 0 },
+      output: { sum: 50, reportedCalls: 10, unreportedCalls: 0 },
+      cacheRead: { sum: null, reportedCalls: 0, unreportedCalls: 10 },
+      cacheWrite: { sum: null, reportedCalls: 0, unreportedCalls: 10 },
+      reasoning: { sum: null, reportedCalls: 0, unreportedCalls: 10 },
+    },
+    cost: { entries: [{ currency: 'USD', costSource: 'provider-reported', sum: 5, calls: 10 }], unknownCostCalls: 0 },
+    firstAt: 1,
+    lastAt: 2,
+  };
+  const figures = toUsageFigures(group, { costSource: 'provider-reported' });
+  assert.deepEqual(figures, { cost: 5, currency: 'USD', inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+});
+
+test('toUsageFigures: two currencies, a mismatched cost source, or any unknown cost all give cost: null', () => {
+  const base = {
+    calls: { total: 2, succeeded: 2, failed: 0 },
+    tokens: {
+      input: { sum: 10, reportedCalls: 2, unreportedCalls: 0 },
+      output: { sum: 5, reportedCalls: 2, unreportedCalls: 0 },
+      cacheRead: { sum: null, reportedCalls: 0, unreportedCalls: 2 },
+      cacheWrite: { sum: null, reportedCalls: 0, unreportedCalls: 2 },
+      reasoning: { sum: null, reportedCalls: 0, unreportedCalls: 2 },
+    },
+    firstAt: 1,
+    lastAt: 2,
+  };
+
+  const twoCurrencies = {
+    ...base,
+    cost: {
+      entries: [
+        { currency: 'USD', costSource: 'provider-reported', sum: 1, calls: 1 },
+        { currency: 'EUR', costSource: 'provider-reported', sum: 1, calls: 1 },
+      ],
+      unknownCostCalls: 0,
+    },
+  };
+  assert.equal(toUsageFigures(twoCurrencies, { costSource: 'provider-reported' }).cost, null);
+
+  const wrongSource = {
+    ...base,
+    cost: { entries: [{ currency: 'USD', costSource: 'estimated', sum: 2, calls: 2 }], unknownCostCalls: 0 },
+  };
+  assert.equal(toUsageFigures(wrongSource, { costSource: 'provider-reported' }).cost, null);
+
+  const unknownCost = {
+    ...base,
+    cost: { entries: [{ currency: 'USD', costSource: 'provider-reported', sum: 2, calls: 1 }], unknownCostCalls: 1 },
+  };
+  assert.equal(toUsageFigures(unknownCost, { costSource: 'provider-reported' }).cost, null);
+});
+
+test('toUsageFigures: inputTokens/outputTokens/totalTokens are null when any call did not report them', () => {
+  const group = {
+    calls: { total: 3, succeeded: 3, failed: 0 },
+    tokens: {
+      input: { sum: 10, reportedCalls: 2, unreportedCalls: 1 },
+      output: { sum: 5, reportedCalls: 3, unreportedCalls: 0 },
+      cacheRead: { sum: null, reportedCalls: 0, unreportedCalls: 3 },
+      cacheWrite: { sum: null, reportedCalls: 0, unreportedCalls: 3 },
+      reasoning: { sum: null, reportedCalls: 0, unreportedCalls: 3 },
+    },
+    cost: { entries: [], unknownCostCalls: 3 },
+    firstAt: 1,
+    lastAt: 2,
+  };
+  const figures = toUsageFigures(group, { costSource: 'provider-reported' });
+  assert.equal(figures.inputTokens, null);
+  assert.equal(figures.outputTokens, 5);
+  assert.equal(figures.totalTokens, null, 'totalTokens is null when either side is null');
 });

@@ -349,6 +349,7 @@ data: {"schemaVersion":"1.0","reason":"cursor_unknown","cursor":"evt_gone","miss
 `reason` is `cursor_unknown`, `gap_too_large` or `buffer_overflow`. `missed` is the event count, or `null` only when the server cannot know it (an unknown cursor); it is never `0` for an unknown cursor. On any `resync`, a client must reload its state from `snapshotPath` (`GET /api/v1/snapshot`): apply `snapshot.events` oldest first to rebuild the office, but take usage figures (`totalTokens`, `totalCost`, `agents[].tokens*`) from the snapshot's own aggregates, never from re-adding those events, since the snapshot carries only the newest 100. The [library guide](library.md#reconnect-replay-and-resync-issue-54) documents the `connectEventStream` helper that implements this (`lastEventId`, `onResync`, `onReplayed`, the `resyncing` status and `resyncCount()`).
 
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
+- `GET /api/v1/usage/rollup`: Grouped sums over the usage ledger for an audit question such as "how much did agent X spend with model Y this week" (issue #66), with a time range, a time basis (`received`/`occurred`), up to 3 dimensions (`agent`, `model`, `provider`, `session`, `task`, `day`, `user`, `tag`) and a `coverage` block that says when the answer may be incomplete. [Full reference](#usage-rollup-get-apiv1usagerollup-issue-66).
 - `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
 
 #### Usage calls: `GET /api/v1/usage/calls` (issue #67)
@@ -970,6 +971,74 @@ Every figure traces back to its calls: `GET /api/v1/events?type=llm.usage&agentI
 
 A token or cost figure means the same thing wherever it is read: the memory store, the SQLite store across a restart, the portal and the embeddable library's `summarizeUsage` are all checked against one hand-worked fixture in CI (`npm run test:golden`, issue #62). See [`tests/fixtures/reconciliation/README.md`](../tests/fixtures/reconciliation/README.md) for the fixture itself, including the cases it covers (mixed currencies, a missing cost, a missing currency, missing cache tokens, a duplicate id, a conflicting duplicate, a repeated `requestId`, and a failed call) and what is deferred to a follow-up (the HTTP routes, webhook HMAC signing, the `PATCH` rejection path and memory eviction).
 
+### Usage rollup (`GET /api/v1/usage/rollup`, issue #66)
+
+`GET /api/v1/usage` always groups by agent and by `(provider, model)`, with no time control. The rollup endpoint answers an audit question such as "how much did agent X spend with model Y this week": it groups the usage ledger (issue #65) by up to 3 dimensions, over an explicit time range and time basis, and returns sums an auditor can trust. It is read only, mounted under `/api/v1` (same rate limit and token requirement as every other route there, open when no token is configured), and always answers `Cache-Control: no-store`.
+
+```http
+GET /api/v1/usage/rollup?groupBy=agent,model&from=2026-10-05T00:00:00Z&to=2026-10-12T00:00:00Z&provider=anthropic
+Authorization: Bearer <token>
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `groupBy` | comma-separated, 1 to 3 of `agent`, `model`, `provider`, `session`, `task`, `day`, `user`, `tag` | required | A repeated `groupBy` is flattened into the same list. `model` alone does not separate same-named models from different providers; use `provider,model` for that. |
+| `from` / `to` | epoch ms, `YYYY-MM-DD` (UTC midnight), or ISO 8601 with `Z`/an explicit offset | open | `[from, to)`: `from` inclusive, `to` exclusive. A date-time with no offset is rejected as ambiguous. |
+| `timeBasis` | `received` \| `occurred` | `received` | `received` is the ledger's server receive time; client clocks are not trusted for an audit. `occurred` is the client event `timestamp`. Drives the filter, the `day` buckets, and `firstAt`/`lastAt`. |
+| `utcOffsetMinutes` | integer, -720..840 | `0` | A fixed offset for `day` buckets, no IANA zone and no DST. |
+| `agentId`, `model`, `provider`, `sessionId`, `taskId`, `runtimeId`, `userId`, `tag`, `status`, `costSource`, `currency` | repeatable | none | Same param repeated is OR, different params are AND. Exact match, never split on commas. `currency=none` matches rows with no currency. `status` takes the ledger's own values (`ok`, or an `llm.failed` error kind). |
+| `asOfSeq` | integer >= 1 | current end of ledger | Only rows with ledger `seq <= asOfSeq`, so a figure can be reproduced later (barring retention or memory-mode eviction; see `coverage` below). |
+| `sort` | `key` \| `calls` | `key` | `key` is ascending by each group key (UTF-8 byte order, `null` last); `calls` is `calls.total` descending, tied by key ascending. Cost is never a sort key: it is not comparable across currencies. |
+| `limit` | 1..10000 | 1000 | Maximum groups returned; `truncated` and `groupCount` say when there were more. |
+
+Example response:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "query": { "groupBy": ["agent", "model"], "timeBasis": "received", "from": 1791158400000, "to": 1791763200000, "utcOffsetMinutes": 0, "filters": { "provider": ["anthropic"] }, "asOfSeq": null, "sort": "key", "limit": 1000 },
+  "asOf": { "ledgerSeq": 184213, "lastRowReceivedAt": 1791460181233, "generatedAt": 1791460200000 },
+  "coverage": { "storage": "sqlite", "complete": true, "droppedRows": 0, "purgedThrough": null, "backfilledRows": 0, "legacyContractRows": 0 },
+  "groupsAreAdditive": true,
+  "groupCount": 1,
+  "truncated": false,
+  "groups": [
+    {
+      "key": { "agent": "researcher", "model": "claude-sonnet-4-5" },
+      "calls": { "total": 412, "succeeded": 405, "failed": 7 },
+      "tokens": {
+        "input": { "sum": 1830211, "reportedCalls": 405, "unreportedCalls": 7 },
+        "output": { "sum": 210933, "reportedCalls": 405, "unreportedCalls": 7 },
+        "cacheRead": { "sum": 902112, "reportedCalls": 380, "unreportedCalls": 32 },
+        "cacheWrite": { "sum": 120400, "reportedCalls": 380, "unreportedCalls": 32 },
+        "reasoning": { "sum": null, "reportedCalls": 0, "unreportedCalls": 412 }
+      },
+      "cost": { "entries": [{ "currency": "USD", "costSource": "provider-reported", "sum": 14.482113, "calls": 380 }], "unknownCostCalls": 14 },
+      "firstAt": 1791177102000,
+      "lastAt": 1791460181233
+    }
+  ],
+  "totals": { "...": "same shape as a group, without key/bucketStart/bucketEnd" }
+}
+```
+
+**Aggregation rules.** Everything here is normative, enforced identically by the memory and SQLite stores through one shared result shaper (`server/usage/rollup.ts`):
+
+- **Cost entries are keyed by `(currency, costSource)`.** Different currencies, or `provider-reported` vs `estimated` vs `unknown`, are never summed into one number; there is no currency conversion. A cost with no currency gets its own `currency: null` entry. A reported `0` is a real entry. A `null` cost adds to `unknownCostCalls` instead, never to a sum; `sum(entries[].calls) + unknownCostCalls === calls.total` for every group and for `totals`. Entries are ordered by currency ascending (`null` last), then `provider-reported`, `estimated`, `unknown`.
+- **Tokens** (`input`, `output`, `cacheRead`, `cacheWrite`, `reasoning`) sum only the non-null rows; `sum` is `null`, never `0`, when nobody reported that kind. `reportedCalls + unreportedCalls === calls.total` always holds.
+- **Calls.** `succeeded` counts `llm.usage` rows, `failed` counts `llm.failed` rows; finer failure reasons are a `status` filter, not an extra counter. No deduplication happens here: the ledger (issues #47/#48) already holds one row per call.
+- **No derived totals.** There is no "total tokens" or a single total cost: their meaning depends on the provider and the mix of currencies/cost sources. A caller that needs one number computes it itself, outside the embedded component.
+- **Group keys.** A row with no value for a dimension goes to a `null` group, never dropped, so group sums reconcile with `totals` (when `groupsAreAdditive` is `true` and `truncated` is `false`). `day` is a `YYYY-MM-DD` string on the selected time basis plus `utcOffsetMinutes`, never `null`; each `day` group also carries `bucketStart`/`bucketEnd` (epoch ms, `[bucketStart, bucketEnd)`, `bucketEnd = bucketStart + 86400000`).
+- **Tags are not additive.** A row with 2 tags is counted once per tag group (`groupsAreAdditive: false` whenever `groupBy` includes `tag`), and once in `totals`, which is always computed over distinct rows with no tag join.
+- **Truncation.** `groupCount` is the number of groups before `limit`; when `truncated` is `true`, group sums do not have to add up to `totals`, which always covers every matching row.
+- **Precision.** Costs are summed as IEEE 754 doubles of the stored per-row values and rounded only once, to 9 decimals, in the shared shaper; memory and SQLite agree within `1e-9` on realistic data.
+
+**`coverage`** says when the answer may be incomplete instead of returning a partial figure as if it were whole: `storage` is which store answered, `complete` is `false` when rows that could match the query may be gone (memory mode once its ledger cap drops rows, future retention purges reaching the query range), `droppedRows` is memory mode's own upper bound on rows it could not keep, `purgedThrough` is `null` until retention (issue #70) lands, and `backfilledRows`/`legacyContractRows` count matching rows that came from a pre-0.4.0 database (whose receive time is the original insert time).
+
+**Errors.** `400 { "error": "invalid_filter", "issues": [{ "path", "message" }] }` for an unknown dimension, more than 3 dimensions, a duplicate dimension, an unknown query parameter, `from >= to`, an unparsable or offset-less date, `limit`/`asOfSeq`/`utcOffsetMinutes` out of range, or more than 100 values in one filter. `401` comes from the usual token middleware.
+
+**Feeding the embedded library.** The TypeScript SDK's `usageRollup()` calls this endpoint (same `buildHeaders()`, token in the `Authorization` header, array filters sent as repeated params), and its `toUsageFigures(group, { costSource })` helper maps one group (or `totals`) to the library's own `UsageFigures` shape, returning `cost: null` whenever there is more than one cost entry, an entry of a different source than requested, or any unknown cost. See [Feeding `usage` from the server](library.md#feeding-usage-from-the-server-issue-66) in the library guide. The Python SDK's `usage_rollup()` calls the same endpoint with snake_case keyword filters. The library itself is unchanged: it still never sums, prices or estimates anything, and `showUsage` stays off until the host passes a `usage` prop.
+
 ---
 
 ## 🔄 8. Multi-Runtime & Session Tracking
@@ -1025,7 +1094,21 @@ reported `0` is stored as `0`, and a duplicate `(provider, requestId)` with diff
 retention (issue #70) can prune old events without touching their ledger rows. The first start of a 0.4.0 server
 backfills every event already stored (paged, with a summary log line); every later start runs the same pass to
 catch up on any gap, normally finding nothing to do. Full reference, including the legacy-contract rules and the
-memory-mode cap: [docs/usage-ledger.md](usage-ledger.md).
+memory-mode cap: [docs/usage-ledger.md](usage-ledger.md). Migration 7 (`usage-calls-indexes`, issue #67) adds the
+`(agent_id, seq)`/`(session_id, seq)`/`(trace_id, seq)`/`(request_id)` indexes [`GET
+/api/v1/usage/calls`](#usage-calls-get-apiv1usagecalls-issue-67) needs, plus `usage_ledger_meta` (the cursor
+"store epoch"). Migration 8 (`usage-rollup`, issue #66) adds `usage_ledger_tags` (one `(ledger_seq, tag)` row per
+tag, since `usage_ledger.tags` is a JSON array and cannot be indexed or grouped by in SQL) plus indexes on
+`model`, `task_id` and `user_id`, so [`GET /api/v1/usage/rollup`](#usage-rollup-get-apiv1usagerollup-issue-66) can
+filter and group on every dimension with a named index, never a bare table scan.
+
+**Memory-mode `coverage`.** `GET /api/v1/usage/rollup` never silently returns a partial figure. In memory mode,
+once the ledger reaches its cap (`AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS`), further rows are refused rather than
+evicting older ones, so the response's `coverage.complete` turns `false` and stays `false`, and
+`coverage.droppedRows` counts the refused rows (an upper bound, since a refused row's own attributes are never
+recorded). In SQLite mode `coverage.complete` is always `true` today: nothing prunes `usage_ledger` yet.
+`coverage.purgedThrough` stays `null` until retention (issue #70) lands; once it does, a query range reaching the
+highest purged `usage_cutoff` will also turn `complete` to `false`.
 
 ---
 

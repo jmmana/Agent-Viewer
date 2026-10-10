@@ -644,6 +644,34 @@ const usage = {
 - `cost` y `currency` se envían solo cuando el grupo tiene llamadas, `costUnknownCount` es `0` y `byCurrency` tiene una sola entrada (una moneda, un origen de costo). Si no, envía `cost: null`, que se muestra como "desconocido".
 - El grupo `agentId: null` (llamadas sin agente) no tiene clave en `byAgent`; solo cuenta en `total`. Las llamadas fallidas (`failed`) no forman parte de estas cifras.
 
+### Alimentar `usage` desde el servidor (issue #66)
+
+`GET /api/v1/usage/rollup` ([referencia completa](integration.md#usage-rollup-get-apiv1usagerollup-issue-66), en inglés) responde una pregunta más precisa que `GET /api/v1/usage`: un rango de tiempo, una base de tiempo y hasta 3 dimensiones de agrupación. El `toUsageFigures()` del SDK de TypeScript hace la misma traducción de "solo una cifra exacta se vuelve número" que `toFigures()` arriba, ya escrita para un grupo del rollup:
+
+```tsx
+import type { UsageFigures } from '@warlockcode/agent-viewer';
+import { toUsageFigures } from './sdk/typescript/index';
+
+const rollup = await viewer.usageRollup({
+  groupBy: ['agent'],
+  from: '2026-10-05T00:00:00Z',
+  to: '2026-10-12T00:00:00Z',
+});
+
+const usage = {
+  total: toUsageFigures(rollup.totals, { costSource: 'provider-reported' }),
+  byAgent: Object.fromEntries(
+    rollup.groups
+      .filter((group) => group.key.agent !== null)
+      .map((group) => [group.key.agent as string, toUsageFigures(group, { costSource: 'provider-reported' })]),
+  ),
+};
+
+<AgentOffice events={events} showUsage usage={usage} />
+```
+
+`toUsageFigures(group, { costSource })` devuelve `cost` como número solo cuando el grupo tiene exactamente una entrada de costo, esa entrada tiene el origen (`costSource`) que pediste y `unknownCostCalls` es `0`; dos monedas, una mezcla de reportado/estimado o cualquier costo desconocido dan `cost: null`. `inputTokens`/`outputTokens` son `null` salvo que toda llamada del grupo haya reportado ese tipo, y `totalTokens` es su suma (sin tokens de cache ni de razonamiento) solo cuando ambos se conocen. Este helper corre en tu backend anfitrión, junto a la llamada del SDK: el componente sigue mostrando solo el `UsageFigures` que le pasas, importado aquí solo como tipo, nunca calculado por `@warlockcode/agent-viewer`.
+
 ## Repetición
 
 `useEventReplay` reproduce una ejecución grabada a su propio ritmo y devuelve el tramo visible, listo para `<AgentOffice events>`. Solo revela eventos; nunca crea ninguno. `ReplayControls` es una barra opcional para el hook: reproducir y pausar, volver al inicio, una barra de posición y botones de velocidad.

@@ -25,6 +25,22 @@ _UNSTATED_COST_SOURCE_WARNING = (
     'Pass cost_source="provider-reported" or "estimated" to state where the cost comes from.'
 )
 
+# snake_case kwarg -> camelCase query param for AgentViewer.usage_rollup() (issue #66). Mirrors the server's
+# own parseUsageFilters().
+_ROLLUP_FILTER_QUERY_NAMES = {
+    "agent_id": "agentId",
+    "model": "model",
+    "provider": "provider",
+    "session_id": "sessionId",
+    "task_id": "taskId",
+    "runtime_id": "runtimeId",
+    "user_id": "userId",
+    "tag": "tag",
+    "status": "status",
+    "cost_source": "costSource",
+    "currency": "currency",
+}
+
 # -------------------------------------------------------------
 # Usage correlation block (issue #64): traceId, parentId, toolCallId, meetingId, userId, tags.
 #
@@ -721,6 +737,55 @@ class AgentViewer:
                     "Agent Viewer usage calls walk did not advance: the server returned the same cursor twice in a row."
                 )
             cursor = next_cursor
+
+    def usage_rollup(
+        self,
+        group_by: Union[str, Sequence[str]],
+        *,
+        from_: Optional[Union[int, str]] = None,
+        to: Optional[Union[int, str]] = None,
+        time_basis: str = "received",
+        utc_offset_minutes: int = 0,
+        sort: str = "key",
+        limit: int = 1000,
+        as_of_seq: Optional[int] = None,
+        **filters: Union[str, Sequence[str]],
+    ) -> Dict[str, Any]:
+        """Fetch grouped sums over the usage ledger from ``GET /api/v1/usage/rollup`` (issue #66).
+
+        ``group_by`` is a dimension name or a sequence of 1 to 3 (``agent``, ``model``, ``provider``,
+        ``session``, ``task``, ``day``, ``user``, ``tag``). Filter kwargs use snake_case (``agent_id``,
+        ``session_id``, ``task_id``, ``runtime_id``, ``user_id``, ``cost_source``, and ``model``, ``provider``,
+        ``tag``, ``status``, ``currency``); each accepts a single string or a sequence for a repeated filter
+        (same param repeated means OR). An unknown keyword argument raises ``TypeError`` instead of being sent.
+        The token is always sent in the ``Authorization`` header, never in the query string. Uses the same
+        ``_get_with_retry`` as :meth:`list_calls` (issue #67): raises :class:`AgentViewerError` (with
+        ``status_code`` and ``issues``) immediately on 400/401/410, retries 429 and 5xx with backoff.
+        """
+        unknown = sorted(set(filters) - set(_ROLLUP_FILTER_QUERY_NAMES))
+        if unknown:
+            raise TypeError(f"usage_rollup() got unexpected keyword argument(s): {', '.join(unknown)}")
+
+        group_by_list = [group_by] if isinstance(group_by, str) else list(group_by)
+        params: List[tuple] = [("groupBy", ",".join(group_by_list))]
+        if from_ is not None:
+            params.append(("from", str(from_)))
+        if to is not None:
+            params.append(("to", str(to)))
+        params.append(("timeBasis", time_basis))
+        params.append(("utcOffsetMinutes", str(utc_offset_minutes)))
+        params.append(("sort", sort))
+        params.append(("limit", str(limit)))
+        if as_of_seq is not None:
+            params.append(("asOfSeq", str(as_of_seq)))
+        for key, value in filters.items():
+            query_name = _ROLLUP_FILTER_QUERY_NAMES[key]
+            values = [value] if isinstance(value, str) else list(value)
+            for item in values:
+                params.append((query_name, item))
+
+        query_string = urllib.parse.urlencode(params)
+        return self._get_with_retry(f"/api/v1/usage/rollup?{query_string}")
 
     # Legacy method compatibility
     def register_agent(

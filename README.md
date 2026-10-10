@@ -484,7 +484,7 @@ analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client. Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
+The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client. Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy. `viewer.usage_rollup(["agent", "model"], agent_id="analyst")` calls `GET /api/v1/usage/rollup` for grouped, audit-ready sums ([details](docs/integration.md#usage-rollup-get-apiv1usagerollup-issue-66)).
 
 Read the calls behind a figure with `list_calls()` (one page) or `iter_calls()` (follows the cursor for you), both over `GET /api/v1/usage/calls` (issue #67):
 
@@ -509,7 +509,7 @@ await builder.message('Handler is ready for review.', 'Nova');
 await builder.done('Pull request opened');
 ```
 
-Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md). Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy.
+Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md). Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy. `viewer.usageRollup({ groupBy: ['agent', 'model'], agentId: 'builder' })` calls `GET /api/v1/usage/rollup` for grouped, audit-ready sums, and `toUsageFigures()` maps one group straight into the library's `usage` prop ([details](docs/integration.md#usage-rollup-get-apiv1usagerollup-issue-66)).
 
 Read the calls behind a figure with `listCalls()` (one page) or `iterateCalls()` (follows the cursor for you), both over `GET /api/v1/usage/calls` (issue #67):
 
@@ -622,6 +622,7 @@ flowchart LR
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Authenticates with `Authorization: Bearer <token>` or a `?ticket=` from `POST /api/v1/stream-tickets`; a `token` query parameter never authenticates. On reconnect, replays every event missed since `Last-Event-ID` in full, up to `AGENT_VIEWER_SSE_REPLAY_MAX` (default 10,000), or sends an explicit `resync` frame instead, never a partial replay; the connection stays open either way. Heartbeat every 15 s. |
 | `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
 | `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
+| `GET` | `/api/v1/usage/rollup` | Grouped sums over the usage ledger for an audit question such as "how much did agent X spend with model Y this week": a time range, `received`/`occurred` time basis, up to 3 dimensions, never a derived total, and a `coverage` block that says when the answer may be incomplete. [Details](docs/integration.md#usage-rollup-get-apiv1usagerollup-issue-66). |
 | `GET` | `/api/v1/usage/ledger/status` | Usage ledger health: row counts by origin (`live`/`backfill`), legacy rows, skip counts and the oldest/newest server receive time. Never a sum of tokens or cost. [Details](docs/usage-ledger.md). |
 | `GET` | `/api/v1/usage/calls` | Read-only, metadata-only listing of usage ledger rows (issue #67), with the same filters as `GET /api/v1/usage` and a stable, opaque cursor that can walk the full history in either direction. Never returns prompt, completion, message, tool or provider error text. [Details](docs/integration.md#usage-calls-get-apiv1usagecalls-issue-67). |
 | `GET` | `/api/v1/admin/retention` | Retention status: counts, coverage (`purgedBefore`, lifetime `deletedTotal`) and recent purge runs for events and the usage ledger. Read-only; no endpoint triggers a purge. [Details](docs/retention.md). |

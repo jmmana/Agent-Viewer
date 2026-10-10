@@ -364,15 +364,28 @@ export function dbRowToLedgerRowInput(r: any): LedgerRowInput {
   };
 }
 
+/** True once migration `usage-rollup` (issue #66) has run. Checked once per backfill/catch-up pass: migration
+ * `usage-ledger` (#65) itself calls `runUsageLedgerBackfill` from inside its own `up()`, before that later
+ * migration (and its table) exists, so tag rows cannot be written yet on that very first pass. Migration
+ * `usage-rollup`'s own backfill step (`INSERT OR IGNORE ... SELECT ... FROM usage_ledger, json_each(tags)`) covers
+ * that gap once it runs; every later catch-up pass (on every server start) finds the table and keeps it current. */
+function usageLedgerTagsTableExists(db: DatabaseSync): boolean {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_ledger_tags'").get());
+}
+
 /**
  * Inserts one ledger decision for an already-computed row: the request key (when complete) is checked first,
  * exactly like the live path (`server/store.ts`), so a backfill or a catch-up pass reaches the same duplicate /
  * conflict decision a concurrent live write would. Idempotent: the row insert and the skip insert both use
  * `ON CONFLICT(event_id) DO NOTHING`, so calling this twice for the same event id is a no-op the second time.
+ * When `stmts.insertTag` is set (issue #66: `usage_ledger_tags` exists), one tag row per tag is written in the
+ * same step, keyed by the ledger row's own `seq` (the SQLite `rowid` alias, read back from `run()`), but only
+ * when the ledger insert actually happened (`changes > 0`): a conflict that silently no-ops must not write tags
+ * for a row it did not insert.
  */
 function insertLedgerDecision(
   db: DatabaseSync,
-  stmts: { insertLedger: any; insertSkip: any; lookupByRequestKey: any },
+  stmts: { insertLedger: any; insertSkip: any; lookupByRequestKey: any; insertTag: any | null },
   row: LedgerRowInput,
   now: number
 ): 'inserted' | 'duplicate' | 'conflict' {
@@ -386,7 +399,11 @@ function insertLedgerDecision(
       return reason;
     }
   }
-  stmts.insertLedger.run(...ledgerRowParams(row));
+  const result = stmts.insertLedger.run(...ledgerRowParams(row));
+  if (stmts.insertTag && Number(result.changes) > 0 && row.tags.length > 0) {
+    const seq = Number(result.lastInsertRowid);
+    for (const tag of row.tags) stmts.insertTag.run(seq, tag);
+  }
   return 'inserted';
 }
 
@@ -443,6 +460,9 @@ export function runUsageLedgerBackfill(
       'INSERT INTO usage_ledger_skips (event_id, reason, kept_event_id, detected_at, origin) VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id) DO NOTHING'
     ),
     lookupByRequestKey: db.prepare('SELECT * FROM usage_ledger WHERE provider = ? AND request_id = ? LIMIT 1'),
+    insertTag: usageLedgerTagsTableExists(db)
+      ? db.prepare('INSERT OR IGNORE INTO usage_ledger_tags (ledger_seq, tag) VALUES (?, ?)')
+      : null,
   };
 
   let lastRowid = 0;

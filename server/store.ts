@@ -31,6 +31,8 @@ import {
 } from './usageLedger';
 import { buildListCallsQuery, listCallsInMemory, sqliteRowToCallRecord, type CallsPage, type CallsQuery } from './usage/calls';
 import { type UsageSummary } from './usageAggregates';
+import { computeMemoryRollup, computeSqliteRollup } from './usage/rollup';
+import type { RollupQuery, UsageRollupResponse } from './usage/types';
 import {
   applyEvent,
   createServerState,
@@ -518,6 +520,9 @@ export interface EventStore {
   /** A persistent random id for SQLite (survives a restart, issue #67's cursor "store epoch"), a new one every
    * process for memory mode. A cursor whose `e` differs from this is a 410 `cursor_expired`. */
   usageLedgerEpoch(): string;
+  /** Grouped sums over the usage ledger (issue #66): `GET /api/v1/usage/rollup`. Both stores go through the same
+   * shaper (`server/usage/rollup.ts`), so rounding, key ordering and `day` buckets never diverge. */
+  rollup(query: RollupQuery): Promise<UsageRollupResponse>;
 
   /** The original event id already stored under this `(provider, requestId)` key, normalizing both arguments. */
   findByRequest(provider: string, requestId: string): Promise<{ id: string } | null>;
@@ -830,6 +835,11 @@ export class MemoryEventStore implements EventStore {
   /** `false` once `usageLedgerMaxRows` has dropped at least one ledger row or skip (issue #53's rule, applied to
    * the ledger: never lost silently, always reported). */
   private ledgerComplete = true;
+  /** Count of `llm.usage`/`llm.failed` events that reached a ledger decision but were refused a row because the
+   * ledger was already at `usageLedgerMaxRows` (issue #66's `coverage.droppedRows`). This store never evicts an
+   * existing row to make room (unlike the retained event window): once full, it refuses new rows instead, so a
+   * "dropped" row here is one that was never admitted, not one later removed. */
+  private ledgerDroppedRows = 0;
   private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
   /** Agents, runtimes, sessions, tasks, meetings and usage: everything `applyEvent` (`serverState.ts`) owns. */
   private state: ServerState = createServerState();
@@ -1038,6 +1048,7 @@ export class MemoryEventStore implements EventStore {
 
     if (this.ledger.length >= this.usageLedgerMaxRows) {
       this.ledgerComplete = false;
+      this.ledgerDroppedRows++;
       return false;
     }
     const row: UsageLedgerRow = { ...ledgerRow, seq: this.ledgerSeq++ };
@@ -1104,6 +1115,15 @@ export class MemoryEventStore implements EventStore {
    * process must never be mistaken for one from this one. */
   usageLedgerEpoch(): string {
     return this.ledgerEpoch;
+  }
+
+  async rollup(query: RollupQuery): Promise<UsageRollupResponse> {
+    return computeMemoryRollup({
+      ledger: this.ledger,
+      query,
+      now: this.now,
+      coverage: { droppedRows: this.ledgerDroppedRows, complete: this.ledgerComplete },
+    });
   }
 
   /** One warning, the first time the dedup index crosses the documented memory-cost threshold. */
@@ -2186,7 +2206,19 @@ export class SQLiteEventStore implements EventStore {
         ledgerRow.userId,
         JSON.stringify(ledgerRow.tags)
       );
-    return Number((insertResult as { changes?: number | bigint }).changes ?? 0) === 0;
+
+    const inserted = Number((insertResult as { changes?: number | bigint }).changes ?? 0) > 0;
+
+    // One `usage_ledger_tags` row per tag, in the same transaction as the ledger row (issue #66), keyed by the
+    // row's own `seq` (the table's rowid alias, read back from `run()`). Skipped when the insert itself was a
+    // no-op (a same-process race on `event_id`; rare, since the live path already checked duplicates above).
+    if (inserted && ledgerRow.tags.length > 0) {
+      const seq = Number((insertResult as { lastInsertRowid: number | bigint }).lastInsertRowid);
+      const insertTag = this.db.prepare('INSERT OR IGNORE INTO usage_ledger_tags (ledger_seq, tag) VALUES (?, ?)');
+      for (const tag of ledgerRow.tags) insertTag.run(seq, tag);
+    }
+
+    return !inserted;
   }
 
   async usageLedgerStatus(): Promise<UsageLedgerStatus> {
@@ -2251,6 +2283,10 @@ export class SQLiteEventStore implements EventStore {
 
   usageLedgerEpoch(): string {
     return this.ledgerEpoch;
+  }
+
+  async rollup(query: RollupQuery): Promise<UsageRollupResponse> {
+    return computeSqliteRollup(this.db, query);
   }
 
   /** Counters and log lines, applied only once the outcome is final (after the commit for a batch). */

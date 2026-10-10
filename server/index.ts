@@ -26,7 +26,7 @@ import { parseRetentionConfig, startRetention, usageRetentionWarning, type Reten
 import { readPackageVersion } from './version';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
-import type { UsageFilters } from './usage/types';
+import type { RollupQuery, UsageFilters } from './usage/types';
 import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from '../src/integrations/otlp/claudeCodeLogs';
 import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
 import { createStreamTicketStore } from './stream-tickets';
@@ -39,6 +39,18 @@ import {
   encodeStatus,
 } from './otlp/otlpProtobuf';
 import { parseRollupQuery, UsageFilterError } from './usage/rollup';
+import {
+  buildExportFilename,
+  CSV_HEADER,
+  EXPORT_SCHEMA,
+  ExportQueryError,
+  formatCsvRow,
+  formatJsonlRow,
+  parseExportQuery,
+  parseExportTotalsQuery,
+  shapeExportTotals,
+  toExportCallRecord,
+} from './usage/export';
 
 /**
  * Set by the `agent-viewer` CLI before it imports this module. The CLI configures the server through its own
@@ -66,6 +78,17 @@ app.set('query parser', 'extended');
 const port = Number(process.env.PORT ?? 8787);
 const maxBatchSize = Number(process.env.AGENT_VIEWER_MAX_BATCH_SIZE ?? 100);
 const rateLimitMax = Number(process.env.AGENT_VIEWER_RATE_LIMIT ?? 1000);
+/** Above this many matching rows, `GET /api/v1/usage/export` answers `422 export_too_large` before streaming
+ * anything (issue #69): an export is never silently truncated. Read per request, like `getApiToken()`, so it can
+ * change without a restart (and so tests can flip it with `process.env` directly). */
+function getExportMaxRows(): number {
+  return Number(process.env.AGENT_VIEWER_EXPORT_MAX_ROWS ?? 1_000_000);
+}
+/** Concurrent `GET /api/v1/usage/export` requests this process serves at once (issue #69). The totals sidecar
+ * never counts against this cap (it is a fast, single read, not a long-running stream). */
+function getExportConcurrencyMax(): number {
+  return Number(process.env.AGENT_VIEWER_EXPORT_CONCURRENCY ?? 2);
+}
 const rateLimitWindowMs = 60 * 1000;
 /** Upper bound of tracked client IPs before expired windows are swept. */
 const rateLimitMaxTrackedClients = 10_000;
@@ -1391,6 +1414,204 @@ app.get('/api/v1/usage/rollup', async (req, res) => {
     throw error;
   }
   res.json(await store.rollup(query));
+});
+
+// -------------------------------------------------------------
+// Usage export (issue #69): CSV/JSONL streaming export of the usage ledger, redacted, plus its totals sidecar.
+// Both routes sit under /api/v1, so they already get the rate limiter, the query-token rejection, the no-token
+// loopback/Host/Origin guard and the Bearer auth every other /api/v1 route gets (issue #71's `openModeGuard`
+// already implements, generically, exactly the access rule section 4 of #69 asks the export routes to add: no
+// token configured -> loopback peer, loopback Host header, no cross-origin Origin, else 403). The one guard #69
+// asks for that nothing upstream already provides is the per-process export concurrency cap, added here.
+// -------------------------------------------------------------
+
+/** Headers a cross-origin portal must be able to read (issue #69: today only Allow-Headers/Allow-Methods are
+ * exposed, `server/index.ts`'s CORS middleware above). Set directly on these two routes rather than widening the
+ * shared CORS middleware, which every other /api/v1 route would otherwise also start exposing these headers on. */
+const EXPORT_EXPOSE_HEADERS = [
+  'Content-Disposition',
+  'X-Agent-Viewer-Export-Schema',
+  'X-Agent-Viewer-Export-Id',
+  'X-Agent-Viewer-As-Of-Seq',
+  'X-Agent-Viewer-Row-Count',
+].join(', ');
+
+function exportQueryErrorResponse(res: express.Response, error: ExportQueryError): void {
+  if (error.code === 'invalid_format') {
+    res.status(400).json({ error: 'invalid_format' });
+    return;
+  }
+  if (error.code === 'unsupported_parameter') {
+    res.status(400).json({ error: 'unsupported_parameter', parameters: (error.detail as { parameters: string[] }).parameters });
+    return;
+  }
+  res.status(400).json({ error: 'invalid_filter', issues: (error.detail as { issues: { path: string; message: string }[] }).issues });
+}
+
+/**
+ * One rollup call (issue #66), grouped by a throwaway single dimension whose groups are never read, gives the
+ * export route and the totals sidecar everything they need from one read-consistent snapshot: the resolved,
+ * clamped `asOfSeq` (`asOf.ledgerSeq`), the pre-stream row count (`totals.calls.total`, used for both the
+ * `X-Agent-Viewer-Row-Count` header and the `422` guard) and the coverage signal (`complete`/`droppedRows`/
+ * `purgedThrough`) the totals sidecar's `complete`/`incompleteReason` come from. Calling `store.rollup()` instead
+ * of summing the matching rows a second time is exactly issue #69's own instruction for the totals sidecar.
+ */
+const EXPORT_SCOPE_GROUP_BY: RollupQuery['groupBy'] = ['agent'];
+
+async function resolveExportScope(filters: UsageFilters) {
+  return store.rollup({ groupBy: EXPORT_SCOPE_GROUP_BY, filters, sort: 'key', limit: 1 });
+}
+
+let activeExports = 0;
+
+app.get('/api/v1/usage/export', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Access-Control-Expose-Headers', EXPORT_EXPOSE_HEADERS);
+
+  let query: ReturnType<typeof parseExportQuery>;
+  try {
+    query = parseExportQuery(req.query as Record<string, unknown>);
+  } catch (error) {
+    if (error instanceof ExportQueryError) {
+      exportQueryErrorResponse(res, error);
+      return;
+    }
+    throw error;
+  }
+
+  if (activeExports >= getExportConcurrencyMax()) {
+    res.setHeader('Retry-After', '5');
+    res.status(429).json({ error: 'export_busy' });
+    return;
+  }
+
+  const scope = await resolveExportScope(query.filters);
+  const rowCount = scope.totals.calls.total;
+  const maxRows = getExportMaxRows();
+  if (rowCount > maxRows) {
+    res.status(422).json({ error: 'export_too_large', rowCount, maxRows });
+    return;
+  }
+
+  activeExports++;
+  let released = false;
+  const releaseSlot = () => {
+    if (!released) {
+      released = true;
+      activeExports--;
+    }
+  };
+  res.on('close', releaseSlot);
+  res.on('finish', releaseSlot);
+
+  try {
+    // 0 when the ledger is empty: `iterateExportRows` with asOfSeq 0 correctly yields no rows on both backends
+    // (real seqs start at 1), so this needs no special-cased empty-ledger branch below.
+    const asOfSeq = scope.asOf.ledgerSeq ?? 0;
+    const exportId = `exp_${crypto.randomUUID()}`;
+    const filename = buildExportFilename(query.filters, asOfSeq, query.format);
+
+    res.status(200);
+    res.setHeader('Content-Type', query.format === 'csv' ? 'text/csv; charset=utf-8' : 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Agent-Viewer-Export-Schema', EXPORT_SCHEMA);
+    res.setHeader('X-Agent-Viewer-Export-Id', exportId);
+    res.setHeader('X-Agent-Viewer-As-Of-Seq', String(asOfSeq));
+    res.setHeader('X-Agent-Viewer-Row-Count', String(rowCount));
+
+    let aborted = false;
+    req.on('close', () => {
+      aborted = true;
+    });
+
+    async function writeChunk(chunk: string): Promise<void> {
+      if (res.destroyed || res.writableEnded) return;
+      const canContinue = res.write(chunk);
+      if (!canContinue) {
+        await new Promise<void>((resolve) => res.once('drain', resolve));
+      }
+    }
+
+    if (query.bom && query.format === 'csv') await writeChunk('﻿');
+    if (query.format === 'csv') await writeChunk(`${CSV_HEADER}\r\n`);
+
+    const filtersAtAsOf: UsageFilters = { ...query.filters, asOfSeq };
+    let written = 0;
+    try {
+      for await (const row of store.iterateExportRows(filtersAtAsOf, asOfSeq)) {
+        if (aborted || res.destroyed) break;
+        const record = toExportCallRecord(row);
+        await writeChunk(query.format === 'csv' ? formatCsvRow(record) : `${formatJsonlRow(record)}\n`);
+        written++;
+      }
+    } catch (streamError) {
+      if (query.format === 'jsonl' && !res.destroyed && !res.writableEnded) {
+        try {
+          res.write('{"record":"error","code":"export_aborted"}\n');
+        } catch {
+          // The socket is already gone; destroying it below is enough.
+        }
+      }
+      console.error('[agent-viewer] usage export failed mid-stream', streamError);
+      res.destroy();
+      return;
+    }
+
+    // A client that disconnected mid-stream never gets a summary line: the socket is already closing, and
+    // writing to it now would either throw or silently vanish.
+    if (aborted || res.destroyed || res.writableEnded) return;
+
+    if (query.format === 'jsonl') {
+      const totals = shapeExportTotals(scope, query.filters);
+      const summary = {
+        record: 'summary' as const,
+        schema: EXPORT_SCHEMA,
+        exportId,
+        generatedAt: new Date().toISOString(),
+        asOfSeq,
+        afterSeq: query.filters.afterSeq,
+        filters: totals.filters,
+        rowCount: written,
+        complete: totals.complete,
+        ...(totals.incompleteReason ? { incompleteReason: totals.incompleteReason } : {}),
+        totals: { cost: totals.cost, tokens: totals.tokens, byStatus: totals.byStatus },
+      };
+      await writeChunk(`${JSON.stringify(summary)}\n`);
+    }
+    res.end();
+  } finally {
+    releaseSlot();
+  }
+});
+
+// Totals sidecar (issue #69): the per-currency reconciliation numbers CSV cannot carry as a footer row without
+// breaking `pandas.read_csv`/`COPY FROM`. Never counts against AGENT_VIEWER_EXPORT_CONCURRENCY: a single read
+// transaction, not a long-running stream.
+app.get('/api/v1/usage/export/totals', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Access-Control-Expose-Headers', EXPORT_EXPOSE_HEADERS);
+
+  let filters: UsageFilters;
+  try {
+    filters = parseExportTotalsQuery(req.query as Record<string, unknown>);
+  } catch (error) {
+    if (error instanceof ExportQueryError) {
+      exportQueryErrorResponse(res, error);
+      return;
+    }
+    throw error;
+  }
+
+  const scope = await resolveExportScope(filters);
+  const asOfSeq = scope.asOf.ledgerSeq ?? 0;
+  const totals = shapeExportTotals(scope, filters);
+
+  res.setHeader('X-Agent-Viewer-Export-Schema', EXPORT_SCHEMA);
+  res.setHeader('X-Agent-Viewer-As-Of-Seq', String(asOfSeq));
+  res.setHeader('X-Agent-Viewer-Row-Count', String(totals.rowCount));
+  res.json(totals);
 });
 
 // OTLP/HTTP logs receiver counters (issue #59). Per-process, reset on restart like store.ingestionCounters().

@@ -3,6 +3,8 @@ import { Agent, AgentStatus, PricingConfig, Task, ViewerEvent } from '../types/a
 import { OFFICE_ROOMS } from '../engine/officeModel';
 import { APP_MESSAGES, t, type Locale, type TranslationKey } from '../i18n';
 import { localizeDemoText } from '../content/demoScript';
+import type { LedgerConnection } from './modelOps/useModelOpsLedger';
+import { ToolSpendTooltip } from './usage/ToolSpendTooltip';
 import {
   X,
   Copy,
@@ -38,6 +40,8 @@ interface AgentDetailModalProps {
   onSendMessage: (agentId: string, message: string) => void;
   onUpdateStatus: (agentId: string, status: AgentStatus) => void;
   onOpenNewTaskForAgent?: (agent: Agent) => void;
+  /** `null` in demo mode: tool chip spend tooltips then render nothing extra. */
+  ledger: LedgerConnection | null;
 }
 
 type DetailTab = 'overview' | 'tasks' | 'metrics' | 'logs' | 'console';
@@ -71,6 +75,7 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
   onSendMessage,
   onUpdateStatus,
   onOpenNewTaskForAgent,
+  ledger,
 }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [copiedId, setCopiedId] = useState(false);
@@ -341,10 +346,12 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
             </div>
 
             {agent.currentTool && (
-              <div className="flex items-center gap-1.5 text-indigo-300 bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-800/40 font-mono text-[11px]">
-                <Terminal className="w-3.5 h-3.5 text-indigo-400" aria-hidden="true" />
-                <span>{agent.currentTool}</span>
-              </div>
+              <ToolSpendTooltip tool={agent.currentTool} agentId={agent.id} ledger={ledger} locale={locale}>
+                <div className="flex items-center gap-1.5 text-indigo-300 bg-indigo-950/40 px-2 py-0.5 rounded border border-indigo-800/40 font-mono text-[11px]">
+                  <Terminal className="w-3.5 h-3.5 text-indigo-400" aria-hidden="true" />
+                  <span>{agent.currentTool}</span>
+                </div>
+              </ToolSpendTooltip>
             )}
 
             {agent.speechBubble && (
@@ -595,12 +602,11 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-slate-400 text-[11px]">{t(locale, 'agentDetail.tools')}</span>
                       {activeTask.toolsUsed.map((tool) => (
-                        <span
-                          key={tool}
-                          className="bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-800 font-mono text-[11px]"
-                        >
-                          {tool}
-                        </span>
+                        <ToolSpendTooltip key={tool} tool={tool} agentId={agent.id} taskId={activeTask.id} ledger={ledger} locale={locale}>
+                          <span className="bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-800 font-mono text-[11px]">
+                            {tool}
+                          </span>
+                        </ToolSpendTooltip>
                       ))}
                     </div>
                   )}

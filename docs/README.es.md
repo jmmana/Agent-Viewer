@@ -82,7 +82,7 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 1. **Tu runtime manda.** Agent Viewer proyecta eventos; nunca decide qué está haciendo un agente. La animación jamás sobrescribe un estado de trabajo real (`IDLE`, `THINKING`, `CODING`...).
 2. **Solo lo observable.** Estados, nombres de herramientas, mensajes explícitos, reuniones y consumo reportado. La cadena de pensamiento privada nunca se pide ni se muestra.
 3. **Nada inventado en modo profesional.** La oficina integrada no tiene vida ambiental, ni frases inventadas, ni sonidos. El modo vitrina agrega vida de oficina simulada, y cada burbuja simulada lo dice (`SOCIAL · SIMULADO`).
-4. **Desconocido no es cero.** El componente nunca calcula, suma ni pone precio al consumo. Un costo que falta se muestra como "desconocido", nunca como `0`.
+4. **Desconocido no es cero.** El componente nunca calcula, suma ni pone precio al consumo. Un costo que falta se muestra como "desconocido", nunca como `0`. Las cifras de reuniones (`meetingUsage`) siguen exactamente la misma regla: vienen de tu host, nunca de los campos obsoletos `Meeting.tokensAccumulated`/`costAccumulated`.
 5. **Un buen invitado en tu app.** No inyecta estilos, no usa selectores globales ni `localStorage`, no registra atajos de teclado globales y no ejecuta nada al importarse. Dos oficinas en la misma página nunca comparten estado.
 6. **Desconocido no es cero, en ningún lado.** El servidor, el portal, la CLI y los SDK nunca guardan ni muestran una cifra desconocida como cero, y nunca suman monedas distintas. Semántica completa, campo por campo: [docs/usage-semantics.es.md](usage-semantics.es.md) ([english](../README.md)).
 
@@ -395,6 +395,12 @@ export function OficinaConConsumo({ events }: { events: readonly OfficeEventInpu
 ```
 
 Al hacer clic en un agente se abre un panel de solo lectura con sus llamadas (proveedor, modelo, tokens por tipo, id de solicitud, latencia, estado, origen del costo), tal como las reporta `agentCallDetails[agentId]`: la oficina nunca calcula, suma, cotiza ni ordena nada de esto, y `AgentCallDetail` no tiene ningún campo que pueda llevar un prompt, una respuesta ni ningún otro texto libre.
+
+¿Quieres responder "cuánto costó esta reunión"? Agrega `meetingUsage`, indexado por id de reunión (se muestra solo junto con `showUsage`; ver [Cifras de reuniones](library.es.md#cifras-de-reuniones)):
+
+```tsx
+<AgentOffice events={events} locale="es" showUsage usage={usage} meetingUsage={meetingUsage} />
+```
 
 </details>
 

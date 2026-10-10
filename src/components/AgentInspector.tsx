@@ -2,6 +2,8 @@ import React, { useId, useState } from 'react';
 import { Agent, AgentStatus, ViewerEvent } from '../types/agent';
 import { t, type Locale, type TranslationKey } from '../i18n';
 import { localizeDemoText } from '../content/demoScript';
+import type { LedgerConnection } from './modelOps/useModelOpsLedger';
+import { ToolSpendTooltip } from './usage/ToolSpendTooltip';
 import {
   X,
   Send,
@@ -26,6 +28,8 @@ interface AgentInspectorProps {
   onOpenDetailModal?: (agentId: string) => void;
   events: ViewerEvent[];
   locale: Locale;
+  /** `null` in demo mode: the tool chip's spend tooltip then renders nothing extra. */
+  ledger: LedgerConnection | null;
 }
 
 /** Statuses the operator can set from the inspector select (option values stay raw). */
@@ -40,6 +44,7 @@ export const AgentInspector: React.FC<AgentInspectorProps> = ({
   onOpenDetailModal,
   events,
   locale,
+  ledger,
 }) => {
   const [instructionText, setInstructionText] = useState('');
   const statusSelectId = useId();
@@ -134,10 +139,12 @@ export const AgentInspector: React.FC<AgentInspectorProps> = ({
           </p>
 
           {agent.currentTool && (
-            <div className="flex items-center gap-2 text-indigo-300 bg-indigo-950/40 p-2 rounded border border-indigo-800/40 font-mono text-[11px]">
-              <Terminal className="w-3.5 h-3.5 shrink-0 text-indigo-400" aria-hidden="true" />
-              <span className="truncate">{agent.currentTool}</span>
-            </div>
+            <ToolSpendTooltip tool={agent.currentTool} agentId={agent.id} ledger={ledger} locale={locale}>
+              <div className="flex items-center gap-2 text-indigo-300 bg-indigo-950/40 p-2 rounded border border-indigo-800/40 font-mono text-[11px]">
+                <Terminal className="w-3.5 h-3.5 shrink-0 text-indigo-400" aria-hidden="true" />
+                <span className="truncate">{agent.currentTool}</span>
+              </div>
+            </ToolSpendTooltip>
           )}
         </div>
 

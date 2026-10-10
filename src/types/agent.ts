@@ -178,7 +178,11 @@ export interface Meeting {
   status: 'SCHEDULED' | 'ACTIVE' | 'CONCLUDED';
   startedAt: number;
   endedAt?: number;
+  /** @deprecated Never written in live mode (always `0`); not a usage figure. Use the `meetingUsage` host prop
+   * (`src/lib/usage.ts`, issue #81) or the server's usage rollup grouped by meeting (issue #80).
+   * Removing this field is a breaking change, deferred to 1.0. */
   tokensAccumulated: number;
+  /** @deprecated See `tokensAccumulated`. */
   costAccumulated: number;
   agenda: string[];
   decisions: string[];

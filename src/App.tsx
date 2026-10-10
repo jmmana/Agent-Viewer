@@ -34,6 +34,7 @@ import { OverflowFloorView } from './components/OverflowFloorView';
 import { ModelOpsModal } from './components/ModelOpsModal';
 import { AgentDetailModal } from './components/AgentDetailModal';
 import { recordSimulatedCall, SimulatedCall } from './engine/modelOps';
+import type { LedgerConnection } from './components/modelOps/useModelOpsLedger';
 import { DoorOpen } from 'lucide-react';
 import { applyDocumentLocale, detectLocale, Locale, persistLocale, t, type TranslationKey } from './i18n';
 import { createOfficeTranslator } from './content/officeMessages';
@@ -133,9 +134,10 @@ export default function App() {
   // `sessionStorage`, see `liveConnection.ts`). `resolved` stays false until that finishes, so the modal shows a
   // loading state instead of ever reading a real 401 as "unauthorized" too early.
   const [liveTokenState, setLiveTokenState] = useState<{ resolved: boolean; token?: string }>({ resolved: false });
-  // Shared by Model Ops and the office spend badges/top-bar total (issue #78): one `LedgerConnection` so both
-  // read the same base URL and token instead of building their own.
-  const ledgerConnection = useMemo(
+  // Shared by Model Ops, the office spend badges/top-bar total (issue #78) and the Meetings panel / tool spend
+  // tooltips (issue #81): one `LedgerConnection` so every consumer reads the same base URL and token and agrees
+  // on "unavailable" vs "unauthorized".
+  const ledgerConnection = useMemo<LedgerConnection | null>(
     () => (apiBase ? { baseUrl: apiBase, token: liveTokenState.token, tokenResolved: liveTokenState.resolved } : null),
     [apiBase, liveTokenState.token, liveTokenState.resolved],
   );
@@ -917,6 +919,8 @@ export default function App() {
               setCurrentTab('office');
             }}
             locale={locale}
+            events={simState.events}
+            ledger={ledgerConnection}
           />
         )}
 
@@ -944,6 +948,7 @@ export default function App() {
             onOpenDetailModal={(id) => setDetailModalAgentId(id)}
             events={simState.events}
             locale={locale}
+            ledger={ledgerConnection}
           />
         )}
       </main>
@@ -1002,6 +1007,7 @@ export default function App() {
         onSendMessage={handleSendMessageToAgent}
         onUpdateStatus={handleUpdateAgentStatus}
         locale={locale}
+        ledger={ledgerConnection}
       />
     </div>
   );

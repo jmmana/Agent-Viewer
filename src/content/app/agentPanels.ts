@@ -77,6 +77,15 @@ const EN = {
   'agentDetail.progress': 'Progress:',
   'agentDetail.progressLabel': 'Task progress',
   'agentDetail.tools': 'Tools:',
+
+  // Tool spend tooltip (issue #81, real figures from the usage ledger, #80)
+  'tool.spend.calls': '{count} model calls',
+  'tool.spend.tokens': 'Tokens',
+  'tool.spend.cost': 'Cost',
+  'tool.spend.loading': 'Loading spend…',
+  'tool.spend.unavailable': 'Spend data is not available from this server.',
+  'tool.spend.none': 'No figures from the server',
+
   'agentDetail.noActiveTask': 'This agent has no active task assigned right now.',
   'agentDetail.noActiveTaskHint': 'You can assign a new mission or dispatch one from the task manager.',
   'agentDetail.assignTask': 'Assign New Task to {name}',
@@ -223,6 +232,14 @@ const ES: Record<keyof typeof EN, string> = {
   'agentDetail.progress': 'Progreso:',
   'agentDetail.progressLabel': 'Progreso de la tarea',
   'agentDetail.tools': 'Herramientas:',
+
+  'tool.spend.calls': '{count} llamadas al modelo',
+  'tool.spend.tokens': 'Tokens',
+  'tool.spend.cost': 'Costo',
+  'tool.spend.loading': 'Cargando el gasto…',
+  'tool.spend.unavailable': 'Este servidor no tiene datos de gasto disponibles.',
+  'tool.spend.none': 'Sin cifras del servidor',
+
   'agentDetail.noActiveTask': 'Este agente no tiene una tarea activa asignada en este momento.',
   'agentDetail.noActiveTaskHint': 'Puedes asignarle una nueva misión o despacharla desde el gestor de tareas.',
   'agentDetail.assignTask': 'Asignar nueva tarea a {name}',

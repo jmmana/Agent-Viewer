@@ -33,6 +33,24 @@ export interface OfficeUsage {
   byAgent?: Record<string, UsageFigures>;
 }
 
+/**
+ * Usage figures for one meeting, exactly as the host knows them (issue #81). Display only, like `UsageFigures`:
+ * the office never fetches, sums or prices any of this, and never reads `Meeting.tokensAccumulated` or
+ * `costAccumulated` (both `@deprecated`, always `0` in live mode; see `src/types/agent.ts`).
+ */
+export interface MeetingUsageFigures extends UsageFigures {
+  /** Model calls the host attributed to this meeting. */
+  calls?: number | null;
+  /** Of `calls`, how many had no cost. The cost figure is shown as partial when this is greater than `0`. */
+  callsWithoutCost?: number | null;
+  /** Model calls the host could not attribute to this meeting. Shown on its own line, never added to `calls`
+   * or to any other figure. `0` is a real count (shown as `0`); omit the key when the host does not know it. */
+  unattributedCalls?: number | null;
+}
+
+/** Keyed by meeting id. A key with no matching meeting in the current snapshot is ignored. */
+export type MeetingUsage = Record<string, MeetingUsageFigures>;
+
 export interface FormattedUsageItem {
   label: string;
   value: string;
@@ -111,6 +129,34 @@ export function formatUsage(figures: UsageFigures, locale: string | undefined, t
   }
   if (figures.failedCalls !== undefined) {
     items.push({ label: translate('usage.failedCalls'), value: formatTokens(figures.failedCalls, locale, translate) });
+  }
+  return items;
+}
+
+/**
+ * The rows a meeting's usage panel shows (issue #81): `formatUsage`'s own rows, plus `calls` (with a "partial
+ * cost" suffix when `callsWithoutCost` is greater than `0`) and `unattributedCalls`, shown when the host sends a
+ * number (including `0`), omitted entirely when the key is absent, and `usage.unknown` when it is `null`.
+ */
+export function formatMeetingUsage(
+  figures: MeetingUsageFigures,
+  locale: string | undefined,
+  translate: OfficeTranslate,
+): FormattedUsageItem[] {
+  const items = formatUsage(figures, locale, translate);
+  if (isNumber(figures.callsWithoutCost) && figures.callsWithoutCost > 0) {
+    const costLabel = translate('usage.cost');
+    const costItem = items.find((item) => item.label === costLabel);
+    if (costItem) costItem.value = `${costItem.value} (${translate('usage.partialCost', { count: figures.callsWithoutCost })})`;
+  }
+  if (figures.calls !== undefined) {
+    items.push({ label: translate('usage.calls'), value: formatTokens(figures.calls, locale, translate) });
+  }
+  if (figures.unattributedCalls !== undefined) {
+    items.push({
+      label: translate('usage.unattributedCalls'),
+      value: formatTokens(figures.unattributedCalls, locale, translate),
+    });
   }
   return items;
 }

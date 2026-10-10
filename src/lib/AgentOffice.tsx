@@ -18,7 +18,7 @@ import {
   type OfficeEventInput,
   type OfficeMode,
 } from './officeStore';
-import { formatUsage, formatUsageBadge, type OfficeUsage } from './usage';
+import { formatUsage, formatUsageBadge, formatMeetingUsage, type OfficeUsage, type MeetingUsage } from './usage';
 import type { AgentBadge } from '../engine/canvasRenderer';
 import { CallDetailsPanel } from './CallDetailsPanel';
 import type { AgentCallDetails } from './callDetails';
@@ -74,6 +74,13 @@ export interface AgentOfficeProps {
   /** Usage figures computed by the host. The office never computes them. */
   usage?: OfficeUsage;
   /**
+   * Per-meeting usage figures computed by the host, keyed by meeting id (issue #81). Shown only while
+   * `showUsage` is also `true`, next to the active meeting (or, once a meeting concludes and
+   * `activeMeetingId` clears, the shown meeting with the greatest `startedAt` that has an entry here). The
+   * office never sums, derives or reads `Meeting.tokensAccumulated`/`costAccumulated` from this.
+   */
+  meetingUsage?: MeetingUsage;
+  /**
    * Shows the per-call detail panel for the selected agent. Off by default: without it, `agentCallDetails`
    * is never read and none of its data reaches the DOM, even when an agent is selected.
    */
@@ -114,6 +121,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   showUsage = false,
   showUsageBadges = false,
   usage,
+  meetingUsage,
   showCallDetails = false,
   agentCallDetails,
   selectedAgentId,
@@ -163,6 +171,22 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   // `showUsage || showUsageBadges` feeds the same figures into the accessible list, so the visible badge
   // and the screen-reader text always agree, whichever prop turned the figures on.
   const usageInDom = showUsage || showUsageBadges;
+
+  // The meeting panel (issue #81): the active meeting if it has an entry, else the meeting with the greatest
+  // `startedAt` that has one (so a concluded meeting, whose `activeMeetingId` just cleared, still shows its
+  // figures). A `meetingUsage` key matching no meeting in this snapshot is never shown.
+  const shownMeeting = useMemo(() => {
+    if (!showUsage || !meetingUsage) return undefined;
+    const active = snapshot.activeMeetingId
+      ? snapshot.meetings.find((meeting) => meeting.id === snapshot.activeMeetingId)
+      : undefined;
+    if (active && meetingUsage[active.id]) return active;
+    const withEntry = snapshot.meetings.filter((meeting) => meetingUsage[meeting.id]);
+    if (withEntry.length === 0) return undefined;
+    return withEntry.reduce((latest, meeting) => (meeting.startedAt > latest.startedAt ? meeting : latest));
+  }, [showUsage, meetingUsage, snapshot.activeMeetingId, snapshot.meetings]);
+  const shownMeetingFigures = shownMeeting && meetingUsage ? meetingUsage[shownMeeting.id] : undefined;
+  const meetingUsageItems = shownMeetingFigures ? formatMeetingUsage(shownMeetingFigures, locale, translate) : [];
 
   const agentBadges = useMemo<ReadonlyMap<string, AgentBadge>>(() => {
     if (!showUsageBadges || !usage?.byAgent) return new Map();
@@ -228,15 +252,30 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           </div>
         )}
 
-        {usageItems.length > 0 && (
-          <dl className="av-usage" aria-label={translate('usage.title')}>
-            {usageItems.map((item) => (
-              <div key={item.label} className="av-usage-item">
-                <dt>{item.label}</dt>
-                <dd>{item.value}</dd>
-              </div>
-            ))}
-          </dl>
+        {(usageItems.length > 0 || meetingUsageItems.length > 0) && (
+          <div className="av-usage-stack">
+            {usageItems.length > 0 && (
+              <dl className="av-usage" aria-label={translate('usage.title')}>
+                {usageItems.map((item) => (
+                  <div key={item.label} className="av-usage-item">
+                    <dt>{item.label}</dt>
+                    <dd>{item.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            {meetingUsageItems.length > 0 && shownMeeting && (
+              <dl className="av-meeting-usage" aria-label={translate('usage.meeting')}>
+                <div className="av-meeting-usage-title">{shownMeeting.title}</div>
+                {meetingUsageItems.map((item) => (
+                  <div key={item.label} className="av-usage-item">
+                    <dt>{item.label}</dt>
+                    <dd>{item.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </div>
         )}
       </div>
 
@@ -273,6 +312,27 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           })}
         </ul>
       </div>
+
+      {showUsage && meetingUsage && (
+        <div className="av-agent-list">
+          <p id={`${listId}-meetings`} className="av-agent-list-title">{translate('usage.meetingsHeading')}</p>
+          <ul aria-labelledby={`${listId}-meetings`} aria-live="polite">
+            {snapshot.meetings
+              .filter((meeting) => meetingUsage[meeting.id])
+              .map((meeting) => {
+                const figures = meetingUsage[meeting.id];
+                const usageText = formatMeetingUsage(figures, locale, translate)
+                  .map((item) => `${item.label}: ${item.value}`)
+                  .join(', ');
+                return (
+                  <li key={meeting.id} data-meeting-id={meeting.id}>
+                    {translate('usage.meetingLine', { title: meeting.title, usage: usageText })}
+                  </li>
+                );
+              })}
+          </ul>
+        </div>
+      )}
 
       {selectedAgentForDetails && (
         <CallDetailsPanel

@@ -95,6 +95,24 @@ export function spendRows(totals: RollupTotals, locale: Locale, t2: ReturnType<t
   return rows;
 }
 
+/** Fallback rows when the server is reachable but has no group for this meeting (no ledger rows reference it
+ * yet): every figure is "unknown", never `0`, per the honesty rule (`README.md:719`). */
+export function unknownSpendRows(locale: Locale): SpendRow[] {
+  const unknown = t(locale, 'usage.unknown');
+  return [
+    { key: 'calls', label: callsLabel(locale), value: unknown },
+    { key: 'tokens.input', label: t(locale, 'meetings.spend.inputTokens'), value: unknown },
+    { key: 'tokens.output', label: t(locale, 'meetings.spend.outputTokens'), value: unknown },
+    { key: 'cost', label: t(locale, 'meetings.spend.cost'), value: unknown },
+  ];
+}
+
+function callsLabel(locale: Locale): string {
+  // `meetings.spend.calls` interpolates `{count}`; with no real count the label alone (without the number)
+  // reads oddly, so this strips the leading placeholder value instead of inventing a `0` count.
+  return t(locale, 'meetings.spend.calls', { count: '' }).replace(/^\s+/, '');
+}
+
 /** The portal never reads a server row's `meeting` title field as anything but the server's own value: a
  * `meetingId` with no recorded title still shows the id, never "unknown" (the link itself is known). */
 export function meetingGroupTitle(group: RollupGroup): string | null {

@@ -29,7 +29,7 @@ opts in to a window per table, independently, through `server/.env.example`. Thi
 ## The two windows never interact
 
 Nothing cascades between `events` and `usage_ledger`: there is no foreign key from one to the other, on purpose
-(see the comment at the top of `server/db/migrations/0007-retention.ts`), and the SQLite driver here enables
+(see the comment at the top of `server/db/migrations/0008-retention.ts`), and the SQLite driver here enables
 `PRAGMA foreign_keys`, so a foreign key would have made deleting an old event fail, or forced its ledger row to
 be deleted with it. Concretely:
 

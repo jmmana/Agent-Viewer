@@ -38,7 +38,9 @@ jobs:
 
       - name: No doc recommends the removed token/api_key query parameter (issue #71)
         run: |
-          if grep -RnE '\?(token|api_key)=' README.md docs .github/SECURITY.md; then
+          # docs/migrating-to-0.4.md (issue #75) is exempt: a migration guide has to show the removed,
+          # now-rejected pattern as "before" text so a reader can recognize it in their own scripts.
+          if grep -RnE '\?(token|api_key)=' --exclude=migrating-to-0.4.md README.md docs .github/SECURITY.md; then
             echo "Found a '?token=' or '?api_key=' reference: it stopped authenticating in issue #71. Describe the token query parameter in words instead of the literal pattern." >&2
             exit 1
           fi

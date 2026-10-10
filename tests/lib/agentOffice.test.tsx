@@ -5,6 +5,7 @@ import {
   AgentOffice,
   ReplayControls,
   useEventReplay,
+  type AgentCallDetails,
   type HostTranslate,
   type OfficeEventInput,
   type OfficeUsage,
@@ -167,6 +168,40 @@ describe('AgentOffice: no English text when Spanish is requested', () => {
     const leaks = findEnglishLeaks(collectVisibleTexts());
     expect(leaks.length).toBeGreaterThan(5);
     expect(leaks.join('\n')).toContain('office.agentsHeading');
+  });
+
+  const agentCallDetails: AgentCallDetails = {
+    planner: [
+      {
+        id: 'call-1',
+        provider: 'Anthropic',
+        model: 'claude-sonnet-4-5',
+        tokens: { input: 1200, output: 300, cacheRead: 500 },
+        requestId: 'req_01H8',
+        latencyMs: 980,
+        status: 'ok',
+        costSource: 'provider-reported',
+        cost: 0.01,
+        currency: 'USD',
+      },
+      { id: 'call-2', status: 'rate_limited', costSource: 'unknown' },
+    ],
+  };
+
+  it('renders the call details panel in Spanish without English catalog texts', () => {
+    render(
+      <AgentOffice
+        events={busyScene}
+        locale="es"
+        showCallDetails
+        agentCallDetails={agentCallDetails}
+        selectedAgentId="planner"
+      />,
+    );
+    expect(document.querySelector('.av-call-details')).not.toBeNull();
+    expect(document.querySelectorAll('.av-call-item')).toHaveLength(2);
+
+    expect(findEnglishLeaks(collectVisibleTexts())).toEqual([]);
   });
 });
 

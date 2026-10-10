@@ -7,6 +7,9 @@ import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
 import { useCrewBlink } from './useCrewBlink';
+import { useCrewWalk } from './useCrewWalk';
+import { preloadCrewWalk } from './crewWalkRegistry';
+import { builtInMessages } from '../content/officeMessages';
 import { constrainCrewPan, focusCrewFurniture, focusCrewPoint } from './crewViewport';
 import { crewRoomLink } from './crewNavigation';
 import {
@@ -120,6 +123,12 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
   }, [roomId, setCameraByRoom]);
   const patchCamera = (update: Partial<CrewCamera>) => updateCamera(current => ({ ...current, ...update }));
   const setView = (value: CrewView) => {
+    // Precarga solo el ángulo elegido para actores que ya reportan caminar.
+    if (!visualPreferences.reducedMotion && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const facings=new Set(presence.markers.filter(marker=>agents.some(agent=>agent.id===marker.id && agent.isWalking))
+        .map(marker=>crewSpriteView(marker,value)).filter((facing):facing is CrewView=>facing!==null));
+      for (const facing of facings) void preloadCrewWalk(facing).catch(()=>undefined);
+    }
     patchCamera({ view: value });
     const label = isEs
       ? { front: 'Frente', right: 'Derecha', back: 'Atrás', left: 'Izquierda' }
@@ -167,7 +176,16 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
   const directions = presence.markers.map(marker => crewSpriteView(marker, view)).filter((direction): direction is CrewView => direction !== null);
   const sprite = useCrewSprites(directions);
   const illustratedAgents = directions.filter(direction => !!sprite.images[direction]).length;
-  const blink = useCrewBlink(directions.includes('front') && !!sprite.images.front, roomId, visualPreferences.reducedMotion);
+  const walkingMarkers = useMemo(()=>presence.markers.filter(marker=>agents.some(agent=>agent.id===marker.id && agent.isWalking)),[presence.markers,agents]);
+  const blink = useCrewBlink(presence.markers.some(marker=>crewSpriteView(marker,view)==='front'
+    && !walkingMarkers.includes(marker)) && !!sprite.images.front, roomId, visualPreferences.reducedMotion);
+  const walkDirections = walkingMarkers.map(marker=>crewSpriteView(marker,view)).filter((direction): direction is CrewView=>direction!==null);
+  const walk = useCrewWalk(walkDirections,roomId,visualPreferences.reducedMotion);
+  const walks = useMemo(()=>Object.fromEntries(walkingMarkers.map(marker=>{
+    const direction=crewSpriteView(marker,view);
+    return [marker.id,direction ? walk.frames[direction] : undefined];
+  })),[walkingMarkers,view,walk.frames]);
+  const messages = builtInMessages(locale);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -180,8 +198,8 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, locale, highContrast: visualPreferences.highContrast });
-  }, [room, camera, locale, presence, sprite.images, blink, visualPreferences.highContrast]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, locale, highContrast: visualPreferences.highContrast });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, visualPreferences.highContrast]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -374,9 +392,10 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
       {isEs ? `Ilustraciones: ${illustratedAgents}.` : `Illustrations: ${illustratedAgents}.`}
       {!sprite.failed && directions.some(direction => !sprite.images[direction]) && (isEs ? ' Cargando ilustraciones…' : ' Loading illustrations…')}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
+      {walk.failed && <span data-testid="crew-walk-fallback"> {messages['crew.walkFallback']}</span>}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>
-      {isEs ? 'PROTOTIPO 2.5D: CEO con parpadeo frontal y poses estáticas en otras vistas; animación laboral pendiente.' : '2.5D PROTOTYPE: CEO with front-view blinking and static poses in other views; work animation pending.'}
+      {messages['crew.walkPrototype']}
     </p>
   </section>;
 }

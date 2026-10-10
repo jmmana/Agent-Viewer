@@ -86,7 +86,7 @@ Shared, cross-role values:
 
 ## 8. Animation and clip contract
 
-The only shipped clip, `ceo.blink.front.v1` (`src/crew/crewAnimation.ts`), is the reference implementation this section formalizes:
+The blink clip, `ceo.blink.front.v1` (`src/crew/crewAnimation.ts`), is the original reference implementation this section formalizes. The four prototype walk clips now use the versioned catalog and measured rectangles documented in [FRAME-PIPELINE.md](FRAME-PIPELINE.md); their generated atlas dimensions differ from the 256x352 static-pose canvas, while preserving its logical presentation contract:
 
 - **Clip id pattern**: `<role>.<clip-name>.<facing>.v<version>`.
 - A clip is an **atlas** (PNG/WebP RGBA) with an explicit `frames` array. Each frame has a pixel rectangle (`x, y, width, height`), a per-frame `anchor` measured in **atlas pixel space** (not the normalized 0..1 anchor used for a static pose) on that specific frame's opaque foot pixels (this corrects for generation drift between cells without touching pixels), and a `durationMs`. All of this is validated by `validateCrewClip()`: integer rectangles inside atlas bounds, positive duration, anchor inside the frame's own bounds.

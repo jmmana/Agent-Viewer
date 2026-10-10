@@ -86,7 +86,7 @@ Valores compartidos entre roles:
 
 ## 8. Contrato de animación y clips
 
-El único clip entregado, `ceo.blink.front.v1` (`src/crew/crewAnimation.ts`), es la implementación de referencia que esta sección formaliza:
+El parpadeo `ceo.blink.front.v1` (`src/crew/crewAnimation.ts`) es la implementación de referencia original que esta sección formaliza. Los cuatro clips prototipo de caminar ahora usan el catálogo versionado y los rectángulos medidos descritos en [FRAME-PIPELINE.es.md](FRAME-PIPELINE.es.md); sus atlas generados tienen dimensiones distintas del lienzo de pose estática 256x352, conservando su contrato lógico de presentación:
 
 - **Patrón de id de clip**: `<rol>.<nombre-del-clip>.<orientación>.v<versión>`.
 - Un clip es un **atlas** (PNG/WebP RGBA) con un arreglo explícito de `frames`. Cada cuadro tiene un rectángulo en píxeles (`x, y, width, height`), un `anchor` por cuadro medido en **espacio de píxeles del atlas** (no el anclaje normalizado 0..1 usado para una pose estática) sobre los píxeles opacos del pie de ese cuadro específico (esto compensa el desvío de generación entre celdas sin tocar los píxeles), y una `durationMs`. Todo esto lo valida `validateCrewClip()`: rectángulos enteros dentro de los límites del atlas, duración positiva, anclaje dentro de los límites propios del cuadro.

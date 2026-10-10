@@ -1,5 +1,9 @@
 # Clips originales de Crew
 
+## CEO: caminar en cuatro direcciones
+
+Catálogo canónico: `manifest.v1.json`, cuatro atlas `ceo-walk-{front,right,back}-v1.png` y `ceo-walk-left-v2.png`. Cada uno contiene ocho dibujos originales. Generados con image_gen integrado, sin retocar ni reescalar PNG; originales del banco preservados. Estado prototype, nunca aprobado automáticamente. Prompts exactos y estudio izquierdo descartado: `../origins/walk-117/`. Procedencia, hashes y recortes reales figuran en el catálogo. Ver [contrato e importador](../../../docs/crew/FRAME-PIPELINE.es.md) y [evidencia runtime](../../../docs/crew/evidence/walk-117/).
+
 ## CEO: parpadeo frontal v1
 
 Atlas: `ceo-blink-front-v1.png`, 1070 × 1470, RGBA. Cuatro celdas de 535 × 735 en orden de lectura. Generado con la herramienta integrada image_gen el 2026-10-09, a partir de `../bank/characters/ceo/idle-front.png`, sin modificar ni sustituir el original. Hashes y procedencia: `ceo-blink-front-v1.json`. Estado: prototype, no aprobado como arte final.

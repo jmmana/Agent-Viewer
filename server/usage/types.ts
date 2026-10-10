@@ -140,6 +140,13 @@ export interface UsageFilters {
   asOfSeq: number | null;
   /** Rollup-only (issue #66). -720..840, fixed offset (no DST), used for `day` bucketing. `0` when not given. */
   utcOffsetMinutes: number;
+  /** Export-only (issue #69). Only rows with ledger `seq > afterSeq`, for incremental pulls ("everything since my
+   * last pull"). Never populated by `parseUsageFilters` (no route echoes it as a rollup query parameter): the
+   * export route (`server/usage/export.ts`) parses its own `afterSeq`/`asOfSeq` pair and sets this directly, so
+   * the export's totals sidecar can pin the same `(afterSeq, asOfSeq]` window by calling straight into the #66
+   * rollup aggregation (`computeMemoryRollup`/`computeSqliteRollup`) instead of summing a second time. `null`
+   * means no lower bound. */
+  afterSeq: number | null;
 }
 
 export function emptyUsageFilters(): UsageFilters {
@@ -162,6 +169,7 @@ export function emptyUsageFilters(): UsageFilters {
     tag: [],
     asOfSeq: null,
     utcOffsetMinutes: 0,
+    afterSeq: null,
   };
 }
 

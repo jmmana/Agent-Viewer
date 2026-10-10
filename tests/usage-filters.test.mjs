@@ -3,7 +3,9 @@
 // `UsageFilters` with its own rollup-only fields (`userId`, `tag`, `asOfSeq`, `utcOffsetMinutes`), gated by
 // `allowRollupOnly` the same way these calls-only fields are gated by `allowCallsOnly`; the default-shape
 // assertion below includes them (always present, empty/null unless `allowRollupOnly` is set) so this file stays
-// the single source of truth for the shared contract's exact shape.
+// the single source of truth for the shared contract's exact shape. Issue #69 added `afterSeq`, export-only and
+// never parsed from a query string by this function at all (the export route sets it directly on the filters
+// object it got back from here), so it is always `null` regardless of options.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseUsageFilters } from '../server/usage/filters.ts';
@@ -41,6 +43,7 @@ test('parseUsageFilters: defaults with no query at all', () => {
     tag: [],
     asOfSeq: null,
     utcOffsetMinutes: 0,
+    afterSeq: null,
   });
   assert.equal(value.order, 'desc');
   assert.equal(value.limit, 100);

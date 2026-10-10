@@ -12,6 +12,16 @@ Este archivo existe para no repetir las mismas instrucciones en cada prompt de c
 2. Revisa si ya existe un worktree con trabajo sin terminar para este mismo issue bajo `.claude/worktrees/agent-*/` (puede haber quedado a medias por un límite de uso de la cuenta). Si encuentras trabajo sólido y relevante, apóyate en él (copia los archivos con `cp`, git no permite operar entre worktrees directamente) en vez de reimplementar desde cero.
 3. Si el issue declara una dependencia de otro issue que sigue abierto, detente y repórtalo como bloqueo en vez de construir sobre código que no existe.
 
+## ¿El issue debe partirse en sub-issues?
+
+Antes de escribir código, evalúa el tamaño real del issue (no solo su título). Si describe varios entregables independientes (ejemplo: tres o más componentes sin relación directa entre sí, varias preferencias/pantallas separadas, o trabajo que un agente tardaría más de ~45 minutos en completar de punta a punta con PR y merge), NO intentes resolverlo todo en un solo PR gigante:
+
+1. Crea sub-issues en GitHub con `gh issue create` (uno por cada entregable independiente), con el mismo milestone que el issue padre, y enlázalos desde el issue padre (lista `- [ ] #<N>` en su cuerpo o un comentario que los enumere).
+2. Implementa en este turno SOLO una porción vertical completa (idealmente un sub-issue entero), ábrele su propio PR, y deja los demás sub-issues abiertos para otro turno/agente.
+3. No cierres el issue padre hasta que todos sus sub-issues estén cerrados; si el issue padre no tiene código propio (solo agrupa sub-issues), ciérralo cuando el último sub-issue se cierre.
+
+Esto evita turnos de una hora o más en un solo intento, reduce el riesgo de alucinación por sobrecarga de contexto, y deja cada pieza verificable (CI, revisión) por separado.
+
 ## Al terminar
 
 1. Antes del push final: `git fetch origin && git rebase origin/main` — varios issues de un mismo milestone suelen tocar los mismos archivos (`server/index.ts`, `server/store.ts`, `CHANGELOG.md`), así que main puede haber avanzado mientras trabajabas.

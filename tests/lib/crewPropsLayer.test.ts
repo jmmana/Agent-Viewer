@@ -52,4 +52,41 @@ describe('Crew props layer (muebles 2.5D)', () => {
     expect(rightDraws).toHaveLength(3);
     expect(frontDraws[0]).not.toEqual(rightDraws[0]);
   });
+
+  // Piloto acotado de #115: cuando el orquestador resuelve una imagen real del banco,
+  // se dibuja esa imagen en vez de las tres caras del bloque 2.5D.
+  it('dibuja la imagen real del banco en vez de la caja cuando el orquestador la resuelve', () => {
+    const drawn: unknown[][] = [];
+    const fills: string[] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) {
+        if (key === 'drawImage') return (...args: unknown[]) => drawn.push(args);
+        if (key === 'fill') return () => fills.push('polygon');
+        return () => {};
+      },
+      set() { return true; },
+    });
+    const image = {} as HTMLImageElement;
+    drawCrewProp(ctx, { type: 'desk' }, 5, 3, 'front', crewIsoPoint, false,
+      { image, width: 168, height: 100, displayHeight: 34, anchor: { x: .5, y: .93 } });
+    expect(fills).toEqual([]);
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0][0]).toBe(image);
+  });
+
+  it('no dibuja la caja ni la imagen dos veces: una u otra, nunca ambas', () => {
+    const drawn: unknown[][] = [];
+    const fills: string[] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) {
+        if (key === 'drawImage') return (...args: unknown[]) => drawn.push(args);
+        if (key === 'fill') return () => fills.push('polygon');
+        return () => {};
+      },
+      set() { return true; },
+    });
+    drawCrewProp(ctx, { type: 'plant' }, 1, 2, 'left', crewIsoPoint);
+    expect(drawn).toHaveLength(0);
+    expect(fills).toHaveLength(3);
+  });
 });

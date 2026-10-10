@@ -6,6 +6,8 @@ import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
+import { useCrewPropImages } from './useCrewPropImages';
+import { CREW_ROOM_PROP_IMAGES, type CrewPropImageId } from './crewPropImages';
 import { useCrewBlink } from './useCrewBlink';
 import { useCrewWalk } from './useCrewWalk';
 import { preloadCrewWalk } from './crewWalkRegistry';
@@ -185,6 +187,14 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const direction=crewSpriteView(marker,view);
     return [marker.id,direction ? walk.frames[direction] : undefined];
   })),[walkingMarkers,view,walk.frames]);
+  // Piloto acotado de #115: solo los muebles listados en CREW_ROOM_PROP_IMAGES (hoy,
+  // escritorio y planta de Dirección) cargan una imagen real; el resto de las once
+  // salas sigue con el bloque 2.5D de siempre, sin red ni carga adicional.
+  const roomPropImageIds = useMemo(() => Array.from(new Set(room.furniture
+    .map(item => CREW_ROOM_PROP_IMAGES[item.id])
+    .filter((id): id is CrewPropImageId => id !== undefined))), [room]);
+  const propImages = useCrewPropImages(roomPropImageIds);
+  const illustratedProps = roomPropImageIds.filter(id => !!propImages.images[id]).length;
   const messages = builtInMessages(locale);
 
   const render = useCallback(() => {
@@ -198,8 +208,8 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, locale, highContrast: visualPreferences.highContrast });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, visualPreferences.highContrast]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, visualPreferences.highContrast, propImages.images]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -393,6 +403,11 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
       {!sprite.failed && directions.some(direction => !sprite.images[direction]) && (isEs ? ' Cargando ilustraciones…' : ' Loading illustrations…')}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
       {walk.failed && <span data-testid="crew-walk-fallback"> {messages['crew.walkFallback']}</span>}
+    </p>
+    <p aria-live="polite" data-testid="crew-prop-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
+      {isEs ? `Mobiliario con imagen real: ${illustratedProps}.` : `Furniture with real artwork: ${illustratedProps}.`}
+      {!propImages.failed && roomPropImageIds.some(id => !propImages.images[id]) && (isEs ? ' Cargando imagen de mobiliario…' : ' Loading furniture artwork…')}
+      {propImages.failed && (isEs ? ' No se pudo cargar la imagen del mueble; se conserva el bloque 2.5D.' : ' Furniture image unavailable; the 2.5D block remains visible.')}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>
       {messages['crew.walkPrototype']}

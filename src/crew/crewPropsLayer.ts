@@ -8,13 +8,31 @@ import { crewPropShades } from './crewLightingLayer';
  * (frontal, lateral y superior), sombreadas por tipo mediante `crewLightingLayer`.
  * No decide posición ni orden de profundidad; eso lo resuelve el orquestador en
  * `renderCrewRoom` junto con los marcadores de presencia.
+ *
+ * Piloto acotado de #115: cuando el orquestador resuelve una imagen real del banco
+ * para este mueble (`CREW_ROOM_PROP_IMAGES`), se dibuja esa imagen como billboard
+ * plano en vez de la caja; sigue siendo la MISMA imagen en las cuatro cámaras
+ * porque el banco no tiene vistas verificadas por ángulo todavía (prototype).
  */
 export type CrewFurnitureItem = CrewRoomDefinition['furniture'][number];
+export interface CrewPropImageSpec {
+  image: HTMLImageElement;
+  width: number;
+  height: number;
+  displayHeight: number;
+  anchor: { x: number; y: number };
+}
 
 /** Dibuja un mueble en un punto ya proyectado a coordenadas de sala (antes de isoPoint). */
 export function drawCrewProp(ctx: CanvasRenderingContext2D, item: Pick<CrewFurnitureItem, 'type'>,
   x: number, y: number, view: CrewView, isoPoint: (x: number, y: number, z?: number) => CrewPoint,
-  highContrast = false): void {
+  highContrast = false, propImage?: CrewPropImageSpec): void {
+  if (propImage) {
+    const point = isoPoint(x, y);
+    const height = propImage.displayHeight, width = height * propImage.width / propImage.height;
+    ctx.drawImage(propImage.image, point.x - width * propImage.anchor.x, point.y - height * propImage.anchor.y, width, height);
+    return;
+  }
   const size = CREW_PROP_SIZE[item.type];
   const sideView = view === 'left' || view === 'right';
   const w = sideView ? size.depth : size.width;

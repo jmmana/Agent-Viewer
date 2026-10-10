@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { t, type Locale, type TranslationKey } from '../i18n';
 import { localizeDemoText } from '../content/demoScript';
+import { createOfficeTranslator } from '../content/officeMessages';
+import { formatCost, type UsageFigures } from '../lib/usage';
 
 interface LiveTimelineSidebarProps {
   isOpen: boolean;
@@ -34,9 +36,17 @@ interface LiveTimelineSidebarProps {
   onFocusAgent: (agent: Agent) => void;
   onSendMessage: (agentId: string, message: string) => void;
   onUpdateStatus: (agentId: string, status: AgentStatus) => void;
-  onOpenAgentDetailModal?: (agentId: string) => void;
+  onOpenAgentDetailModal?: (agentId: string, tab?: 'overview' | 'tasks' | 'metrics' | 'logs' | 'console') => void;
   theme: 'dark' | 'light';
   locale: Locale;
+  /** The selected agent's row from the usage ledger rollup (issue #78), `undefined` when it has no row (no
+   * calls in the current window). Read only while `ledgerReady` is `true`. */
+  usageFigures?: UsageFigures;
+  /** `true` once the ledger has ever answered: the cost figure then reads `usageFigures` instead of the
+   * agent's local accumulator. */
+  ledgerReady?: boolean;
+  /** `true` when the last ledger refetch failed but earlier figures are kept: shown dimmed. */
+  isStale?: boolean;
 }
 
 export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
@@ -54,10 +64,14 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
   onOpenAgentDetailModal,
   theme,
   locale,
+  usageFigures,
+  ledgerReady = false,
+  isStale = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'timeline' | 'inspector'>('timeline');
   const [filterCategory, setFilterCategory] = useState<'all' | 'tasks' | 'tools' | 'messages'>('all');
   const [instructionText, setInstructionText] = useState('');
+  const officeTranslate = React.useMemo(() => createOfficeTranslator({ locale }), [locale]);
 
   // If selectedAgent changes, switch to inspector tab automatically
   React.useEffect(() => {
@@ -481,12 +495,17 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
                 {statusLabel(selectedAgent.status)}
               </span>
             </div>
-            <div className="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
+            <div
+              className={`bg-slate-950/70 p-2.5 rounded-lg border border-slate-800 ${ledgerReady && isStale ? 'opacity-60' : ''}`}
+              title={ledgerReady && isStale ? t(locale, 'inspector.stale') : undefined}
+            >
               <span className="text-[10px] text-slate-400 uppercase tracking-wider block font-semibold">
                 {t(locale, 'sidebar.cost')}
               </span>
               <span className="text-xs font-mono font-medium text-slate-200 mt-0.5 block truncate">
-                ${selectedAgent.cost.toFixed(3)}
+                {ledgerReady
+                  ? formatCost(usageFigures?.cost, usageFigures?.currency, locale, officeTranslate)
+                  : `$${selectedAgent.cost.toFixed(3)}`}
               </span>
             </div>
           </div>

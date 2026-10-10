@@ -434,13 +434,22 @@ export function computeMemoryAggregates(
   return { groups: [...groupsMap.values()], totals };
 }
 
+/** `true` when a query whose lower bound is `from` (or unbounded) could include rows older than `purgedThrough`
+ * (retention, issue #70) and so cannot be answered completely from what the ledger still holds. Retention purges
+ * by `received_at` regardless of the query's own `timeBasis`, so this stays conservative: any unbounded or
+ * early-starting query is flagged, even one filtered by `occurred_at`. */
+function rangeReachesPurge(purgedThrough: number | null, from: number | null): boolean {
+  if (purgedThrough === null) return false;
+  return from === null || from <= purgedThrough;
+}
+
 export interface MemoryRollupInput {
   /** The full ledger, insertion (and therefore seq) ordered. */
   ledger: readonly UsageLedgerRow[];
   query: RollupQuery;
   now: () => number;
-  /** From `MemoryEventStore`'s own cap bookkeeping (issue #53 applied to the ledger). */
-  coverage: { droppedRows: number; complete: boolean };
+  /** From `MemoryEventStore`'s own cap bookkeeping (issue #53 applied to the ledger) and retention (issue #70). */
+  coverage: { droppedRows: number; capComplete: boolean; purgedThrough: number | null };
 }
 
 export function computeMemoryRollup(input: MemoryRollupInput): UsageRollupResponse {
@@ -459,9 +468,9 @@ export function computeMemoryRollup(input: MemoryRollupInput): UsageRollupRespon
     asOf: { ledgerSeq, lastRowReceivedAt, generatedAt: now() },
     coverage: {
       storage: 'memory',
-      complete: coverage.complete,
+      complete: coverage.capComplete && !rangeReachesPurge(coverage.purgedThrough, query.filters.from),
       droppedRows: coverage.droppedRows,
-      purgedThrough: null,
+      purgedThrough: coverage.purgedThrough,
       backfilledRows: totals.callsTotal > 0 ? countBackfilled(eligible, query) : 0,
       legacyContractRows: totals.callsTotal > 0 ? countLegacyContract(eligible, query) : 0,
     },
@@ -743,6 +752,14 @@ export function computeSqliteRollup(db: DatabaseSync, query: RollupQuery, now: (
     const backfilledRows = Number(totalsRow.backfilled_rows ?? 0);
     const legacyContractRows = Number(totalsRow.legacy_contract_rows ?? 0);
 
+    // Retention (#70) purges `usage_ledger` rows by `received_at` and records the highest cutoff it ever reached
+    // in `retention_state`, independently of whether anything was deleted this run. Read inside the same
+    // transaction as every other statement above so this answer is consistent with the rows actually queried.
+    const purgeRow = db.prepare("SELECT purged_before FROM retention_state WHERE scope = 'usage_ledger'").get() as
+      | { purged_before: number | null }
+      | undefined;
+    const purgedThrough = purgeRow?.purged_before ?? null;
+
     db.exec('COMMIT');
 
     return shapeRollupResponse({
@@ -752,12 +769,9 @@ export function computeSqliteRollup(db: DatabaseSync, query: RollupQuery, now: (
       asOf: { ledgerSeq, lastRowReceivedAt, generatedAt: now() },
       coverage: {
         storage: 'sqlite',
-        // Retention (#70) is not merged yet: nothing purges `usage_ledger` rows in SQLite mode today, so the
-        // answer is always complete. Once #70 lands, this reads `retention_runs` for the highest `usage_cutoff`
-        // with `usage_deleted > 0` and sets `complete: false` / `purgedThrough` when the query range reaches it.
-        complete: true,
+        complete: !rangeReachesPurge(purgedThrough, query.filters.from),
         droppedRows: 0,
-        purgedThrough: null,
+        purgedThrough,
         backfilledRows,
         legacyContractRows,
       },

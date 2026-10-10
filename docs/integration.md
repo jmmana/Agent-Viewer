@@ -1097,18 +1097,21 @@ catch up on any gap, normally finding nothing to do. Full reference, including t
 memory-mode cap: [docs/usage-ledger.md](usage-ledger.md). Migration 7 (`usage-calls-indexes`, issue #67) adds the
 `(agent_id, seq)`/`(session_id, seq)`/`(trace_id, seq)`/`(request_id)` indexes [`GET
 /api/v1/usage/calls`](#usage-calls-get-apiv1usagecalls-issue-67) needs, plus `usage_ledger_meta` (the cursor
-"store epoch"). Migration 8 (`usage-rollup`, issue #66) adds `usage_ledger_tags` (one `(ledger_seq, tag)` row per
-tag, since `usage_ledger.tags` is a JSON array and cannot be indexed or grouped by in SQL) plus indexes on
-`model`, `task_id` and `user_id`, so [`GET /api/v1/usage/rollup`](#usage-rollup-get-apiv1usagerollup-issue-66) can
-filter and group on every dimension with a named index, never a bare table scan.
+"store epoch"). Migration 8 (`retention`, issue #70) adds `retention_runs` and `retention_state`, including the
+`usage_ledger` scope's `purged_before` cutoff that [`GET
+/api/v1/usage/rollup`](#usage-rollup-get-apiv1usagerollup-issue-66) reads for its `coverage.purgedThrough`.
+Migration 9 (`usage-rollup`, issue #66) adds `usage_ledger_tags` (one `(ledger_seq, tag)` row per tag, since
+`usage_ledger.tags` is a JSON array and cannot be indexed or grouped by in SQL) plus indexes on `model`, `task_id`
+and `user_id`, so that route can filter and group on every dimension with a named index, never a bare table scan.
 
 **Memory-mode `coverage`.** `GET /api/v1/usage/rollup` never silently returns a partial figure. In memory mode,
 once the ledger reaches its cap (`AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS`), further rows are refused rather than
 evicting older ones, so the response's `coverage.complete` turns `false` and stays `false`, and
 `coverage.droppedRows` counts the refused rows (an upper bound, since a refused row's own attributes are never
-recorded). In SQLite mode `coverage.complete` is always `true` today: nothing prunes `usage_ledger` yet.
-`coverage.purgedThrough` stays `null` until retention (issue #70) lands; once it does, a query range reaching the
-highest purged `usage_cutoff` will also turn `complete` to `false`.
+recorded). `coverage.purgedThrough` is the highest `received_at` retention (issue #70) has purged the usage
+ledger through, in both storage modes, read from `retention_state`'s `usage_ledger` scope (`null` until a
+retention run actually reaches a row); a query whose range could include rows at or before that cutoff (an
+unbounded query, or one starting at or before it) also turns `complete` to `false`.
 
 ---
 

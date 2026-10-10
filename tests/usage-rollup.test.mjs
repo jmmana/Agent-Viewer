@@ -518,6 +518,77 @@ test('rollup: a fresh memory store under its cap reports coverage.complete true'
 });
 
 // -------------------------------------------------------------
+// Retention coverage (issue #70): a range reaching a purged cutoff must report coverage.complete false, in both
+// storage modes, independently of the memory-mode cap above.
+// -------------------------------------------------------------
+
+test('rollup: a query range reaching a retention purge reports coverage.complete false (memory)', async () => {
+  const store = new MemoryEventStore({ maxEvents: 1000, usageLedgerMaxRows: 1000 });
+  await store.init();
+  try {
+    await seed(store, [usageEvent({ receivedAt: 1_000 }), usageEvent({ receivedAt: 5_000 })]);
+    await store.purge({ ledgerCutoffMs: 2_000 });
+
+    const unbounded = await store.rollup(parseRollupQuery({ groupBy: 'agent' }));
+    assert.equal(unbounded.coverage.complete, false);
+    assert.equal(unbounded.coverage.purgedThrough, 2_000);
+
+    const reachesCutoff = await store.rollup(parseRollupQuery({ groupBy: 'agent', from: '1970-01-01T00:00:01.000Z' }));
+    assert.equal(reachesCutoff.coverage.complete, false);
+
+    const afterCutoff = await store.rollup(parseRollupQuery({ groupBy: 'agent', from: '1970-01-01T00:00:03.000Z' }));
+    assert.equal(afterCutoff.coverage.complete, true);
+    assert.equal(afterCutoff.coverage.purgedThrough, 2_000);
+  } finally {
+    await store.close();
+  }
+});
+
+test('rollup: a query range reaching a retention purge reports coverage.complete false (sqlite)', async () => {
+  const { dir, file } = tempDbPath('rollup-purge');
+  const store = new SQLiteEventStore(file, { backup: 'off' });
+  await store.init();
+  try {
+    await seed(store, [usageEvent({ receivedAt: 1_000 }), usageEvent({ receivedAt: 5_000 })]);
+    await store.purge({ ledgerCutoffMs: 2_000 });
+
+    const unbounded = await store.rollup(parseRollupQuery({ groupBy: 'agent' }));
+    assert.equal(unbounded.coverage.complete, false);
+    assert.equal(unbounded.coverage.purgedThrough, 2_000);
+
+    const reachesCutoff = await store.rollup(parseRollupQuery({ groupBy: 'agent', from: '1970-01-01T00:00:01.000Z' }));
+    assert.equal(reachesCutoff.coverage.complete, false);
+
+    const afterCutoff = await store.rollup(parseRollupQuery({ groupBy: 'agent', from: '1970-01-01T00:00:03.000Z' }));
+    assert.equal(afterCutoff.coverage.complete, true);
+    assert.equal(afterCutoff.coverage.purgedThrough, 2_000);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('rollup: no retention run yet reports coverage.purgedThrough null in both stores', async () => {
+  const memory = new MemoryEventStore({ maxEvents: 1000, usageLedgerMaxRows: 1000 });
+  await memory.init();
+  const { dir, file } = tempDbPath('rollup-no-purge');
+  const sqlite = new SQLiteEventStore(file, { backup: 'off' });
+  await sqlite.init();
+  try {
+    for (const store of [memory, sqlite]) {
+      await seed(store, [usageEvent({})]);
+      const result = await store.rollup(parseRollupQuery({ groupBy: 'agent' }));
+      assert.equal(result.coverage.purgedThrough, null);
+      assert.equal(result.coverage.complete, true);
+    }
+  } finally {
+    await memory.close();
+    await sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -------------------------------------------------------------
 // Provenance (coverage.backfilledRows / legacyContractRows), SQLite only: these origins never occur on the live
 // memory-store append path, so they are only reachable by writing the ledger row directly, the same way
 // tests/usage-ledger-backfill.test.mjs exercises the backfill.

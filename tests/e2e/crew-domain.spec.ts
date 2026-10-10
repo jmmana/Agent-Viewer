@@ -34,6 +34,9 @@ for (const transport of ['sse','log'] as const) {
     await expect(page.getByText('$0.250',{exact:true})).toBeVisible();
     await page.getByRole('button',{name:'Crew · Beta',exact:true}).click();
     const crew = page.getByRole('region',{name:'Crew mode: independent office'});
+    // Puente LIVE/DEMO/REPLAY (#155): SSE en vivo muestra LIVE; soltar un archivo de eventos para
+    // reproducirlo pasa la insignia a REPLAY de forma explícita, nunca inferida en silencio.
+    await expect(crew.getByTestId('crew-viewer-mode')).toHaveText(transport === 'sse' ? 'LIVE' : 'REPLAY');
     await expect(crew.getByText('Agents in this room: 0',{exact:true})).toBeVisible();
     await page.locator('#crew-room').selectOption('development');
     await expect(crew.getByText('QA Fixture Developer: CODING',{exact:true})).toBeVisible();
@@ -65,6 +68,12 @@ test('LIVE sin eventos permanece vacío en todas las salas del catálogo', async
     await expect(page.getByText('Agents in this room: 0',{exact:true})).toBeVisible();
     await expect(page.locator('canvas')).toHaveCount(1);
   }
+});
+
+test('fuera de LIVE, Crew muestra la insignia DEMO explícita (#155)', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button',{name:'Crew · Beta',exact:true}).click();
+  await expect(page.getByTestId('crew-viewer-mode')).toHaveText('DEMO');
 });
 
 test('libera observadores Crew al salir y mantiene controles ES en cuatro tamaños', async ({page}, testInfo) => {

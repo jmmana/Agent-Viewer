@@ -81,6 +81,51 @@ describe('Crew native 2.5D renderer', () => {
     expect(bounds.height).toBeGreaterThan(0);
     expect(crewGeometryBounds(ceo, 'front')).not.toEqual(crewGeometryBounds(dev, 'front'));
   });
+  // Piloto acotado de #115: escritorio y planta de Dirección reciben la imagen real
+  // del banco en las cuatro cámaras; el resto de las salas no pide ni dibuja imagen.
+  it('dibuja el escritorio y la planta de Dirección con la imagen real del banco en las cuatro cámaras', () => {
+    const [ceo] = CREW_ROOMS;
+    const desk = {} as HTMLImageElement, plant = {} as HTMLImageElement;
+    for (const view of ['front', 'right', 'back', 'left'] as const) {
+      const drawn: unknown[][] = [];
+      const ctx = new Proxy({} as CanvasRenderingContext2D, {
+        get(_target, key) { return key === 'drawImage' ? (...args: unknown[]) => drawn.push(args) : () => {}; },
+        set() { return true; },
+      });
+      renderCrewRoom({ ctx, width: 900, height: 600, room: ceo, camera: { view, zoom: 1, pan: { x: 0, y: 0 } },
+        propImages: { 'desk-executive': desk, 'plant-floor': plant } });
+      expect(drawn.map(call => call[0])).toEqual(expect.arrayContaining([desk, plant]));
+      expect(drawn).toHaveLength(2);
+    }
+  });
+
+  it('conserva el bloque 2.5D de un mueble de Dirección si su imagen todavía no cargó', () => {
+    const [ceo] = CREW_ROOMS;
+    const drawnImages: unknown[][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) { return key === 'drawImage' ? (...args: unknown[]) => drawnImages.push(args) : () => {}; },
+      set() { return true; },
+    });
+    // Sin propImages (carga en curso o falla): ningún drawImage de mobiliario, el bloque 2.5D sigue intacto.
+    renderCrewRoom({ ctx, width: 900, height: 600, room: ceo, camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } } });
+    expect(drawnImages).toHaveLength(0);
+    renderCrewRoom({ ctx, width: 900, height: 600, room: ceo, camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } },
+      propImages: { 'desk-executive': undefined, 'plant-floor': undefined } });
+    expect(drawnImages).toHaveLength(0);
+  });
+
+  it('no pide ni dibuja imagen de mobiliario en una sala fuera del alcance acotado', () => {
+    const development = CREW_ROOMS.find(room => room.id === 'development')!;
+    const drawn: unknown[][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) { return key === 'drawImage' ? (...args: unknown[]) => drawn.push(args) : () => {}; },
+      set() { return true; },
+    });
+    renderCrewRoom({ ctx, width: 900, height: 600, room: development, camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } },
+      propImages: { 'desk-executive': {} as HTMLImageElement, 'plant-floor': {} as HTMLImageElement } });
+    expect(drawn).toHaveLength(0);
+  });
+
   it('draws exactly the selected room, without consulting legacy office', () => {
     const calls: Array<[string, ...unknown[]]> = [];
     const ctx = new Proxy({} as CanvasRenderingContext2D, {

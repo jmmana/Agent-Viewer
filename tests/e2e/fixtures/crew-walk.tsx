@@ -18,7 +18,7 @@ function Fixture(){
     <h1 style={{font:'16px sans-serif',color:'white',margin:8}}>{builtInMessages(state.locale)['crew.walkDemo']}</h1>
     <output hidden data-testid="original-snapshot">{JSON.stringify(initial)}</output>
     <output hidden data-testid="reported-snapshot">{JSON.stringify(agents)}</output>
-    <div style={{height:'calc(100vh - 50px)',minHeight:520}}>{state.mounted && <CrewStage agents={agents} locale={state.locale} selectedRoomId={parameters.get('room')??undefined} persistCamera={false} showRoomLink={false}/>}</div>
+    <div style={{height:'calc(100vh - 50px)',minHeight:520}}>{state.mounted && <CrewStage viewerMode="DEMO" agents={agents} locale={state.locale} selectedRoomId={parameters.get('room')??undefined} persistCamera={false} showRoomLink={false}/>}</div>
   </>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture/>);

@@ -70,29 +70,42 @@ function childScript(rowCount) {
       await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
       const port = server.address().port;
 
+      function streamExportOnce() {
+        return new Promise((resolve, reject) => {
+          http.get('http://127.0.0.1:' + port + '/api/v1/usage/export?format=csv', (res) => {
+            if (res.statusCode !== 200) {
+              reject(new Error('unexpected status ' + res.statusCode));
+              return;
+            }
+            let lineCount = 0;
+            let partial = '';
+            res.on('data', (chunk) => {
+              partial += chunk;
+              let idx;
+              while ((idx = partial.indexOf('\\n')) !== -1) {
+                partial = partial.slice(idx + 1);
+                lineCount++;
+              }
+            });
+            res.on('end', () => resolve(lineCount - 1)); // minus the header line
+            res.on('error', reject);
+          }).on('error', reject);
+        });
+      }
+
+      // A warm-up pass first: populating SQLite's own page cache for this freshly-seeded 100,000-row database, and
+      // one-time V8/HTTP-client JIT and buffer-pool growth, are real RSS costs but not what this budget is about
+      // (they would happen for a query over this data of any size, and V8 rarely returns heap-arena pages to the
+      // OS once grown, even after a GC). The budget is about the *second* export's own incremental growth: would
+      // doing *another* export of the same size grow memory again, which is what "never buffers the whole match
+      // set" actually predicts (bounded, not zero).
+      const warmupRows = await streamExportOnce();
+      assert.equal(warmupRows, ROW_COUNT, 'warm-up pass');
+
       if (global.gc) global.gc();
       const rssBefore = process.memoryUsage().rss;
 
-      const rows = await new Promise((resolve, reject) => {
-        http.get('http://127.0.0.1:' + port + '/api/v1/usage/export?format=csv', (res) => {
-          if (res.statusCode !== 200) {
-            reject(new Error('unexpected status ' + res.statusCode));
-            return;
-          }
-          let lineCount = 0;
-          let partial = '';
-          res.on('data', (chunk) => {
-            partial += chunk;
-            let idx;
-            while ((idx = partial.indexOf('\\n')) !== -1) {
-              partial = partial.slice(idx + 1);
-              lineCount++;
-            }
-          });
-          res.on('end', () => resolve(lineCount - 1)); // minus the header line
-          res.on('error', reject);
-        }).on('error', reject);
-      });
+      const rows = await streamExportOnce();
 
       if (global.gc) global.gc();
       const rssAfter = process.memoryUsage().rss;

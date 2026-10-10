@@ -8,6 +8,10 @@ export const SOURCE_COMMIT = '355e9194bd83d8b741bc65d5b58a897d320ee584';
 const MANIFEST = 'assets/crew/asset-manifest.json';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
+/** Contrato visual Crew (docs/crew/visual-style-contract.md): lienzo y anclaje fijos para todo personaje. */
+export const CREW_CHARACTER_CANVAS = { width: 256, height: 352 };
+export const CREW_CHARACTER_ANCHOR = { x: 0.5, y: 0.9375 };
+
 function imageSize(bytes, mimeType) {
   if (mimeType === 'image/png') {
     if (!bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])) || bytes.length < 33) throw new Error('PNG inválido');
@@ -95,6 +99,10 @@ export function validateCrewAssets(root = process.cwd(), suppliedManifest) {
       if (!Number.isFinite(asset.logicalSize?.width) || !Number.isFinite(asset.logicalSize?.height)
         || asset.logicalSize.width <= 0 || asset.logicalSize.height <= 0) throw new Error('Tamaño lógico inválido');
       if (![asset.anchor?.x,asset.anchor?.y].every(value=>Number.isFinite(value) && value>=0 && value<=1)) throw new Error('Anclaje inválido');
+      if (asset.kind === 'character' && (asset.width !== CREW_CHARACTER_CANVAS.width || asset.height !== CREW_CHARACTER_CANVAS.height
+        || asset.anchor.x !== CREW_CHARACTER_ANCHOR.x || asset.anchor.y !== CREW_CHARACTER_ANCHOR.y)) {
+        throw new Error('El contrato visual Crew exige lienzo de personaje 256x352 con anclaje 0.5/0.9375');
+      }
       for (const view of ['front','right','back','left']) {
         const expected = asset.kind === 'character' ? (view === asset.facing ? 'prototype' : 'missing') : 'unverified';
         if (asset.viewAvailability?.[view] !== expected) throw new Error('Perspectiva no verificada');

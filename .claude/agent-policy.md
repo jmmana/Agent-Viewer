@@ -27,6 +27,10 @@ No dejes un estado a medio implementar, sin compilar y sin PR — eso es peor qu
 
 No corras toda la batería de CI (`npm audit`, `build:cli`, `check:package`, el wheel de Python, Docker) si tu cambio no la necesita. Como mínimo: `npm run lint` y `npm test`. Agrega `npm run build`/`build:lib` si tocaste algo que compila a un bundle, y `python3 tests/test_python_sdk.py` solo si tocaste `sdk/python/`. Reserva la batería completa para el issue final de docs/release de cada milestone.
 
+## Empuja en cuanto el CI pase una vez
+
+Corre la batería de verificación una vez. En cuanto esté en verde, haz push y abre el PR de inmediato — no vuelvas a "verificar una vez más" antes de empujar. El dueño del repo prefiere ver cambios reales en GitHub (ramas pusheadas, PRs abiertos) cuanto antes, no rondas extra de confirmación que no producen nada visible. Reserva una segunda pasada de verificación solo para un bloqueo real que aparezca después (un conflicto de merge, un fallo de CI), no como doble chequeo de rutina.
+
 ## Reporte final: corto
 
 Tu reporte final debe caber en unas 100 palabras: número de PR, estado (mergeado / bloqueado y por qué / CI fallando y por qué), un resumen de una línea, y qué quedó diferido si algo. No listes cada archivo tocado ni expliques cada decisión salvo que algo haya quedado bloqueado — esos detalles ya están en el cuerpo del PR, que es donde alguien los busca si los necesita.

@@ -20,6 +20,29 @@ export interface CameraState {
   rotation: number; // 0: 0°, 1: 90°, 2: 180°, 3: 270°
 }
 
+/**
+ * Pre-formatted usage badge for one agent card: the renderer receives only strings, never a number, so it
+ * never adds up or prices anything. `failed` is `null` when there is no failed-call chip to draw.
+ */
+export interface AgentBadge {
+  tokens: string;
+  costLabel: string;
+  failed: string | null;
+}
+
+/**
+ * Text colors for the agent card's usage badge, exported so a test can check WCAG AA contrast (4.5:1)
+ * against `background`. `secondary` draws `tokens` and `costLabel`; `failed` draws the bold failed-call chip.
+ */
+export const AGENT_BADGE_COLORS = {
+  dark: { background: '#0d1524', secondary: '#a9b7ca', failed: '#f1f5f9' },
+  light: { background: '#ffffff', secondary: '#526176', failed: '#0f172a' },
+} as const;
+
+const BADGE_FONT = '500 9px "Plus Jakarta Sans", sans-serif';
+const BADGE_FONT_BOLD = '700 9px "Plus Jakarta Sans", sans-serif';
+const BADGE_SEPARATOR = ' · ';
+
 export interface RenderContext {
   ctx: CanvasRenderingContext2D;
   width: number;
@@ -40,6 +63,11 @@ export interface RenderContext {
   usageTelemetry?: boolean;
   nowMs: number;
   reducedMotion?: boolean;
+  /**
+   * Pre-formatted per-agent usage badges, keyed by agent id. Embedded views leave it undefined or empty: the
+   * badge path never imports from `modelOps` and draws nothing when an agent has no entry here.
+   */
+  agentBadges?: ReadonlyMap<string, AgentBadge>;
 }
 
 /** Text settings shared by every drawing helper. */
@@ -1791,6 +1819,79 @@ function agentDisplayName(agent: Agent, translate: OfficeTranslate): string {
   return agent.role === 'boss' ? translate('role.boss') : agent.name;
 }
 
+interface BadgeSegment {
+  text: string;
+  bold: boolean;
+}
+
+function badgeSegments(badge: AgentBadge): BadgeSegment[] {
+  const segments: BadgeSegment[] = [
+    { text: badge.tokens, bold: false },
+    { text: badge.costLabel, bold: false },
+  ];
+  if (badge.failed) segments.push({ text: badge.failed, bold: true });
+  return segments;
+}
+
+function measureBadgeSegment(ctx: CanvasRenderingContext2D, segment: BadgeSegment): number {
+  ctx.font = segment.bold ? BADGE_FONT_BOLD : BADGE_FONT;
+  return ctx.measureText(segment.text).width;
+}
+
+/** Width of every segment drawn on a single row, separators included. Used to size the card before wrapping. */
+function badgeOneRowWidth(ctx: CanvasRenderingContext2D, segments: BadgeSegment[]): number {
+  ctx.font = BADGE_FONT;
+  const sepWidth = ctx.measureText(BADGE_SEPARATOR).width;
+  return segments.reduce((total, segment, index) => total + measureBadgeSegment(ctx, segment) + (index > 0 ? sepWidth : 0), 0);
+}
+
+/**
+ * Packs badge segments into rows that fit `innerWidth`, left to right. A segment that does not fit next to
+ * the current row starts a new one; segment text itself is never split (the formatted figures are short).
+ */
+function packBadgeRows(ctx: CanvasRenderingContext2D, segments: BadgeSegment[], innerWidth: number): BadgeSegment[][] {
+  ctx.font = BADGE_FONT;
+  const sepWidth = ctx.measureText(BADGE_SEPARATOR).width;
+  const rows: BadgeSegment[][] = [];
+  let row: BadgeSegment[] = [];
+  let rowWidth = 0;
+  for (const segment of segments) {
+    const width = measureBadgeSegment(ctx, segment);
+    const withSeparator = row.length > 0 ? rowWidth + sepWidth + width : width;
+    if (row.length > 0 && withSeparator > innerWidth) {
+      rows.push(row);
+      row = [segment];
+      rowWidth = width;
+    } else {
+      row.push(segment);
+      rowWidth = withSeparator;
+    }
+  }
+  if (row.length > 0) rows.push(row);
+  return rows;
+}
+
+/** Draws the packed badge rows below the subtitle line, inside the already-placed card. */
+function drawAgentBadge(ctx: CanvasRenderingContext2D, card: OverlayRect, rows: BadgeSegment[][], colors: { secondary: string; failed: string }): void {
+  let rowY = card.y + 44;
+  for (const row of rows) {
+    let x = card.x + 10;
+    row.forEach((segment, index) => {
+      if (index > 0) {
+        ctx.font = BADGE_FONT;
+        ctx.fillStyle = colors.secondary;
+        ctx.fillText(BADGE_SEPARATOR, x, rowY);
+        x += ctx.measureText(BADGE_SEPARATOR).width;
+      }
+      ctx.font = segment.bold ? BADGE_FONT_BOLD : BADGE_FONT;
+      ctx.fillStyle = segment.bold ? colors.failed : colors.secondary;
+      ctx.fillText(segment.text, x, rowY);
+      x += ctx.measureText(segment.text).width;
+    });
+    rowY += 14;
+  }
+}
+
 function drawAgentOverlays(rc: RenderContext) {
   const { ctx, agents, camera, width, height, nowMs, timeMs, theme, translate } = rc;
   const center = cameraCenter(width, height);
@@ -1816,8 +1917,20 @@ function drawAgentOverlays(rc: RenderContext) {
     const subtitle = role ? role + ' · ' + label : label;
     const subtitleWidth = ctx.measureText(subtitle).width + 26;
     ctx.font = '700 11px "Plus Jakarta Sans", sans-serif';
-    const cardWidth = Math.max(112, Math.min(190, Math.max(subtitleWidth, ctx.measureText(name).width + 34)));
-    const card = placeOverlay({ x: a.x - cardWidth / 2, y: a.y - 46, width: cardWidth, height: 38 }, occupied, { width, height });
+    let cardWidth = Math.max(112, Math.min(190, Math.max(subtitleWidth, ctx.measureText(name).width + 34)));
+    let cardHeight = 38;
+    const badge = rc.agentBadges?.get(a.agent.id);
+    const segments = badge ? badgeSegments(badge) : [];
+    let badgeRows: BadgeSegment[][] = [];
+    if (segments.length > 0) {
+      // The card grows to fit the badge on one row, up to the existing 190px cap; past that it wraps, and
+      // each extra row adds 14px of card height (52 / 66 / 80 for 1 / 2 / 3 rows).
+      const oneRowWidth = badgeOneRowWidth(ctx, segments) + 20;
+      cardWidth = Math.max(112, Math.min(190, Math.max(cardWidth, oneRowWidth)));
+      badgeRows = packBadgeRows(ctx, segments, cardWidth - 20);
+      cardHeight = 38 + badgeRows.length * 14;
+    }
+    const card = placeOverlay({ x: a.x - cardWidth / 2, y: a.y - 46, width: cardWidth, height: cardHeight }, occupied, { width, height });
     occupied.push(card); labels.set(a.agent.id, card);
     ctx.strokeStyle = color; ctx.globalAlpha = 0.4; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(card.x + card.width / 2, card.y + card.height); ctx.lineTo(a.x, a.y); ctx.stroke(); ctx.globalAlpha = 1;
@@ -1830,6 +1943,7 @@ function drawAgentOverlays(rc: RenderContext) {
     ctx.fillText(wrapText(name, card.width - 34, t => ctx.measureText(t).width, 1)[0], card.x + 21, card.y + 16);
     ctx.font = '500 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = theme === 'dark' ? '#a9b7ca' : '#526176';
     ctx.fillText(wrapText(subtitle, card.width - 20, t => ctx.measureText(t).width, 1)[0], card.x + 10, card.y + 30);
+    if (badgeRows.length > 0) drawAgentBadge(ctx, card, badgeRows, AGENT_BADGE_COLORS[theme]);
   }
   for (const a of anchors) {
     const speech = a.agent.speechBubble ?? a.agent.ambientBubble;

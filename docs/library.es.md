@@ -153,6 +153,7 @@ Dale a cada evento un `id` estable y único. La oficina ignora un evento cuyo `i
 | `t` | `HostTranslate` | ninguno | Tu función de traducción. Gana sobre `messages` cuando devuelve un valor. Mantenla estable. |
 | `theme` | `'dark' \| 'light'` | `'dark'` | Paleta del dibujo del canvas y clase `av-theme-dark` o `av-theme-light`. |
 | `showUsage` | `boolean` | `false` | Muestra las cifras que pasas en `usage`. Consulta [Cifras de consumo](#cifras-de-consumo). |
+| `showUsageBadges` | `boolean` | `false` | Dibuja una insignia compacta de consumo en cada tarjeta de agente, a partir de `usage.byAgent`. Independiente de `showUsage`. Consulta [Cifras de consumo](#cifras-de-consumo). |
 | `usage` | `OfficeUsage` | ninguno | Cifras de consumo calculadas por tu app. La oficina nunca las calcula. |
 | `selectedAgentId` | `string \| null` | ninguno | Selección controlada. Déjala sin definir para que la oficina lleve la suya. Cuando cambia, la cámara se centra en ese agente. |
 | `onSelectAgent` | `(agentId: string \| null) => void` | ninguno | Se llama cuando quien mira hace clic en un agente del canvas. |
@@ -456,7 +457,7 @@ Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`
 | `office.agentLineNoRole` | {name}: {status} | {name}: {status} |
 | `office.empty` | Esperando actividad de los agentes | Waiting for agent activity |
 
-#### `usage.*` (6)
+#### `usage.*` (26)
 
 | Clave | Texto en español | Texto en inglés |
 |---|---|---|
@@ -464,8 +465,28 @@ Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`
 | `usage.tokens` | Tokens | Tokens |
 | `usage.inputTokens` | Tokens de entrada | Input tokens |
 | `usage.outputTokens` | Tokens de salida | Output tokens |
+| `usage.cacheRead` | Lectura de caché | Cache read |
+| `usage.cacheWrite` | Escritura de caché | Cache write |
+| `usage.cacheReadTokens` | Tokens de caché leídos | Cache read tokens |
+| `usage.cacheWriteTokens` | Tokens de caché escritos | Cache write tokens |
+| `usage.reasoningTokens` | Tokens de razonamiento | Reasoning tokens |
 | `usage.cost` | Costo | Cost |
+| `usage.costSource` | Origen del costo | Cost source |
+| `usage.costSource.providerReported` | informado por el proveedor | provider reported |
+| `usage.costSource.estimated` | estimado | estimated |
+| `usage.failedCalls` | Llamadas fallidas | Failed calls |
+| `usage.badge.estimatedMark` | est. | est. |
+| `usage.badge.failed` | {count} fallidas | {count} failed |
+| `usage.badge.lessThan` | <{value} | <{value} |
 | `usage.unknown` | desconocido | unknown |
+| `usage.partialTokens` | {value} (desconocido en {count} de {calls} llamadas) | {value} (unknown in {count} of {calls} calls) |
+| `usage.partialCost` | + {count} llamadas con costo desconocido | + {count} calls with unknown cost |
+| `usage.partialShort` | + desconocido | + unknown |
+| `usage.mixedCurrencies` | múltiples monedas | mixed currencies |
+| `usage.mixedSources` | múltiples fuentes | mixed sources |
+| `usage.noCurrency` | Moneda no reportada | Currency not reported |
+| `usage.estimatedShort` | estimado | estimated |
+| `usage.sourceUnknown` | Fuente desconocida | Source unknown |
 
 #### `replay.*` (8)
 
@@ -546,7 +567,7 @@ Notas:
 
 - La oficina es un `<section>` con el nombre de `ariaLabel` (por defecto, el texto de `office.label`).
 - El canvas tiene `role="img"` y un `aria-label` (`canvas.aria`) que remite a la lista en texto.
-- Una lista oculta a la vista y anunciada con cortesía (`aria-live="polite"`) nombra a cada agente con su rol y su estado, por ejemplo "Atlas, Desarrollador: Programando". Con `showUsage`, cada línea incluye además las cifras de ese agente en `usage.byAgent`. La lista queda oculta a la vista hasta que recibe el foco del teclado (Tab); entonces se abre como un panel de botones.
+- Una lista oculta a la vista y anunciada con cortesía (`aria-live="polite"`) nombra a cada agente con su rol y su estado, por ejemplo "Atlas, Desarrollador: Programando". Con `showUsage` o `showUsageBadges` (cualquiera de los dos), cada línea incluye además las cifras exactas de ese agente en `usage.byAgent`, así que el texto para lector de pantalla siempre coincide con una insignia visible, incluso cuando la insignia misma está oculta por debajo del zoom 0.55. La lista queda oculta a la vista hasta que recibe el foco del teclado (Tab); entonces se abre como un panel de botones.
 - La barra (`role="toolbar"`) y los controles de repetición son botones reales con nombre accesible y anillo de foco visible. La barra de posición anuncia el avance y los botones de velocidad usan `aria-pressed`.
 - Con `prefers-reduced-motion: reduce` nada se anima: los agentes llegan a su destino sin caminar, los detalles animados se quedan quietos y las transiciones de los botones se desactivan.
 - Selección con teclado: cada agente de esa lista es un botón (`aria-pressed` marca el seleccionado). Al pulsarlo se selecciona el agente y la cámara va hacia él, igual que con un clic en el canvas; al pulsarlo otra vez se quita la selección. La oficina no registra atajos de teclado globales.
@@ -567,19 +588,34 @@ const usage = useMemo(() => ({
 <AgentOffice events={events} locale="es" showUsage usage={usage} />
 ```
 
-`OfficeUsage` es `{ total?: UsageFigures; byAgent?: Record<string, UsageFigures> }`, y `UsageFigures` tiene `totalTokens`, `inputTokens`, `outputTokens`, `cost` y `currency` (todos opcionales).
+`OfficeUsage` es `{ total?: UsageFigures; byAgent?: Record<string, UsageFigures> }`. `UsageFigures` tiene `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `cost`, `currency`, `costSource` (`'provider-reported' | 'estimated' | 'unknown'`) y `failedCalls` (todos opcionales y aceptan `null`).
 
 Reglas de presentación:
 
 - `showUsage` es `false` por defecto. Sin él, `usage` se ignora.
-- `total` aparece en un panel pequeño en la esquina superior derecha: tokens y costo siempre; tokens de entrada y de salida solo si envías esos campos.
+- `total` aparece en un panel pequeño en la esquina superior derecha: tokens y costo siempre; cada otro campo solo si envías esa clave.
 - Las cifras de `byAgent`, indexadas por id de agente, aparecen en la lista accesible de agentes.
 - Un valor que falta (`undefined`, `null` o un número no finito) se muestra como "desconocido" (`usage.unknown`), nunca como cero. `totalTokens` no se deriva de los tokens de entrada y de salida: envíalo tú.
 - `cost` se muestra como moneda cuando `currency` es un código ISO 4217 como `USD` o `COP`, y como número simple en otro caso. Los números siguen a `locale`.
+- `costSource` se muestra como "informado por el proveedor" o "estimado"; `null`, ausente o un valor no reconocido se muestra como desconocido. `failedCalls` sigue las mismas reglas de formato de tokens que cualquier otro conteo.
 
 `formatUsage(figures, locale, translate)`, `formatTokens` y `formatCost` devuelven los mismos valores formateados, por si quieres mostrarlos en otra parte de tu interfaz.
 
-Si tu app no tiene un servicio de consumo, `summarizeUsage(events)` es una ayuda opcional y explícita. Solo suma las cifras que reportan los eventos `llm.usage` y nunca pone precio a los tokens:
+### Insignias de consumo en el canvas
+
+`showUsageBadges` (`false` por defecto, independiente de `showUsage`) dibuja una insignia compacta en cada tarjeta de agente a partir de `usage.byAgent`:
+
+```tsx
+<AgentOffice events={events} locale="es" usage={usage} showUsageBadges />
+```
+
+- Un agente **sin** entrada en `usage.byAgent` **no recibe insignia**: eso no es ni un cero ni una afirmación, así que la librería no dibuja nada en vez de adivinar. Un agente con una entrada cuyos campos faltan o son `null` recibe una insignia que dice "desconocido" en esos campos.
+- La insignia muestra los tokens totales en forma compacta (`9.840` por debajo de 10.000, `12,3 mil` desde 10.000 en adelante), el costo (`$0,42`, `<$0,01` para un costo positivo menor a medio centavo, `$0,00` para un costo reportado en cero), la marca `est.` cuando `costSource` es `'estimated'`, y un chip `N fallidas` cuando `failedCalls` es mayor que 0. Nada de esto depende solo del color: cada estado tiene su propio texto.
+- Las insignias viven en la tarjeta del agente, así que quedan ocultas por debajo del zoom 0.55 a menos que el agente esté seleccionado, resaltado o hablando, igual que la tarjeta misma. La lista accesible de agentes (arriba) es el canal siempre disponible con las cifras exactas.
+- El canvas recibe solo las cadenas ya formateadas que produce `formatUsageBadge`, nunca un número: no importa el agregador de tokens de la app de demostración y no suma nada por su cuenta.
+- `formatUsageBadge(figures, locale, translate)` devuelve `{ tokens, cost, costLabel, estimated, failed, text }` y se exporta por si quieres el mismo contenido de insignia en otra parte de tu interfaz; `UsageBadge` y `UsageCostSource` son tipos exportados.
+
+Si tu app no tiene un servicio de consumo, `summarizeUsage(events)` es una ayuda opcional y explícita. Solo suma las cifras que reportan los eventos `llm.usage` y `llm.failed`, y nunca pone precio a los tokens:
 
 ```tsx
 const usage = useMemo(() => summarizeUsage(events), [events]);
@@ -587,6 +623,9 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 
 - Los eventos se deduplican por `id`, como lo hacen la oficina y el servidor: gana el primer evento con un id dado, sea cual sea su tipo o agente, y los siguientes con ese id se ignoran (las reconexiones SSE, los reintentos y los archivos de repetición combinados repiten eventos). Un evento sin `id` (o con uno vacío o que no es texto) no se puede emparejar, así que cada uno se cuenta; el mismo objeto pasado dos veces cuenta una sola vez.
 - Los tokens se leen del payload original. Un conteo está reportado solo si es un entero no negativo. Si algún evento no reporta `inputTokens`, la cifra `inputTokens` es `null` (se muestra como "desconocido"), y lo mismo pasa con `outputTokens`. `totalTokens` es `inputTokens + outputTokens` solo si ambos se conocen, y `null` en otro caso.
+- `cacheReadTokens`, `cacheWriteTokens` y `reasoningTokens` siguen una regla parecida pero con un tercer estado: la clave se **omite** cuando ningún evento contado la reporta, es la **suma** cuando todos los eventos contados la reportan, y es `null` cuando solo algunos lo hacen. El campo obsoleto `cachedTokens` se lee como `cacheReadTokens` cuando el campo nuevo está ausente.
+- `costSource` se omite cuando ningún evento contado envía jamás la clave. En cuanto algún evento lo hace, un valor ausente o no reconocido en cualquier evento cuenta como `'unknown'` (el mismo valor por defecto que aplica el contrato canónico), y la cifra es el valor común cuando todos los eventos coinciden, `null` cuando no coinciden; así, una mezcla de un `'estimated'` explícito y un evento que no dijo nada da `null`.
+- `failedCalls` cuenta los eventos `llm.failed`, de forma independiente a `llm.usage`: un agente con solo llamadas fallidas y ninguna exitosa igual recibe una entrada en `byAgent`, con el resto de las cifras en `null`. La clave se omite cuando no hay llamadas fallidas que reportar.
 - Un costo está reportado solo si es un número finito y no negativo, y una moneda cuenta solo si es un código ISO 4217 (`^[A-Z]{3}$`, como `USD`). Valores como `'usd'`, `'dollars'` o `''` cuentan como sin moneda. Los costos nunca se convierten:
 
   | Costos vistos (tras deduplicar) | `cost` | `currency` |
@@ -600,7 +639,7 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 
 - `currency` se fija solo cuando `cost` se conoce, así que nunca aparece una moneda junto a un costo desconocido. Nunca se muestra una suma parcial.
 - Las mismas reglas valen para cada agente en `byAgent`, con solo los eventos de ese agente: si a un agente le falta una cifra, solo ese agente y el total de la ejecución quedan como desconocidos.
-- Sin ningún evento `llm.usage`, todas las cifras son `null` (se muestran como "desconocido"), no cero, y `byAgent` es `{}`.
+- Sin ningún evento `llm.usage`, todas las cifras son `null` (se muestran como "desconocido"), no cero, y `byAgent` es `{}` (salvo que algún agente tenga eventos `llm.failed` propios, en cuyo caso recibe una entrada con `failedCalls` fijado y todo lo demás en `null`).
 
 **Campos de correlación de uso (issue #64).** Los payloads de `llm.usage` y `llm.failed` pueden traer `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` y `tags` (ver [integration.md](integration.md#correlation-and-attribution-fields-issue-64), en inglés, para las reglas de validación). `summarizeUsage` no los lee: su resultado es idéntico tenga o no un evento estos campos, y nunca agrupa por ellos. Ningún componente de la librería muestra `userId` ni `tags`, ya que `userId` es una atribución seudónima y `tags` puede usarse para etiquetas internas, ninguno pensado para la vista embebida. La librería exporta los límites y el tipo correspondientes, solo como valores y tipo, sin ningún comportamiento nuevo: `CORRELATION_ID_MAX_LENGTH` (128), `USAGE_TAGS_MAX` (20), `USAGE_TAG_MAX_LENGTH` (64) y el tipo `UsageCorrelation`.
 
@@ -849,7 +888,7 @@ Todo se exporta desde `@warlockcode/agent-viewer`. La hoja de estilos es `@warlo
 | Oficina | `AgentOffice` | `AgentOfficeProps` |
 | Modelo de la oficina | `OfficeStore`, `buildOfficeSnapshot` | `AgentProfile`, `OfficeEventInput`, `OfficeMode`, `OfficeSnapshot`, `OfficeStoreOptions` |
 | Repetición | `useEventReplay`, `ReplayControls` | `EventReplay`, `EventReplayOptions`, `ReplayControlsProps` |
-| Consumo | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem` |
+| Consumo | `formatUsage`, `formatTokens`, `formatCost`, `formatUsageBadge`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource` |
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Tipos base | ninguno | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
 | Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |

@@ -11,8 +11,12 @@ import {
   formatJsonlRow,
   formatTagsForCsv,
   guardCsvCell,
+  shapeExportTotals,
   toExportCallRecord,
 } from '../server/usage/export.ts';
+import { MemoryEventStore } from '../server/store.ts';
+import { emptyUsageFilters } from '../server/usage/types.ts';
+import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
 
 function baseRow(overrides = {}) {
   return {
@@ -307,4 +311,57 @@ test('toExportCallRecord: receivedAt/occurredAt are ISO 8601 UTC with millisecon
   assert.equal(record.receivedAt, '2023-11-14T22:13:25.441Z');
   assert.equal(record.occurredAt, '2023-11-14T22:13:20.120Z');
   assert.notEqual(record.receivedAt, record.occurredAt);
+});
+
+// -------------------------------------------------------------
+// shapeExportTotals: complete/incompleteReason (memory-mode eviction, issue #53)
+// -------------------------------------------------------------
+
+function usageEvent(id, agentId) {
+  const result = validateCanonicalEvent({
+    id,
+    type: 'llm.usage',
+    timestamp: 1_700_000_000_000,
+    source: `agent:${agentId}`,
+    agentId,
+    summary: 'test call',
+    payload: { provider: 'anthropic', model: 'claude', inputTokens: 1, outputTokens: 1, cost: 1, currency: 'USD', costSource: 'provider-reported' },
+  });
+  assert.equal(result.success, true, JSON.stringify(result.issues));
+  return result.data;
+}
+
+test('shapeExportTotals: memory-mode eviction reports complete=false, incompleteReason=evicted', async () => {
+  const store = new MemoryEventStore({ maxEvents: 1000, usageLedgerMaxRows: 2 });
+  await store.init();
+  try {
+    for (let i = 0; i < 3; i++) {
+      const res = await store.append(usageEvent(`evt_cap_${i}`, 'agent-cap'));
+      assert.equal(res.outcome, 'accepted');
+    }
+    const filters = emptyUsageFilters();
+    filters.agentId = ['agent-cap'];
+    const rollup = await store.rollup({ groupBy: ['agent'], filters, sort: 'key', limit: 1 });
+    const totals = shapeExportTotals(rollup, filters);
+    assert.equal(totals.complete, false);
+    assert.equal(totals.incompleteReason, 'evicted');
+  } finally {
+    await store.close();
+  }
+});
+
+test('shapeExportTotals: a fresh store under its cap reports complete=true with no incompleteReason', async () => {
+  const store = new MemoryEventStore({ maxEvents: 1000, usageLedgerMaxRows: 1000 });
+  await store.init();
+  try {
+    await store.append(usageEvent('evt_fresh', 'agent-fresh'));
+    const filters = emptyUsageFilters();
+    filters.agentId = ['agent-fresh'];
+    const rollup = await store.rollup({ groupBy: ['agent'], filters, sort: 'key', limit: 1 });
+    const totals = shapeExportTotals(rollup, filters);
+    assert.equal(totals.complete, true);
+    assert.equal('incompleteReason' in totals, false);
+  } finally {
+    await store.close();
+  }
 });

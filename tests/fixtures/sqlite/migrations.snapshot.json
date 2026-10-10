@@ -7,5 +7,6 @@
   [6, "usage-ledger"],
   [7, "usage-calls-indexes"],
   [8, "retention"],
-  [9, "usage-rollup"]
+  [9, "usage-rollup"],
+  [10, "usage-ledger-summary"]
 ]

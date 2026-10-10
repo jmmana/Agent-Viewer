@@ -156,6 +156,11 @@ const EN = {
   'usage.noCurrency': 'Currency not reported',
   'usage.estimatedShort': 'estimated',
   'usage.sourceUnknown': 'Source unknown',
+  'usage.calls': 'Model calls',
+  'usage.unattributedCalls': 'Not attributed to this meeting',
+  'usage.meeting': 'Meeting spend',
+  'usage.meetingsHeading': 'Meetings',
+  'usage.meetingLine': '{title}: {usage}',
 
   // Per-call detail panel (only shown when the host allows it, for the selected agent)
   'calls.title': 'Call details: {name}',
@@ -328,6 +333,11 @@ const ES: OfficeMessages = {
   'usage.noCurrency': 'Moneda no reportada',
   'usage.estimatedShort': 'estimado',
   'usage.sourceUnknown': 'Fuente desconocida',
+  'usage.calls': 'Llamadas al modelo',
+  'usage.unattributedCalls': 'Sin atribuir a esta reunión',
+  'usage.meeting': 'Gasto de la reunión',
+  'usage.meetingsHeading': 'Reuniones',
+  'usage.meetingLine': '{title}: {usage}',
 
   'calls.title': 'Detalle de llamadas: {name}',
   'calls.close': 'Cerrar el detalle de llamadas',

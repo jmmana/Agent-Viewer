@@ -19,8 +19,8 @@ export { ReplayControls } from './ReplayControls';
 export type { ReplayControlsProps } from './ReplayControls';
 
 // Usage figures (display only)
-export { formatUsage, formatTokens, formatCost, formatCostSource, formatUsageBadge, summarizeUsage } from './usage';
-export type { OfficeUsage, UsageFigures, FormattedUsageItem, UsageBadge, UsageCostSource } from './usage';
+export { formatUsage, formatTokens, formatCost, formatCostSource, formatUsageBadge, formatMeetingUsage, summarizeUsage } from './usage';
+export type { OfficeUsage, UsageFigures, FormattedUsageItem, UsageBadge, UsageCostSource, MeetingUsage, MeetingUsageFigures } from './usage';
 
 // Per-call detail panel (display only)
 export type { AgentCallDetail, AgentCallDetails, AgentCallTokens, AgentCallStatus, AgentCallCostSource } from './callDetails';

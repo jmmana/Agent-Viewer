@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   createOfficeTranslator,
   formatCost,
+  formatMeetingUsage,
   formatTokens,
   formatUsage,
   formatUsageBadge,
   summarizeUsage,
   type CanonicalEventInput,
+  type MeetingUsageFigures,
   type UsageFigures,
 } from '../../src/lib/index';
 import { T0, llmFailed, llmUsage, makeEvent, registered } from './fixtures';
@@ -585,5 +587,43 @@ describe('summarizeUsage: cache, reasoning, cost source and failed calls', () =>
       llmFailed('ana', { provider: 'OpenAI', errorKind: 'timeout' }, { id: 'f-1', at: T0 + 1 }),
     ]);
     expect(usage.total?.failedCalls).toBe(1);
+  });
+});
+
+describe('formatMeetingUsage (issue #81)', () => {
+  const base: MeetingUsageFigures = { totalTokens: 1650, cost: 0.0135, currency: 'USD' };
+
+  it('adds a calls row only when the host sends one', () => {
+    expect(formatMeetingUsage(base, undefined, en).find((item) => item.label === 'Model calls')).toBeUndefined();
+    const withCalls = formatMeetingUsage({ ...base, calls: 14 }, undefined, en);
+    expect(withCalls.find((item) => item.label === 'Model calls')).toMatchObject({ value: '14' });
+  });
+
+  it('marks the cost row partial when callsWithoutCost is greater than 0, leaving the number itself intact', () => {
+    const rows = formatMeetingUsage({ ...base, calls: 14, callsWithoutCost: 2 }, undefined, en);
+    const cost = rows.find((item) => item.label === 'Cost');
+    expect(cost?.value).toContain('$0.0135');
+    expect(cost?.value).toContain('2 calls with unknown cost');
+  });
+
+  it('does not mark the cost row partial when callsWithoutCost is 0 or absent', () => {
+    expect(formatMeetingUsage({ ...base, callsWithoutCost: 0 }, undefined, en).find((item) => item.label === 'Cost')?.value).toBe('$0.0135');
+    expect(formatMeetingUsage(base, undefined, en).find((item) => item.label === 'Cost')?.value).toBe('$0.0135');
+  });
+
+  it('shows unattributedCalls when sent, including a real 0, and omits it when the key is absent', () => {
+    const label = 'Not attributed to this meeting';
+    expect(formatMeetingUsage(base, undefined, en).find((item) => item.label === label)).toBeUndefined();
+    const zero = formatMeetingUsage({ ...base, unattributedCalls: 0 }, undefined, en);
+    expect(zero.find((item) => item.label === label)?.value).toBe('0');
+    const unknown = formatMeetingUsage({ ...base, unattributedCalls: null }, undefined, en);
+    expect(unknown.find((item) => item.label === label)?.value).toBe('unknown');
+  });
+
+  it('reuses formatUsage for every figure it already knows, in Spanish too', () => {
+    const rows = formatMeetingUsage({ totalTokens: null, cost: null, calls: 3 }, undefined, es);
+    expect(rows.find((item) => item.label === 'Tokens')?.value).toBe('desconocido');
+    expect(rows.find((item) => item.label === 'Costo')?.value).toBe('desconocido');
+    expect(rows.find((item) => item.label === 'Llamadas al modelo')?.value).toBe('3');
   });
 });

@@ -82,7 +82,7 @@ These are design rules, enforced in code, not marketing:
 1. **Your runtime is the source of truth.** Agent Viewer projects events; it never decides what an agent is doing. Animation never overwrites a real work status (`IDLE`, `THINKING`, `CODING`...).
 2. **Observable only.** Statuses, tool names, explicit messages, meetings and reported usage. Private chain-of-thought is never required and never shown.
 3. **Nothing invented in professional mode.** The embedded office has no ambient life, no invented lines, no sounds. Showcase mode adds simulated office life, and every simulated bubble says so (`SOCIAL · SIMULATED`).
-4. **Unknown is not zero.** The component never computes, adds up or prices usage. A missing cost is shown as "unknown", never as `0`.
+4. **Unknown is not zero.** The component never computes, adds up or prices usage. A missing cost is shown as "unknown", never as `0`. Meeting figures (`meetingUsage`) follow the exact same rule: they come from your host, never from the deprecated `Meeting.tokensAccumulated`/`costAccumulated`.
 5. **A good guest in your app.** No injected styles, no global selectors, no `localStorage`, no global keyboard shortcuts, nothing runs on import. Two offices on one page never share state.
 6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
@@ -403,6 +403,12 @@ Want to answer "which calls made up that number" for one agent? Add `showCallDet
 ```
 
 Clicking an agent opens a read-only panel of its calls (provider, model, tokens by kind, request id, latency, status, cost source), exactly as `agentCallDetails[agentId]` reports them: the office never fetches, sums, prices or sorts any of it, and `AgentCallDetail` has no field that can carry a prompt, a completion or any other free text.
+
+Want to answer "what did this meeting cost"? Add `meetingUsage`, keyed by meeting id (shown only alongside `showUsage`; see [Meeting figures](docs/library.md#meeting-figures)):
+
+```tsx
+<AgentOffice events={events} showUsage usage={usage} meetingUsage={meetingUsage} />
+```
 
 </details>
 

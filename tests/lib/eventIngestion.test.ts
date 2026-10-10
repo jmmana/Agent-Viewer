@@ -162,6 +162,22 @@ describe('meeting lifecycle', () => {
     expect(state.meetings[0].status).toBe('CONCLUDED');
     expect(state.agents.map((item) => item.status)).toEqual(['IDLE', 'IDLE']);
   });
+
+  it('never writes Meeting.tokensAccumulated/costAccumulated from llm.usage (issue #81 regression: the live ' +
+    'portal must never read these as a usage figure; they stay 0 and are only ever seeded by the demo script)', () => {
+    const state = officeWithMeeting();
+    apply(state, [makeEvent('meeting.started', 'ana', { meetingId: 'm-1' }, { at: T0 + 30 })], {
+      ...PROFESSIONAL,
+      trackUsage: true,
+    });
+    apply(
+      state,
+      [llmUsage('ana', { inputTokens: 500, outputTokens: 200, cost: 0.01, meetingId: 'm-1' }, { at: T0 + 40 })],
+      { ...PROFESSIONAL, trackUsage: true }
+    );
+    expect(state.meetings[0].tokensAccumulated).toBe(0);
+    expect(state.meetings[0].costAccumulated).toBe(0);
+  });
 });
 
 describe('agent.registered and workspaces', () => {

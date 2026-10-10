@@ -1173,3 +1173,18 @@ From the Python SDK: `agent.usage(provider=..., model=..., input_tokens=..., out
 A field your runtime never reports renders as "n/a" in Model Ops, never as `0`. Note that some SDK helpers still default `cached_tokens`/`reasoning_tokens` to `0` rather than leaving them unset; until that is fixed (issue #58), those two columns will read `0` for calls sent through those helpers instead of "n/a", even though the raw API and Model Ops itself never invent a zero on their own.
 
 Model Ops never writes to the server: reassigning a model or editing spend from the console only ever exists in its separate, clearly labelled Simulator tab, and only in `simulated` mode.
+
+## 💬 12. Reading spend per meeting and tool in the portal
+
+The Meetings panel and the tool chip tooltips (issue #81) are thin, read-only views over the same `GET /api/v1/usage/rollup` endpoint Model Ops uses, grouped by `meeting` or `tool` (issue #80, see [section 3](#-3-rest-api-reference)). Neither the Meetings panel nor a tool tooltip sums, converts or prices anything: every figure comes straight from a rollup group.
+
+**Send `meetingId` and `toolCallId` on `llm.usage`/`llm.failed` for figures to appear anywhere.** Both are part of the [correlation and attribution fields](#correlation-and-attribution-fields-issue-64) (issue #64):
+
+- `meetingId`: without it, a call is `unattributed` for the `meeting` dimension, full stop. There is no time-overlap fallback ("the agent was in this meeting at the time"). When your host does not send one, the portal and the server agree on the fallback id `meeting-<event id>`, so the two never disagree about which bucket a call belongs to.
+- `toolCallId`: without it, a call is `unattributed` for the `tool` dimension. With one, the server resolves the tool's name by matching it against a `tool.started` event in the exact same `(sessionId, agentId, toolCallId)` scope; two different names in that scope make the call `ambiguous` rather than guessing one.
+
+**What the Meetings panel shows.** The active meeting's card reads its figures from the `meeting` group whose `key.meetingId` matches the meeting's id; a meeting with no matching group (no ledger rows reference it yet) shows "unknown", never `0` or `$0.000`. A "Spend per meeting" table lists every meeting the portal knows about, plus any server-only group with no portal counterpart, plus a final "Not attributed to a meeting" row when the `unattributed` group is non-empty; the table never recomputes a total.
+
+**What a tool chip's tooltip shows.** It fetches the `tool` group scoped to that chip's agent (and task, for a per-task tool chip) and looks for the row whose resolved `tool` name matches the chip. A chip with no matching row reads "no figures from the server", never `0`: that is different from a real zero-call tool, which would still have its own row.
+
+**Demo mode.** With no server connected (`VITE_AGENT_VIEWER_MODE` unset and no `?mode=live`), the Meetings panel keeps its simulated `tokensAccumulated`/`costAccumulated` figures, tagged "Simulated", and no tool tooltip makes a request.

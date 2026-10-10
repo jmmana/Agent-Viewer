@@ -155,6 +155,7 @@ Give every event a stable, unique `id`. The office ignores an event whose `id` i
 | `showUsage` | `boolean` | `false` | Shows the figures passed in `usage`. See [Usage figures](#usage-figures). |
 | `showUsageBadges` | `boolean` | `false` | Draws a compact usage badge on each agent card from `usage.byAgent`. Independent of `showUsage`. See [Usage figures](#usage-figures). |
 | `usage` | `OfficeUsage` | none | Usage figures computed by your app. The office never computes them. |
+| `meetingUsage` | `MeetingUsage` | none | Per-meeting usage figures computed by your app, keyed by meeting id. Shown only while `showUsage` is also `true`. See [Meeting figures](#meeting-figures). |
 | `showCallDetails` | `boolean` | `false` | Shows a read-only panel with the calls of the selected agent, from `agentCallDetails`. Independent of `showUsage`/`showUsageBadges`. See [Call details](#call-details). |
 | `agentCallDetails` | `AgentCallDetails` | none | Call metadata per agent id, computed and paged by your app. Only the selected agent's entry is read. |
 | `selectedAgentId` | `string \| null` | none | Controlled selection. Leave it undefined to let the office keep its own. When it changes, the camera centers on that agent. |
@@ -459,7 +460,7 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | `office.agentLineNoRole` | {name}: {status} | {name}: {status} |
 | `office.empty` | Waiting for agent activity | Esperando actividad de los agentes |
 
-#### `usage.*` (26)
+#### `usage.*` (31)
 
 | Key | English | Spanish |
 |---|---|---|
@@ -489,6 +490,11 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | `usage.noCurrency` | Currency not reported | Moneda no reportada |
 | `usage.estimatedShort` | estimated | estimado |
 | `usage.sourceUnknown` | Source unknown | Fuente desconocida |
+| `usage.calls` | Model calls | Llamadas al modelo |
+| `usage.unattributedCalls` | Not attributed to this meeting | Sin atribuir a esta reunión |
+| `usage.meeting` | Meeting spend | Gasto de la reunión |
+| `usage.meetingsHeading` | Meetings | Reuniones |
+| `usage.meetingLine` | {title}: {usage} | {title}: {usage} |
 
 #### `replay.*` (8)
 
@@ -563,7 +569,7 @@ Notes:
 
 - The canvas drawing itself (floor, furniture, agents, name cards and bubbles) uses the built-in dark or light palette chosen by `theme`. The `--av-*` variables do not change it.
 - No fonts are loaded. Canvas text asks for `"Plus Jakarta Sans"` and falls back to the browser's sans-serif font when your page does not provide it.
-- Class names you can target: `av-office`, `av-theme-dark`, `av-theme-light`, `av-office-stage`, `av-office-empty`, `av-usage`, `av-usage-item`, `av-sr-only`, `av-canvas-root`, `av-toolbar`, `av-toolbar-sep`, `av-tool-btn`, `av-tool-btn--accent`, `av-tool-btn--active`, `av-zoom-level`, `av-stage`, `av-canvas`, `av-icon`, `av-replay`, `av-replay-btn`, `av-replay-btn--primary`, `av-replay-range`, `av-replay-progress`, `av-replay-speed`, `av-call-details`, `av-call-details-header`, `av-call-details-close`, `av-call-details-empty`, `av-call-details-list`, `av-call-item`, `av-call-row`, `av-call-request-id`. The `av-tooltip*`, `av-tool-btn--telemetry` and `av-icon--live` classes are used by the demo app.
+- Class names you can target: `av-office`, `av-theme-dark`, `av-theme-light`, `av-office-stage`, `av-office-empty`, `av-usage-stack`, `av-usage`, `av-usage-item`, `av-meeting-usage`, `av-meeting-usage-title`, `av-sr-only`, `av-canvas-root`, `av-toolbar`, `av-toolbar-sep`, `av-tool-btn`, `av-tool-btn--accent`, `av-tool-btn--active`, `av-zoom-level`, `av-stage`, `av-canvas`, `av-icon`, `av-replay`, `av-replay-btn`, `av-replay-btn--primary`, `av-replay-range`, `av-replay-progress`, `av-replay-speed`, `av-call-details`, `av-call-details-header`, `av-call-details-close`, `av-call-details-empty`, `av-call-details-list`, `av-call-item`, `av-call-row`, `av-call-request-id`. The `av-tooltip*`, `av-tool-btn--telemetry` and `av-icon--live` classes are used by the demo app.
 
 ## Accessibility
 
@@ -644,6 +650,28 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 - Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}` (unless some agent has `llm.failed` events of its own, in which case it gets an entry with `failedCalls` set and everything else `null`).
 
 **Usage correlation fields (issue #64).** `llm.usage` and `llm.failed` payloads may carry `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` and `tags` (see [docs/integration.md](integration.md#correlation-and-attribution-fields-issue-64) for the validation rules). `summarizeUsage` does not read them: its output is identical whether or not an event carries these fields, and it never groups by them. No library component renders `userId` or `tags`, since `userId` is pseudonymous attribution and `tags` can be used for internal labels, neither meant for the embedded display. The library exports the matching limits and type as values and a type only, with no new behavior: `CORRELATION_ID_MAX_LENGTH` (128), `USAGE_TAGS_MAX` (20), `USAGE_TAG_MAX_LENGTH` (64) and the type `UsageCorrelation`.
+
+### Meeting figures
+
+A meeting is where several agents spend together; `meetingUsage` answers "what did this meeting cost" the same way `usage.byAgent` answers it per agent, from your app's own figures only (issue #81):
+
+```tsx
+import type { MeetingUsage } from '@warlockcode/agent-viewer';
+
+const meetingUsage = useMemo<MeetingUsage>(() => ({
+  'm-1': { calls: 14, totalTokens: 23550, cost: 0.0412, currency: 'USD', callsWithoutCost: 2, unattributedCalls: 3 },
+}), []);
+
+<AgentOffice events={events} showUsage usage={usage} meetingUsage={meetingUsage} />
+```
+
+- `MeetingUsageFigures` extends `UsageFigures` with `calls` (model calls attributed to the meeting), `callsWithoutCost` (of `calls`, how many had no cost: the cost figure is marked partial when this is greater than `0`) and `unattributedCalls` (calls you could not attribute to the meeting, shown on its own line, never added to `calls` or to any other figure). `MeetingUsage` is `Record<meetingId, MeetingUsageFigures>`.
+- Hidden unless `showUsage` is `true` and `meetingUsage` has an entry for the shown meeting. The shown meeting is the active one (`snapshot.activeMeetingId`) when it has an entry; otherwise, since the active id clears the moment a meeting ends, it is the meeting with the greatest `startedAt` that has an entry, so a just-concluded meeting still shows its figures. An entry whose key matches no meeting in the current snapshot is ignored.
+- A new `dl.av-meeting-usage` panel, placed under the per-run `av-usage` panel, shows the meeting's title and the same row rules as `usage.byAgent`: a missing or `null` field reads "unknown", a real `0` shows `0`, and an omitted key shows no row. `unattributedCalls` is shown when you send a number (including `0`) and omitted entirely when the key is absent.
+- The visually hidden list gets a second heading, "Meetings", with one line per meeting that has an entry, so screen readers get the same figures as the visible panel.
+- Nothing is summed: two meetings in `meetingUsage` never produce a combined figure, `unattributedCalls` is never added to `calls`, and the office never reads `Meeting.tokensAccumulated` or `Meeting.costAccumulated` (both `@deprecated`: always `0` outside the bundled demo script). If your host reports a mixed-currency meeting, send `cost: null` rather than picking one currency; `UsageFigures` has room for exactly one.
+- `formatMeetingUsage(figures, locale, translate)` is exported and returns the same formatted rows the panel uses, if you want to show them elsewhere.
+- Your host must send a `meetingId` on its meeting events to key this prop reliably. Without one, the library falls back to `meeting-<event id>`.
 
 ### Call details
 
@@ -927,7 +955,7 @@ Everything is exported from `@warlockcode/agent-viewer`. The stylesheet is `@war
 | Office | `AgentOffice` | `AgentOfficeProps` |
 | Office model | `OfficeStore`, `buildOfficeSnapshot` | `AgentProfile`, `OfficeEventInput`, `OfficeMode`, `OfficeSnapshot`, `OfficeStoreOptions` |
 | Replay | `useEventReplay`, `ReplayControls` | `EventReplay`, `EventReplayOptions`, `ReplayControlsProps` |
-| Usage | `formatUsage`, `formatTokens`, `formatCost`, `formatCostSource`, `formatUsageBadge`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource` |
+| Usage | `formatUsage`, `formatTokens`, `formatCost`, `formatCostSource`, `formatUsageBadge`, `formatMeetingUsage`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource`, `MeetingUsage`, `MeetingUsageFigures` |
 | Call details | none | `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Core types | none | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |

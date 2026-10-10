@@ -20,7 +20,8 @@ import {
 } from './crewPreferences';
 import { crewTheme } from './crewContrast';
 import { CrewGestures } from './crewGestures';
-import type { Agent } from '../types/agent';
+import { crewAgentActivity, crewActivityLine, crewViewerModeLabel, type CrewViewerMode, type CrewVisibility } from './crewEventBridge';
+import type { Agent, Meeting, Task } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
 /** Oculta visualmente un texto sin quitarlo de la lectura por lector de pantalla. */
@@ -33,10 +34,22 @@ const srOnlyStyle: React.CSSProperties = {
  * Escena Crew independiente con arte incremental y geometría provisional.
  * Consume presencia del dominio sin importar el renderer ni la cuadrícula Caricatura.
  */
-export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomChange, missingRoom = false,
+export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [], viewerMode, visibility = 'full',
+  selectedRoomId, onRoomChange, missingRoom = false,
   cameraState, onCameraStateChange, preferences, onPreferencesChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
   locale?: string;
   agents?: readonly Agent[];
+  /** Tareas del snapshot (issue #155). Solo lectura: Crew nunca recalcula su estado ni su progreso. */
+  tasks?: readonly Task[];
+  /** Reuniones del snapshot (issue #155). Solo lectura, igual que `tasks`. */
+  meetings?: readonly Meeting[];
+  /**
+   * LIVE/DEMO/REPLAY explícito del host (issue #155). Sin esta prop, Crew no muestra ninguna insignia:
+   * nunca infiere el modo a partir de los datos.
+   */
+  viewerMode?: CrewViewerMode;
+  /** `full` (por defecto) o `minimized` para pantallas públicas/televisores: oculta texto de tarea y reunión. */
+  visibility?: CrewVisibility;
   selectedRoomId?: string;
   missingRoom?: boolean;
   cameraState?: CrewCameraByRoom;
@@ -191,6 +204,11 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
         : 'The linked office is unavailable. Showing CEO Office; choose another office or return to Cartoon.'}
     </p>}
     <div style={{ display: 'flex', flexWrap: 'wrap', padding: 10 * hudScale, gap: 8 * hudScale, alignItems: 'center', fontSize: 14 * hudScale }}>
+      {viewerMode && <span data-testid={`${idPrefix}-viewer-mode`}
+        aria-label={isEs ? `Modo: ${crewViewerModeLabel(viewerMode, isEs)}` : `Mode: ${crewViewerModeLabel(viewerMode, isEs)}`}
+        style={{ border: '1px solid currentColor', borderRadius: 999, padding: '2px 8px', fontSize: 11 * hudScale, fontWeight: 700, letterSpacing: .4 }}>
+        {crewViewerModeLabel(viewerMode, isEs)}
+      </span>}
       <CrewRoomSelector roomId={roomId} onChange={setRoomId} agents={agents} isEs={isEs} idPrefix={idPrefix} />
       <button type="button" disabled={roomId === CREW_ROOMS[0].id}
         onClick={() => setRoomId(CREW_ROOMS[Math.max(0, CREW_ROOMS.findIndex(item => item.id === roomId) - 1)].id)}>
@@ -300,6 +318,10 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
       <span>{isEs ? 'Agentes en esta oficina:' : 'Agents in this room:'} {visibleAgents.length}</span>
       {visibleAgents.map(agent => {
         const marker = presence.markers.find(item => item.id === agent.id);
+        // Puente de eventos de solo lectura (#155): la misma actividad real del snapshot (tarea, reunión,
+        // aprobación, herramienta) sin inventar nada ni recalcular tokens/costo.
+        const activity = crewAgentActivity(agent, tasks, meetings, visibility);
+        const activityLine = crewActivityLine(activity, isEs);
         return <button type="button" key={agent.id} disabled={!marker}
           aria-label={isEs ? `Enfocar a ${agent.name}` : `Focus ${agent.name}`}
           onClick={() => {
@@ -309,6 +331,7 @@ export function CrewStage({ locale = 'es', agents = [], selectedRoomId, onRoomCh
           {marker && <span aria-hidden="true">{marker.number}. </span>}
           <span>{agent.name}: {agent.status}</span>
           {agent.isWalking && <span>{isEs ? ' · En tránsito' : ' · In transit'}</span>}
+          {activityLine && <span> · {activityLine}</span>}
         </button>;
       })}
       {presence.unplaced.length > 0 && <span role="status">{isEs

@@ -3,6 +3,7 @@ import { defaultCrewPreferences, type CrewPreferences } from '../crew/crewPrefer
 import { CrewStage } from '../crew/CrewStage';
 import { CREW_ROOMS, type VisualMode } from '../crew/crewModel';
 import type { CrewCameraByRoom } from '../crew/crewCamera';
+import type { CrewViewerMode, CrewVisibility } from '../crew/crewEventBridge';
 import { OfficeCanvas } from '../components/OfficeCanvas';
 import { type CameraState, agentRoleLabel } from '../engine/canvasRenderer';
 import {
@@ -44,6 +45,13 @@ export interface AgentOfficeProps {
   /** Preferencias visuales por instancia, sin almacenamiento ni cambios al dominio. */
   crewPreferences?: CrewPreferences;
   onCrewPreferencesChange?: (preferences: CrewPreferences) => void;
+  /**
+   * LIVE/DEMO/REPLAY explícito (issue #155). AgentOffice nunca lo infiere de los eventos recibidos:
+   * sin esta prop, Crew no muestra ninguna insignia de modo.
+   */
+  crewViewerMode?: CrewViewerMode;
+  /** `full` (por defecto) o `minimized` para pantallas públicas/televisores (issue #155): oculta el texto de tarea y reunión en Crew, conservando solo su categoría. */
+  crewVisibility?: CrewVisibility;
   /** BCP 47 locale for the built-in texts and number formats, for example `es-CO`. Defaults to `en`. */
   locale?: string;
   /** Overrides for single texts. Missing keys fall back to the built-in catalog, then to English. */
@@ -77,6 +85,8 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   onCrewCamerasChange,
   crewPreferences,
   onCrewPreferencesChange,
+  crewViewerMode,
+  crewVisibility = 'full',
   locale = 'en',
   messages,
   t,
@@ -136,6 +146,10 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
         {visualMode === 'crew' ? <CrewStage
           locale={locale}
           agents={snapshot.agents}
+          tasks={snapshot.tasks}
+          meetings={snapshot.meetings}
+          viewerMode={crewViewerMode}
+          visibility={crewVisibility}
           selectedRoomId={crewRoomId ?? internalCrewRoom}
           onRoomChange={roomId => {
             if (crewRoomId === undefined) setInternalCrewRoom(roomId);

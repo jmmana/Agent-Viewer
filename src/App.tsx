@@ -68,6 +68,10 @@ export default function App() {
   const serverAuth = useServerAuthState(isLiveMode ? apiBase : undefined);
 
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  // Rótulo explícito LIVE/DEMO/REPLAY para Crew (issue #155). No se infiere de los datos: arranca según
+  // `isLiveMode` y pasa a 'replay' solo cuando el usuario suelta un archivo de eventos para reproducirlo.
+  const [lastSource, setLastSource] = useState<'live' | 'demo' | 'replay'>(() => (isLiveMode ? 'live' : 'demo'));
+  const crewViewerMode = lastSource === 'live' ? 'LIVE' as const : lastSource === 'replay' ? 'REPLAY' as const : 'DEMO' as const;
   // Load phase of the live portal (issue #72): the top bar badge is driven by this, not by the arrival of an
   // event, so a quiet server still shows a loading state instead of looking stuck on "CONNECTING".
   const [livePhase, setLivePhase] = useState<'loading' | 'subscribing' | 'live' | 'reconnecting' | 'error'>('loading');
@@ -654,6 +658,7 @@ export default function App() {
         applyExternalEvent(nextState, evt, { locale });
       }
       setSimState(nextState);
+      setLastSource('replay');
     } catch (err: any) {
       setDropError(err?.message || t(locale, 'drop.readFailed'));
     }
@@ -748,7 +753,8 @@ export default function App() {
           <div className="flex-1 flex w-full h-full relative overflow-hidden">
             <div className="flex-1 h-full relative overflow-hidden">
               {visualMode === 'crew' ? (
-                <CrewStage locale={locale} agents={canvasAgents}
+                <CrewStage locale={locale} agents={canvasAgents} tasks={simState.tasks} meetings={simState.meetings}
+                  viewerMode={crewViewerMode}
                   selectedRoomId={crewNavigation.selectedRoomId} onRoomChange={setCrewRoom}
                   missingRoom={crewMissingRoom} preferences={crewPreferences} onPreferencesChange={setCrewPreferences} />
               ) : currentFloor === 1 ? (

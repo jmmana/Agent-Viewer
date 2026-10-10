@@ -270,7 +270,8 @@ export interface UsageRollupCoverage {
   complete: boolean;
   /** Memory mode only: ledger rows this process could not keep (upper bound, not an exact per-query count). */
   droppedRows: number;
-  /** Highest `usage_cutoff` any retention run has purged through. `null` until #70 lands. */
+  /** Highest `received_at` any retention run (issue #70) has purged the usage ledger through. `null` until the
+   * first run that actually reaches a row. */
   purgedThrough: number | null;
   backfilledRows: number;
   legacyContractRows: number;

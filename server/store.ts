@@ -1122,7 +1122,11 @@ export class MemoryEventStore implements EventStore {
       ledger: this.ledger,
       query,
       now: this.now,
-      coverage: { droppedRows: this.ledgerDroppedRows, complete: this.ledgerComplete },
+      coverage: {
+        droppedRows: this.ledgerDroppedRows,
+        capComplete: this.ledgerComplete,
+        purgedThrough: this.retentionState.usageLedger.purgedBefore,
+      },
     });
   }
 

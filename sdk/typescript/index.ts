@@ -10,6 +10,15 @@ import type { LlmErrorKind } from '../../src/integrations/canonicalTypes';
 import type { ViewerSnapshot } from '../../server/store';
 import type { UsageSummary } from '../../server/usageAggregates';
 import type { CallRecord } from '../../server/usage/types';
+import type {
+  RollupDimension,
+  RollupSort,
+  TimeBasis,
+  UsageRollupGroup,
+  UsageRollupResponse,
+  UsageRollupTotals,
+} from '../../server/usage/types';
+import type { UsageFigures } from '../../src/lib/usage';
 
 export type { ViewerSnapshot } from '../../server/store';
 export type { CallRecord, CallTokenFigures, CallTrace, CallStatus } from '../../server/usage/types';
@@ -22,6 +31,19 @@ export type {
   TokenFigure,
   CurrencyCost,
 } from '../../server/usageAggregates';
+export type {
+  RollupDimension,
+  RollupSort,
+  TimeBasis,
+  TokenKindRollup,
+  CostEntry,
+  UsageRollupTotals,
+  UsageRollupGroup,
+  UsageRollupQueryEcho,
+  UsageRollupAsOf,
+  UsageRollupCoverage,
+  UsageRollupResponse,
+} from '../../server/usage/types';
 
 /** Where a reported cost comes from. The SDK never chooses it for the caller. */
 export type CostSource = 'provider-reported' | 'estimated' | 'unknown';
@@ -334,6 +356,68 @@ export interface EmitBatchResult {
 /** 128 random bits from the platform CSPRNG (`crypto.randomUUID`), never the clock. */
 function defaultEventId(): string {
   return `evt_${globalThis.crypto.randomUUID()}`;
+}
+
+// -------------------------------------------------------------
+// Usage rollup (issue #66)
+// -------------------------------------------------------------
+
+/** Flat params for `AgentViewer.usageRollup()`. Repeatable filters accept a single value or an array; a `Date`
+ * for `from`/`to` is sent as ISO 8601. Mirrors the server's own `parseUsageFilters`/`parseRollupQuery`. */
+export interface UsageRollupParams {
+  groupBy: RollupDimension[];
+  from?: number | string | Date;
+  to?: number | string | Date;
+  timeBasis?: TimeBasis;
+  utcOffsetMinutes?: number;
+  sort?: RollupSort;
+  limit?: number;
+  asOfSeq?: number;
+  agentId?: string | string[];
+  model?: string | string[];
+  provider?: string | string[];
+  sessionId?: string | string[];
+  taskId?: string | string[];
+  runtimeId?: string | string[];
+  userId?: string | string[];
+  tag?: string | string[];
+  status?: string | string[];
+  costSource?: CostSource | CostSource[];
+  currency?: string | string[];
+}
+
+function formatRollupDateParam(value: number | string | Date): string {
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+function appendRepeatableParam(search: URLSearchParams, key: string, value: string | string[] | undefined): void {
+  if (value === undefined) return;
+  for (const item of Array.isArray(value) ? value : [value]) search.append(key, item);
+}
+
+/**
+ * Maps one rollup group (or `totals`) to the library's own `UsageFigures` shape (`src/lib/usage.ts`, imported as
+ * a type only: this helper runs in the host, the component still only displays what it receives through the
+ * `usage` prop). `cost` is a number only when there is exactly one cost entry, it has the requested `costSource`,
+ * and `unknownCostCalls` is 0; any mix of currencies, cost sources, or an unknown cost gives `null`.
+ * `inputTokens`/`outputTokens` are `null` unless every matching call reported that kind; `totalTokens` is their
+ * sum (excluding cache and reasoning tokens) only when both are non-null.
+ */
+export function toUsageFigures(
+  group: UsageRollupGroup | UsageRollupTotals,
+  options: { costSource: 'provider-reported' | 'estimated' }
+): UsageFigures {
+  const { entries, unknownCostCalls } = group.cost;
+  const singleEntry = entries.length === 1 ? entries[0] : undefined;
+  const matches = singleEntry !== undefined && singleEntry.costSource === options.costSource && unknownCostCalls === 0;
+  const cost = matches ? singleEntry!.sum : null;
+  const currency = matches ? singleEntry!.currency : null;
+
+  const inputTokens = group.tokens.input.sum !== null && group.tokens.input.unreportedCalls === 0 ? group.tokens.input.sum : null;
+  const outputTokens = group.tokens.output.sum !== null && group.tokens.output.unreportedCalls === 0 ? group.tokens.output.sum : null;
+  const totalTokens = inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null;
+
+  return { cost, currency, inputTokens, outputTokens, totalTokens };
 }
 
 export class AgentHandle {
@@ -867,6 +951,38 @@ export class AgentViewer {
         delay = Math.min(delay * 2, 5000);
       }
     }
+  }
+
+  /**
+   * `GET /api/v1/usage/rollup` (issue #66): grouped sums over the usage ledger, for an audit question such as
+   * "how much did agent X spend with model Y this week". The token always goes in the `Authorization` header,
+   * never the URL; repeated filters (`agentId`, `tag`, ...) are sent as repeated query params, never joined with
+   * commas. Uses the same `getWithRetry` as `listCalls()` (issue #67): 400/401/410 fail immediately, 429 and 5xx
+   * retry with backoff.
+   */
+  async usageRollup(params: UsageRollupParams): Promise<UsageRollupResponse> {
+    const search = new URLSearchParams();
+    search.set('groupBy', params.groupBy.join(','));
+    if (params.from !== undefined) search.set('from', formatRollupDateParam(params.from));
+    if (params.to !== undefined) search.set('to', formatRollupDateParam(params.to));
+    if (params.timeBasis !== undefined) search.set('timeBasis', params.timeBasis);
+    if (params.utcOffsetMinutes !== undefined) search.set('utcOffsetMinutes', String(params.utcOffsetMinutes));
+    if (params.sort !== undefined) search.set('sort', params.sort);
+    if (params.limit !== undefined) search.set('limit', String(params.limit));
+    if (params.asOfSeq !== undefined) search.set('asOfSeq', String(params.asOfSeq));
+    appendRepeatableParam(search, 'agentId', params.agentId);
+    appendRepeatableParam(search, 'model', params.model);
+    appendRepeatableParam(search, 'provider', params.provider);
+    appendRepeatableParam(search, 'sessionId', params.sessionId);
+    appendRepeatableParam(search, 'taskId', params.taskId);
+    appendRepeatableParam(search, 'runtimeId', params.runtimeId);
+    appendRepeatableParam(search, 'userId', params.userId);
+    appendRepeatableParam(search, 'tag', params.tag);
+    appendRepeatableParam(search, 'status', params.status);
+    appendRepeatableParam(search, 'costSource', params.costSource);
+    appendRepeatableParam(search, 'currency', params.currency);
+
+    return this.getWithRetry(`/api/v1/usage/rollup?${search.toString()}`) as Promise<UsageRollupResponse>;
   }
 
   private buildHeaders(idempotencyKey?: string): Record<string, string> {

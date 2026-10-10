@@ -1,7 +1,9 @@
 /**
  * `parseUsageFilters` (issue #67, section 2): the one query-string parser for both the calls endpoint (#67) and
  * the rollup endpoint (#66), so an identical query string selects an identical row set on both. Whichever of
- * the two issues lands first owns this file; the other reuses it unchanged (both issues say so).
+ * the two issues lands first owns this file; the other reuses it unchanged except for adding its own gated
+ * extras (issue #66 added `allowRollupOnly`, covering `userId`, `tag`, `asOfSeq` and `utcOffsetMinutes`, the
+ * same way issue #67's own `allowCallsOnly` gates `requestId`, `traceId`, `order`, `limit` and `cursor`).
  *
  * Strict by design: every violation is a 400 `invalid_filter` with `issues[].path` naming the parameter,
  * never a silent fallback. `token` and `api_key` are accepted and ignored (consumed by the auth middleware in
@@ -33,6 +35,12 @@ export interface ParseUsageFiltersOptions {
   /** True for the calls route (#67): accepts `requestId`, `traceId`, `order`, `limit`, `cursor`. False for the
    * rollup route (#66), where those keys do not exist and are rejected as unknown parameters. */
   allowCallsOnly: boolean;
+  /** True for the rollup route (#66): accepts `userId`, `tag`, `asOfSeq`, `utcOffsetMinutes`. False (or
+   * omitted) for the calls route, where those keys do not exist and are rejected as unknown parameters.
+   * Rollup's own `groupBy`/`sort`/`limit` are never parsed here at all (its `limit` means something different,
+   * with a different valid range, from the calls route's pagination `limit`): the rollup route strips them from
+   * the query object it passes in and parses them itself (`server/usage/rollup.ts`). */
+  allowRollupOnly?: boolean;
 }
 
 const IGNORED_KEYS = new Set(['token', 'api_key']);
@@ -53,6 +61,9 @@ const SHARED_SINGLE_KEYS = ['from', 'to', 'timeBasis'] as const;
 
 const CALLS_ONLY_REPEATABLE_KEYS = ['requestId'] as const;
 const CALLS_ONLY_SINGLE_KEYS = ['traceId', 'order', 'limit', 'cursor'] as const;
+
+const ROLLUP_ONLY_REPEATABLE_KEYS = ['userId', 'tag'] as const;
+const ROLLUP_ONLY_SINGLE_KEYS = ['asOfSeq', 'utcOffsetMinutes'] as const;
 
 const MAX_VALUES_PER_KEY = 100;
 const MAX_LIMIT = 1000;
@@ -139,6 +150,10 @@ export function parseUsageFilters(
     for (const key of CALLS_ONLY_REPEATABLE_KEYS) allowedRepeatable.add(key);
     for (const key of CALLS_ONLY_SINGLE_KEYS) allowedSingle.add(key);
   }
+  if (options.allowRollupOnly) {
+    for (const key of ROLLUP_ONLY_REPEATABLE_KEYS) allowedRepeatable.add(key);
+    for (const key of ROLLUP_ONLY_SINGLE_KEYS) allowedSingle.add(key);
+  }
 
   for (const key of Object.keys(query)) {
     if (IGNORED_KEYS.has(key)) continue;
@@ -159,6 +174,10 @@ export function parseUsageFilters(
   filters.currency = readRepeatable(query, 'currency', issues);
   if (options.allowCallsOnly) {
     filters.requestId = readRepeatable(query, 'requestId', issues);
+  }
+  if (options.allowRollupOnly) {
+    filters.userId = readRepeatable(query, 'userId', issues);
+    filters.tag = readRepeatable(query, 'tag', issues);
   }
 
   for (const value of filters.status) {
@@ -233,6 +252,31 @@ export function parseUsageFilters(
     cursor = cursorRaw ?? null;
   }
   filters.traceId = traceId;
+
+  if (options.allowRollupOnly) {
+    const asOfSeqRaw = readSingle(query, 'asOfSeq', issues);
+    if (asOfSeqRaw !== undefined) {
+      if (/^\d+$/.test(asOfSeqRaw) && Number(asOfSeqRaw) >= 1) {
+        filters.asOfSeq = Number(asOfSeqRaw);
+      } else {
+        issues.push({ path: 'asOfSeq', message: '"asOfSeq" must be an integer >= 1' });
+      }
+    }
+
+    const offsetRaw = readSingle(query, 'utcOffsetMinutes', issues);
+    if (offsetRaw !== undefined) {
+      if (/^-?\d+$/.test(offsetRaw)) {
+        const n = Number(offsetRaw);
+        if (Number.isSafeInteger(n) && n >= -720 && n <= 840) {
+          filters.utcOffsetMinutes = n;
+        } else {
+          issues.push({ path: 'utcOffsetMinutes', message: '"utcOffsetMinutes" must be between -720 and 840' });
+        }
+      } else {
+        issues.push({ path: 'utcOffsetMinutes', message: '"utcOffsetMinutes" must be an integer' });
+      }
+    }
+  }
 
   if (issues.length > 0) return { ok: false, issues };
 

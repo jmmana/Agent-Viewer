@@ -1,5 +1,9 @@
-// Issue #67 (section 2): `parseUsageFilters`, shared with the future rollup endpoint (#66). Covers every
-// acceptance-criteria row: the valid shapes, the full 400 table, and the calls-only gating.
+// Issue #67 (section 2): `parseUsageFilters`, shared with the rollup endpoint (#66). Covers every
+// acceptance-criteria row: the valid shapes, the full 400 table, and the calls-only gating. Issue #66 extended
+// `UsageFilters` with its own rollup-only fields (`userId`, `tag`, `asOfSeq`, `utcOffsetMinutes`), gated by
+// `allowRollupOnly` the same way these calls-only fields are gated by `allowCallsOnly`; the default-shape
+// assertion below includes them (always present, empty/null unless `allowRollupOnly` is set) so this file stays
+// the single source of truth for the shared contract's exact shape.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseUsageFilters } from '../server/usage/filters.ts';
@@ -33,6 +37,10 @@ test('parseUsageFilters: defaults with no query at all', () => {
     currency: [],
     requestId: [],
     traceId: null,
+    userId: [],
+    tag: [],
+    asOfSeq: null,
+    utcOffsetMinutes: 0,
   });
   assert.equal(value.order, 'desc');
   assert.equal(value.limit, 100);
@@ -84,6 +92,35 @@ test('parseUsageFilters: calls-only parameters are rejected as unknown when allo
   for (const key of ['requestId', 'traceId', 'order', 'limit', 'cursor']) {
     assert.deepEqual(issuePaths({ [key]: 'x' }, { allowCallsOnly: false }), [key]);
   }
+});
+
+test('parseUsageFilters: rollup-only parameters (userId, tag, asOfSeq, utcOffsetMinutes), issue #66', () => {
+  const value = okFilters(
+    { userId: ['u1', 'u2'], tag: 'alpha', asOfSeq: '42', utcOffsetMinutes: '-300' },
+    { allowCallsOnly: false, allowRollupOnly: true }
+  );
+  assert.deepEqual(value.filters.userId, ['u1', 'u2']);
+  assert.deepEqual(value.filters.tag, ['alpha']);
+  assert.equal(value.filters.asOfSeq, 42);
+  assert.equal(value.filters.utcOffsetMinutes, -300);
+});
+
+test('parseUsageFilters: rollup-only parameters are rejected as unknown when allowRollupOnly is not set', () => {
+  for (const key of ['userId', 'tag', 'asOfSeq', 'utcOffsetMinutes']) {
+    assert.deepEqual(issuePaths({ [key]: 'x' }, { allowCallsOnly: true }), [key]);
+    assert.deepEqual(issuePaths({ [key]: 'x' }, { allowCallsOnly: false }), [key]);
+  }
+});
+
+test('parseUsageFilters: asOfSeq and utcOffsetMinutes validation', () => {
+  const rollupOnly = { allowCallsOnly: false, allowRollupOnly: true };
+  assert.deepEqual(issuePaths({ asOfSeq: '0' }, rollupOnly), ['asOfSeq']);
+  assert.deepEqual(issuePaths({ asOfSeq: 'abc' }, rollupOnly), ['asOfSeq']);
+  assert.deepEqual(issuePaths({ utcOffsetMinutes: '900' }, rollupOnly), ['utcOffsetMinutes']);
+  assert.deepEqual(issuePaths({ utcOffsetMinutes: '-900' }, rollupOnly), ['utcOffsetMinutes']);
+  assert.deepEqual(issuePaths({ utcOffsetMinutes: 'abc' }, rollupOnly), ['utcOffsetMinutes']);
+  assert.equal(okFilters({ utcOffsetMinutes: '-720' }, rollupOnly).filters.utcOffsetMinutes, -720);
+  assert.equal(okFilters({ utcOffsetMinutes: '840' }, rollupOnly).filters.utcOffsetMinutes, 840);
 });
 
 test('parseUsageFilters: token and api_key are accepted and ignored, never surfaced as filters', () => {

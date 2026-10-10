@@ -1,7 +1,14 @@
 /**
- * Shared types for the usage ledger read APIs (issue #67, "Calls API"; shared with issue #66, "Rollup API",
- * whichever lands first owns this module per both issues' own text). Everything here is derived from the
- * ledger shipped by issue #65 (`server/usageLedger.ts`), never re-derived from `events`.
+ * Shared types for the usage ledger read APIs: the per-call list (`GET /api/v1/usage/calls`, issue #67, which
+ * merged first and so is the module's original owner) and the rollup endpoint (`GET /api/v1/usage/rollup`,
+ * issue #66, which extends it). Everything here is derived from the ledger shipped by issue #65
+ * (`server/usageLedger.ts`), never re-derived from `events`.
+ *
+ * `UsageFilters` is shared so an identical filter query string selects the identical row set on both routes;
+ * `parseUsageFilters` (`server/usage/filters.ts`) is the one parser for both. Fields marked "calls-only" or
+ * "rollup-only" below are always present (so one object shape serves both routes) but only ever populated when
+ * `parseUsageFilters` is called with the matching option; the other route's own parser call always leaves them
+ * at their empty default, and its own handler never reads them.
  *
  * Two deliberate deviations from issue #67's literal `CallRecord` table, both forced by what #65 actually
  * stored (mirroring how `server/usageLedger.ts` itself documents its own deviations from #65's literal text):
@@ -27,6 +34,8 @@
  */
 import type { LedgerEventType, CostSource } from '../usageLedger';
 import { LLM_ERROR_KINDS, type LlmErrorKind } from '../../src/integrations/canonicalTypes';
+
+export type { CostSource } from '../usageLedger';
 
 /** `'ok'` for a successful `llm.usage` row, otherwise the `llm.failed` row's `errorKind` (issue #46's enum). */
 export type CallStatus = 'ok' | LlmErrorKind;
@@ -95,10 +104,12 @@ export type TimeBasis = 'received' | 'occurred';
 
 /**
  * The query shape shared by the calls endpoint (#67) and the rollup endpoint (#66): same filters, same AND
- * across keys / OR within a repeated key semantics, enforced identically in SQL (`buildListCallsQuery`,
- * `server/usage/calls.ts`) and in memory (`matchesUsageFilters`). `requestId` and `traceId` are calls-only
- * (section 2 of issue #67): `parseUsageFilters` rejects them as unknown parameters when its caller passes
- * `allowCallsOnly: false`, so they are always empty/`null` on a rollup query.
+ * across keys / OR within a repeated key semantics, enforced identically in SQL and in memory.
+ * `requestId`/`traceId` are calls-only (section 2 of issue #67): populated only when `parseUsageFilters` is
+ * called with `allowCallsOnly: true`. `userId`/`tag`/`asOfSeq`/`utcOffsetMinutes` are rollup-only (issue #66):
+ * populated only with `allowRollupOnly: true`. `parseUsageFilters` rejects a calls-only or rollup-only
+ * parameter as unknown when the matching option is not set, so a rollup query can never smuggle in `requestId`
+ * and a calls query can never smuggle in `tag`.
  */
 export interface UsageFilters {
   /** Half-open window lower bound, epoch ms, inclusive. `null` means unbounded. */
@@ -120,6 +131,15 @@ export interface UsageFilters {
   requestId: string[];
   /** Calls-only. Exact match on `traceId`; not repeatable (one trace per query). */
   traceId: string | null;
+  /** Rollup-only (issue #66). Exact match on the ledger's `user_id`. */
+  userId: string[];
+  /** Rollup-only (issue #66). A row matches when it has any of the given tags (OR, never a dimension filter on
+   * its own commas). */
+  tag: string[];
+  /** Rollup-only (issue #66). Only rows with ledger `seq <= asOfSeq`. `null` means the current end of the ledger. */
+  asOfSeq: number | null;
+  /** Rollup-only (issue #66). -720..840, fixed offset (no DST), used for `day` bucketing. `0` when not given. */
+  utcOffsetMinutes: number;
 }
 
 export function emptyUsageFilters(): UsageFilters {
@@ -138,5 +158,145 @@ export function emptyUsageFilters(): UsageFilters {
     currency: [],
     requestId: [],
     traceId: null,
+    userId: [],
+    tag: [],
+    asOfSeq: null,
+    utcOffsetMinutes: 0,
   };
+}
+
+/** Echoes `UsageFilters` back as the flat `Record<string, string[]>` the rollup response's `query.filters`
+ * field uses: only the keys that were actually supplied. Calls-only fields are never echoed by the rollup
+ * route, since `parseUsageFilters` never populates them there. */
+export function filtersToEcho(filters: UsageFilters): Record<string, string[]> {
+  const echo: Record<string, string[]> = {};
+  const repeatable: Array<[string, string[]]> = [
+    ['agentId', filters.agentId],
+    ['model', filters.model],
+    ['provider', filters.provider],
+    ['sessionId', filters.sessionId],
+    ['taskId', filters.taskId],
+    ['runtimeId', filters.runtimeId],
+    ['userId', filters.userId],
+    ['tag', filters.tag],
+    ['status', filters.status],
+    ['costSource', filters.costSource],
+    ['currency', filters.currency],
+  ];
+  for (const [key, values] of repeatable) {
+    if (values.length > 0) echo[key] = values;
+  }
+  return echo;
+}
+
+// -------------------------------------------------------------
+// Rollup-specific types (issue #66). Pure additions: nothing above this point is changed by this endpoint.
+// -------------------------------------------------------------
+
+export type RollupDimension = 'agent' | 'model' | 'provider' | 'session' | 'task' | 'day' | 'user' | 'tag';
+
+export const ROLLUP_DIMENSIONS: readonly RollupDimension[] = [
+  'agent',
+  'model',
+  'provider',
+  'session',
+  'task',
+  'day',
+  'user',
+  'tag',
+];
+
+export type RollupSort = 'key' | 'calls';
+
+export interface TokenKindRollup {
+  sum: number | null;
+  reportedCalls: number;
+  unreportedCalls: number;
+}
+
+export interface CostEntry {
+  currency: string | null;
+  costSource: CostSource;
+  sum: number;
+  calls: number;
+}
+
+export type TokenKind = 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'reasoning';
+
+export const TOKEN_KINDS: readonly TokenKind[] = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
+
+export interface UsageRollupTotals {
+  calls: { total: number; succeeded: number; failed: number };
+  tokens: Record<TokenKind, TokenKindRollup>;
+  cost: { entries: CostEntry[]; unknownCostCalls: number };
+  /** On the selected time basis. */
+  firstAt: number | null;
+  lastAt: number | null;
+}
+
+export interface UsageRollupGroup extends UsageRollupTotals {
+  key: Partial<Record<RollupDimension, string | null>>;
+  /** Only present when `groupBy` includes `day`: epoch ms, inclusive, the local midnight expressed in UTC. */
+  bucketStart?: number;
+  /** Only present when `groupBy` includes `day`: epoch ms, exclusive, `bucketStart + 86400000`. */
+  bucketEnd?: number;
+}
+
+export interface UsageRollupQueryEcho {
+  groupBy: RollupDimension[];
+  timeBasis: TimeBasis;
+  from: number | null;
+  to: number | null;
+  utcOffsetMinutes: number;
+  filters: Record<string, string[]>;
+  asOfSeq: number | null;
+  sort: RollupSort;
+  limit: number;
+}
+
+export interface UsageRollupAsOf {
+  /** Highest ledger `seq` included: the lower of a supplied `asOfSeq` and the current max. `null` for an empty
+   * ledger. */
+  ledgerSeq: number | null;
+  /** `received_at` of that row; `null` if it no longer exists (for example after retention purges it). */
+  lastRowReceivedAt: number | null;
+  generatedAt: number;
+}
+
+export interface UsageRollupCoverage {
+  storage: 'memory' | 'sqlite';
+  /** `false` when rows that could belong to the query may be gone (memory-mode cap, or retention purge reaching
+   * the query range). Never silently partial: when `false`, the figure may be incomplete. */
+  complete: boolean;
+  /** Memory mode only: ledger rows this process could not keep (upper bound, not an exact per-query count). */
+  droppedRows: number;
+  /** Highest `usage_cutoff` any retention run has purged through. `null` until #70 lands. */
+  purgedThrough: number | null;
+  backfilledRows: number;
+  legacyContractRows: number;
+}
+
+export interface UsageRollupResponse {
+  schemaVersion: '1.0';
+  query: UsageRollupQueryEcho;
+  asOf: UsageRollupAsOf;
+  coverage: UsageRollupCoverage;
+  /** `false` only when `groupBy` includes `tag` (a row with 2 tags counts in 2 groups; `totals` still counts it
+   * once). */
+  groupsAreAdditive: boolean;
+  /** Number of groups before `limit` was applied. */
+  groupCount: number;
+  truncated: boolean;
+  groups: UsageRollupGroup[];
+  totals: UsageRollupTotals;
+}
+
+/** A fully parsed, validated rollup request: `UsageFilters` plus the rollup-only `groupBy`/`sort`/`limit` (kept
+ * out of the shared `UsageFilters`/`parseUsageFilters` on purpose: `limit` already means something different,
+ * and with a different valid range, for the calls endpoint's pagination). */
+export interface RollupQuery {
+  groupBy: RollupDimension[];
+  filters: UsageFilters;
+  sort: RollupSort;
+  limit: number;
 }

@@ -38,6 +38,7 @@ import {
   encodeExportMetricsServiceResponse,
   encodeStatus,
 } from './otlp/otlpProtobuf';
+import { parseRollupQuery, UsageFilterError } from './usage/rollup';
 
 /**
  * Set by the `agent-viewer` CLI before it imports this module. The CLI configures the server through its own
@@ -1372,6 +1373,24 @@ app.get('/api/v1/admin/retention', async (req, res) => {
     lastRun: status.lastRun,
     runs: status.runs,
   });
+});
+
+// Grouped sums over the usage ledger (issue #66): the auditable read API, built for "how much did agent X spend
+// with model Y this week". Read only, never writes to the ledger. `Cache-Control: no-store` because the answer
+// is only ever as fresh as this one request's read transaction.
+app.get('/api/v1/usage/rollup', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  let query;
+  try {
+    query = parseRollupQuery(req.query as Record<string, unknown>);
+  } catch (error) {
+    if (error instanceof UsageFilterError) {
+      res.status(400).json({ error: 'invalid_filter', issues: error.issues });
+      return;
+    }
+    throw error;
+  }
+  res.json(await store.rollup(query));
 });
 
 // OTLP/HTTP logs receiver counters (issue #59). Per-process, reset on restart like store.ingestionCounters().

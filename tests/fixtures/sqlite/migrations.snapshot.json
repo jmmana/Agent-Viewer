@@ -4,5 +4,6 @@
   [3, "request-key-dedup"],
   [4, "events-seq"],
   [5, "telemetry-metrics"],
-  [6, "usage-ledger"]
+  [6, "usage-ledger"],
+  [7, "usage-calls-indexes"]
 ]

@@ -182,9 +182,9 @@ if (!response.ok) throw new Error(`export failed: ${response.status}`);
 const blob = await response.blob();
 ```
 
-Always send the token in the `Authorization` header, never as a `?token=`/`?api_key=` query parameter: both
-export routes reject a query-string token outright (`#71`), since a bulk-download URL is far more likely to end
-up in a shell history, a proxy log or a browser's address bar than a short-lived API call.
+Always send the token in the `Authorization` header, never as a query-string token parameter: both export routes
+reject one outright (`#71`), since a bulk-download URL is far more likely to end up in a shell history, a proxy
+log or a browser's address bar than a short-lived API call.
 
 ## Guards
 

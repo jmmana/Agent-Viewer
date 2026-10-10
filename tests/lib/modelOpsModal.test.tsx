@@ -58,21 +58,15 @@ describe('ModelOpsModal', () => {
     expect(within(row).getAllByText('Unknown').length).toBeGreaterThanOrEqual(3);
   });
 
-  it('the simulator shows "Rate: unknown" for an uncatalogued model and records a null-cost call when fired', () => {
-    const onSimulateCall = vi.fn();
-    render(<ModelOpsModal {...baseProps({ onSimulateCall })} />);
+  it('the simulator model selector offers only demo-catalog models, never a model only observed on the office (issue #79)', () => {
+    render(<ModelOpsModal {...baseProps()} />);
     openTab(/LLM traffic simulator/);
-
-    fireEvent.change(screen.getByLabelText('Target LLM model:'), { target: { value: UNKNOWN_MODEL } });
-    expect(screen.getByText('Rate: unknown')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: /Fire live inference/ }));
-    expect(onSimulateCall).toHaveBeenCalledTimes(1);
-    const call = onSimulateCall.mock.calls[0][0] as SimulatedCall;
-    expect(call.simulated).toBe(true);
-    expect(call.estimatedCost).toBeNull();
-    expect(call.currency).toBeNull();
-    expect(call.model).toBe(UNKNOWN_MODEL);
+    const select = screen.getByLabelText('Target LLM model:') as HTMLSelectElement;
+    const optionValues = [...select.options].map((option) => option.value);
+    expect(optionValues).not.toContain(UNKNOWN_MODEL);
+    expect(optionValues.length).toBeGreaterThan(0);
+    // Every offered model has a known demo-catalog rate: "Rate: unknown" can never appear for a selectable model.
+    expect(screen.queryByText('Rate: unknown')).toBeNull();
   });
 
   it('the simulator fire button records a call with simulated: true and a numeric estimate for a known model', () => {
@@ -150,9 +144,24 @@ describe('ModelOpsModal', () => {
     }
   });
 
-  it('shows the active-nodes chip as the real provider count, not a hard-coded 4', () => {
+  it('shows the "Simulated" mode pill in simulated mode, never a hard-coded active-nodes count (issue #79)', () => {
     render(<ModelOpsModal {...baseProps()} />);
-    const providerCount = new Set(INITIAL_AGENTS.map((a) => a.provider)).size;
-    expect(screen.getByText(`${providerCount} active nodes`)).toBeTruthy();
+    expect(screen.getByText('Simulated')).toBeTruthy();
+    expect(screen.queryByText(/active nodes/)).toBeNull();
+  });
+
+  it('switches to ledger mode (no "Simulated" badge) when a `ledger` connection is given', () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('{}', { status: 501 })));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      render(
+        <ModelOpsModal
+          {...baseProps({ ledger: { baseUrl: 'https://server.example', token: 'tok', tokenResolved: true } })}
+        />
+      );
+      expect(screen.queryByText('Simulated')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

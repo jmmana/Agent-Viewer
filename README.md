@@ -73,7 +73,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
 | 📡 **Ingestion server** | Express API on port 8787: single and batch ingestion with idempotency, a Server-Sent Events stream that resumes from the last event, a generic webhook with HMAC signatures, in-memory or SQLite storage. |
 | 🐍 **SDKs and adapters** | Python and TypeScript clients, plus example adapters for LangGraph, CrewAI, AutoGen, OpenAI Agents SDK and Google ADK. |
 | 🎬 **Replay and export** | Load a JSONL V1 log, replay it at its original pace with seek and speed, and record it to WebM or MP4 in the browser. |
-| 📊 **Model Ops console** | In the demo app: tokens and reported cost by provider and model, aggregated from `llm.usage` events. |
+| 📊 **Model Ops console** | In the demo app: Matrix, Agents and Feed read the server's usage ledger (`GET /api/v1/usage/rollup` and `/usage/calls`), so figures reconcile call by call; a value the ledger never reported shows as "n/a", never as zero. A separate Simulator tab stays, clearly labelled, with no effect on real data. Without a connected server, Model Ops falls back to a labelled, simulated view over the local demo state. |
 
 ## 🧠 Principles
 

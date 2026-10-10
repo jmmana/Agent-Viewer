@@ -304,7 +304,7 @@ const officeT = useCallback<HostTranslate>(
 
 ### Message keys
 
-There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` and `modelOps.*` keys belong to the demo app's Model Ops console and timeline; the embedded office does not show them.
+There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` and `modelOps.*` keys belong to the demo app's Model Ops console and timeline; the embedded office does not show them. As of issue #79, Model Ops reads the server's usage ledger: that read client and its ledger-backed tab components live under `src/integrations/ledgerClient.ts` and `src/components/modelOps/`, both demo-app-only. `@warlockcode/agent-viewer` ships no ledger client, no usage-ledger endpoint reference and no Model Ops component (enforced by `tests/lib/libraryIsolation.test.ts`).
 
 #### `rooms.*` (10)
 

@@ -158,6 +158,88 @@ const EN = {
   'ops.footer.tipText':
     'Click the server racks or the NOC screen in the Model Ops room of the office to open this panel.',
   'ops.footer.close': 'Close',
+
+  // Data source mode (issue #79): ledger vs simulated demo data
+  'ops.mode.ledgerStatus': 'Ledger, as of {time}',
+  'ops.mode.simulatedBadge': 'Simulated',
+  'ops.banner.simulatedData':
+    'Simulated demo data. These figures come from the local demo state, not the usage ledger.',
+
+  // Ledger-mode stats strip
+  'ops.stats.reportedCost': 'Reported cost',
+  'ops.stats.calls': 'Calls',
+  'ops.stats.failedCalls': 'Failed calls',
+
+  // Unknown / partial / multi-currency rendering, shared by Matrix, Agents and Feed
+  'ops.value.na': 'n/a',
+  'ops.value.partial': 'partial',
+  'ops.value.partialTitle': '{unreported} of {total} calls did not report this',
+  'ops.cost.unknownCalls': '{count} calls without cost',
+  'ops.cost.source.estimated': 'estimated',
+  'ops.cost.source.unknown': 'unknown source',
+  'ops.sort.costDisabledTitle': 'Cost sort is unavailable: the displayed rows mix currencies or cost sources.',
+
+  // Matrix tab, ledger mode
+  'ops.matrix.timeRange.label': 'Time range:',
+  'ops.matrix.timeRange.all': 'All time',
+  'ops.matrix.timeRange.last24h': 'Last 24 hours',
+  'ops.matrix.timeRange.last7d': 'Last 7 days',
+  'ops.matrix.truncated': 'Showing the top {count} groups by tokens.',
+  'ops.matrix.col.calls': 'CALLS',
+  'ops.matrix.col.failedCalls': 'FAILED',
+  'ops.matrix.col.input': 'INPUT',
+  'ops.matrix.col.output': 'OUTPUT',
+  'ops.matrix.col.cacheRead': 'CACHE READ',
+  'ops.matrix.col.cacheWrite': 'CACHE WRITE',
+  'ops.matrix.col.reasoning': 'REASONING',
+  'ops.matrix.col.cost': 'COST',
+
+  // Agents tab, ledger mode
+  'ops.agents.ledger.heading': 'Usage by agent and model',
+  'ops.agents.ledger.subtitle': 'From the usage ledger: one row per agent and model actually called.',
+  'ops.agents.col.calls': 'CALLS',
+  'ops.agents.col.failedCalls': 'FAILED',
+  'ops.agents.col.cost': 'COST',
+  'ops.agents.noUsage': 'No usage reported',
+  'ops.agents.unattributed': 'Unattributed',
+
+  // Feed tab, ledger mode
+  'ops.feed.ledger.heading': 'Recent model calls',
+  'ops.feed.ledger.loadMore': 'Load more',
+  'ops.feed.ledger.loading': 'Loading more...',
+  'ops.feed.ledger.col.time': 'TIME',
+  'ops.feed.ledger.col.model': 'MODEL',
+  'ops.feed.ledger.col.agent': 'AGENT',
+  'ops.feed.ledger.col.status': 'STATUS',
+  'ops.feed.ledger.col.tokens': 'TOKENS',
+  'ops.feed.ledger.col.latency': 'LATENCY',
+  'ops.feed.ledger.col.cost': 'COST',
+  'ops.feed.ledger.costUnknown': 'Cost not reported',
+  'ops.feed.ledger.filter.status': 'Status:',
+  'ops.feed.ledger.filter.statusAll': 'All',
+  'ops.feed.ledger.filter.statusFailed': 'Failed',
+  'ops.feed.ledger.filter.model': 'Model:',
+  'ops.feed.ledger.filter.agent': 'Agent:',
+  'ops.feed.ledger.filter.allModels': 'All models',
+  'ops.feed.ledger.filter.allAgents': 'All agents',
+  'ops.feed.ledger.unattributed': 'Unattributed',
+  'ops.feed.ledger.detailTitle': 'event {eventId} / session {sessionId}',
+
+  // Empty and error states, shared by Matrix, Agents and Feed in ledger mode
+  'ops.empty.loading': 'Loading usage data...',
+  'ops.empty.unavailable': 'This server does not expose the usage ledger. Upgrade the Agent Viewer server to 0.4.0 or later.',
+  'ops.empty.unauthorized': 'The server requires an API token. Configure it for the portal.',
+  'ops.empty.networkError': 'Could not reach the server.',
+  'ops.empty.retry': 'Retry',
+  'ops.empty.noCalls.heading': 'No model calls have been recorded yet',
+  'ops.empty.noCalls.intro': 'Send a real llm.usage event and it will show up here.',
+  'ops.empty.noCalls.curlHeading': 'From the command line:',
+  'ops.empty.noCalls.pythonHeading': 'From the Python SDK:',
+  'ops.empty.noCalls.typescriptHeading': 'From the TypeScript SDK:',
+  'ops.empty.noCalls.docsLink': 'Read the integration guide',
+  'ops.empty.noCalls.naNote': 'Fields you leave out show as "n/a", never as zero.',
+  'ops.empty.filtered': 'No calls match the current filters.',
+  'ops.empty.clearFilters': 'Clear filters',
 } as const satisfies Record<string, string>;
 
 const ES: Record<keyof typeof EN, string> = {
@@ -315,6 +397,88 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.footer.tipText':
     'Haz clic en los racks de servidores o en la pantalla NOC de la sala Model Ops de la oficina para abrir este panel.',
   'ops.footer.close': 'Cerrar',
+
+  // Fuente de datos (issue #79): ledger real o datos simulados de la demo
+  'ops.mode.ledgerStatus': 'Ledger, actualizado a las {time}',
+  'ops.mode.simulatedBadge': 'Simulado',
+  'ops.banner.simulatedData':
+    'Datos simulados de la demo. Estas cifras provienen del estado local de la demo, no del ledger de uso.',
+
+  // Franja de estadísticas en modo ledger
+  'ops.stats.reportedCost': 'Costo reportado',
+  'ops.stats.calls': 'Llamadas',
+  'ops.stats.failedCalls': 'Llamadas fallidas',
+
+  // Valores desconocidos / parciales / multi-moneda, compartido por Matrix, Agentes y Flujo
+  'ops.value.na': 'n/d',
+  'ops.value.partial': 'parcial',
+  'ops.value.partialTitle': '{unreported} de {total} llamadas no reportaron este dato',
+  'ops.cost.unknownCalls': '{count} llamadas sin costo',
+  'ops.cost.source.estimated': 'estimado',
+  'ops.cost.source.unknown': 'fuente desconocida',
+  'ops.sort.costDisabledTitle': 'Ordenar por costo no está disponible: las filas mostradas mezclan monedas o fuentes de costo.',
+
+  // Pestaña Matriz, modo ledger
+  'ops.matrix.timeRange.label': 'Rango de tiempo:',
+  'ops.matrix.timeRange.all': 'Todo el tiempo',
+  'ops.matrix.timeRange.last24h': 'Últimas 24 horas',
+  'ops.matrix.timeRange.last7d': 'Últimos 7 días',
+  'ops.matrix.truncated': 'Mostrando los {count} grupos principales por tokens.',
+  'ops.matrix.col.calls': 'LLAMADAS',
+  'ops.matrix.col.failedCalls': 'FALLIDAS',
+  'ops.matrix.col.input': 'ENTRADA',
+  'ops.matrix.col.output': 'SALIDA',
+  'ops.matrix.col.cacheRead': 'LECTURA DE CACHÉ',
+  'ops.matrix.col.cacheWrite': 'ESCRITURA DE CACHÉ',
+  'ops.matrix.col.reasoning': 'RAZONAMIENTO',
+  'ops.matrix.col.cost': 'COSTO',
+
+  // Pestaña Agentes, modo ledger
+  'ops.agents.ledger.heading': 'Consumo por agente y modelo',
+  'ops.agents.ledger.subtitle': 'Desde el ledger de uso: una fila por cada agente y modelo realmente invocado.',
+  'ops.agents.col.calls': 'LLAMADAS',
+  'ops.agents.col.failedCalls': 'FALLIDAS',
+  'ops.agents.col.cost': 'COSTO',
+  'ops.agents.noUsage': 'Sin consumo reportado',
+  'ops.agents.unattributed': 'Sin atribuir',
+
+  // Pestaña Flujo, modo ledger
+  'ops.feed.ledger.heading': 'Llamadas recientes a modelos',
+  'ops.feed.ledger.loadMore': 'Cargar más',
+  'ops.feed.ledger.loading': 'Cargando más...',
+  'ops.feed.ledger.col.time': 'HORA',
+  'ops.feed.ledger.col.model': 'MODELO',
+  'ops.feed.ledger.col.agent': 'AGENTE',
+  'ops.feed.ledger.col.status': 'ESTADO',
+  'ops.feed.ledger.col.tokens': 'TOKENS',
+  'ops.feed.ledger.col.latency': 'LATENCIA',
+  'ops.feed.ledger.col.cost': 'COSTO',
+  'ops.feed.ledger.costUnknown': 'Costo no reportado',
+  'ops.feed.ledger.filter.status': 'Estado:',
+  'ops.feed.ledger.filter.statusAll': 'Todas',
+  'ops.feed.ledger.filter.statusFailed': 'Fallidas',
+  'ops.feed.ledger.filter.model': 'Modelo:',
+  'ops.feed.ledger.filter.agent': 'Agente:',
+  'ops.feed.ledger.filter.allModels': 'Todos los modelos',
+  'ops.feed.ledger.filter.allAgents': 'Todos los agentes',
+  'ops.feed.ledger.unattributed': 'Sin atribuir',
+  'ops.feed.ledger.detailTitle': 'evento {eventId} / sesión {sessionId}',
+
+  // Estados vacíos y de error, compartidos por Matriz, Agentes y Flujo en modo ledger
+  'ops.empty.loading': 'Cargando datos de uso...',
+  'ops.empty.unavailable': 'Este servidor no expone el ledger de uso. Actualiza el servidor de Agent Viewer a la versión 0.4.0 o posterior.',
+  'ops.empty.unauthorized': 'El servidor requiere un token de API. Configúralo para el portal.',
+  'ops.empty.networkError': 'No se pudo contactar al servidor.',
+  'ops.empty.retry': 'Reintentar',
+  'ops.empty.noCalls.heading': 'Todavía no se ha registrado ninguna llamada a un modelo',
+  'ops.empty.noCalls.intro': 'Envía un evento llm.usage real y aparecerá aquí.',
+  'ops.empty.noCalls.curlHeading': 'Desde la línea de comandos:',
+  'ops.empty.noCalls.pythonHeading': 'Desde el SDK de Python:',
+  'ops.empty.noCalls.typescriptHeading': 'Desde el SDK de TypeScript:',
+  'ops.empty.noCalls.docsLink': 'Lee la guía de integración',
+  'ops.empty.noCalls.naNote': 'Los campos que omitas se muestran como "n/d", nunca como cero.',
+  'ops.empty.filtered': 'Ninguna llamada coincide con los filtros actuales.',
+  'ops.empty.clearFilters': 'Limpiar filtros',
 };
 
 export const MODEL_OPS_MESSAGES = { en: EN, es: ES };

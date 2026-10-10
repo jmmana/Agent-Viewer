@@ -111,7 +111,9 @@ test('ending overflow meeting releases room and returns agents to main floor', (
   assert.equal(s.agents.find(a => a.id === 'a4').floor, 1);
 });
 
-test('model ops aggregates usage by provider and model', () => {
+// `aggregateModelUsage` is `@deprecated demo-only` as of issue #79: Model Ops' ledger-backed Matrix and Agents
+// tabs no longer call it. It stays exported, unchanged, for `simulated` Model Ops mode and the office plaque.
+test('model ops demo-only helper: aggregateModelUsage aggregates agent-level usage by provider and model', () => {
   const a = agent('a1');
   const b = agent('a2');
   a.tokensInput = 100;

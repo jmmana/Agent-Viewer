@@ -33,6 +33,9 @@ test('Rate limit: failed authentication attempts count toward the limit (limiter
     const res = await fetch(`${baseUrl}/api/v1/snapshot`, { headers: { Authorization: 'Bearer rate-limit-token' } });
     assert.equal(res.status, 429);
     assert.equal((await res.json()).error, 'rate_limit_exceeded');
+    // Issue #59: every 429 this limiter sends carries Retry-After, so OTLP exporters (and any other
+    // well-behaved client) back off instead of retrying immediately.
+    assert.ok(Number(res.headers.get('retry-after')) >= 1);
 
     // Health checks stay outside /api/v1 and are not throttled.
     const health = await fetch(`${baseUrl}/health`);

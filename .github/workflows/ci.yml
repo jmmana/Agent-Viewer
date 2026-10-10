@@ -36,8 +36,20 @@ jobs:
       - name: Crew asset bank integrity
         run: npm run crew:assets:check
 
+      - name: No doc recommends the removed token/api_key query parameter (issue #71)
+        run: |
+          # docs/migrating-to-0.4.md (issue #75) is exempt: a migration guide has to show the removed,
+          # now-rejected pattern as "before" text so a reader can recognize it in their own scripts.
+          if grep -RnE '\?(token|api_key)=' --exclude=migrating-to-0.4.md README.md docs .github/SECURITY.md; then
+            echo "Found a '?token=' or '?api_key=' reference: it stopped authenticating in issue #71. Describe the token query parameter in words instead of the literal pattern." >&2
+            exit 1
+          fi
+
       - name: Typecheck
         run: npm run lint
+
+      - name: Golden reconciliation suite
+        run: npm run test:golden
 
       - name: TypeScript Tests (node + Vitest)
         run: npm test
@@ -86,6 +98,11 @@ jobs:
 
       - name: Docker Build (viewer image)
         run: docker build -f docker/Dockerfile --target viewer --build-arg VITE_AGENT_VIEWER_API_URL=http://localhost:8787 .
+
+      - name: Check Compose ports bind to loopback
+        run: |
+          docker compose -f docker/compose.yml config --format json > /tmp/compose.json
+          node -e "const c = require('/tmp/compose.json'); for (const [service, port] of [['api', 8787], ['viewer', 3000]]) { const binding = c.services[service].ports.find((entry) => entry.target === port); if (binding?.host_ip !== '127.0.0.1') throw new Error(service + ' port ' + port + ' is not loopback-bound'); }"
 
       # Each image answers /health, refuses /api/v1 without the token, accepts an event with it and reads it back.
       - name: Container smoke tests (app and API images)

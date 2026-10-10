@@ -3,6 +3,44 @@ import { CREW_ROOMS } from '../../src/crew/crewModel';
 import { crewGeometryBounds, crewIsoPoint, crewViewSize, renderCrewRoom } from '../../src/crew/renderCrewRoom';
 
 describe('Crew native 2.5D renderer', () => {
+  it('reproyecta el umbral de la puerta local al cambiar de cámara', () => {
+    let path: unknown[][] = [];
+    let fill = '';
+    const doors: unknown[][][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target,key) {
+        if (key === 'beginPath') return () => { path = []; };
+        if (key === 'moveTo' || key === 'lineTo') return (...args:unknown[]) => path.push(args);
+        if (key === 'fill') return () => { if (fill === '#263b4d') doors.push([...path]); };
+        return () => {};
+      },
+      set(_target,key,value) { if (key === 'fillStyle') fill = value; return true; },
+    });
+    for (const view of ['front','right'] as const) renderCrewRoom({ctx,width:900,height:600,room:CREW_ROOMS[0],
+      camera:{view,zoom:1,pan:{x:0,y:0}}});
+    expect(doors).toHaveLength(2);
+    expect(doors[0][0]).toEqual(Object.values(crewIsoPoint(.25,8)));
+    expect(doors[1][0]).toEqual(Object.values(crewIsoPoint(0,.25)));
+    expect(doors[0]).not.toEqual(doors[1]);
+  });
+  it('selecciona imagen por actor y aplica parpadeo solo al rostro visible', () => {
+    const drawn: unknown[][]=[];
+    const ctx=new Proxy({} as CanvasRenderingContext2D,{
+      get(_target,key){return key==='drawImage' ? (...args:unknown[])=>drawn.push(args) : ()=>{};},
+      set(){return true;},
+    });
+    const front={} as HTMLImageElement, back={} as HTMLImageElement, atlas={} as HTMLImageElement;
+    const markers=[
+      {id:'a',name:'A',role:'boss' as const,facing:'NE' as const,status:'IDLE' as const,x:2,y:2,number:1},
+      {id:'b',name:'B',role:'boss' as const,facing:'SW' as const,status:'IDLE' as const,x:4,y:4,number:2},
+    ];
+    renderCrewRoom({ctx,width:900,height:600,room:CREW_ROOMS[0],markers,
+      camera:{view:'right',zoom:1,pan:{x:0,y:0}},sprites:{front,back},
+      blink:{image:atlas,frame:{x:0,y:0,width:535,height:735,anchor:{x:267.5,y:678},durationMs:100}}});
+    expect(drawn.map(call=>call[0])).toEqual([atlas,back]);
+    expect(drawn[0]).toHaveLength(9);
+    expect(drawn[1]).toHaveLength(5);
+  });
   it('dibuja el original solo para el CEO presente y conserva marcadores si falta la imagen', () => {
     const drawn: unknown[][] = [];
     const labels: unknown[][] = [];
@@ -24,30 +62,11 @@ describe('Crew native 2.5D renderer', () => {
     expect(drawn).toHaveLength(0);
     expect(labels).toHaveLength(2);
     const sprite = {} as HTMLImageElement;
-    renderCrewRoom({...input,sprite});
+    renderCrewRoom({...input,sprites:{front:sprite}});
     expect(drawn).toHaveLength(1);
     expect(drawn[0][0]).toBe(sprite);
-    renderCrewRoom({...input,sprite,markers:[]});
+    renderCrewRoom({...input,sprites:{front:sprite},markers:[]});
     expect(drawn).toHaveLength(1);
-  });
-  it('dibuja la pose de cada CEO según su orientación y omite las vistas no cargadas', () => {
-    const drawn: unknown[][] = [];
-    const ctx = new Proxy({} as CanvasRenderingContext2D, {
-      get(_t,key) { return key === 'drawImage' ? (...a: unknown[]) => drawn.push(a) : () => {}; },
-      set() { return true; },
-    });
-    const ceo = (id:string,x:number,facing:'front'|'right') =>
-      ({id,name:id,role:'boss' as const,status:'IDLE' as const,x,y:3,number:1,facing});
-    const front = {} as HTMLImageElement, left = {} as HTMLImageElement;
-    const input = {ctx,width:900,height:600,room:CREW_ROOMS[0],
-      camera:{view:'front' as const,zoom:1,pan:{x:0,y:0}},markers:[ceo('a',2,'front'),ceo('b',3,'right')]};
-    renderCrewRoom({...input,sprites:{front,left}});
-    expect(drawn.map(call=>call[0]).sort()).toHaveLength(2);
-    expect(drawn.map(call=>call[0])).toContain(front);
-    expect(drawn.map(call=>call[0])).toContain(left);
-    drawn.length = 0;
-    renderCrewRoom({...input,sprites:{front}});
-    expect(drawn.map(call=>call[0])).toEqual([front]);
   });
   it('projects floor and wall height into separate axes', () => {
     expect(crewIsoPoint(2, 1)).toEqual({ x: 34, y: 54 });

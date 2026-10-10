@@ -1,4 +1,4 @@
-import type { CrewRoomDefinition, CrewView } from './crewModel';
+import type { CrewRoomDefinition } from './crewModel';
 
 export const CREW_PROP_SIZE = {
   desk: {width:1.5,depth:.9,height:28},
@@ -29,21 +29,14 @@ export function crewPresenceSlots(room: CrewRoomDefinition): CrewLocalPoint[] {
       if (crewPointIsFree(room,{x,y})) points.push({x,y});
     }
   }
-  return points;
-}
-
-/**
- * Orientación provisional: mira hacia el escritorio o pantalla más cercano. Devuelve la vista de
- * cámara desde la que se ve su frente (+y hacia `front`, +x hacia `right`); `undefined` sin objetivo.
- */
-export function crewFacingToward(room: CrewRoomDefinition, point: CrewLocalPoint): CrewView | undefined {
-  let best: { dx: number; dy: number; d: number } | undefined;
-  for (const item of room.furniture) {
-    if (item.type !== 'desk' && item.type !== 'screen') continue;
-    const dx = item.x-point.x, dy = item.y-point.y, d = Math.hypot(dx,dy);
-    if (!best || d < best.d) best = { dx, dy, d };
+  // Reservar el anclaje de llegada dentro del mismo presupuesto de posiciones libres.
+  for (const arrival of room.arrivalPoints) {
+    if (!crewPointIsFree(room, arrival) || !points.length) continue;
+    const nearest = points.reduce((best, point, index) =>
+      Math.hypot(point.x-arrival.x, point.y-arrival.y) < Math.hypot(points[best].x-arrival.x, points[best].y-arrival.y) ? index : best, 0);
+    if (points.every((point, index) => index === nearest || Math.hypot(point.x-arrival.x, point.y-arrival.y) > 2*CREW_PRESENCE_RADIUS)) {
+      points[nearest] = {x:arrival.x, y:arrival.y};
+    }
   }
-  if (!best || best.d === 0) return undefined;
-  if (Math.abs(best.dy) >= Math.abs(best.dx)) return best.dy > 0 ? 'front' : 'back';
-  return best.dx > 0 ? 'right' : 'left';
+  return points;
 }

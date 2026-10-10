@@ -55,7 +55,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
 
 <table>
   <tr>
-    <td align="center" width="25%"><h2>22</h2><sub>canonical event types<br/>in contract V1</sub></td>
+    <td align="center" width="25%"><h2>23</h2><sub>canonical event types<br/>in contract V1</sub></td>
     <td align="center" width="25%"><h2>9</h2><sub>rooms agents<br/>work and meet in</sub></td>
     <td align="center" width="25%"><h2>EN · ES</h2><sub>116 text keys,<br/>all replaceable</sub></td>
     <td align="center" width="25%"><h2>0</h2><sub>usage figures computed<br/>by the component</sub></td>
@@ -73,7 +73,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
 | 📡 **Ingestion server** | Express API on port 8787: single and batch ingestion with idempotency, a Server-Sent Events stream that resumes from the last event, a generic webhook with HMAC signatures, in-memory or SQLite storage. |
 | 🐍 **SDKs and adapters** | Python and TypeScript clients, plus example adapters for LangGraph, CrewAI, AutoGen, OpenAI Agents SDK and Google ADK. |
 | 🎬 **Replay and export** | Load a JSONL V1 log, replay it at its original pace with seek and speed, and record it to WebM or MP4 in the browser. |
-| 📊 **Model Ops console** | In the demo app: tokens and reported cost by provider and model, aggregated from `llm.usage` events. |
+| 📊 **Model Ops console** | In the demo app: Matrix, Agents and Feed read the server's usage ledger (`GET /api/v1/usage/rollup` and `/usage/calls`), so figures reconcile call by call; a value the ledger never reported shows as "n/a", never as zero. A separate Simulator tab stays, clearly labelled, with no effect on real data. Without a connected server, Model Ops falls back to a labelled, simulated view over the local demo state. |
 
 ## 🧠 Principles
 
@@ -84,6 +84,7 @@ These are design rules, enforced in code, not marketing:
 3. **Nothing invented in professional mode.** The embedded office has no ambient life, no invented lines, no sounds. Showcase mode adds simulated office life, and every simulated bubble says so (`SOCIAL · SIMULATED`).
 4. **Unknown is not zero.** The component never computes, adds up or prices usage. A missing cost is shown as "unknown", never as `0`.
 5. **A good guest in your app.** No injected styles, no global selectors, no `localStorage`, no global keyboard shortcuts, nothing runs on import. Two offices on one page never share state.
+6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
 **What it is not:** a tracing backend, a log store or an APM replacement. It does not import OTLP traces yet, it does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
 
@@ -103,7 +104,16 @@ Starts the ingestion server and the office together on `http://127.0.0.1:8787`, 
 npx @warlockcode/agent-viewer send --agent demo --status working --message "Hello"
 ```
 
-Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). The same with Docker: `docker run --rm -p 8787:8787 ghcr.io/jmmana/agent-viewer` (flags after the image name are added to its defaults; image tags and tokens in the [CLI guide](docs/cli.md#docker)). Until the package is on npm and the image is published by the next release, run the release `.tgz` with `npx ./warlockcode-agent-viewer-<version>.tgz`.
+Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jsonl`) are in the [CLI guide](docs/cli.md). To run the Docker image on this machine:
+
+```bash
+docker run --rm -p 127.0.0.1:8787:8787 \
+  -e AGENT_VIEWER_API_TOKEN="$(openssl rand -base64 32)" \
+  -v agent-viewer-data:/app/data \
+  ghcr.io/jmmana/agent-viewer
+```
+
+Drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. Flags after the image name are added to its defaults; image tags and tokens are in the [CLI guide](docs/cli.md#docker).
 
 ### Watch Claude Code work
 
@@ -111,7 +121,7 @@ Options (`--port`, `--host`, `--token`, `--demo`, `--no-open`, `--record run.jso
 npx @warlockcode/agent-viewer install claude-code   # in your project, shows the change and asks first
 ```
 
-Your Claude Code sessions and their subagents appear in the office: tools, handoffs, and when Claude waits for you. Only tool names, agent types, timings and statuses are sent, never arguments, prompts, code or paths. Setup, privacy and uninstall: [docs/claude-code.md](docs/claude-code.md).
+Your Claude Code sessions and their subagents appear in the office: tools, handoffs, and when Claude waits for you. Only tool names, agent types, timings and statuses are sent, never arguments, prompts, code or paths. Token and cost telemetry is opt-in, through `install claude-code --telemetry`; without it, the promise above holds exactly as written. Setup, privacy and uninstall: [docs/claude-code.md](docs/claude-code.md).
 
 ### From the repository
 
@@ -177,7 +187,7 @@ curl -X POST http://localhost:8787/api/v1/webhooks/generic \
 docker compose -f docker/compose.yml up --build
 ```
 
-This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
+This starts the API on **:8787** with SQLite on a named volume, and the built demo on **:3000**. Compose publishes both ports on `127.0.0.1` only. To reach the office from other machines, restore the port mappings to `"8787:8787"` and `"3000:3000"`, update `AGENT_VIEWER_CORS_ORIGIN` and `VITE_AGENT_VIEWER_API_URL`, and put the services behind TLS. The API never runs without a token: set `AGENT_VIEWER_API_TOKEN` before `up` to choose it, or read the one it generates with `docker compose -f docker/compose.yml logs api`. Then open **http://localhost:3000/?mode=live#token=&lt;token&gt;** to watch the stream (the office removes the token from the address bar once it has read it).
 
 > **Maintainers:** GitHub Container Registry creates the `ghcr.io/jmmana/agent-viewer` package as private, and the release workflow cannot change that. After the first release that publishes it, make it public once in the package page: **Package settings > Danger Zone > Change visibility > Public**. The release run summary shows the current visibility.
 
@@ -378,6 +388,14 @@ export function OfficeWithUsage({ events }: { events: readonly OfficeEventInput[
 
 `showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported: it ignores repeated event ids, keeps a token count unknown when an event does not report it, and returns an unknown cost rather than a partial sum or a sum of mixed or missing currencies.
 
+Want the spend visible on the canvas itself, not only in the hidden agent list? Add `showUsageBadges` (also off by default, independent of `showUsage`):
+
+```tsx
+<AgentOffice events={events} usage={usage} showUsageBadges />
+```
+
+Each visible agent card with a `usage.byAgent` entry gets a compact badge (tokens, cost, an `est.` mark when `costSource` is `'estimated'`, and a failed-call chip); an agent with no entry gets no badge. The badge is display only: every figure still comes from `usage`, and `UsageFigures` now also carries `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `costSource` and `failedCalls` for hosts that have them.
+
 </details>
 
 **Full guide:** props, event effects, workspaces, translations, theming, usage rules, replay, video export and the store without React are in the [library guide](docs/library.md) ([español](docs/library.es.md)).
@@ -436,11 +454,14 @@ Honest maturity, so you know what you are getting:
 |---|---|---|
 | **REST API, batch, SSE** | [`server/`](server/index.ts) | ✅ **Stable.** Covered by integration, SSE and webhook security tests in CI. |
 | **Claude Code** | [`agent-viewer install claude-code`](docs/claude-code.md) | ✅ **Stable.** Official Claude Code hooks: sessions, subagents as their own agents, tools, waiting for you. Fixture tests for every hook type prove no arguments or content leave the machine. |
+| **Claude Code tokens (OTLP logs)** | [`agent-viewer install claude-code --telemetry`](docs/claude-code.md#tokens-and-cost) | ✅ **Stable.** `POST /v1/logs` receives Claude Code's native OpenTelemetry export (`http/json` and `http/protobuf`) and turns `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed` on the main agent. Opt-in, off by default. Reference: [docs/otlp.md](docs/otlp.md). |
+| **Claude Code metrics (OTLP metrics)** | `POST /v1/metrics` | ✅ **Stable ingestion.** Stores `claude_code.token.usage`/`claude_code.cost.usage` as their own evidence, kept apart from the ledger, the snapshot, SSE and every rollup on purpose: a second, independent measurement of the same consumption for a future cross-check. The `GET /api/v1/usage/reconciliation` endpoint that compares the two is not built yet (needs a usage ledger accessor still in progress). Reference: [docs/otlp.md](docs/otlp.md#otlp-metrics-post-v1metrics). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
-| **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. Not on PyPI yet. |
+| **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
 | **JSONL log replay** | [`parseEventLog`](docs/event-log.md) | ✅ **Stable.** Library API, and drag and drop in the demo app. |
+| **OTLP logs file import (Claude Code)** | [`parseEventLog`](docs/event-log.md#otlp-files) | ✅ **Stable.** Reads a saved OTLP/JSON export (pretty-printed, or one request per line from a Collector `file` exporter) and converts `resourceLogs` into `llm.usage`/`llm.failed` events through the same mapper as the live `POST /v1/logs` receiver. `resourceMetrics` returns one clear issue instead of inventing per-call figures; `resourceSpans` is not supported yet. |
 | **LangGraph** | [`examples/langgraph-adapter.ts`](examples/langgraph-adapter.ts) | 🧪 **Example adapter.** Node, tool and usage callbacks mapped to SDK calls. Type-checked in CI, not run against LangGraph. |
 | **CrewAI** | [`examples/crewai-adapter.py`](examples/crewai-adapter.py) | 🧪 **Example adapter.** Crew agents, tasks, tools, messages and usage. Not run in CI. |
 | **AutoGen** | [`examples/autogen-adapter.py`](examples/autogen-adapter.py) | 🧪 **Example adapter.** Conversable agents and group chat messages, tools and usage. Not run in CI. |
@@ -471,7 +492,14 @@ analyst.message("Overview ready for review.", target_agent_name="Nova")
 analyst.done("Summary delivered")
 ```
 
-The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client.
+The agent registers itself on its first call. Requests retry with backoff, and `usage()` without a `cost` reports it as unknown. Token counts you leave out stay unknown, never `0`. The SDK never assumes `provider-reported`: a `cost` passed without `cost_source` is sent as `unknown`, with one warning per client. Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy. `viewer.usage_rollup(["agent", "model"], agent_id="analyst")` calls `GET /api/v1/usage/rollup` for grouped, audit-ready sums ([details](docs/integration.md#usage-rollup-get-apiv1usagerollup-issue-66)).
+
+Read the calls behind a figure with `list_calls()` (one page) or `iter_calls()` (follows the cursor for you), both over `GET /api/v1/usage/calls` (issue #67):
+
+```python
+for call in viewer.iter_calls(agent_id="analyst", cost_source="unknown"):
+    print(call["requestId"], call["tokens"]["input"], call["status"])
+```
 
 ### TypeScript SDK
 
@@ -489,7 +517,15 @@ await builder.message('Handler is ready for review.', 'Nova');
 await builder.done('Pull request opened');
 ```
 
-Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md).
+Several crews can share one server: tag each client with its own `runtimeId` and `sessionId`, then filter with `GET /api/v1/events?runtimeId=...`. More in the [integration guide](docs/integration.md). Transport retries reuse the same event id and `requestId`. If your code calls `usage()` again for the same provider call, pass the same `requestId` and the server keeps one copy. `viewer.usageRollup({ groupBy: ['agent', 'model'], agentId: 'builder' })` calls `GET /api/v1/usage/rollup` for grouped, audit-ready sums, and `toUsageFigures()` maps one group straight into the library's `usage` prop ([details](docs/integration.md#usage-rollup-get-apiv1usagerollup-issue-66)).
+
+Read the calls behind a figure with `listCalls()` (one page) or `iterateCalls()` (follows the cursor for you), both over `GET /api/v1/usage/calls` (issue #67):
+
+```ts
+for await (const call of viewer.iterateCalls({ agentId: 'builder', costSource: 'unknown' })) {
+  console.log(call.requestId, call.tokens.input, call.status);
+}
+```
 
 ---
 
@@ -518,7 +554,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 |---|---|---|
 | `schemaVersion` | `"1.0"` | Contract version. |
 | `id` | `string` | Unique event id, also the idempotency key. One id names exactly one event: reusing it for different content is rejected with 409. |
-| `type` | `string` | One of the 22 canonical types (aliases accepted). |
+| `type` | `string` | One of the 23 canonical types (aliases accepted). |
 | `timestamp` | `number` | Unix epoch in milliseconds. |
 | `source` | `string` | Producer, for example `runtime:crewai` or `agent:researcher`. |
 | `agentId` | `string?` | The agent the event is about. |
@@ -528,7 +564,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | `payload` | `object` | Type-specific details. |
 
 <details>
-<summary><b>📋 The 22 event types and what they do in the office</b></summary>
+<summary><b>📋 The 23 event types and what they do in the office</b></summary>
 <br/>
 
 | Category | Type | Effect |
@@ -544,7 +580,7 @@ One envelope for everything. Producers send it; the server validates it with Zod
 | | `meeting.started` | Starts at once. |
 | | `meeting.message` | Bubble headed by its kind; a `decision` is added to the meeting decisions. |
 | | `meeting.ended`, `meeting.cancelled` | Frees the room; participants walk back to their workspace. |
-| Telemetry | `llm.usage` | Provider, model, input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost, cost source and currency. A figure that was not reported stays unknown, never 0. |
+| Telemetry | `llm.usage` | Provider, model, input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost, cost source and currency. A figure that was not reported stays unknown, never 0. Optional correlation fields: `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` and `tags` ([docs/integration.md](docs/integration.md#correlation-and-attribution-fields-issue-64)). |
 | | `llm.failed` | One failed model call attempt: provider, model, error kind, HTTP status and whether it can be retried. Tokens and cost only when the provider billed the attempt. No status change. |
 | Runtime | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | Runtime health; no visible change. |
 
@@ -567,7 +603,7 @@ flowchart LR
   subgraph Server["Agent Viewer server :8787"]
     I["REST + webhooks<br/>Zod validation, contract V1"]
     D[("Memory ring buffer<br/>or SQLite")]
-    E["SSE stream<br/>resume by Last-Event-ID"]
+    E["SSE stream<br/>full replay or resync"]
   end
   subgraph Office["The office"]
     W["Demo app :3000"]
@@ -585,14 +621,21 @@ flowchart LR
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/health` | Status, version, schema version and connected SSE clients. |
+| `GET` | `/health` | Status, version, schema version, connected SSE clients, and current `auth` / `webhookAuth` mode. |
 | `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
-| `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
-| `GET` | `/api/v1/events/stream` | Server-Sent Events. Replays missed events from `Last-Event-ID`; heartbeat every 15 s. |
+| `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. Not the audit path: it returns whole events (including free text) and `afterId` cannot walk history; use `GET /api/v1/usage/calls` for that. |
+| `POST` | `/api/v1/stream-tickets` | Issues a short-lived, single-use ticket for `EventSource` clients, which cannot send an `Authorization` header. Requires the Bearer token; a ticket cannot mint tickets. |
+| `GET` | `/api/v1/events/stream` | Server-Sent Events. Authenticates with `Authorization: Bearer <token>` or a `?ticket=` from `POST /api/v1/stream-tickets`; a `token` query parameter never authenticates. On reconnect, replays every event missed since `Last-Event-ID` in full, up to `AGENT_VIEWER_SSE_REPLAY_MAX` (default 10,000), or sends an explicit `resync` frame instead, never a partial replay; the connection stays open either way. Heartbeat every 15 s. |
 | `GET` | `/api/v1/snapshot` | Aggregate snapshot: agents, tasks, meetings, runtimes and the `usage` block. The deprecated `totalCost` and agent `cost` are `null` unless every call reported one fully known currency (one currency, one cost source). |
 | `GET` | `/api/v1/usage` | Usage aggregates only, call by call: by agent and by `(provider, model)`, unknown counts kept, costs per currency and never summed across currencies. [Details](docs/integration.md#usage-aggregates-get-apiv1usage). |
+| `GET` | `/api/v1/usage/rollup` | Grouped sums over the usage ledger for an audit question such as "how much did agent X spend with model Y this week", "how much did this meeting cost" or "which tool is the expensive one": a time range, `received`/`occurred` time basis, up to 3 dimensions (including `meeting`/`tool`, attributed only through an explicit `meetingId`/`toolCallId`, never by time overlap), never a derived total, and a `coverage` block that says when the answer may be incomplete. [Details](docs/integration.md#usage-rollup-get-apiv1usagerollup-issue-66). |
+| `GET` | `/api/v1/usage/ledger/status` | Usage ledger health: row counts by origin (`live`/`backfill`), legacy rows, skip counts and the oldest/newest server receive time. Never a sum of tokens or cost. [Details](docs/usage-ledger.md). |
+| `GET` | `/api/v1/usage/calls` | Read-only, metadata-only listing of usage ledger rows (issue #67), with the same filters as `GET /api/v1/usage` and a stable, opaque cursor that can walk the full history in either direction. Never returns prompt, completion, message, tool or provider error text. [Details](docs/integration.md#usage-calls-get-apiv1usagecalls-issue-67). |
+| `GET` | `/api/v1/usage/export` | Streams the usage ledger as CSV or JSONL for reconciling against a provider invoice (issue #69): every text cell redacted, a CSV formula-injection guard, a pinned `asOfSeq` snapshot, and `afterSeq` for incremental pulls. [Details](docs/usage-export.md). |
+| `GET` | `/api/v1/usage/export/totals` | Per-`(currency, costSource)` and per-token-kind reconciliation totals for the same filters, computed by the `GET /api/v1/usage/rollup` service (never summed a second time). CSV stays strictly tabular; this is where its totals live. [Details](docs/usage-export.md). |
+| `GET` | `/api/v1/admin/retention` | Retention status: counts, coverage (`purgedBefore`, lifetime `deletedTotal`) and recent purge runs for events and the usage ledger. Read-only; no endpoint triggers a purge. [Details](docs/retention.md). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
 | `PATCH` | `/api/v1/agents/:agentId` | Update an agent's profile or status (descriptive fields only; usage is reported with `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |
@@ -635,7 +678,7 @@ The event id is the idempotency key, and the content decides what a repeated id 
 The first send returns `202` with the fingerprint, and a true retry returns HTTP 200 with the same fingerprint instead of a second copy:
 
 ```json
-{ "accepted": true, "duplicate": true, "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
+{ "accepted": true, "duplicate": true, "duplicateReason": "event_id", "id": "evt_req_9921", "fingerprint": "sha256:3f1c..." }
 ```
 
 The same id with any different stored field (a token count, the cost, a cost that was `0` and is now missing, or the `timestamp`) is rejected with HTTP 409:
@@ -675,6 +718,40 @@ A batch answers `202` whenever validation passes, even if no item was applied, s
 }
 ```
 
+`llm.usage` and `llm.failed` have a second, independent dedup key: `(provider, requestId)`. The event id above tells a retry of the exact same request from a conflicting one; the request key tells whether two different event ids actually name the same provider call (the application called `usage()` again, a process replayed its own buffer with fresh ids, two layers reported the same call, or a webhook delivery was retried). Provider matching ignores case and surrounding whitespace; `requestId` matches exactly after trimming; a missing or blank `requestId` means the event has no request key and behaves exactly as above. `llm.usage` and `llm.failed` share one key space, so a call reported as failed and then as used is not counted twice.
+
+A new event id with an already-used `(provider, requestId)` is a `200` duplicate too, but `duplicateReason` says which key matched, `id` is always the id the figure is held under (the original), and `submittedId` appears whenever it differs from `id`:
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "duplicateReason": "request_id",
+  "id": "evt_req_9921",
+  "submittedId": "evt_req_9988",
+  "matchesOriginal": true,
+  "fingerprint": "sha256:9b0e..."
+}
+```
+
+`matchesOriginal` appears only for a `request_id` duplicate: whether its usage-relevant fields (`model`, every token field, `cost`, `currency`, `costSource`) match the original. Unknown is never equal to zero: a `cost` of `null` against a stored `0` (or the reverse) is `matchesOriginal: false`. A mismatch also writes one `warn` log line with both event ids, the provider and a truncated request id, never payload text. The duplicate is stored with its full content for audit, but it is never added to any total, never changes the agent's status, provider or model, is never broadcast over the live stream or replayed on `Last-Event-ID`, and never appears in `GET /api/v1/events`. List every duplicate reference with `GET /api/v1/usage/duplicates` (optional `limit`, `provider`, `requestId`, `duplicateOf` query filters, same auth as the rest of `/api/v1`), and read the running counts from `GET /api/v1/snapshot`'s `usageDuplicates: { count, mismatched, unverified }` (`unverified` is a reference migrated from before this existed, whose legacy content was never compared).
+
+A batch applies the same two keys in input order, so two items of one batch can resolve against each other:
+
+```json
+{
+  "accepted": 1,
+  "duplicates": 2,
+  "conflicts": 0,
+  "total": 3,
+  "results": [
+    { "id": "evt_b1", "status": "accepted",  "duplicate": false, "fingerprint": "sha256:aa..." },
+    { "id": "evt_b1", "submittedId": "evt_b2", "status": "duplicate", "duplicate": true, "duplicateReason": "request_id", "matchesOriginal": false, "fingerprint": "sha256:bb..." },
+    { "id": "evt_b1", "status": "duplicate", "duplicate": true, "duplicateReason": "event_id", "fingerprint": "sha256:aa..." }
+  ]
+}
+```
+
 Each conflict also writes one `warn` log line with the id, type, source, agent and both fingerprints (never the payload), and `GET /ready` counts them since the process started:
 
 ```json
@@ -709,9 +786,15 @@ The signature is compared in constant time. Expired timestamps and bad signature
 
 </details>
 
-**Storage:** `memory` (default) keeps the last 10,000 events in a ring buffer. `sqlite` uses Node's built-in `node:sqlite` and persists events to `./data/agent-viewer.db`; runtime, session and agent state remains in memory.
+**Storage:** `memory` (default) keeps the last `AGENT_VIEWER_MAX_EVENTS` events (default 10,000) in a ring buffer for `GET /api/v1/events` and SSE replay, derived state included. Dedup never forgets: once an event id (or, for `llm.usage`/`llm.failed`, a `(provider, requestId)` pair) is accepted, a later retry of that id is recognized as a duplicate for as long as the process runs, even after the event itself has fallen off the ring. Remembering every id costs roughly 100-150 bytes per accepted event for the process lifetime; the server logs one warning when it crosses 1,000,000 known ids, suggesting `AGENT_VIEWER_STORAGE=sqlite` for long-running servers. Totals, per-agent figures and `GET /api/v1/snapshot`'s `usage` cover every accepted event since the process started, including evicted ones; only the event list itself is capped. `snapshot.retention` (and the `retention` field on `GET /api/v1/events` and the SSE heartbeat) reports `maxEvents`, how many events are retained versus accepted, and `droppedEvents`, so a client never mistakes a truncated list for the full history.
+
+**Usage ledger (issue #65):** every accepted `llm.usage` or `llm.failed` event also gets one append-only, typed row in the usage ledger, carrying the **server** receive time (`received_at`), never the client's own clock. `GET /api/v1/events` now returns that same receive time as `receivedAt` on every event (SQLite always stored it in `created_at`; it was never returned before this). The ledger is independent of the event ring and of `AGENT_VIEWER_MAX_EVENTS`: in memory mode it has its own cap, `AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS` (default 100,000); in SQLite mode it has no foreign key to `events`, so retention (issue #70) can prune old events without touching their ledger rows. The first start of a 0.4.0 server runs a one-time backfill over every event already stored, logging a summary line such as `usage_ledger: scanned=1546 inserted=1530 duplicate=14 conflict=2 unparseable=0 (backfill)`; every later restart runs the same pass again to catch up on any gap, which normally finds nothing to do. Full reference: [docs/usage-ledger.md](docs/usage-ledger.md).
+
+`sqlite` uses Node's built-in `node:sqlite` and persists every event to `./data/agent-viewer.db`; `AGENT_VIEWER_MAX_EVENTS` has no effect in this mode (a one-time startup log says so if it is set). Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses. The state after a restart is identical to the state before it, events that cannot be read are skipped and reported, and `/ready` answers `503` until the rebuild finishes (see below). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer is part of the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug. `snapshot.retention` reports `maxEvents: null` (the database keeps every row), `droppedEvents: 0` and `acceptedEvents` equal to `retainedEvents`, the true stored row count.
 
 SQLite schema migrations run automatically at startup. Before upgrading an existing database, the default `AGENT_VIEWER_SQLITE_BACKUP=auto` writes a `.bak` file beside it. Backups contain the same event data, are never pruned automatically, and can make the first startup take longer for large files. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if you manage backups yourself. A server refuses a database with a newer schema; to roll back, stop the server and restore the `.bak` file before starting an older version. `/ready` reports `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt` in SQLite mode. These are database migration details; `/health`'s `schemaVersion` is the event contract version (`1.0`).
+
+**Readiness during a SQLite rebuild:** `GET /ready` answers `503` with `Retry-After: 1` and `rebuild.state: "running"` until the replay finishes, then `200` with `rebuild.state: "done"` and `rebuild.durationMs`. `GET /health` (the liveness probe) answers `200` the whole time. While the rebuild runs, `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:id` and `POST /api/v1/runtimes` answer `503 store_rebuilding`; `POST /api/v1/events` and `/events/batch` stay open, are stored, and are applied once the rebuild (or a later restart) reaches them. Point container health checks at `/health` and readiness checks at `/ready`. Memory storage has nothing to replay: `/ready` answers `200` immediately.
 
 ---
 
@@ -722,16 +805,30 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Server port. |
-| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`, or `?token=` (or `?api_key=`) for `EventSource`. Empty means open, for local development with `npm run server`; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
-| `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. |
+| `AGENT_VIEWER_HOST` | `127.0.0.1` | Interface `npm run server` (and a direct `startServer()` call) binds. A non-loopback value with no token refuses to start; see the Security table. A blank value counts as unset. |
+| `AGENT_VIEWER_API_TOKEN` | empty | Protects `/api/v1/*`. Clients send `Authorization: Bearer <token>`; `EventSource` clients trade it for a ticket from `POST /api/v1/stream-tickets` first, since it cannot send a header. A `token` or `api_key` query parameter never authenticates, on any route. Empty means open: the server warns at startup, `/health` reports `auth: "open"` and the live portal shows a banner; the `agent-viewer` CLI and the Docker images never run open (a blank value counts as unset and a token is generated). `AGENT_VIEWER_API_KEY`, still read by the example adapters, is a deprecated alias. |
+| `AGENT_VIEWER_ALLOW_OPEN` | unset | Set to exactly `1` to let the server bind a non-loopback interface with no token anyway, and to silence the open-mode request guard (403s on a non-loopback remote address, `Host` or `Origin`). Any other value is ignored. |
+| `AGENT_VIEWER_STREAM_TICKET_TTL_MS` | `30000` | Lifetime of a stream ticket from `POST /api/v1/stream-tickets`, clamped to `[1000, 300000]`. |
+| `AGENT_VIEWER_STREAM_TICKET_MAX` | `1000` | Outstanding (unused, unexpired) stream tickets allowed at once; past it, minting answers `429`. |
+| `AGENT_VIEWER_CORS_ORIGIN` | `*` when unset | Allowed browser origins, comma separated. `server/.env.example` sets `http://localhost:3000`. A `*` value does not count as an explicit origin for the open-mode request guard. |
 | `AGENT_VIEWER_STORAGE` | `memory` | `memory` or `sqlite`. |
+| `AGENT_VIEWER_MAX_EVENTS` | `10000` | Positive integer. Cap on the retained event window in memory mode (dedup is never capped). Has no effect in `sqlite` mode, which stores and rebuilds every event. An invalid value stops the server at startup. |
 | `AGENT_VIEWER_SQLITE_PATH` | `./data/agent-viewer.db` | SQLite file when storage is `sqlite`. |
 | `AGENT_VIEWER_SQLITE_BACKUP` | `auto` | Back up an existing SQLite database before migration, or set to `off` when backups are managed separately. |
+| `AGENT_VIEWER_REBUILD_PAGE_SIZE` | `2000` | Rows replayed per page of the SQLite startup rebuild. |
+| `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` | `0` | Extra delay awaited after each rebuild page, for tests and diagnostics. |
 | `AGENT_VIEWER_MAX_BATCH_SIZE` | `100` | Maximum events per batch request. |
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
+| `AGENT_VIEWER_SSE_REPLAY_MAX` | `10000` | Maximum missed events a reconnect replays in full. `0` means any reconnect that missed something resyncs instead of replaying. An invalid value stops the server at startup. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |
+| `AGENT_VIEWER_RETENTION_DAYS` | unset (keep forever) | Raw events whose server receive time is older than this many days are purged by a scheduled job. Integer `1` to `36500`; `0` and any other invalid value refuse to start. See [docs/retention.md](docs/retention.md). |
+| `AGENT_VIEWER_USAGE_RETENTION_DAYS` | unset (keep forever) | Same, for the usage ledger (the audit record of tokens and cost), independently of `AGENT_VIEWER_RETENTION_DAYS`. Setting it logs a one-line startup warning. |
+| `AGENT_VIEWER_RETENTION_INTERVAL_MINUTES` | `60` | How often the purge job runs, once either window above is set. Integer `1` to `1440`. |
+| `AGENT_VIEWER_EXPORT_MAX_ROWS` | `1000000` | Above this many matching rows, `GET /api/v1/usage/export` answers `422 export_too_large` (with the actual row count and this limit) before streaming anything, rather than truncating silently. Narrow the filters or use `afterSeq`/`asOfSeq` windows. See [docs/usage-export.md](docs/usage-export.md). |
+| `AGENT_VIEWER_EXPORT_CONCURRENCY` | `2` | Concurrent `GET /api/v1/usage/export` requests this process serves at once; above it, `429 export_busy` with `Retry-After: 5`. Does not apply to `GET /api/v1/usage/export/totals` (a single read, not a long-running stream). |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | none | Demo app: `live` boots in live mode, like `?mode=live`. `npm run dev:full` sets it for you. |
+| `VITE_AGENT_VIEWER_HISTORY_LIMIT` | `1000` | Demo app, live mode: upper bound (1 to 5000) of events the portal loads on open, beyond the snapshot's own newest 100, through `GET /api/v1/events?beforeId=...`. Only the activity timeline goes this deep; the token and cost figures always come from the snapshot's own totals. An invalid value falls back to the default. |
 
 ---
 
@@ -753,7 +850,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | Language | `EN` / `ES` selector |
 | Replay a log without a server | Drop a JSONL V1 file onto the window |
 
-The demo saves its state in the browser so a refresh picks up where you were; Reset clears it ([details](docs/session-persistence.md)). Live mode starts clean and skips the saved demo state.
+The demo saves its state in the browser so a refresh picks up where you were; Reset clears it ([details](docs/session-persistence.md)). Live mode skips the saved demo state; instead, on open it loads the office, the recent activity and the token/cost figures from the server itself (`GET /api/v1/snapshot` and a paged `GET /api/v1/events`) before subscribing to the stream, so a reload or a second tab opened mid-run shows the same figures, never zero (issue #72). Run `npm run test:e2e` to exercise this and the rest of the browser flows with Playwright.
 
 ---
 
@@ -763,23 +860,28 @@ The defaults favor local development. Before you expose the server:
 
 | Area | Default | Production |
 |---|---|---|
-| API token | unset, `/api/v1/*` open | Set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. |
+| API token | unset, `/api/v1/*` open | Check with `curl -s localhost:8787/health \| jq .auth`; set `AGENT_VIEWER_API_TOKEN` to a high-entropy secret. |
 | Webhooks | unsigned when no secret | Set `AGENT_VIEWER_WEBHOOK_SECRET` to require HMAC signatures. |
 | CORS | `*` | Set `AGENT_VIEWER_CORS_ORIGIN` to your exact frontend origin. |
-| Network | binds `0.0.0.0` | Put it behind a reverse proxy with TLS. |
+| Network | `npm run server` binds `127.0.0.1` by default; a non-loopback `AGENT_VIEWER_HOST` with no token refuses to start (`AGENT_VIEWER_ALLOW_OPEN=1` overrides this); with no token, a request from a non-loopback address, `Host` or `Origin` gets `403` even on a loopback bind. Docker Compose ports bind `127.0.0.1`. | Set `AGENT_VIEWER_API_TOKEN` before binding a non-loopback `AGENT_VIEWER_HOST`. To expose Compose remotely, restore `"8787:8787"` / `"3000:3000"` and put it behind a reverse proxy with TLS; a reverse proxy on the same host makes every request look local, so it still needs a token. |
 | Storage | in memory | `AGENT_VIEWER_STORAGE=sqlite` on a protected volume. |
+| Retention | keeps everything forever | Set `AGENT_VIEWER_RETENTION_DAYS` for a production deployment that must bound how long prompts-adjacent metadata (summaries, payloads) stays on disk; set `AGENT_VIEWER_USAGE_RETENTION_DAYS` separately only if the audit record of tokens and cost must also expire. This is a honest baseline, not tamper-evident: see [docs/retention.md](docs/retention.md). |
+| Bulk export | With no token, `GET /api/v1/usage/export` and `/export/totals` require a loopback peer address, a loopback `Host` header and no cross-origin `Origin`, even when `AGENT_VIEWER_CORS_ORIGIN` is `*`; `token`/`api_key` in the query is always rejected (send `Authorization: Bearer` instead). A reverse proxy on the same host still looks loopback to this check, so it needs a token anyway; a Docker port mapping does not look loopback (the container sees the bridge address), so it always needs one. Set `AGENT_VIEWER_API_TOKEN` for any production deployment. **Until a scoped, read-only key ships (0.8.0), any holder of the API token can export the entire usage ledger**: treat the token as read access to your whole consumption history, not only write access to the event stream. See [docs/usage-export.md](docs/usage-export.md). |
+| Redaction | Built-in secret patterns, applied only to `GET /api/v1/usage/export` and `/export/totals` | Not yet applied at ingestion, to the live stream, to `GET /api/v1/events`, or to webhook replays: keep secrets out of event text rather than relying on redaction to scrub it later. See [docs/redaction.md](docs/redaction.md). |
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).
+
+`POST /v1/logs` and `POST /v1/metrics` honor `AGENT_VIEWER_API_TOKEN` exactly like `/api/v1` (open when unset, the same startup warning). The metrics receiver stores only an explicit attribute allowlist (hashed session id, `model`, `type`, `service.name`/`service.version`); `user.email`, `user.account_uuid`, `organization.id` and the raw `session.id` are never stored. Its internal series key is a keyed `HMAC-SHA256` (random secret, persisted in SQLite mode), not a plain hash, so a low-entropy attribute can never be recovered from it by dictionary attack. See [docs/otlp.md](docs/otlp.md) for the full reference.
 
 ---
 
 ## 🧭 Roadmap
 
-Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts.
+Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
 
 Planned, not available yet:
 
-- [ ] Publish `@warlockcode/agent-viewer` on npm.
+- [ ] `GET /api/v1/usage/reconciliation`: compare the OTLP metrics stored by `POST /v1/metrics` against the usage ledger. The ledger itself shipped in 0.4.0; this comparison endpoint is still not built.
 - [ ] Import OTLP (OpenTelemetry) traces.
 - [ ] More adapters, packaged and tested against the real frameworks.
 - [ ] An MCP server, so agents can report into the office directly.
@@ -797,13 +899,14 @@ Contributions are welcome: adapters for your framework, translations, bug report
 ```bash
 npm run lint                    # typecheck
 npm test                        # node:test suites + Vitest
+npm run test:golden             # golden reconciliation suite (also part of npm test)
 python3 tests/test_python_sdk.py
 npm run build                   # demo app
 npm run build:lib               # library
 npm run check:package           # publint + attw
 ```
 
-Three rules keep the product honest: never require or expose private model reasoning, keep simulated dialogue visibly marked as simulated, and never show an unknown figure as zero.
+Three rules keep the product honest: never require or expose private model reasoning, keep simulated dialogue visibly marked as simulated, and never show an unknown figure as zero. Field-by-field detail: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
 ---
 

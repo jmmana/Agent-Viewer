@@ -11,9 +11,10 @@ import logging
 import random
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 logger = logging.getLogger("agent_viewer")
 
@@ -23,6 +24,144 @@ _UNSTATED_COST_SOURCE_WARNING = (
     'Agent Viewer: a cost was reported without cost_source, so it is sent as costSource="unknown". '
     'Pass cost_source="provider-reported" or "estimated" to state where the cost comes from.'
 )
+
+# snake_case kwarg -> camelCase query param for AgentViewer.usage_rollup() (issue #66). Mirrors the server's
+# own parseUsageFilters().
+_ROLLUP_FILTER_QUERY_NAMES = {
+    "agent_id": "agentId",
+    "model": "model",
+    "provider": "provider",
+    "session_id": "sessionId",
+    "task_id": "taskId",
+    "runtime_id": "runtimeId",
+    "user_id": "userId",
+    "tag": "tag",
+    "status": "status",
+    "cost_source": "costSource",
+    "currency": "currency",
+}
+
+# -------------------------------------------------------------
+# Usage correlation block (issue #64): traceId, parentId, toolCallId, meetingId, userId, tags.
+#
+# This SDK ships standalone and does not import the server contract, so the three limits and the
+# whitespace rule are kept here as an explicit copy. tests/fixtures/usage-correlation-vectors.json is the
+# shared test-vector file that keeps this copy, the server contract and the TypeScript SDK from drifting.
+# -------------------------------------------------------------
+
+CORRELATION_ID_MAX_LENGTH = 128
+USAGE_TAGS_MAX = 20
+USAGE_TAG_MAX_LENGTH = 64
+
+# Same exact whitespace set as ECMAScript's String.prototype.trim (value !== value.trim()). Deliberately NOT
+# str.strip(): Python's default whitespace set differs (for example it strips U+001C-U+001F and U+0085,
+# which are not in this set) and does not include U+00A0 or U+FEFF, which are.
+_TRIMMABLE_WHITESPACE = (
+    "\u0009\u000a\u000b\u000c\u000d   "
+    "           "
+    "    　﻿"
+)
+
+
+def _utf16_length(value: str) -> int:
+    """Counts UTF-16 code units, matching JavaScript's String.length for astral characters."""
+    return len(value.encode("utf-16-le")) // 2
+
+
+def _has_control_character(value: str) -> bool:
+    return any(ord(ch) <= 0x1F or ord(ch) == 0x7F for ch in value)
+
+
+def _has_leading_or_trailing_whitespace(value: str) -> bool:
+    return bool(value) and (value[0] in _TRIMMABLE_WHITESPACE or value[-1] in _TRIMMABLE_WHITESPACE)
+
+
+def _validate_correlation_id(name: str, value: Any) -> None:
+    """Validates one correlation id field with the server's exact rules. Raises ``TypeError`` for a
+    non-string value and ``ValueError`` naming the argument for anything else that is invalid. ``None``
+    means "not reported" and is always accepted; never truncates.
+    """
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string (got {type(value).__name__})")
+    length = _utf16_length(value)
+    if length < 1:
+        raise ValueError(f"{name} must not be empty")
+    if length > CORRELATION_ID_MAX_LENGTH:
+        raise ValueError(f"{name} must be at most {CORRELATION_ID_MAX_LENGTH} characters")
+    if _has_control_character(value):
+        raise ValueError(f"{name} must not contain control characters")
+    if _has_leading_or_trailing_whitespace(value):
+        raise ValueError(f"{name} must not have leading or trailing whitespace")
+
+
+def _validate_tags(tags: Any) -> None:
+    """Validates ``tags`` with the server's exact rules. A ``str`` or ``bytes`` raises ``TypeError`` (a
+    ``str`` is itself a ``Sequence`` and would otherwise be split into one tag per character).
+    """
+    if tags is None:
+        return
+    if isinstance(tags, (str, bytes)):
+        raise TypeError("tags must be a sequence of strings, not a single str or bytes")
+    if not isinstance(tags, Sequence):
+        raise TypeError("tags must be a sequence of strings")
+    tags_list = list(tags)
+    if len(tags_list) > USAGE_TAGS_MAX:
+        raise ValueError(f"At most {USAGE_TAGS_MAX} tags are allowed")
+    for index, tag in enumerate(tags_list):
+        if not isinstance(tag, str):
+            raise TypeError(f"tags[{index}] must be a string")
+        length = _utf16_length(tag)
+        if length < 1:
+            raise ValueError(f"tags[{index}] must not be empty")
+        if length > USAGE_TAG_MAX_LENGTH:
+            raise ValueError(f"tags[{index}] must be at most {USAGE_TAG_MAX_LENGTH} characters")
+        if _has_control_character(tag):
+            raise ValueError(f"tags[{index}] must not contain control characters")
+        if _has_leading_or_trailing_whitespace(tag):
+            raise ValueError(f"tags[{index}] must not have leading or trailing whitespace")
+
+
+def _validate_usage_correlation(
+    trace_id: Optional[str],
+    parent_id: Optional[str],
+    tool_call_id: Optional[str],
+    meeting_id: Optional[str],
+    user_id: Optional[str],
+    tags: Optional[Sequence[str]],
+) -> None:
+    _validate_correlation_id("trace_id", trace_id)
+    _validate_correlation_id("parent_id", parent_id)
+    _validate_correlation_id("tool_call_id", tool_call_id)
+    _validate_correlation_id("meeting_id", meeting_id)
+    _validate_correlation_id("user_id", user_id)
+    _validate_tags(tags)
+
+
+def _correlation_payload(
+    trace_id: Optional[str],
+    parent_id: Optional[str],
+    tool_call_id: Optional[str],
+    meeting_id: Optional[str],
+    user_id: Optional[str],
+    tags: Optional[Sequence[str]],
+) -> Dict[str, Any]:
+    """Builds the payload keys for the six correlation fields, only when given (never ``None`` on the wire)."""
+    payload: Dict[str, Any] = {}
+    if trace_id is not None:
+        payload["traceId"] = trace_id
+    if parent_id is not None:
+        payload["parentId"] = parent_id
+    if tool_call_id is not None:
+        payload["toolCallId"] = tool_call_id
+    if meeting_id is not None:
+        payload["meetingId"] = meeting_id
+    if user_id is not None:
+        payload["userId"] = user_id
+    if tags is not None:
+        payload["tags"] = list(tags)
+    return payload
 
 
 class AgentViewerError(Exception):
@@ -44,6 +183,18 @@ class AgentViewerError(Exception):
         self.status_code = status_code
         self.issues = issues
         self.code = code
+
+
+def _append_repeatable(
+    params: List[Tuple[str, str]], key: str, value: Optional[Union[str, Sequence[str]]]
+) -> None:
+    """Appends one query parameter per value of a repeatable filter (issue #67's ``list_calls``): a single
+    string becomes one pair, a sequence becomes one pair per item, sent as repeated query parameters."""
+    if value is None:
+        return
+    values: Sequence[str] = [value] if isinstance(value, str) else list(value)
+    for v in values:
+        params.append((key, v))
 
 
 def _default_event_id() -> str:
@@ -158,12 +309,16 @@ class AgentHandle:
             source=f"agent:{self.id}",
         )
 
-    def tool_started(self, tool: str, input_summary: Optional[str] = None) -> None:
+    def tool_started(
+        self, tool: str, input_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+    ) -> None:
         """Report tool call start."""
         self._ensure_registered()
         payload = {"tool": tool}
         if input_summary is not None:
             payload["inputSummary"] = input_summary
+        if tool_call_id is not None:
+            payload["toolCallId"] = tool_call_id
         self.viewer.emit(
             "tool.started",
             f"Started {tool}: {input_summary}" if input_summary else f"Started tool {tool}",
@@ -172,12 +327,16 @@ class AgentHandle:
             source=f"agent:{self.id}",
         )
 
-    def tool_completed(self, tool: str, output_summary: Optional[str] = None) -> None:
+    def tool_completed(
+        self, tool: str, output_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+    ) -> None:
         """Report tool call completion."""
         self._ensure_registered()
         payload = {"tool": tool}
         if output_summary is not None:
             payload["outputSummary"] = output_summary
+        if tool_call_id is not None:
+            payload["toolCallId"] = tool_call_id
         self.viewer.emit(
             "tool.completed",
             f"Completed {tool}: {output_summary}" if output_summary else f"Completed tool {tool}",
@@ -186,13 +345,18 @@ class AgentHandle:
             source=f"agent:{self.id}",
         )
 
-    def tool_failed(self, tool: str, error_summary: Optional[str] = None) -> None:
+    def tool_failed(
+        self, tool: str, error_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+    ) -> None:
         """Report tool call failure."""
         self._ensure_registered()
+        payload = {"tool": tool, "error": error_summary}
+        if tool_call_id is not None:
+            payload["toolCallId"] = tool_call_id
         self.viewer.emit(
             "tool.failed",
             f"Failed {tool}: {error_summary}" if error_summary else f"Failed tool {tool}",
-            {"tool": tool, "error": error_summary},
+            payload,
             agent_id=self.id,
             source=f"agent:{self.id}",
         )
@@ -214,17 +378,27 @@ class AgentHandle:
         cache_write_tokens: Optional[int] = None,
         currency: Optional[str] = None,
         task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        meeting_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[Sequence[str]] = None,
     ) -> None:
         """Report the token and cost usage of one model call, exactly as the caller knows it.
 
         A figure that is not given stays unknown: it is left out of the payload, never sent as 0.
         ``cost_source`` is never inferred. A cost given without it is sent as ``"unknown"`` and
-        the client logs one warning. ``task_id`` goes to the envelope ``taskId``.
+        the client logs one warning. ``task_id`` goes to the envelope ``taskId``. ``trace_id``,
+        ``parent_id``, ``tool_call_id``, ``meeting_id``, ``user_id`` and ``tags`` (issue #64) are validated
+        locally with the same limits as the server and raise ``ValueError`` (or ``TypeError`` for a wrong
+        type) naming the argument before anything is sent.
         """
         if cost_source is not None and cost_source not in COST_SOURCES:
             raise ValueError(
                 f'costSource must be one of {", ".join(COST_SOURCES)} (got "{cost_source}")'
             )
+        _validate_usage_correlation(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags)
         if cost is not None and cost_source is None:
             self.viewer._warn_unstated_cost_source()
         self._ensure_registered()
@@ -243,6 +417,7 @@ class AgentHandle:
             "latencyMs": latency_ms,
             "requestId": request_id,
         }
+        payload.update(_correlation_payload(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags))
         self.viewer.emit(
             "llm.usage",
             f"{provider}/{model} tokens ({input_tokens}+{output_tokens})",
@@ -250,6 +425,77 @@ class AgentHandle:
             agent_id=self.id,
             source=f"agent:{self.id}",
             task_id=task_id,
+        )
+
+    def llm_failed(
+        self,
+        provider: str,
+        model: Optional[str] = None,
+        error_kind: Optional[str] = None,
+        *,
+        http_status: Optional[int] = None,
+        retryable: Optional[bool] = None,
+        request_id: Optional[str] = None,
+        provider_error_code: Optional[str] = None,
+        attempts: Optional[int] = None,
+        latency_ms: Optional[int] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        cache_read_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        reasoning_tokens: Optional[int] = None,
+        cost: Optional[float] = None,
+        cost_source: Optional[str] = None,
+        currency: Optional[str] = None,
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        meeting_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[Sequence[str]] = None,
+    ) -> None:
+        """Report one failed model call attempt (issue #64). A figure that is not given stays unknown and
+        is left out, never sent as 0. There is no free-text error field on purpose: provider messages can
+        echo prompts or credentials. A retry that succeeds is reported as a separate ``usage()`` call.
+        """
+        if cost_source is not None and cost_source not in COST_SOURCES:
+            raise ValueError(
+                f'costSource must be one of {", ".join(COST_SOURCES)} (got "{cost_source}")'
+            )
+        _validate_usage_correlation(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags)
+        if cost is not None and cost_source is None:
+            self.viewer._warn_unstated_cost_source()
+        self._ensure_registered()
+        payload = {
+            "provider": provider,
+            "model": model,
+            "errorKind": error_kind,
+            "httpStatus": http_status,
+            "retryable": retryable,
+            "requestId": request_id,
+            "providerErrorCode": provider_error_code,
+            "attempts": attempts,
+            "latencyMs": latency_ms,
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "cacheReadTokens": cache_read_tokens,
+            "cacheWriteTokens": cache_write_tokens,
+            "reasoningTokens": reasoning_tokens,
+            "cost": cost,
+            "costSource": cost_source if cost_source is not None else "unknown",
+            "currency": currency,
+        }
+        payload.update(_correlation_payload(trace_id, parent_id, tool_call_id, meeting_id, user_id, tags))
+        summary = f"{provider}/{model} call failed" if model else f"{provider} call failed"
+        self.viewer.emit(
+            "llm.failed",
+            summary,
+            {k: v for k, v in payload.items() if v is not None},
+            agent_id=self.id,
+            source=f"agent:{self.id}",
+            task_id=task_id,
+            severity="high",
         )
 
 
@@ -407,6 +653,140 @@ class AgentViewer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def list_calls(
+        self,
+        *,
+        start: Optional[Union[int, str]] = None,
+        end: Optional[Union[int, str]] = None,
+        time_basis: Optional[str] = None,
+        agent_id: Optional[Union[str, Sequence[str]]] = None,
+        session_id: Optional[Union[str, Sequence[str]]] = None,
+        runtime_id: Optional[Union[str, Sequence[str]]] = None,
+        task_id: Optional[Union[str, Sequence[str]]] = None,
+        provider: Optional[Union[str, Sequence[str]]] = None,
+        model: Optional[Union[str, Sequence[str]]] = None,
+        status: Optional[Union[str, Sequence[str]]] = None,
+        cost_source: Optional[Union[str, Sequence[str]]] = None,
+        currency: Optional[Union[str, Sequence[str]]] = None,
+        request_id: Optional[Union[str, Sequence[str]]] = None,
+        trace_id: Optional[str] = None,
+        order: Optional[str] = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetch one page of ``GET /api/v1/usage/calls`` (issue #67): read-only, metadata-only ledger rows
+        (never prompt, completion, message or error text), with a stable, opaque cursor.
+
+        ``start``/``end`` map to the server's ``from``/``to`` query parameters (``from`` is a reserved word in
+        Python); both accept epoch milliseconds or an ISO 8601 date-time with an explicit offset, sent through
+        unmodified, never reformatted. Every repeatable filter accepts one value or a sequence of values, sent
+        as repeated query parameters (OR within the key, AND across keys). ``cursor`` is the opaque
+        ``page["nextCursor"]`` of a previous page; use :meth:`iter_calls` to follow it automatically.
+
+        Returns the raw response body (``schemaVersion``, ``asOf``, ``storage``, ``data``, ``page``). ``None``
+        values in ``data`` are never defaulted to ``0``; nothing is summed or priced here.
+        """
+        params: List[Tuple[str, str]] = []
+        if start is not None:
+            params.append(("from", str(start)))
+        if end is not None:
+            params.append(("to", str(end)))
+        if time_basis is not None:
+            params.append(("timeBasis", time_basis))
+        _append_repeatable(params, "agentId", agent_id)
+        _append_repeatable(params, "sessionId", session_id)
+        _append_repeatable(params, "runtimeId", runtime_id)
+        _append_repeatable(params, "taskId", task_id)
+        _append_repeatable(params, "provider", provider)
+        _append_repeatable(params, "model", model)
+        _append_repeatable(params, "status", status)
+        _append_repeatable(params, "costSource", cost_source)
+        _append_repeatable(params, "currency", currency)
+        _append_repeatable(params, "requestId", request_id)
+        if trace_id is not None:
+            params.append(("traceId", trace_id))
+        if order is not None:
+            params.append(("order", order))
+        if limit is not None:
+            params.append(("limit", str(limit)))
+        if cursor is not None:
+            params.append(("cursor", cursor))
+
+        query = urllib.parse.urlencode(params)
+        endpoint = "/api/v1/usage/calls" + (f"?{query}" if query else "")
+        return self._get_with_retry(endpoint)
+
+    def iter_calls(self, **kwargs: Any) -> Iterator[Dict[str, Any]]:
+        """Walks every page of :meth:`list_calls` by following ``page["nextCursor"]`` until ``hasMore`` is
+        false, yielding one call record (a ``dict``) at a time. Accepts the same keyword arguments as
+        :meth:`list_calls` except ``cursor``, which this method manages itself (an initial ``cursor`` may still
+        be passed to resume a previous walk). Raises :class:`AgentViewerError` if the server ever returns the
+        same cursor twice in a row, instead of looping forever.
+        """
+        cursor = kwargs.pop("cursor", None)
+        while True:
+            page = self.list_calls(cursor=cursor, **kwargs)
+            for call in page.get("data", []):
+                yield call
+            page_info = page.get("page") or {}
+            if not page_info.get("hasMore"):
+                return
+            next_cursor = page_info.get("nextCursor")
+            if not next_cursor or next_cursor == cursor:
+                raise AgentViewerError(
+                    "Agent Viewer usage calls walk did not advance: the server returned the same cursor twice in a row."
+                )
+            cursor = next_cursor
+
+    def usage_rollup(
+        self,
+        group_by: Union[str, Sequence[str]],
+        *,
+        from_: Optional[Union[int, str]] = None,
+        to: Optional[Union[int, str]] = None,
+        time_basis: str = "received",
+        utc_offset_minutes: int = 0,
+        sort: str = "key",
+        limit: int = 1000,
+        as_of_seq: Optional[int] = None,
+        **filters: Union[str, Sequence[str]],
+    ) -> Dict[str, Any]:
+        """Fetch grouped sums over the usage ledger from ``GET /api/v1/usage/rollup`` (issue #66).
+
+        ``group_by`` is a dimension name or a sequence of 1 to 3 (``agent``, ``model``, ``provider``,
+        ``session``, ``task``, ``day``, ``user``, ``tag``). Filter kwargs use snake_case (``agent_id``,
+        ``session_id``, ``task_id``, ``runtime_id``, ``user_id``, ``cost_source``, and ``model``, ``provider``,
+        ``tag``, ``status``, ``currency``); each accepts a single string or a sequence for a repeated filter
+        (same param repeated means OR). An unknown keyword argument raises ``TypeError`` instead of being sent.
+        The token is always sent in the ``Authorization`` header, never in the query string. Uses the same
+        ``_get_with_retry`` as :meth:`list_calls` (issue #67): raises :class:`AgentViewerError` (with
+        ``status_code`` and ``issues``) immediately on 400/401/410, retries 429 and 5xx with backoff.
+        """
+        unknown = sorted(set(filters) - set(_ROLLUP_FILTER_QUERY_NAMES))
+        if unknown:
+            raise TypeError(f"usage_rollup() got unexpected keyword argument(s): {', '.join(unknown)}")
+
+        group_by_list = [group_by] if isinstance(group_by, str) else list(group_by)
+        params: List[tuple] = [("groupBy", ",".join(group_by_list))]
+        if from_ is not None:
+            params.append(("from", str(from_)))
+        if to is not None:
+            params.append(("to", str(to)))
+        params.append(("timeBasis", time_basis))
+        params.append(("utcOffsetMinutes", str(utc_offset_minutes)))
+        params.append(("sort", sort))
+        params.append(("limit", str(limit)))
+        if as_of_seq is not None:
+            params.append(("asOfSeq", str(as_of_seq)))
+        for key, value in filters.items():
+            query_name = _ROLLUP_FILTER_QUERY_NAMES[key]
+            values = [value] if isinstance(value, str) else list(value)
+            for item in values:
+                params.append((query_name, item))
+
+        query_string = urllib.parse.urlencode(params)
+        return self._get_with_retry(f"/api/v1/usage/rollup?{query_string}")
+
     # Legacy method compatibility
     def register_agent(
         self,
@@ -446,6 +826,12 @@ class AgentViewer:
         request_id: Optional[str] = None,
         currency: Optional[str] = None,
         task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        tool_call_id: Optional[str] = None,
+        meeting_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        tags: Optional[Sequence[str]] = None,
     ) -> None:
         """Report LLM usage (legacy helper). Same rules as ``AgentHandle.usage()``."""
         self.agent(agent_id).usage(
@@ -463,6 +849,12 @@ class AgentViewer:
             cache_write_tokens=cache_write_tokens,
             currency=currency,
             task_id=task_id,
+            trace_id=trace_id,
+            parent_id=parent_id,
+            tool_call_id=tool_call_id,
+            meeting_id=meeting_id,
+            user_id=user_id,
+            tags=tags,
         )
 
     def _build_headers(self, idempotency_key: Optional[str] = None) -> Dict[str, str]:
@@ -523,6 +915,59 @@ class AgentViewer:
                     raise AgentViewerError(f"Agent Viewer connection error: {err.reason}")
                 time.sleep(delay + random.uniform(0, 0.1))
                 delay = min(delay * 2, 5.0)
+
+        raise AgentViewerError(f"Agent Viewer request failed after {self.max_retries} retries")
+
+    def _get_with_retry(self, endpoint: str) -> Dict[str, Any]:
+        """Shared GET helper (issue #67). ``snapshot()`` and ``usage_summary()`` predate it and keep their own
+        direct ``urlopen`` call with no error mapping; a failed call to either raises a raw ``urllib.error``
+        instead of :class:`AgentViewerError`. Sends the token only in the ``Authorization`` header, never in the
+        URL. 400, 401 and 410 fail immediately; 429 and 5xx are retried with the same backoff as
+        ``_post_with_retry``, since a GET is always safe to repeat.
+        """
+        url = f"{self.url}{endpoint}"
+        headers = self._build_headers()
+
+        attempt = 0
+        delay = 0.3
+
+        while attempt <= self.max_retries:
+            try:
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    resp_bytes = resp.read()
+                    return json.loads(resp_bytes.decode("utf-8")) if resp_bytes else {}
+            except urllib.error.HTTPError as err:
+                error_body = err.read().decode("utf-8")
+                issues = None
+                code = None
+                try:
+                    parsed = json.loads(error_body)
+                    issues = parsed.get("issues") or parsed.get("errors")
+                    if isinstance(parsed.get("error"), str):
+                        code = parsed["error"]
+                except Exception:
+                    pass
+
+                # Client errors (4xx except 429) fail immediately: 400 invalid_filter/invalid_cursor/cursor_mismatch,
+                # 401 unauthorized and 410 cursor_expired are all final, never retried.
+                if 400 <= err.code < 500 and err.code != 429:
+                    raise AgentViewerError(f"Agent Viewer rejected request: {err.code} {error_body}", err.code, issues, code)
+
+                attempt += 1
+                if attempt > self.max_retries:
+                    raise AgentViewerError(f"Agent Viewer request failed: {err.code} {error_body}", err.code, issues, code)
+
+                time.sleep(delay + random.uniform(0, 0.1))
+                delay = min(delay * 2, 5.0)
+            except urllib.error.URLError as err:
+                attempt += 1
+                if attempt > self.max_retries:
+                    raise AgentViewerError(f"Agent Viewer connection error: {err.reason}")
+                time.sleep(delay + random.uniform(0, 0.1))
+                delay = min(delay * 2, 5.0)
+
+        raise AgentViewerError(f"Agent Viewer request failed after {self.max_retries} retries")
 
 
 # Backward compatibility alias

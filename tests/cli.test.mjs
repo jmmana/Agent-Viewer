@@ -7,12 +7,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { CliUsageError, parseCliArgs } from '../cli/args.ts';
+import { CliUsageError, parseCliArgs, USAGE } from '../cli/args.ts';
 import { buildSendEvents } from '../cli/send.ts';
 import { normalizeStatus } from '../cli/statuses.ts';
 import { resolveConnection, writeSessionFile } from '../cli/connection.ts';
 import { createLaunchCodes, curlExample, displayHost, exposureWarning, launchUrl, officeUrl, resolveStartToken } from '../cli/start.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
+import { MIGRATIONS } from '../server/db/migrations.ts';
+
+const LATEST_MIGRATION_VERSION = MIGRATIONS.at(-1).version;
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliEntry = path.join(repoRoot, 'cli', 'index.ts');
@@ -99,11 +102,32 @@ test('CLI args: send, claude-hook, install, uninstall, help and version', () => 
     command: 'claude-hook', url: undefined, token: undefined, includeSummaries: true,
   });
   assert.deepEqual(parseCliArgs(['install', 'claude-code', '--project', 'app', '--yes'], '/work'), {
-    command: 'install', target: 'claude-code', project: path.resolve('/work', 'app'), yes: true, includeSummaries: false, url: undefined, token: undefined,
+    command: 'install', target: 'claude-code', project: path.resolve('/work', 'app'), yes: true, includeSummaries: false, url: undefined, token: undefined, telemetry: undefined,
   });
   assert.equal(parseCliArgs(['uninstall', 'claude-code', '-y'], '/work').yes, true);
   assert.equal(parseCliArgs(['--help']).command, 'help');
   assert.equal(parseCliArgs(['-v']).command, 'version');
+});
+
+test('CLI args: --telemetry and --no-telemetry, absent is undefined, last flag wins', () => {
+  assert.equal(parseCliArgs(['install', 'claude-code'], '/work').telemetry, undefined);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--telemetry'], '/work').telemetry, true);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--no-telemetry'], '/work').telemetry, false);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--telemetry', '--no-telemetry'], '/work').telemetry, false);
+  assert.equal(parseCliArgs(['install', 'claude-code', '--no-telemetry', '--telemetry'], '/work').telemetry, true);
+  assert.throws(() => parseCliArgs(['uninstall', 'claude-code', '--telemetry'], '/work'), CliUsageError);
+  assert.throws(() => parseCliArgs(['uninstall', 'claude-code', '--no-telemetry'], '/work'), CliUsageError);
+});
+
+test('CLI args: otel-headers needs --url, and the usage text lists the new flags', () => {
+  assert.deepEqual(parseCliArgs(['otel-headers', '--url', 'http://127.0.0.1:8787'], '/work'), {
+    command: 'otel-headers', url: 'http://127.0.0.1:8787',
+  });
+  assert.throws(() => parseCliArgs(['otel-headers'], '/work'), CliUsageError);
+  assert.throws(() => parseCliArgs(['otel-headers', '--url', 'not a url'], '/work'), CliUsageError);
+  assert.match(USAGE, /--telemetry/);
+  assert.match(USAGE, /--no-telemetry/);
+  assert.match(USAGE, /otel-headers/);
 });
 
 test('CLI statuses: office statuses and everyday words', () => {
@@ -212,6 +236,8 @@ test('CLI end to end: start, send an event, read it back from the API and the li
 
     const health = await (await fetch(`${base}/health`)).json();
     assert.equal(health.ok, true);
+    assert.equal(health.auth, 'token');
+    assert.doesNotMatch(output, /WARNING: AGENT_VIEWER_API_TOKEN is not set/);
     assert.equal((await fetch(`${base}/api/v1/events`)).status, 401, 'the API needs the token');
     assert.equal((await fetch(`${base}/api/v1/snapshot`)).status, 401, 'the API needs the token');
     const session = JSON.parse(readFileSync(path.join(home, 'session.json'), 'utf8'));
@@ -221,8 +247,19 @@ test('CLI end to end: start, send an event, read it back from the API and the li
     const refused = await fetch(`${base}/api/cli/launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"code":"nope"}' });
     assert.equal(refused.status, 404);
 
-    // What the office receives: the live stream.
-    const stream = await fetch(`${base}/api/v1/events/stream?token=${encodeURIComponent(token)}`);
+    // A token in the query string never authenticates (issue #71): EventSource clients mint a ticket instead.
+    const queryAttempt = await fetch(`${base}/api/v1/events/stream?token=${encodeURIComponent(token)}`);
+    assert.equal(queryAttempt.status, 401);
+    assert.equal((await queryAttempt.json()).error, 'query_token_not_supported');
+
+    // What the office receives: the live stream, opened with a single-use ticket.
+    const mintedTicket = await (
+      await fetch(`${base}/api/v1/stream-tickets`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    ).json();
+    const stream = await fetch(`${base}/api/v1/events/stream?ticket=${mintedTicket.ticket}`);
     assert.equal(stream.status, 200);
     const reader = stream.body.getReader();
 
@@ -317,7 +354,7 @@ test('CLI end to end: a too-new SQLite database prints one error line and exits'
   const db = new DatabaseSync(dbPath);
   db.exec(`
     CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, app_version TEXT NOT NULL);
-    INSERT INTO schema_migrations VALUES (3, 'future', 1, '9.0.0');
+    INSERT INTO schema_migrations VALUES (${LATEST_MIGRATION_VERSION + 1}, 'future', 1, '9.0.0');
   `);
   db.close();
   try {
@@ -345,7 +382,10 @@ test('CLI end to end: a too-new SQLite database prints one error line and exits'
       .split(/\r?\n/)
       .filter((line) => line.trim() && !line.includes('ExperimentalWarning') && !line.includes('--trace-warnings'));
     assert.equal(lines.length, 1);
-    assert.match(lines[0], /^agent-viewer: The database .* has schema version 3, but this server \(.+\) only knows up to version 2\./);
+    assert.match(
+      lines[0],
+      new RegExp(`^agent-viewer: The database .* has schema version ${LATEST_MIGRATION_VERSION + 1}, but this server \\(.+\\) only knows up to version ${LATEST_MIGRATION_VERSION}\\.`)
+    );
     assert.doesNotMatch(result.stderr, /at .*server|MigrationFailedError/);
   } finally {
     rmSync(home, { recursive: true, force: true });

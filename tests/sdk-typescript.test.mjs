@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { app } from '../server/index.ts';
-import { AgentViewer, AgentViewerError } from '../sdk/typescript/index.ts';
+import { AgentViewer, AgentViewerError, toUsageFigures } from '../sdk/typescript/index.ts';
+
+const vectorsPath = fileURLToPath(new URL('./fixtures/usage-correlation-vectors.json', import.meta.url));
+const vectors = JSON.parse(readFileSync(vectorsPath, 'utf8'));
 
 function startTestServer() {
   return new Promise((resolve) => {
@@ -314,6 +319,152 @@ test('TypeScript SDK usage: new fields go to the payload and taskId to the envel
 // Ingestion integrity (issue #47)
 // -------------------------------------------------------------
 
+// -------------------------------------------------------------
+// Usage correlation block (issue #64)
+// -------------------------------------------------------------
+
+test('TypeScript SDK usage: correlation fields are forwarded when defined, omitted otherwise', async (t) => {
+  const { usageEvents } = stubFetch(t);
+  t.mock.method(console, 'warn', () => {});
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.usage({
+    ...base,
+    traceId: 'trace_1',
+    parentId: 'span_1',
+    toolCallId: 'call_1',
+    meetingId: 'meeting_1',
+    userId: 'usr_1',
+    tags: ['env:prod', 'env:prod', 'feature:x'],
+  });
+  await agent.usage({ ...base });
+
+  const [withCorrelation, without] = usageEvents().map((e) => e.payload);
+  assert.equal(withCorrelation.traceId, 'trace_1');
+  assert.equal(withCorrelation.parentId, 'span_1');
+  assert.equal(withCorrelation.toolCallId, 'call_1');
+  assert.equal(withCorrelation.meetingId, 'meeting_1');
+  assert.equal(withCorrelation.userId, 'usr_1');
+  // The SDK never deduplicates locally: that is the server's job. It sends exactly what it was given.
+  assert.deepEqual(withCorrelation.tags, ['env:prod', 'env:prod', 'feature:x']);
+  for (const field of [...vectors.idFields, 'tags']) {
+    assert.equal(field in without, false, `${field} should not be sent as undefined or null`);
+  }
+});
+
+function bodiesOf(requests, type) {
+  return requests.map((r) => r.body).filter((body) => body.type === type);
+}
+
+test('TypeScript SDK usage: toolStarted, toolCompleted and toolFailed forward toolCallId when given', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.toolStarted('git.commit', 'committing', { toolCallId: 'call_started' });
+  await agent.toolCompleted('git.commit', 'done', { toolCallId: 'call_completed' });
+  await agent.toolFailed('git.commit', 'failed', { toolCallId: 'call_failed' });
+  await agent.toolStarted('git.push');
+
+  const [started, secondStarted] = bodiesOf(requests, 'tool.started');
+  const [completed] = bodiesOf(requests, 'tool.completed');
+  const [failed] = bodiesOf(requests, 'tool.failed');
+  assert.equal(started.payload.toolCallId, 'call_started');
+  assert.equal(completed.payload.toolCallId, 'call_completed');
+  assert.equal(failed.payload.toolCallId, 'call_failed');
+  assert.equal('toolCallId' in secondStarted.payload, false);
+});
+
+test('TypeScript SDK usage: an invalid correlation id rejects locally with AgentViewerError before any request', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  for (const field of vectors.idFields) {
+    for (const vector of vectors.idCases) {
+      await (vector.valid
+        ? agent.usage({ ...base, [field]: vector.value })
+        : assert.rejects(
+          agent.usage({ ...base, [field]: vector.value }),
+          (err) => {
+            assert.ok(err instanceof AgentViewerError, `${field} / ${vector.name}: expected AgentViewerError`);
+            assert.ok(
+              err.issues.some((issue) => issue.path === `payload.${field}`),
+              `${field} / ${vector.name}: expected an issue at payload.${field}, got ${JSON.stringify(err.issues)}`,
+            );
+            return true;
+          },
+        ));
+    }
+  }
+  assert.ok(requests.length > 0, 'valid cases should have sent a request');
+});
+
+test('TypeScript SDK usage: tags follow the shared tag vectors, with the same rejection shape', async (t) => {
+  stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  for (const vector of vectors.tagCases) {
+    if (vector.valid) {
+      await agent.usage({ ...base, tags: vector.tags });
+      continue;
+    }
+    await assert.rejects(
+      agent.usage({ ...base, tags: vector.tags }),
+      (err) => {
+        assert.ok(err instanceof AgentViewerError, `${vector.name}: expected AgentViewerError`);
+        const paths = err.issues.map((issue) => issue.path);
+        for (const expectedPath of vector.expectedPaths) {
+          assert.ok(paths.includes(expectedPath), `${vector.name}: expected ${expectedPath} in ${paths}`);
+        }
+        return true;
+      },
+    );
+  }
+});
+
+test('TypeScript SDK: llmFailed() sends the failure payload with correlation fields, severity high', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.llmFailed({
+    provider: 'OpenAI',
+    model: 'gpt-4.1',
+    errorKind: 'rate_limited',
+    httpStatus: 429,
+    retryable: true,
+    traceId: 'trace_failed',
+    tags: ['env:prod'],
+    taskId: 'task_1',
+  });
+
+  const [body] = bodiesOf(requests, 'llm.failed');
+  assert.equal(body.type, 'llm.failed');
+  assert.equal(body.severity, 'high');
+  assert.equal(body.taskId, 'task_1');
+  assert.equal('taskId' in body.payload, false);
+  assert.equal(body.payload.provider, 'OpenAI');
+  assert.equal(body.payload.model, 'gpt-4.1');
+  assert.equal(body.payload.errorKind, 'rate_limited');
+  assert.equal(body.payload.httpStatus, 429);
+  assert.equal(body.payload.retryable, true);
+  assert.equal(body.payload.traceId, 'trace_failed');
+  assert.deepEqual(body.payload.tags, ['env:prod']);
+});
+
+test('TypeScript SDK: llmFailed() omits model when not given, and rejects an invalid correlation field', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.llmFailed({ provider: 'OpenAI' });
+  const [failed] = bodiesOf(requests, 'llm.failed');
+  assert.equal('model' in failed.payload, false);
+  assert.equal(failed.payload.errorKind, undefined);
+
+  await assert.rejects(
+    agent.llmFailed({ provider: 'OpenAI', traceId: '' }),
+    (err) => err instanceof AgentViewerError && err.issues.some((issue) => issue.path === 'payload.traceId'),
+  );
+});
+
 test('TypeScript SDK: default event ids are 128-bit random UUIDs', async (t) => {
   const { requests } = stubFetch(t);
   const viewer = new AgentViewer({ url: 'http://sdk.test' });
@@ -388,4 +539,302 @@ test('TypeScript SDK: emitBatch against a 0.2.x server reports conflicts as 0 an
   );
   const result = await new AgentViewer({ url: 'http://sdk.test' }).emitBatch([{ id: 'evt_old', type: 'tool.started', payload: { tool: 'x' } }]);
   assert.deepEqual(result, { accepted: 1, duplicates: 0, conflicts: 0, results: legacyResults });
+});
+
+// -------------------------------------------------------------
+// listCalls / iterateCalls (issue #67)
+// -------------------------------------------------------------
+
+test('TypeScript SDK: listCalls maps filters to the documented query parameters', async (t) => {
+  let requestUrl;
+  let requestHeaders;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    requestUrl = url;
+    requestHeaders = init.headers;
+    return new Response(
+      JSON.stringify({ schemaVersion: '1.0', asOf: 1, storage: 'memory', data: [], page: { limit: 2, order: 'asc', hasMore: false, nextCursor: null } }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  });
+  const viewer = new AgentViewer({ url: 'http://sdk.test', token: 'secret-token' });
+  const page = await viewer.listCalls({
+    from: 1700000000000,
+    to: '2026-10-08T00:00:00Z',
+    timeBasis: 'occurred',
+    agentId: ['researcher', 'writer'],
+    provider: 'anthropic',
+    status: 'rate_limited',
+    costSource: 'unknown',
+    currency: ['USD', 'none'],
+    requestId: 'req_1',
+    traceId: 'trace_1',
+    order: 'asc',
+    limit: 2,
+    cursor: 'abc',
+  });
+  assert.deepEqual(page.page, { limit: 2, order: 'asc', hasMore: false, nextCursor: null });
+
+  const parsed = new URL(String(requestUrl));
+  assert.equal(parsed.pathname, '/api/v1/usage/calls');
+  assert.equal(parsed.searchParams.get('from'), '1700000000000');
+  assert.equal(parsed.searchParams.get('to'), '2026-10-08T00:00:00Z');
+  assert.equal(parsed.searchParams.get('timeBasis'), 'occurred');
+  assert.deepEqual(parsed.searchParams.getAll('agentId'), ['researcher', 'writer']);
+  assert.equal(parsed.searchParams.get('provider'), 'anthropic');
+  assert.equal(parsed.searchParams.get('status'), 'rate_limited');
+  assert.equal(parsed.searchParams.get('costSource'), 'unknown');
+  assert.deepEqual(parsed.searchParams.getAll('currency'), ['USD', 'none']);
+  assert.equal(parsed.searchParams.get('requestId'), 'req_1');
+  assert.equal(parsed.searchParams.get('traceId'), 'trace_1');
+  assert.equal(parsed.searchParams.get('order'), 'asc');
+  assert.equal(parsed.searchParams.get('limit'), '2');
+  assert.equal(parsed.searchParams.get('cursor'), 'abc');
+  // The token is sent only in the Authorization header, never in the URL.
+  assert.equal(parsed.searchParams.has('token'), false);
+  assert.equal(requestHeaders.authorization, 'Bearer secret-token');
+});
+
+test('TypeScript SDK: listCalls against a live server, metadata only, nulls preserved', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl, runtimeId: 'sdk-calls' });
+    const agent = viewer.agent({ id: 'calls-agent-ts', name: 'Calls Agent' });
+    await agent.usage({ provider: 'anthropic', model: 'claude', inputTokens: 10, outputTokens: 5 });
+
+    const page = await viewer.listCalls({ agentId: 'calls-agent-ts' });
+    assert.equal(page.data.length, 1);
+    assert.equal(page.data[0].agentId, 'calls-agent-ts');
+    assert.equal(page.data[0].cost, null);
+    assert.equal(page.data[0].tokens.cacheRead, null);
+  } finally {
+    server.close();
+  }
+});
+
+test('TypeScript SDK: iterateCalls follows nextCursor until hasMore is false', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl, runtimeId: 'sdk-iterate' });
+    const agent = viewer.agent({ id: 'iterate-agent-ts', name: 'Iterate Agent' });
+    for (let i = 0; i < 5; i++) {
+      await agent.usage({ provider: 'anthropic', model: 'claude', inputTokens: i, outputTokens: 0 });
+    }
+
+    const seen = [];
+    for await (const call of viewer.iterateCalls({ agentId: 'iterate-agent-ts', limit: 2, order: 'asc' })) {
+      seen.push(call.tokens.input);
+    }
+    assert.deepEqual(seen, [0, 1, 2, 3, 4]);
+  } finally {
+    server.close();
+  }
+});
+
+test('TypeScript SDK: iterateCalls raises if the server returns the same cursor twice in a row', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () =>
+    new Response(
+      JSON.stringify({
+        schemaVersion: '1.0',
+        asOf: 1,
+        storage: 'memory',
+        data: [{ seq: 1 }],
+        page: { limit: 1, order: 'desc', hasMore: true, nextCursor: 'same-cursor' },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  );
+  const viewer = new AgentViewer({ url: 'http://sdk.test' });
+  await assert.rejects(async () => {
+    for await (const _call of viewer.iterateCalls({ cursor: 'same-cursor' })) {
+      // draining the generator until it throws
+    }
+  }, (err) => err instanceof AgentViewerError && err.message.includes('same cursor twice'));
+});
+
+test('TypeScript SDK: listCalls fails immediately on 400/410, never retried', async (t) => {
+  for (const status of [400, 410]) {
+    // Re-mocking `fetch` a second time without restoring the first leaves `t.mock`'s teardown pointing at the
+    // first iteration's handler instead of the true original (observed leaking the 400/invalid_filter response
+    // into later tests' real HTTP calls); restoring before each re-mock keeps exactly one active mock at a time.
+    t.mock.restoreAll();
+    let attempts = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+      attempts++;
+      return new Response(JSON.stringify({ error: status === 400 ? 'invalid_filter' : 'cursor_expired', issues: [] }), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const viewer = new AgentViewer({ url: 'http://sdk.test', maxRetries: 3 });
+    await assert.rejects(
+      viewer.listCalls({}),
+      (err) => err instanceof AgentViewerError && err.status === status
+    );
+    assert.equal(attempts, 1, `status ${status} must not be retried`);
+  }
+});
+
+test('TypeScript SDK: listCalls retries 429 and succeeds once the server recovers', async (t) => {
+  let attempts = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    attempts++;
+    if (attempts < 3) {
+      return new Response(JSON.stringify({ error: 'rate_limit_exceeded' }), { status: 429, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(
+      JSON.stringify({ schemaVersion: '1.0', asOf: 1, storage: 'memory', data: [], page: { limit: 100, order: 'desc', hasMore: false, nextCursor: null } }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  });
+  const viewer = new AgentViewer({ url: 'http://sdk.test', maxRetries: 3 });
+  const page = await viewer.listCalls({});
+  assert.equal(page.data.length, 0);
+  assert.equal(attempts, 3);
+});
+
+// -------------------------------------------------------------
+// usageRollup() / toUsageFigures() (issue #66)
+// -------------------------------------------------------------
+
+test('TypeScript SDK: usageRollup() builds the right URL, repeats array filters, and sends the token only in the header', async (t) => {
+  let capturedUrl;
+  let capturedHeaders;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    capturedUrl = url;
+    capturedHeaders = init?.headers;
+    return new Response(JSON.stringify({ schemaVersion: '1.0', groups: [], totals: {} }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  const viewer = new AgentViewer({ url: 'http://sdk.test', token: 'secret-token' });
+  await viewer.usageRollup({
+    groupBy: ['agent', 'model'],
+    from: new Date('2026-10-05T00:00:00.000Z'),
+    to: 1_700_000_000_000,
+    utcOffsetMinutes: -300,
+    sort: 'calls',
+    limit: 50,
+    agentId: ['a1', 'a2'],
+    tag: 'solo-tag',
+  });
+
+  const parsed = new URL(String(capturedUrl));
+  assert.equal(parsed.pathname, '/api/v1/usage/rollup');
+  assert.equal(parsed.searchParams.get('groupBy'), 'agent,model');
+  assert.equal(parsed.searchParams.get('from'), '2026-10-05T00:00:00.000Z');
+  assert.equal(parsed.searchParams.get('to'), '1700000000000');
+  assert.equal(parsed.searchParams.get('utcOffsetMinutes'), '-300');
+  assert.equal(parsed.searchParams.get('sort'), 'calls');
+  assert.equal(parsed.searchParams.get('limit'), '50');
+  assert.deepEqual(parsed.searchParams.getAll('agentId'), ['a1', 'a2']);
+  assert.deepEqual(parsed.searchParams.getAll('tag'), ['solo-tag']);
+  assert.equal(parsed.searchParams.has('token'), false);
+  assert.equal(capturedHeaders.authorization, 'Bearer secret-token');
+});
+
+test('TypeScript SDK: usageRollup() against a live server returns the real response and surfaces 400 issues', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const viewer = new AgentViewer({ url: baseUrl, runtimeId: 'sdk-rollup' });
+    await viewer.agent({ id: 'sdk-rollup-agent' }).usage({
+      provider: 'anthropic',
+      model: 'claude-sonnet',
+      inputTokens: 10,
+      outputTokens: 5,
+      cost: 1,
+      currency: 'USD',
+      costSource: 'provider-reported',
+    });
+
+    const result = await viewer.usageRollup({ groupBy: ['agent'] });
+    assert.equal(result.schemaVersion, '1.0');
+    assert.ok(result.totals.calls.total >= 1);
+
+    await assert.rejects(
+      viewer.usageRollup({ groupBy: ['not-a-real-dimension'] }),
+      (err) => err instanceof AgentViewerError && err.status === 400 && err.code === 'invalid_filter' && Array.isArray(err.issues)
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('toUsageFigures: a single matching entry with no unknown cost maps to a number and its currency', () => {
+  const group = {
+    key: { agent: 'a' },
+    calls: { total: 10, succeeded: 10, failed: 0 },
+    tokens: {
+      input: { sum: 100, reportedCalls: 10, unreportedCalls: 0 },
+      output: { sum: 50, reportedCalls: 10, unreportedCalls: 0 },
+      cacheRead: { sum: null, reportedCalls: 0, unreportedCalls: 10 },
+      cacheWrite: { sum: null, reportedCalls: 0, unreportedCalls: 10 },
+      reasoning: { sum: null, reportedCalls: 0, unreportedCalls: 10 },
+    },
+    cost: { entries: [{ currency: 'USD', costSource: 'provider-reported', sum: 5, calls: 10 }], unknownCostCalls: 0 },
+    firstAt: 1,
+    lastAt: 2,
+  };
+  const figures = toUsageFigures(group, { costSource: 'provider-reported' });
+  assert.deepEqual(figures, { cost: 5, currency: 'USD', inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+});
+
+test('toUsageFigures: two currencies, a mismatched cost source, or any unknown cost all give cost: null', () => {
+  const base = {
+    calls: { total: 2, succeeded: 2, failed: 0 },
+    tokens: {
+      input: { sum: 10, reportedCalls: 2, unreportedCalls: 0 },
+      output: { sum: 5, reportedCalls: 2, unreportedCalls: 0 },
+      cacheRead: { sum: null, reportedCalls: 0, unreportedCalls: 2 },
+      cacheWrite: { sum: null, reportedCalls: 0, unreportedCalls: 2 },
+      reasoning: { sum: null, reportedCalls: 0, unreportedCalls: 2 },
+    },
+    firstAt: 1,
+    lastAt: 2,
+  };
+
+  const twoCurrencies = {
+    ...base,
+    cost: {
+      entries: [
+        { currency: 'USD', costSource: 'provider-reported', sum: 1, calls: 1 },
+        { currency: 'EUR', costSource: 'provider-reported', sum: 1, calls: 1 },
+      ],
+      unknownCostCalls: 0,
+    },
+  };
+  assert.equal(toUsageFigures(twoCurrencies, { costSource: 'provider-reported' }).cost, null);
+
+  const wrongSource = {
+    ...base,
+    cost: { entries: [{ currency: 'USD', costSource: 'estimated', sum: 2, calls: 2 }], unknownCostCalls: 0 },
+  };
+  assert.equal(toUsageFigures(wrongSource, { costSource: 'provider-reported' }).cost, null);
+
+  const unknownCost = {
+    ...base,
+    cost: { entries: [{ currency: 'USD', costSource: 'provider-reported', sum: 2, calls: 1 }], unknownCostCalls: 1 },
+  };
+  assert.equal(toUsageFigures(unknownCost, { costSource: 'provider-reported' }).cost, null);
+});
+
+test('toUsageFigures: inputTokens/outputTokens/totalTokens are null when any call did not report them', () => {
+  const group = {
+    calls: { total: 3, succeeded: 3, failed: 0 },
+    tokens: {
+      input: { sum: 10, reportedCalls: 2, unreportedCalls: 1 },
+      output: { sum: 5, reportedCalls: 3, unreportedCalls: 0 },
+      cacheRead: { sum: null, reportedCalls: 0, unreportedCalls: 3 },
+      cacheWrite: { sum: null, reportedCalls: 0, unreportedCalls: 3 },
+      reasoning: { sum: null, reportedCalls: 0, unreportedCalls: 3 },
+    },
+    cost: { entries: [], unknownCostCalls: 3 },
+    firstAt: 1,
+    lastAt: 2,
+  };
+  const figures = toUsageFigures(group, { costSource: 'provider-reported' });
+  assert.equal(figures.inputTokens, null);
+  assert.equal(figures.outputTokens, 5);
+  assert.equal(figures.totalTokens, null, 'totalTokens is null when either side is null');
 });

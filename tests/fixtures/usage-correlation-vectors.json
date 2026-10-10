@@ -1,0 +1,605 @@
+{
+  "$comment": "Shared test vectors for the UsageCorrelation contract (issue #64). Loaded by tests/canonical-contract.test.mjs, tests/sdk-typescript.test.mjs and tests/test_python_sdk.py, so the three implementations cannot drift. Length is counted as UTF-16 code units (JavaScript String.length); the Python SDK counts len(s.encode(\"utf-16-le\")) // 2 to match.",
+  "idFields": [
+    "traceId",
+    "parentId",
+    "toolCallId",
+    "meetingId",
+    "userId"
+  ],
+  "idCases": [
+    {
+      "name": "empty string",
+      "value": "",
+      "valid": false,
+      "reason": "empty"
+    },
+    {
+      "name": "single character",
+      "value": "a",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "name": "exactly 128 characters",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "name": "exactly 129 characters",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false,
+      "reason": "too-long"
+    },
+    {
+      "name": "non-ASCII BMP characters",
+      "value": "hélló-你好",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "name": "internal whitespace is allowed",
+      "value": "a b c",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "name": "control character NUL",
+      "value": "a\u0000b",
+      "valid": false,
+      "reason": "control-character"
+    },
+    {
+      "name": "control character unit separator",
+      "value": "a\u001fb",
+      "valid": false,
+      "reason": "control-character"
+    },
+    {
+      "name": "control character DEL",
+      "value": "ab",
+      "valid": false,
+      "reason": "control-character"
+    },
+    {
+      "name": "exactly 128 code units of non-BMP characters",
+      "value": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "valid": true,
+      "reason": null
+    },
+    {
+      "name": "exactly 129 code units of non-BMP characters",
+      "value": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a",
+      "valid": false,
+      "reason": "too-long"
+    },
+    {
+      "name": "leading whitespace U+0009",
+      "value": "\ta",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "0009"
+    },
+    {
+      "name": "trailing whitespace U+0009",
+      "value": "a\t",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "0009"
+    },
+    {
+      "name": "leading whitespace U+000A",
+      "value": "\na",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000A"
+    },
+    {
+      "name": "trailing whitespace U+000A",
+      "value": "a\n",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000A"
+    },
+    {
+      "name": "leading whitespace U+000B",
+      "value": "\u000ba",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000B"
+    },
+    {
+      "name": "trailing whitespace U+000B",
+      "value": "a\u000b",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000B"
+    },
+    {
+      "name": "leading whitespace U+000C",
+      "value": "\fa",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000C"
+    },
+    {
+      "name": "trailing whitespace U+000C",
+      "value": "a\f",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000C"
+    },
+    {
+      "name": "leading whitespace U+000D",
+      "value": "\ra",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000D"
+    },
+    {
+      "name": "trailing whitespace U+000D",
+      "value": "a\r",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "000D"
+    },
+    {
+      "name": "leading whitespace U+0020",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "0020"
+    },
+    {
+      "name": "trailing whitespace U+0020",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "0020"
+    },
+    {
+      "name": "leading whitespace U+00A0",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "00A0"
+    },
+    {
+      "name": "trailing whitespace U+00A0",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "00A0"
+    },
+    {
+      "name": "leading whitespace U+1680",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "1680"
+    },
+    {
+      "name": "trailing whitespace U+1680",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "1680"
+    },
+    {
+      "name": "leading whitespace U+2000",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2000"
+    },
+    {
+      "name": "trailing whitespace U+2000",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2000"
+    },
+    {
+      "name": "leading whitespace U+2001",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2001"
+    },
+    {
+      "name": "trailing whitespace U+2001",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2001"
+    },
+    {
+      "name": "leading whitespace U+2002",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2002"
+    },
+    {
+      "name": "trailing whitespace U+2002",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2002"
+    },
+    {
+      "name": "leading whitespace U+2003",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2003"
+    },
+    {
+      "name": "trailing whitespace U+2003",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2003"
+    },
+    {
+      "name": "leading whitespace U+2004",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2004"
+    },
+    {
+      "name": "trailing whitespace U+2004",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2004"
+    },
+    {
+      "name": "leading whitespace U+2005",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2005"
+    },
+    {
+      "name": "trailing whitespace U+2005",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2005"
+    },
+    {
+      "name": "leading whitespace U+2006",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2006"
+    },
+    {
+      "name": "trailing whitespace U+2006",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2006"
+    },
+    {
+      "name": "leading whitespace U+2007",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2007"
+    },
+    {
+      "name": "trailing whitespace U+2007",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2007"
+    },
+    {
+      "name": "leading whitespace U+2008",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2008"
+    },
+    {
+      "name": "trailing whitespace U+2008",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2008"
+    },
+    {
+      "name": "leading whitespace U+2009",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2009"
+    },
+    {
+      "name": "trailing whitespace U+2009",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2009"
+    },
+    {
+      "name": "leading whitespace U+200A",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "200A"
+    },
+    {
+      "name": "trailing whitespace U+200A",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "200A"
+    },
+    {
+      "name": "leading whitespace U+2028",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2028"
+    },
+    {
+      "name": "trailing whitespace U+2028",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2028"
+    },
+    {
+      "name": "leading whitespace U+2029",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2029"
+    },
+    {
+      "name": "trailing whitespace U+2029",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "2029"
+    },
+    {
+      "name": "leading whitespace U+202F",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "202F"
+    },
+    {
+      "name": "trailing whitespace U+202F",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "202F"
+    },
+    {
+      "name": "leading whitespace U+205F",
+      "value": " a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "205F"
+    },
+    {
+      "name": "trailing whitespace U+205F",
+      "value": "a ",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "205F"
+    },
+    {
+      "name": "leading whitespace U+3000",
+      "value": "　a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "3000"
+    },
+    {
+      "name": "trailing whitespace U+3000",
+      "value": "a　",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "3000"
+    },
+    {
+      "name": "leading whitespace U+FEFF",
+      "value": "﻿a",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "FEFF"
+    },
+    {
+      "name": "trailing whitespace U+FEFF",
+      "value": "a﻿",
+      "valid": false,
+      "reason": "leading-or-trailing-whitespace",
+      "codepoint": "FEFF"
+    }
+  ],
+  "tagCases": [
+    {
+      "name": "20 tags of exactly 64 characters",
+      "tags": [
+        "tag-00-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-02-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-04-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-05-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-06-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-07-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-08-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-09-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-10-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-11-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-12-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-13-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-14-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-15-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-16-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-17-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-18-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "tag-19-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "valid": true,
+      "expectedPaths": []
+    },
+    {
+      "name": "21 tags",
+      "tags": [
+        "tag-0",
+        "tag-1",
+        "tag-2",
+        "tag-3",
+        "tag-4",
+        "tag-5",
+        "tag-6",
+        "tag-7",
+        "tag-8",
+        "tag-9",
+        "tag-10",
+        "tag-11",
+        "tag-12",
+        "tag-13",
+        "tag-14",
+        "tag-15",
+        "tag-16",
+        "tag-17",
+        "tag-18",
+        "tag-19",
+        "tag-20"
+      ],
+      "valid": false,
+      "expectedPaths": [
+        "payload.tags"
+      ]
+    },
+    {
+      "name": "tag of exactly 64 characters",
+      "tags": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "valid": true,
+      "expectedPaths": []
+    },
+    {
+      "name": "tag of exactly 65 characters",
+      "tags": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "valid": false,
+      "expectedPaths": [
+        "payload.tags.0"
+      ]
+    },
+    {
+      "name": "empty tags array normalizes to absent",
+      "tags": [],
+      "valid": true,
+      "expectedPaths": [],
+      "normalizesToAbsent": true
+    },
+    {
+      "name": "duplicate tags are deduplicated keeping first occurrence",
+      "tags": [
+        "env:prod",
+        "feature:x",
+        "env:prod"
+      ],
+      "valid": true,
+      "expectedPaths": [],
+      "expectedNormalized": [
+        "env:prod",
+        "feature:x"
+      ]
+    },
+    {
+      "name": "21 tags with duplicates still rejected (limit applies before dedup)",
+      "tags": [
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag",
+        "same-tag"
+      ],
+      "valid": false,
+      "expectedPaths": [
+        "payload.tags"
+      ]
+    },
+    {
+      "name": "empty string tag is rejected, not treated as absent",
+      "tags": [
+        "a",
+        ""
+      ],
+      "valid": false,
+      "expectedPaths": [
+        "payload.tags.1"
+      ]
+    },
+    {
+      "name": "tag with leading whitespace",
+      "tags": [
+        " leading"
+      ],
+      "valid": false,
+      "expectedPaths": [
+        "payload.tags.0"
+      ]
+    },
+    {
+      "name": "tag with control character",
+      "tags": [
+        "has\u0001control"
+      ],
+      "valid": false,
+      "expectedPaths": [
+        "payload.tags.0"
+      ]
+    },
+    {
+      "name": "tag made of exactly 64 UTF-16 code units of non-BMP characters",
+      "tags": [
+        "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+      ],
+      "valid": true,
+      "expectedPaths": []
+    },
+    {
+      "name": "tag made of 65 UTF-16 code units of non-BMP characters",
+      "tags": [
+        "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a"
+      ],
+      "valid": false,
+      "expectedPaths": [
+        "payload.tags.0"
+      ]
+    }
+  ]
+}

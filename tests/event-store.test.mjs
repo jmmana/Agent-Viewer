@@ -4,9 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { MemoryEventStore, SQLiteEventStore } from '../server/store.ts';
+import { MemoryEventStore, SQLiteEventStore, parseMaxEvents, createEventStore } from '../server/store.ts';
 import { eventFingerprint } from '../server/eventFingerprint.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
+
+function tempDbPath(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-store-'));
+  return { dir, file: path.join(dir, `${name}.db`) };
+}
 
 test('MemoryEventStore: appends events, detects duplicates, and maintains snapshot', async () => {
   const store = new MemoryEventStore(50);
@@ -46,10 +51,9 @@ test('MemoryEventStore: appends events, detects duplicates, and maintains snapsh
 });
 
 test('SQLiteEventStore: stores events persistently and queries by runtime/session', async () => {
-  const testDbPath = './data/test-store.db';
-  if (fs.existsSync(testDbPath)) {
-    fs.unlinkSync(testDbPath);
-  }
+  // Issue #62: every test store must live in a temp dir, never in the repo's own ./data, so parallel test
+  // runs (and a developer's local server) never share a database file.
+  const { dir, file: testDbPath } = tempDbPath('persist');
 
   const store = new SQLiteEventStore(testDbPath);
 
@@ -88,15 +92,8 @@ test('SQLiteEventStore: stores events persistently and queries by runtime/sessio
   assert.equal(dupRes.duplicate, true);
 
   await store.close();
-  if (fs.existsSync(testDbPath)) {
-    fs.unlinkSync(testDbPath);
-  }
+  fs.rmSync(dir, { recursive: true, force: true });
 });
-
-function tempDbPath(name) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-store-'));
-  return { dir, file: path.join(dir, `${name}.db`) };
-}
 
 function storeEvent(id, timestamp, extra = {}) {
   return {
@@ -142,6 +139,85 @@ test('SQLiteEventStore: afterId returns only events newer than the given id, lik
   }
 });
 
+test('SQLiteEventStore: beforeId returns only events stored before the given id, like MemoryEventStore', async () => {
+  const { dir, file } = tempDbPath('before-id');
+  const sqlite = new SQLiteEventStore(file);
+  const memory = new MemoryEventStore();
+
+  try {
+    const events = [storeEvent('evt_a', 1000), storeEvent('evt_b', 2000), storeEvent('evt_c', 3000)];
+    for (const event of events) {
+      await sqlite.append(event);
+      await memory.append(event);
+    }
+
+    const sqliteIds = (await sqlite.list({ beforeId: 'evt_c' })).map((e) => e.id);
+    const memoryIds = (await memory.list({ beforeId: 'evt_c' })).map((e) => e.id);
+    assert.deepEqual(sqliteIds, ['evt_b', 'evt_a']);
+    assert.deepEqual(sqliteIds, memoryIds);
+
+    // The oldest event has nothing before it.
+    assert.deepEqual((await sqlite.list({ beforeId: 'evt_a' })).map((e) => e.id), []);
+    // An unknown id applies no filter, like afterId; the route layer is what rejects it with 400.
+    assert.deepEqual(
+      (await sqlite.list({ beforeId: 'evt_unknown' })).map((e) => e.id),
+      (await memory.list({ beforeId: 'evt_unknown' })).map((e) => e.id)
+    );
+
+    // beforeId and afterId combine: strictly between the two cursors.
+    assert.deepEqual(
+      (await sqlite.list({ beforeId: 'evt_c', afterId: 'evt_a' })).map((e) => e.id),
+      ['evt_b']
+    );
+  } finally {
+    await sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: beforeId pages in arrival order, not timestamp order, when timestamps are not monotonic in arrival order', async () => {
+  const { dir, file } = tempDbPath('before-id-out-of-order');
+  const sqlite = new SQLiteEventStore(file);
+  const memory = new MemoryEventStore();
+
+  try {
+    // Arrival order evt_1..evt_4, but timestamps are not monotonic (a backfilled batch, a second runtime, a
+    // clock correction). Both stores must page by arrival order (seq), never by timestamp, so a cursor and the
+    // list order always agree (issue #72).
+    const events = [
+      storeEvent('evt_1', 5000),
+      storeEvent('evt_2', 1000),
+      storeEvent('evt_3', 9000),
+      storeEvent('evt_4', 2000),
+    ];
+    for (const event of events) {
+      await sqlite.append(event);
+      await memory.append(event);
+    }
+
+    const expectedNewestFirst = ['evt_4', 'evt_3', 'evt_2', 'evt_1'];
+    assert.deepEqual((await sqlite.list()).map((e) => e.id), expectedNewestFirst);
+    assert.deepEqual((await memory.list()).map((e) => e.id), expectedNewestFirst);
+
+    // A full backward walk with a small page size reaches every event with no duplicates and no gaps, on both
+    // stores, and the two stores agree at every step.
+    for (const store of [sqlite, memory]) {
+      let cursor;
+      const walked = [];
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await store.list({ limit: 2, beforeId: cursor });
+        if (page.length === 0) break;
+        walked.push(...page.map((e) => e.id));
+        cursor = page[page.length - 1].id;
+      }
+      assert.deepEqual(walked, expectedNewestFirst);
+    }
+  } finally {
+    await sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('SQLiteEventStore: persists the full canonical event so it round-trips identically', async () => {
   const { dir, file } = tempDbPath('round-trip');
   const event = storeEvent('evt_round_trip', 4000, {
@@ -164,7 +240,10 @@ test('SQLiteEventStore: persists the full canonical event so it round-trips iden
     // A fresh instance reads from disk only, not from the in-memory side store.
     store = new SQLiteEventStore(file);
     const [listed] = await store.list({ runtimeId: 'rt_round' });
-    assert.deepStrictEqual(listed, JSON.parse(JSON.stringify(event)));
+    // list() now carries receivedAt too (issue #65): checked separately, then the rest must round-trip exactly.
+    const { receivedAt, ...rest } = listed;
+    assert.equal(typeof receivedAt, 'number');
+    assert.deepStrictEqual(rest, JSON.parse(JSON.stringify(event)));
     assert.equal(listed.source, 'runtime:rt_round');
   } finally {
     await store.close();
@@ -231,6 +310,62 @@ test('MemoryEventStore: llm.usage without cache fields is stored without invente
     assert.equal(key in listed.payload, false, `memory store should not hold ${key}`);
     assert.equal(key in serialized.payload, false, `serialized event should not hold ${key}`);
   }
+});
+
+function validatedUsageWithCorrelation(id) {
+  const result = validateCanonicalEvent({
+    id,
+    type: 'llm.usage',
+    timestamp: 5000,
+    runtimeId: 'rt_usage_correlation',
+    source: 'agent:gemini',
+    agentId: 'gemini',
+    summary: 'Usage with correlation fields',
+    payload: {
+      provider: 'Google',
+      model: 'gemini-2.5-pro',
+      inputTokens: 5000,
+      outputTokens: 1000,
+      traceId: 'trace_store_roundtrip',
+      parentId: 'span_store_roundtrip',
+      toolCallId: 'call_store_roundtrip',
+      meetingId: 'meeting_store_roundtrip',
+      userId: 'usr_store_roundtrip',
+      tags: ['env:prod', 'env:prod', 'tier:pro'],
+    },
+  });
+  assert.equal(result.success, true);
+  return result.data;
+}
+
+test('SQLiteEventStore: llm.usage correlation fields survive a store reopen (issue #64)', async () => {
+  const { dir, file } = tempDbPath('usage-correlation');
+  let store = new SQLiteEventStore(file);
+  try {
+    await store.append(validatedUsageWithCorrelation('evt_usage_correlation_sql'));
+    await store.close();
+
+    // A fresh instance reads from disk only, confirming the fields were persisted, not kept in memory.
+    store = new SQLiteEventStore(file);
+    const [listed] = await store.list({ runtimeId: 'rt_usage_correlation' });
+    assert.equal(listed.payload.traceId, 'trace_store_roundtrip');
+    assert.equal(listed.payload.parentId, 'span_store_roundtrip');
+    assert.equal(listed.payload.toolCallId, 'call_store_roundtrip');
+    assert.equal(listed.payload.meetingId, 'meeting_store_roundtrip');
+    assert.equal(listed.payload.userId, 'usr_store_roundtrip');
+    assert.deepEqual(listed.payload.tags, ['env:prod', 'tier:pro']);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MemoryEventStore: llm.usage correlation fields are stored as validated (issue #64)', async () => {
+  const store = new MemoryEventStore();
+  await store.append(validatedUsageWithCorrelation('evt_usage_correlation_mem'));
+  const [listed] = await store.list({ runtimeId: 'rt_usage_correlation' });
+  assert.equal(listed.payload.traceId, 'trace_store_roundtrip');
+  assert.deepEqual(listed.payload.tags, ['env:prod', 'tier:pro']);
 });
 
 test('SQLiteEventStore: migrates databases created before the event_json column and keeps legacy rows readable', async () => {
@@ -420,7 +555,7 @@ test('Usage aggregates: re-sending a stored event id does not change the summary
   assert.deepStrictEqual(await store.usageSummary(), before);
 });
 
-test('Usage aggregates: re-sending any id stored in SQLite does not change the summary, even after the memory ring evicted it', async () => {
+test('Usage aggregates: re-sending any id stored in SQLite does not change the summary, however many events were stored after it', async () => {
   const { dir, file } = tempDbPath('usage-dedup');
   const store = new SQLiteEventStore(file);
   try {
@@ -428,11 +563,11 @@ test('Usage aggregates: re-sending any id stored in SQLite does not change the s
     await store.appendBatch(events);
     const before = await store.usageSummary();
 
-    // Push the usage events out of the in-memory ring (10,000 events) with events that carry no usage.
+    // SQLite has no ring buffer (issue #52): unlike MemoryEventStore, eventsCount is the true stored count, not
+    // capped at 10,000, and the dedup index never forgets an original however many events came after it.
     const filler = Array.from({ length: 10_000 }, (_, index) => storeEvent(`evt_filler_${index}`, 10 + index));
     await store.appendBatch(filler);
-    // The ring keeps the newest 10,000 events, so the four usage events (stored first) are no longer in memory.
-    assert.equal((await store.snapshot()).eventsCount, 10_000);
+    assert.equal((await store.snapshot()).eventsCount, events.length + 10_000);
 
     assert.equal((await store.append(events[2])).duplicate, true);
     const batch = await store.appendBatch(events);
@@ -486,8 +621,8 @@ test('agent profile upserts preserve usage from events and preserve unknown cost
         },
       );
 
-      const memoryStore = store instanceof SQLiteEventStore ? store.memoryFallback : store;
-      memoryStore.agents.get('upsert-agent').cost = null;
+      // Cost stays null: the event's payload never reported a currency, so legacyCost() cannot single out one
+      // (currency, costSource) pair to add up (issue #52 removed the direct `memoryFallback` this used to poke).
       assert.equal((await store.upsertAgent({ id: 'upsert-agent', name: 'Updated again' })).cost, null);
     }
   } finally {
@@ -496,15 +631,19 @@ test('agent profile upserts preserve usage from events and preserve unknown cost
   }
 });
 
-test('agent.updated applies statusText without changing agent.registered behavior', async () => {
+test('agent.registered applies statusText (and status) when present, and agent.updated can still change it afterwards', async () => {
+  // Issue #52: `POST /api/v1/agents` now resolves status/statusText itself and puts them in the `agent.registered`
+  // payload, so a rebuild from storage reaches the same values the live route returned. The reducer must apply
+  // them on `agent.registered`, not only on `agent.updated`.
   const store = new MemoryEventStore();
   await store.upsertAgent({ id: 'updated-status-text', name: 'Status Text' });
   await store.append(storeEvent('evt_status_text_registered', 5500, {
     type: 'agent.registered',
     agentId: 'updated-status-text',
-    payload: { statusText: 'Registration text' },
+    payload: { statusText: 'Registration text', status: 'CODING' },
   }));
-  assert.equal((await store.getAgent('updated-status-text')).statusText, 'Active');
+  assert.equal((await store.getAgent('updated-status-text')).statusText, 'Registration text');
+  assert.equal((await store.getAgent('updated-status-text')).status, 'CODING');
   await store.append(storeEvent('evt_status_text_updated', 6000, {
     type: 'agent.updated',
     agentId: 'updated-status-text',
@@ -561,12 +700,25 @@ for (const [label, create] of STORE_FACTORIES) {
         outcome: 'accepted',
         id: 'evt_int_1',
         fingerprint: eventFingerprint(original),
+        seq: first.seq,
         duplicate: false,
         accepted: true,
+        receivedAt: first.receivedAt,
       });
+      assert.equal(typeof first.seq, 'number', 'an accepted event gets a seq (issue #54)');
+      assert.equal(typeof first.receivedAt, 'number', 'an accepted event gets a server receive time (issue #65)');
 
       const retry = await store.append(JSON.parse(JSON.stringify(original)));
-      assert.deepEqual(retry, { outcome: 'duplicate', id: 'evt_int_1', fingerprint: first.fingerprint, duplicate: true, accepted: true });
+      assert.deepEqual(retry, {
+        outcome: 'duplicate',
+        id: 'evt_int_1',
+        fingerprint: first.fingerprint,
+        seq: null,
+        duplicate: true,
+        accepted: true,
+        duplicateReason: 'event_id',
+        receivedAt: first.receivedAt,
+      });
 
       const before = await store.snapshot();
       const variants = [
@@ -590,7 +742,8 @@ for (const [label, create] of STORE_FACTORIES) {
       assert.deepStrictEqual({ ...after, timestamp: 0 }, { ...before, timestamp: 0 }, 'totals unchanged after conflicts');
       const listed = await store.list({ limit: 10 });
       assert.equal(listed.length, 1);
-      assert.deepStrictEqual(JSON.parse(JSON.stringify(listed[0])), JSON.parse(JSON.stringify(original)));
+      const { receivedAt: _listedReceivedAt, ...listedRest } = JSON.parse(JSON.stringify(listed[0]));
+      assert.deepStrictEqual(listedRest, JSON.parse(JSON.stringify(original)));
       assert.deepEqual(store.ingestionCounters(), { conflicts: variants.length, legacyUnverifiedDuplicates: 0 });
 
       const conflictLines = warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('conflicting duplicate'));
@@ -762,7 +915,19 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
   fs.copyFileSync(path.join(sqliteFixtures, 'agent-viewer-0.2.1.db'), file);
   const store = new SQLiteEventStore(file, { backup: 'off' });
   try {
-    assert.deepEqual(store.migration.applied.map(({ name }) => name), ['baseline', 'content-hash']);
+    assert.deepEqual(store.migration.applied.map(({ name }) => name), [
+      'baseline',
+      'content-hash',
+      'request-key-dedup',
+      'events-seq',
+      'telemetry-metrics',
+      'usage-ledger',
+      'usage-calls-indexes',
+      'retention',
+      'usage-rollup',
+      'usage-ledger-summary',
+      'rollup-attribution',
+    ]);
     const db = new DatabaseSync(file);
     const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();
     db.close();
@@ -781,7 +946,8 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
     assert.equal(conflict.storedFingerprint, rows[0].content_hash);
     assert.deepEqual(store.ingestionCounters(), { conflicts: 1, legacyUnverifiedDuplicates: 0 });
     const listed = (await store.list({ limit: 100 })).find(({ id }) => id === stored.id);
-    assert.deepStrictEqual(listed, stored, 'the stored row is unchanged');
+    const { receivedAt: _listedReceivedAt, ...listedRest } = listed;
+    assert.deepStrictEqual(listedRest, stored, 'the stored row is unchanged');
   } finally {
     await store.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -877,4 +1043,1106 @@ test('MemoryEventStore: ingestionCounters never reports legacy rows and exists()
   assert.equal(await store.exists('evt_exists'), true);
   assert.equal(await store.exists('evt_missing'), false);
   assert.deepEqual(store.ingestionCounters(), { conflicts: 0, legacyUnverifiedDuplicates: 0 });
+});
+
+// -------------------------------------------------------------
+// Request-id deduplication (issue #48): (provider, requestId) is a second dedup key for llm.usage/llm.failed.
+// -------------------------------------------------------------
+
+function failedEvent(id, payload = {}) {
+  const result = validateCanonicalEvent({
+    id,
+    type: 'llm.failed',
+    timestamp: 1_700_000_000_000,
+    source: 'agent:auditor',
+    agentId: 'auditor',
+    summary: 'Failed call',
+    payload: { provider: 'p', model: 'm', errorKind: 'rate_limited', ...payload },
+  });
+  assert.equal(result.success, true, JSON.stringify(result.issues));
+  return result.data;
+}
+
+for (const [label, create] of STORE_FACTORIES) {
+  test(`${label}: a request_id duplicate is stored as a reference, never counted, never listed, and findByRequest/listDuplicates see it`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const original = usageEvent('evt_rk_original', { provider: 'OpenAI', requestId: ' req-1 ' });
+      const first = await store.append(original);
+      assert.equal(first.outcome, 'accepted');
+
+      const beforeSnapshot = await store.snapshot();
+
+      const duplicate = usageEvent('evt_rk_duplicate', { provider: ' openai', requestId: 'req-1', inputTokens: 500 });
+      const second = await store.append(duplicate);
+      assert.equal(second.outcome, 'duplicate');
+      assert.equal(second.duplicateReason, 'request_id');
+      assert.equal(second.id, 'evt_rk_original');
+      assert.equal(second.submittedId, 'evt_rk_duplicate');
+      assert.equal(second.matchesOriginal, false);
+
+      // exists() is true for the duplicate's own id, but list() and the snapshot's event list never include it.
+      assert.equal(await store.exists('evt_rk_duplicate'), true);
+      const listed = await store.list({ limit: 100 });
+      assert.ok(!listed.some((e) => e.id === 'evt_rk_duplicate'));
+      assert.ok(listed.some((e) => e.id === 'evt_rk_original'));
+
+      const afterSnapshot = await store.snapshot();
+      assert.deepStrictEqual(
+        { ...afterSnapshot, timestamp: 0, usageDuplicates: null },
+        { ...beforeSnapshot, timestamp: 0, usageDuplicates: null },
+        'totals and agent fields unchanged by a request_id duplicate'
+      );
+      assert.deepStrictEqual(afterSnapshot.usageDuplicates, { count: 1, mismatched: 1, unverified: 0 });
+
+      const found = await store.findByRequest('OPENAI', ' req-1 ');
+      assert.deepEqual(found, { id: 'evt_rk_original' });
+      assert.equal(await store.findByRequest('openai', 'unknown-request'), null);
+
+      const duplicates = await store.listDuplicates();
+      assert.equal(duplicates.length, 1);
+      assert.equal(duplicates[0].id, 'evt_rk_duplicate');
+      assert.equal(duplicates[0].duplicateOf, 'evt_rk_original');
+      assert.equal(duplicates[0].provider, 'openai');
+      assert.equal(duplicates[0].requestId, 'req-1');
+      assert.equal(duplicates[0].matchesOriginal, false);
+      // SQLite round-trips through JSON, which drops undefined fields; compare the JSON-normalized shape.
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(duplicates[0].event)), JSON.parse(JSON.stringify(duplicate)));
+
+      assert.deepEqual(await store.listDuplicates({ provider: 'someone-else' }), []);
+      assert.deepEqual(await store.listDuplicates({ duplicateOf: 'evt_rk_original' }), duplicates);
+      assert.deepEqual(await store.listDuplicates({ requestId: 'req-1' }), duplicates);
+
+      // Resending the duplicate's own id resolves to the original as an event_id duplicate.
+      const resend = await store.append(duplicate);
+      assert.equal(resend.outcome, 'duplicate');
+      assert.equal(resend.duplicateReason, 'event_id');
+      assert.equal(resend.id, 'evt_rk_original');
+      assert.equal(resend.submittedId, 'evt_rk_duplicate');
+
+      // list({ afterId }) never resurrects a duplicate reference either.
+      const another = usageEvent('evt_rk_after', { provider: 'openai', requestId: 'req-after' });
+      await store.append(another);
+      const afterIdResults = await store.list({ afterId: 'evt_rk_original' });
+      assert.ok(!afterIdResults.some((e) => e.id === 'evt_rk_duplicate'));
+      assert.ok(afterIdResults.some((e) => e.id === 'evt_rk_after'));
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: the same requestId under two different providers is counted twice (two originals)`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const a = usageEvent('evt_rk_provA', { provider: 'provider-a', requestId: 'shared' });
+      const b = usageEvent('evt_rk_provB', { provider: 'provider-b', requestId: 'shared' });
+      assert.equal((await store.append(a)).outcome, 'accepted');
+      assert.equal((await store.append(b)).outcome, 'accepted');
+      assert.equal((await store.usageSummary()).total.calls, 2);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: events without a requestId, or with a blank one, are never linked by the request key`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const none = usageEvent('evt_rk_none', { provider: 'noreq' });
+      const blank = usageEvent('evt_rk_blank', { provider: 'noreq', requestId: '   ' });
+      assert.equal((await store.append(none)).outcome, 'accepted');
+      const result = await store.append(blank);
+      assert.equal(result.outcome, 'accepted', 'a blank requestId never links two different ids');
+      assert.equal(await store.findByRequest('noreq', ''), null);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: llm.failed followed by llm.usage with the same key is a request_id duplicate; a third report points to the original`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const failed = failedEvent('evt_rk_failed', { provider: 'anthropic', requestId: 'req-mixed' });
+      assert.equal((await store.append(failed)).outcome, 'accepted');
+
+      const usage = usageEvent('evt_rk_usage', { provider: 'anthropic', requestId: 'req-mixed' });
+      const second = await store.append(usage);
+      assert.equal(second.outcome, 'duplicate');
+      assert.equal(second.duplicateReason, 'request_id');
+      assert.equal(second.id, 'evt_rk_failed');
+      assert.equal(second.matchesOriginal, false, 'llm.failed and llm.usage can never match: type differs');
+
+      const third = usageEvent('evt_rk_third', { provider: 'anthropic', requestId: 'req-mixed' });
+      const thirdResult = await store.append(third);
+      assert.equal(thirdResult.id, 'evt_rk_failed', 'a third report still points to the original, never to a duplicate');
+
+      const duplicates = await store.listDuplicates({ duplicateOf: 'evt_rk_failed' });
+      assert.equal(duplicates.length, 2);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a cost of null against a stored cost of 0 (or the reverse) is a mismatch; unknown is never zero`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const original = usageEvent('evt_rk_cost_null', { provider: 'costp', requestId: 'req-cost', cost: null, currency: null, costSource: 'unknown' });
+      assert.equal((await store.append(original)).outcome, 'accepted');
+      const zeroCost = usageEvent('evt_rk_cost_zero', { provider: 'costp', requestId: 'req-cost', cost: 0, currency: 'USD', costSource: 'provider-reported' });
+      const result = await store.append(zeroCost);
+      assert.equal(result.matchesOriginal, false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a matching request_id duplicate reports matchesOriginal true and logs no warning`, async (t) => {
+    const warn = t.mock.method(console, 'warn', () => {});
+    const { store, cleanup } = create();
+    try {
+      const original = usageEvent('evt_rk_match_1', { provider: 'matchp', requestId: 'req-match' });
+      await store.append(original);
+      const matching = usageEvent('evt_rk_match_2', { provider: 'matchp', requestId: 'req-match' });
+      const result = await store.append(matching);
+      assert.equal(result.matchesOriginal, true);
+      const mismatchLines = warn.mock.calls.filter((call) => String(call.arguments[0]).includes('does not match its original'));
+      assert.equal(mismatchLines.length, 0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: in a batch, two events sharing a key resolve as original then request_id duplicate, in input order`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const first = usageEvent('evt_rk_batch_1', { provider: 'batchp', requestId: 'req-batch' });
+      const second = usageEvent('evt_rk_batch_2', { provider: 'batchp', requestId: 'req-batch', inputTokens: 1 });
+      const plainResend = { ...first };
+      const batch = await store.appendBatch([first, second, plainResend]);
+      assert.equal(batch.results.length, 3);
+      assert.equal(batch.results[0].outcome, 'accepted');
+      assert.equal(batch.results[1].outcome, 'duplicate');
+      assert.equal(batch.results[1].duplicateReason, 'request_id');
+      assert.equal(batch.results[1].id, 'evt_rk_batch_1');
+      assert.equal(batch.results[1].submittedId, 'evt_rk_batch_2');
+      assert.equal(batch.results[2].outcome, 'duplicate');
+      assert.equal(batch.results[2].duplicateReason, 'event_id');
+      assert.deepEqual(batch.acceptedEvents.map((e) => e.id), ['evt_rk_batch_1']);
+    } finally {
+      await cleanup();
+    }
+  });
+}
+
+test('MemoryEventStore: a report with the same key is still a duplicate, and totals do not change, after the original falls off the retained window', async () => {
+  const store = new MemoryEventStore(3);
+  const original = usageEvent('evt_rk_evict_original', { provider: 'evictp', requestId: 'req-evict' });
+  await store.append(original);
+  await store.append(usageEvent('evt_rk_evict_filler_1'));
+  await store.append(usageEvent('evt_rk_evict_filler_2'));
+  await store.append(usageEvent('evt_rk_evict_filler_3'));
+  // The retained window holds only maxEvents (3), so the original is no longer listed, but the dedup index
+  // never forgets an accepted id (issue #53): exists() and a retry of the id itself must both still see it.
+  assert.equal(await store.exists('evt_rk_evict_original'), true);
+
+  const before = await store.usageSummary();
+  const late = usageEvent('evt_rk_evict_late', { provider: 'evictp', requestId: 'req-evict', inputTokens: 99999 });
+  const result = await store.append(late);
+  assert.equal(result.outcome, 'duplicate');
+  assert.equal(result.duplicateReason, 'request_id');
+  assert.equal(result.id, 'evt_rk_evict_original');
+
+  const after = await store.usageSummary();
+  assert.deepStrictEqual(after, before, 'totals unchanged by a duplicate reported after the original was evicted');
+});
+
+test('SQLiteEventStore: a 0.2.1-shaped database with two same-key usage rows migrates with duplicate_of set and matches_original NULL', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'log', () => {});
+  const { dir, file } = tempDbPath('request-key-legacy');
+  const legacy = new DatabaseSync(file);
+  legacy.exec(`
+    CREATE TABLE events (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      runtime_id TEXT,
+      session_id TEXT,
+      agent_id TEXT,
+      task_id TEXT,
+      severity TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  const insert = legacy.prepare(
+    'INSERT INTO events (id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  // A row written before event_json existed (migration 0001's own legacy case), unrelated to the request key.
+  insert.run('evt_legacy_no_json', 'agent.status.changed', 100, null, null, 'old-agent', null, 'normal', 'Legacy row', '{"status":"IDLE"}', 1);
+  // Two usage rows sharing a (provider, requestId) key: the earlier one (lowest rowid) must become the original.
+  insert.run(
+    'evt_legacy_usage_1', 'llm.usage', 200, null, null, 'auditor', null, 'normal', 'First',
+    JSON.stringify({ provider: 'Legacy-Provider', model: 'm', inputTokens: 10, outputTokens: 5, requestId: 'legacy-req-1' }), 2
+  );
+  insert.run(
+    'evt_legacy_usage_2', 'llm.usage', 300, null, null, 'auditor', null, 'normal', 'Second',
+    JSON.stringify({ provider: 'legacy-provider', model: 'm', inputTokens: 10, outputTokens: 5, requestId: ' legacy-req-1 ' }), 3
+  );
+  legacy.close();
+
+  let store = new SQLiteEventStore(file, { backup: 'off' });
+  try {
+    const db = new DatabaseSync(file);
+    const columns = db.prepare('PRAGMA table_info(events)').all().map((c) => c.name);
+    for (const column of ['request_provider', 'request_id', 'duplicate_of', 'matches_original']) {
+      assert.ok(columns.includes(column), `expected column ${column}`);
+    }
+    const indexNames = db.prepare('PRAGMA index_list(events)').all().map((i) => i.name);
+    assert.ok(indexNames.includes('idx_events_request_key'));
+    assert.ok(!indexNames.includes('idx_events_request_lookup_tmp'));
+
+    const rows = Object.fromEntries(
+      db.prepare('SELECT id, request_provider, request_id, duplicate_of, matches_original FROM events').all().map((r) => [r.id, r])
+    );
+    db.close();
+    assert.equal(rows.evt_legacy_no_json.request_id, null);
+    assert.equal(rows.evt_legacy_usage_1.duplicate_of, null);
+    assert.equal(rows.evt_legacy_usage_2.duplicate_of, 'evt_legacy_usage_1');
+    assert.equal(rows.evt_legacy_usage_2.matches_original, null, 'legacy content was never compared under this rule');
+
+    const duplicates = await store.listDuplicates();
+    assert.equal(duplicates.length, 1);
+    assert.equal(duplicates[0].id, 'evt_legacy_usage_2');
+    assert.equal(duplicates[0].duplicateOf, 'evt_legacy_usage_1');
+    assert.equal(duplicates[0].matchesOriginal, null);
+
+    const snapshot = await store.snapshot();
+    assert.deepStrictEqual(snapshot.usageDuplicates, { count: 1, mismatched: 0, unverified: 1 });
+
+    const listed = (await store.list({ limit: 100 })).map((e) => e.id);
+    assert.ok(!listed.includes('evt_legacy_usage_2'));
+    assert.ok(listed.includes('evt_legacy_usage_1'));
+
+    await store.close();
+
+    // Reopening is a no-op: migration 3 does not run twice and the shape stays the same.
+    store = new SQLiteEventStore(file, { backup: 'off' });
+    assert.equal(store.migration.applied.length, 0);
+    const reopened = await store.listDuplicates();
+    assert.deepStrictEqual(reopened, duplicates);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a UNIQUE violation on the request key is classified as a duplicate, never surfaced as an error, and never reaches the memory fallback', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { dir, file } = tempDbPath('request-key-race');
+  const store = new SQLiteEventStore(file);
+  try {
+    const original = usageEvent('evt_race_rk_original', { provider: 'racep', requestId: 'req-race' });
+    await store.append(original);
+
+    // Force the race path: the lookup misses the row once (another writer inserted it in between), so the plain
+    // insert runs and hits the UNIQUE index on (request_provider, request_id); the store must recover from that.
+    const realLookupRequestKey = store.lookupRequestKey.bind(store);
+    let calls = 0;
+    store.lookupRequestKey = (...args) => (++calls === 1 ? null : realLookupRequestKey(...args));
+
+    const duplicate = usageEvent('evt_race_rk_duplicate', { provider: 'racep', requestId: 'req-race', inputTokens: 1 });
+    const result = await store.append(duplicate);
+    store.lookupRequestKey = realLookupRequestKey;
+
+    assert.equal(result.outcome, 'duplicate');
+    assert.equal(result.duplicateReason, 'request_id');
+    assert.equal(result.id, 'evt_race_rk_original');
+    assert.equal(result.submittedId, 'evt_race_rk_duplicate');
+
+    const db = new DatabaseSync(file);
+    const row = db.prepare('SELECT duplicate_of FROM events WHERE id = ?').get('evt_race_rk_duplicate');
+    db.close();
+    assert.equal(row.duplicate_of, 'evt_race_rk_original');
+
+    // The race path never forwards the event to the memory fallback: only an 'accepted' outcome does that.
+    assert.equal((await store.usageSummary()).total.calls, 1);
+
+    // A true primary-key violation on events.id is still classified normally and never mistaken for the race.
+    const idConflict = await store.append({ ...original, timestamp: original.timestamp + 1 });
+    assert.equal(idConflict.outcome, 'conflict');
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -------------------------------------------------------------
+// Issue #53: no silent loss, no double counting after eviction, configurable cap
+// -------------------------------------------------------------
+
+test('MemoryEventStore: constructor options are backward compatible with a bare number, and reject an invalid maxEvents', async () => {
+  const legacy = new MemoryEventStore(50);
+  assert.equal((await legacy.retention()).maxEvents, 50);
+
+  const viaOptions = new MemoryEventStore({ maxEvents: 7 });
+  assert.equal((await viaOptions.retention()).maxEvents, 7);
+
+  const defaulted = new MemoryEventStore();
+  assert.equal((await defaulted.retention()).maxEvents, 10000);
+
+  for (const bad of [0, -1, 1.5, NaN]) {
+    assert.throws(() => new MemoryEventStore({ maxEvents: bad }));
+  }
+});
+
+test('MemoryEventStore: retrying an evicted event id via append() is a duplicate; totals, runtimes, sessions and agents do not change', async () => {
+  const store = new MemoryEventStore(3);
+  const original = usageEvent('evt_evict_retry', { inputTokens: 1000 }, { runtimeId: 'rt_evict', sessionId: 'ses_evict' });
+  await store.append(original);
+  await store.append(usageEvent('evt_evict_filler_1'));
+  await store.append(usageEvent('evt_evict_filler_2'));
+  await store.append(usageEvent('evt_evict_filler_3'));
+
+  assert.equal(await store.exists('evt_evict_retry'), true);
+  const before = await store.snapshot();
+
+  const retry = await store.append(original);
+  assert.equal(retry.outcome, 'duplicate');
+  assert.equal(retry.accepted, true);
+  assert.equal(retry.duplicate, true);
+
+  const after = await store.snapshot();
+  assert.deepStrictEqual(after.usage, before.usage);
+  assert.deepStrictEqual(after.totalTokens, before.totalTokens);
+  assert.equal(after.totalCost, before.totalCost);
+  assert.deepStrictEqual(after.runtimes, before.runtimes);
+  assert.deepStrictEqual(after.sessions, before.sessions);
+  assert.deepStrictEqual(after.agents, before.agents);
+  assert.deepStrictEqual(after.retention, before.retention, 'a duplicate never moves a retention counter');
+});
+
+test('MemoryEventStore: appendBatch retries an evicted id, mixes it with new ids, and repeats a new id twice in one batch', async () => {
+  const store = new MemoryEventStore(3);
+  const original = usageEvent('evt_evict_batch_retry', { inputTokens: 500 });
+  await store.append(original);
+  await store.appendBatch([usageEvent('evt_evict_batch_f1'), usageEvent('evt_evict_batch_f2'), usageEvent('evt_evict_batch_f3')]);
+  assert.equal(await store.exists('evt_evict_batch_retry'), true);
+
+  const before = await store.usageSummary();
+  const newEvent = usageEvent('evt_evict_batch_new', { inputTokens: 7 });
+  const batch = await store.appendBatch([original, newEvent, { ...newEvent }]);
+  assert.equal(batch.results[0].outcome, 'duplicate');
+  assert.equal(batch.results[1].outcome, 'accepted');
+  assert.equal(batch.results[2].outcome, 'duplicate');
+  assert.equal(batch.accepted, 1);
+  assert.equal(batch.duplicates, 2);
+
+  const after = await store.usageSummary();
+  assert.equal(after.total.calls - before.total.calls, 1, 'only the genuinely new event is counted, once');
+});
+
+test('MemoryEventStore: exists() stays true for a plain event id (no request key) after it falls off the retained window', async () => {
+  const store = new MemoryEventStore(2);
+  await store.append(storeEvent('evt_plain_evict', 1));
+  await store.append(storeEvent('evt_plain_filler_1', 2));
+  await store.append(storeEvent('evt_plain_filler_2', 3));
+  assert.equal(await store.exists('evt_plain_evict'), true);
+  assert.deepEqual((await store.list()).map((e) => e.id), ['evt_plain_filler_2', 'evt_plain_filler_1']);
+});
+
+test('MemoryEventStore: retention counters and since follow the injected clock, and since is null before any eviction', async () => {
+  let clock = 1_000;
+  const store = new MemoryEventStore({ maxEvents: 2, now: () => clock });
+
+  await store.append(storeEvent('evt_ret_1', 1));
+  let retention = await store.retention();
+  assert.deepEqual(retention, {
+    storage: 'memory',
+    maxEvents: 2,
+    retainedEvents: 1,
+    acceptedEvents: 1,
+    droppedEvents: 0,
+    since: null,
+    totalsSince: 1_000,
+  });
+
+  clock = 2_000;
+  await store.append(storeEvent('evt_ret_2', 2));
+  retention = await store.retention();
+  assert.equal(retention.droppedEvents, 0);
+  assert.equal(retention.since, null);
+
+  clock = 3_000;
+  await store.append(storeEvent('evt_ret_3', 3)); // evicts evt_ret_1, received at clock 1000
+  retention = await store.retention();
+  assert.equal(retention.retainedEvents, 2);
+  assert.equal(retention.acceptedEvents, 3);
+  assert.equal(retention.droppedEvents, 1);
+  assert.equal(retention.since, 2_000, 'oldest retained event (evt_ret_2) was received at clock 2000');
+  assert.equal(retention.totalsSince, 1_000);
+
+  // A retry of the evicted id is a duplicate: it must not move any retention counter.
+  const before = retention;
+  const retry = await store.append(storeEvent('evt_ret_1', 1));
+  assert.equal(retry.duplicate, true);
+  assert.deepEqual(await store.retention(), before);
+});
+
+test('MemoryEventStore: a single batch larger than maxEvents is fully counted in totals and acceptedEvents, and retains exactly the newest maxEvents', async () => {
+  const store = new MemoryEventStore(5);
+  const events = Array.from({ length: 12 }, (_, i) => usageEvent(`evt_bigbatch_${i}`, { inputTokens: 1 }));
+  const batch = await store.appendBatch(events);
+  assert.equal(batch.accepted, 12);
+
+  const retention = await store.retention();
+  assert.equal(retention.acceptedEvents, 12);
+  assert.equal(retention.retainedEvents, 5);
+  assert.equal(retention.droppedEvents, 7);
+
+  const retainedIds = (await store.list({ limit: 100 })).map((e) => e.id);
+  assert.deepEqual(retainedIds, ['evt_bigbatch_11', 'evt_bigbatch_10', 'evt_bigbatch_9', 'evt_bigbatch_8', 'evt_bigbatch_7']);
+
+  const summary = await store.usageSummary();
+  assert.equal(summary.total.calls, 12, 'every accepted event counts toward totals, evicted or not');
+});
+
+/** Reference (non-ring) implementation of `list()`, mirroring the array semantics this store replaced. */
+function referenceList(acceptedNewestFirst, options = {}) {
+  let result = acceptedNewestFirst;
+  if (options.runtimeId) result = result.filter((e) => e.runtimeId === options.runtimeId);
+  if (options.sessionId) result = result.filter((e) => e.sessionId === options.sessionId);
+  if (options.agentId) result = result.filter((e) => e.agentId === options.agentId);
+  if (options.type) result = result.filter((e) => e.type === options.type);
+  if (options.since !== undefined) result = result.filter((e) => e.timestamp >= options.since);
+  if (options.afterId) {
+    const index = result.findIndex((e) => e.id === options.afterId);
+    if (index >= 0) result = result.slice(0, index);
+  }
+  const limit = options.limit && options.limit > 0 ? options.limit : 100;
+  return result.slice(0, limit).map((e) => e.id);
+}
+
+/** Deterministic seeded PRNG (mulberry32), so the differential and invariant tests below are reproducible. */
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return function () {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test('MemoryEventStore: list() matches a reference array implementation across random filters (seeded differential test)', async () => {
+  const rand = mulberry32(53);
+  const maxEvents = 15;
+  const store = new MemoryEventStore(maxEvents);
+  const runtimes = ['rt_a', 'rt_b', undefined];
+  const sessions = ['ses_a', 'ses_b', undefined];
+  const agents = ['agent_a', 'agent_b', undefined];
+  const types = ['agent.message.sent', 'llm.usage'];
+  const acceptedNewestFirst = [];
+
+  const totalEvents = 60;
+  for (let i = 0; i < totalEvents; i++) {
+    const type = types[Math.floor(rand() * types.length)];
+    const candidate = {
+      id: `evt_diff_${i}`,
+      type,
+      timestamp: 1000 + i,
+      runtimeId: runtimes[Math.floor(rand() * runtimes.length)],
+      sessionId: sessions[Math.floor(rand() * sessions.length)],
+      agentId: agents[Math.floor(rand() * agents.length)],
+      source: 'agent:diff',
+      summary: `Event ${i}`,
+      payload: type === 'llm.usage' ? { provider: 'p', model: 'm', inputTokens: 1, outputTokens: 1 } : { text: 'x' },
+    };
+    const validated = validateCanonicalEvent(candidate);
+    assert.equal(validated.success, true, JSON.stringify(validated.issues));
+    await store.append(validated.data);
+    acceptedNewestFirst.unshift(validated.data);
+  }
+  // The store only retains the newest maxEvents; slicing the full newest-first reference the same way lets the
+  // rest of the comparison reuse the exact filter order of the previous array implementation.
+  const retained = acceptedNewestFirst.slice(0, maxEvents);
+
+  const scenarios = [
+    {},
+    { limit: 5 },
+    { runtimeId: 'rt_a' },
+    { sessionId: 'ses_b', limit: 3 },
+    { agentId: 'agent_a' },
+    { type: 'llm.usage' },
+    { since: 1000 + totalEvents - maxEvents + 2 },
+    { afterId: retained[5]?.id },
+    { afterId: 'evt_unknown' },
+    { runtimeId: 'rt_b', type: 'llm.usage', limit: 2 },
+  ];
+
+  for (const options of scenarios) {
+    const actual = (await store.list(options)).map((e) => e.id);
+    const expected = referenceList(retained, options);
+    assert.deepEqual(actual, expected, `scenario ${JSON.stringify(options)}`);
+  }
+});
+
+test('MemoryEventStore: seeded randomized sequence keeps acceptedEvents == retainedEvents + droppedEvents, and totals equal the sum over unique accepted ids', async () => {
+  const rand = mulberry32(9311);
+  const maxEvents = 6;
+  const store = new MemoryEventStore(maxEvents);
+  const allIds = [];
+  const expectedInputById = new Map();
+
+  const operations = 300;
+  for (let i = 0; i < operations; i++) {
+    const retryExisting = allIds.length > 0 && rand() < 0.4;
+    let id;
+    let inputTokens;
+    if (retryExisting) {
+      id = allIds[Math.floor(rand() * allIds.length)];
+      inputTokens = expectedInputById.get(id); // same content as the original: a duplicate, never a conflict
+    } else {
+      id = `evt_rand_${i}`;
+      inputTokens = Math.floor(rand() * 1000);
+      allIds.push(id);
+      expectedInputById.set(id, inputTokens);
+    }
+    const result = await store.append(usageEvent(id, { inputTokens }));
+    assert.notEqual(result.outcome, 'conflict', `unexpected conflict for ${id} at operation ${i}`);
+
+    const retention = await store.retention();
+    assert.equal(retention.acceptedEvents, retention.retainedEvents + retention.droppedEvents, `invariant broken at operation ${i}`);
+  }
+
+  const expectedTotal = Array.from(expectedInputById.values()).reduce((sum, value) => sum + value, 0);
+  const snapshot = await store.snapshot();
+  assert.equal(snapshot.totalTokens.input, expectedTotal);
+  assert.equal((await store.retention()).acceptedEvents, allIds.length);
+});
+
+test('MemoryEventStore: 200,000 appends with maxEvents=100000 finish well under 5s, and a huge cap does not preallocate', async () => {
+  const store = new MemoryEventStore(100_000);
+  const start = Date.now();
+  for (let i = 0; i < 200_000; i++) {
+    await store.append(storeEvent(`evt_perf_${i}`, i));
+  }
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 5000, `expected under 5000ms, took ${elapsed}ms`);
+  assert.equal((await store.retention()).retainedEvents, 100_000);
+  assert.equal((await store.retention()).droppedEvents, 100_000);
+
+  // A cap of 1e9 must not allocate a proportional array up front.
+  const before = process.memoryUsage().heapUsed;
+  const huge = new MemoryEventStore(1_000_000_000);
+  const after = process.memoryUsage().heapUsed;
+  assert.ok(after - before < 10 * 1024 * 1024, `constructing a store with a 1e9 cap used ${after - before} bytes`);
+  assert.equal((await huge.retention()).retainedEvents, 0);
+});
+
+test('MemoryEventStore: logs the known-ids memory warning once when crossing 1,000,000 ids, not per event', { timeout: 60_000 }, async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const store = new MemoryEventStore(1);
+  for (let i = 0; i < 1_000_001; i++) {
+    await store.append(storeEvent(`evt_warn_${i}`, i));
+  }
+  const matches = warn.mock.calls.filter((call) => String(call.arguments[0]).includes('memory store has seen'));
+  assert.equal(matches.length, 1);
+  assert.match(String(matches[0].arguments[0]), /has seen 1000000 event ids/);
+});
+
+test('SQLiteEventStore: retention() reports the sqlite shape, eventsCount is the true row count, and the fallback forgets evicted ids', async () => {
+  const { dir, file } = tempDbPath('retention-sqlite');
+  const store = new SQLiteEventStore(file, { maxEvents: 2 });
+  try {
+    await store.append(usageEvent('evt_sqlite_ret_1'));
+    await store.append(storeEvent('evt_sqlite_ret_2', 2));
+    await store.append(storeEvent('evt_sqlite_ret_3', 3)); // evicts evt_sqlite_ret_1 from the fallback only
+
+    const retention = await store.retention();
+    assert.equal(retention.storage, 'sqlite');
+    assert.equal(retention.maxEvents, null);
+    assert.equal(retention.droppedEvents, 0);
+    assert.equal(retention.since, null);
+    assert.equal(retention.retainedEvents, 3, 'every row counts, not just the fallback window');
+    assert.equal(retention.acceptedEvents, 3);
+
+    // SQLite itself still knows the id (dedup source of truth is the table), unaffected by the fallback's cap.
+    assert.equal(await store.exists('evt_sqlite_ret_1'), true);
+    const retry = await store.append(usageEvent('evt_sqlite_ret_1'));
+    assert.equal(retry.outcome, 'duplicate');
+
+    const snapshot = await store.snapshot();
+    assert.equal(snapshot.eventsCount, 3);
+    assert.equal(snapshot.retention.storage, 'sqlite');
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: retention() never runs a per-call COUNT(*) (the SSE heartbeat polls it every 15s)', async () => {
+  const { dir, file } = tempDbPath('retention-no-count');
+  const store = new SQLiteEventStore(file);
+  try {
+    await store.append(usageEvent('evt_no_count_1'));
+    const originalPrepare = store.db.prepare.bind(store.db);
+    let countCalls = 0;
+    store.db.prepare = (sql, ...rest) => {
+      if (/COUNT\(/i.test(sql)) countCalls++;
+      return originalPrepare(sql, ...rest);
+    };
+    await store.retention();
+    await store.retention();
+    await store.append(usageEvent('evt_no_count_2'));
+    await store.retention();
+    assert.equal(countCalls, 0);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('parseMaxEvents: valid values, defaults, and the documented invalid cases all throw', () => {
+  assert.equal(parseMaxEvents('5'), 5);
+  assert.equal(parseMaxEvents(undefined), 10000);
+  assert.equal(parseMaxEvents(''), 10000);
+  assert.equal(parseMaxEvents('   '), 10000);
+  assert.equal(parseMaxEvents(' 25 '), 25);
+  assert.equal(parseMaxEvents(String(Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
+
+  const invalid = ['0', '-1', 'abc', '1e3', '10.5', '007', `${Number.MAX_SAFE_INTEGER}0`, '99999999999999999999'];
+  for (const raw of invalid) {
+    assert.throws(
+      () => parseMaxEvents(raw),
+      /AGENT_VIEWER_MAX_EVENTS must be a positive integer/,
+      `expected "${raw}" to throw`
+    );
+  }
+});
+
+test('createEventStore: AGENT_VIEWER_MAX_EVENTS caps the memory store, and an invalid value throws at startup', (t) => {
+  const previousStorage = process.env.AGENT_VIEWER_STORAGE;
+  const previousMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
+  t.after(() => {
+    if (previousStorage === undefined) delete process.env.AGENT_VIEWER_STORAGE;
+    else process.env.AGENT_VIEWER_STORAGE = previousStorage;
+    if (previousMaxEvents === undefined) delete process.env.AGENT_VIEWER_MAX_EVENTS;
+    else process.env.AGENT_VIEWER_MAX_EVENTS = previousMaxEvents;
+  });
+
+  delete process.env.AGENT_VIEWER_STORAGE;
+  process.env.AGENT_VIEWER_MAX_EVENTS = '5';
+  const store = createEventStore();
+  assert.ok(store instanceof MemoryEventStore);
+
+  process.env.AGENT_VIEWER_MAX_EVENTS = 'not-a-number';
+  assert.throws(() => createEventStore(), /AGENT_VIEWER_MAX_EVENTS must be a positive integer/);
+});
+
+test('createEventStore: in SQLite mode, AGENT_VIEWER_MAX_EVENTS has no effect and logs once that it is ignored', (t) => {
+  const log = t.mock.method(console, 'log', () => {});
+  const previousStorage = process.env.AGENT_VIEWER_STORAGE;
+  const previousMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
+  const previousPath = process.env.AGENT_VIEWER_SQLITE_PATH;
+  const { dir, file } = tempDbPath('create-event-store-sqlite');
+  t.after(() => {
+    if (previousStorage === undefined) delete process.env.AGENT_VIEWER_STORAGE;
+    else process.env.AGENT_VIEWER_STORAGE = previousStorage;
+    if (previousMaxEvents === undefined) delete process.env.AGENT_VIEWER_MAX_EVENTS;
+    else process.env.AGENT_VIEWER_MAX_EVENTS = previousMaxEvents;
+    if (previousPath === undefined) delete process.env.AGENT_VIEWER_SQLITE_PATH;
+    else process.env.AGENT_VIEWER_SQLITE_PATH = previousPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  process.env.AGENT_VIEWER_STORAGE = 'sqlite';
+  process.env.AGENT_VIEWER_SQLITE_PATH = file;
+  process.env.AGENT_VIEWER_MAX_EVENTS = '7';
+  const store = createEventStore();
+  assert.ok(store instanceof SQLiteEventStore);
+  const notice = log.mock.calls.find((call) => String(call.arguments[0]).includes('AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode'));
+  assert.ok(notice, 'expected a one-time notice that AGENT_VIEWER_MAX_EVENTS has no effect in SQLite mode');
+});
+
+// -------------------------------------------------------------
+// Seq methods for SSE reconnect replay (issue #54)
+// -------------------------------------------------------------
+
+for (const [label, create] of STORE_FACTORIES) {
+  test(`${label}: resolveCursor resolves a stored id and is null for an unknown one`, async () => {
+    const { store, cleanup } = create();
+    try {
+      assert.equal(await store.resolveCursor('evt_seq_missing'), null);
+      assert.equal(await store.headSeq(), null);
+
+      const a = await store.append(storeEvent('evt_seq_a', 1));
+      const b = await store.append(storeEvent('evt_seq_b', 2));
+      assert.equal(typeof a.seq, 'number');
+      assert.equal(typeof b.seq, 'number');
+      assert.ok(b.seq > a.seq, 'seqs grow with each insertion');
+
+      assert.equal(await store.resolveCursor('evt_seq_a'), a.seq);
+      assert.equal(await store.resolveCursor('evt_seq_b'), b.seq);
+      assert.equal(await store.resolveCursor('evt_seq_missing'), null);
+      assert.equal(await store.headSeq(), b.seq);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: a duplicate or a conflict never gets a seq`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const original = storeEvent('evt_seq_dup', 1);
+      const first = await store.append(original);
+      const duplicate = await store.append(JSON.parse(JSON.stringify(original)));
+      const conflict = await store.append({ ...original, summary: 'different' });
+      assert.equal(typeof first.seq, 'number');
+      assert.equal(duplicate.seq, null);
+      assert.equal(conflict.seq, null);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: appendBatch returns acceptedSeqs aligned with acceptedEvents, growing with each insertion`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const events = [storeEvent('evt_seq_batch_1', 1), storeEvent('evt_seq_batch_2', 2), storeEvent('evt_seq_batch_3', 3)];
+      const result = await store.appendBatch(events);
+      assert.equal(result.acceptedEvents.length, 3);
+      assert.equal(result.acceptedSeqs.length, 3);
+      assert.ok(result.acceptedSeqs.every((seq) => typeof seq === 'number'));
+      assert.ok(result.acceptedSeqs[0] < result.acceptedSeqs[1]);
+      assert.ok(result.acceptedSeqs[1] < result.acceptedSeqs[2]);
+
+      // A resend in a second batch is a duplicate: no seq, and acceptedSeqs stays aligned with acceptedEvents.
+      const second = await store.appendBatch([events[0], storeEvent('evt_seq_batch_4', 4)]);
+      assert.equal(second.acceptedEvents.length, 1);
+      assert.equal(second.acceptedEvents[0].id, 'evt_seq_batch_4');
+      assert.equal(second.acceptedSeqs.length, 1);
+      assert.ok(second.acceptedSeqs[0] > result.acceptedSeqs[2]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test(`${label}: countBetween and listBetween return exactly the events after the cursor, ascending, with no gaps or overlap across a page boundary`, async () => {
+    const { store, cleanup } = create();
+    try {
+      const seqs = [];
+      for (let i = 0; i < 1200; i++) {
+        const result = await store.append(storeEvent(`evt_seq_page_${i}`, i));
+        seqs.push(result.seq);
+      }
+      const head = await store.headSeq();
+      assert.equal(head, seqs.at(-1));
+
+      const cursor = seqs[99]; // after the 100th event
+      const total = await store.countBetween(cursor, head);
+      assert.equal(total, 1100);
+
+      // Page through with a page size that does not evenly divide the remainder, like the server does.
+      const pageSize = 500;
+      const pages = [];
+      let afterSeq = cursor;
+      for (;;) {
+        const page = await store.listBetween(afterSeq, head, pageSize);
+        if (page.length === 0) break;
+        pages.push(page);
+        afterSeq = page.at(-1).seq;
+      }
+      const allIds = pages.flat().map((entry) => entry.event.id);
+      const expectedIds = seqs.slice(100).map((_, index) => `evt_seq_page_${index + 100}`);
+      assert.deepStrictEqual(allIds, expectedIds, 'ascending, no gaps, no overlap, no duplicates');
+      assert.deepStrictEqual(
+        pages.map((page) => page.length),
+        [500, 500, 100],
+        'pages split exactly on the page-size boundary'
+      );
+
+      // Every page's seqs are ascending and the last seq of one page is less than the first of the next.
+      let previousLast = cursor;
+      for (const page of pages) {
+        assert.ok(page[0].seq > previousLast);
+        for (let i = 1; i < page.length; i++) assert.ok(page[i].seq > page[i - 1].seq);
+        previousLast = page.at(-1).seq;
+      }
+
+      assert.deepStrictEqual(await store.listBetween(head, head, 10), [], 'nothing after the head itself');
+      assert.equal(await store.countBetween(head, head), 0);
+    } finally {
+      await cleanup();
+    }
+  });
+}
+
+test('MemoryEventStore: an evicted cursor resolves to null, never to an unrelated event', async () => {
+  const store = new MemoryEventStore(50);
+  for (let i = 0; i < 60; i++) {
+    await store.append(storeEvent(`evt_seq_evict_${i}`, i));
+  }
+  // The oldest 10 events fell off the 50-event ring.
+  assert.equal(await store.resolveCursor('evt_seq_evict_0'), null);
+  assert.equal(await store.resolveCursor('evt_seq_evict_9'), null);
+  const stillThere = await store.resolveCursor('evt_seq_evict_10');
+  assert.equal(typeof stillThere, 'number');
+  const head = await store.headSeq();
+  assert.equal(await store.countBetween(stillThere, head), 49);
+});
+
+test('SQLiteEventStore: events appended with descending timestamps still come back from listBetween in insertion order, and the seq from append equals the stored row seq', async () => {
+  const { dir, file } = tempDbPath('seq-insertion-order');
+  const store = new SQLiteEventStore(file);
+  try {
+    const first = await store.append(storeEvent('evt_seq_sqlite_old', 5_000));
+    const second = await store.append(storeEvent('evt_seq_sqlite_mid', 3_000));
+    const third = await store.append(storeEvent('evt_seq_sqlite_new', 1_000));
+
+    const db = new DatabaseSync(file);
+    for (const [id, result] of [
+      ['evt_seq_sqlite_old', first],
+      ['evt_seq_sqlite_mid', second],
+      ['evt_seq_sqlite_new', third],
+    ]) {
+      const row = db.prepare('SELECT seq FROM events WHERE id = ?').get(id);
+      assert.equal(result.seq, Number(row.seq), `${id}: append()'s seq equals the stored row's seq`);
+    }
+    db.close();
+
+    const head = await store.headSeq();
+    const page = await store.listBetween(0, head, 10);
+    assert.deepStrictEqual(
+      page.map((entry) => entry.event.id),
+      ['evt_seq_sqlite_old', 'evt_seq_sqlite_mid', 'evt_seq_sqlite_new'],
+      'ascending by insertion seq, not by the descending client timestamps'
+    );
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: resolveCursor, headSeq, countBetween and listBetween never see a duplicate reference row', async () => {
+  const { dir, file } = tempDbPath('seq-duplicate-of');
+  const store = new SQLiteEventStore(file);
+  try {
+    const original = usageEvent('evt_seq_dup_original', { provider: 'seqp', requestId: 'req-seq' });
+    const originalResult = await store.append(original);
+    const dup = usageEvent('evt_seq_dup_second', { provider: 'seqp', requestId: 'req-seq', inputTokens: 999 });
+    const dupResult = await store.append(dup);
+    assert.equal(dupResult.outcome, 'duplicate');
+    assert.equal(dupResult.seq, null);
+
+    // The duplicate's own id resolves to nothing: it was never broadcast, so it is never a valid cursor.
+    assert.equal(await store.resolveCursor('evt_seq_dup_second'), null);
+
+    const marker = await store.append(storeEvent('evt_seq_dup_marker', 1));
+    const between = await store.listBetween(originalResult.seq, marker.seq, 10);
+    assert.deepStrictEqual(
+      between.map((entry) => entry.event.id),
+      ['evt_seq_dup_marker'],
+      'the duplicate reference row in between is never replayed'
+    );
+    assert.equal(await store.countBetween(originalResult.seq, marker.seq), 1);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -------------------------------------------------------------
+// Telemetry (issue #73): appendTelemetryPoints, listTelemetryPoints, telemetryStats, getTelemetryHmacSecret.
+// Both stores must behave the same way for idempotency and queries; only the capacity cap is memory-only, and
+// only persistence across a restart is SQLite-only.
+// -------------------------------------------------------------
+
+function telemetryPoint(overrides) {
+  return {
+    receivedAt: 1700000000000,
+    metricName: 'claude_code.token.usage',
+    metricKind: 'tokens',
+    tokenType: 'input',
+    unit: 'tokens',
+    currency: null,
+    temporality: 'delta',
+    seriesKey: 'series-1',
+    sessionId: 'claude-code-aaaaaaaaaaaa',
+    runtimeId: 'claude-code',
+    model: 'claude-sonnet-4-5',
+    serviceName: 'claude-code',
+    serviceVersion: null,
+    startTimeUnixNano: '1000000000000000000',
+    timeUnixNano: '1000000000000000000',
+    timeMs: 1000000000000,
+    value: 100,
+    wireFormat: 'json',
+    ...overrides,
+  };
+}
+
+for (const [label, makeStore] of [
+  ['MemoryEventStore', () => ({ store: new MemoryEventStore(50), cleanup: async () => {} })],
+  [
+    'SQLiteEventStore',
+    () => {
+      const { dir, file } = tempDbPath('telemetry');
+      return { store: new SQLiteEventStore(file), cleanup: async () => fs.rmSync(dir, { recursive: true, force: true }) };
+    },
+  ],
+]) {
+  test(`${label}: appendTelemetryPoints accepts new points, dedupes identical retries, and reports conflicts`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const first = await store.appendTelemetryPoints([telemetryPoint({ value: 10 })]);
+      assert.deepEqual(first, { accepted: 1, duplicates: 0, conflicts: 0, rejectedCapacity: 0, messages: [] });
+
+      const retry = await store.appendTelemetryPoints([telemetryPoint({ value: 10 })]);
+      assert.deepEqual(retry, { accepted: 0, duplicates: 1, conflicts: 0, rejectedCapacity: 0, messages: [] });
+
+      const conflicting = await store.appendTelemetryPoints([telemetryPoint({ value: 999 })]);
+      assert.equal(conflicting.accepted, 0);
+      assert.equal(conflicting.conflicts, 1);
+      assert.match(conflicting.messages[0], /conflicting duplicate/);
+
+      const stored = await store.listTelemetryPoints();
+      assert.equal(stored.length, 1);
+      assert.equal(stored[0].value, 10, 'the first value is kept, a conflicting retry never overwrites it');
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: appendTelemetryPoints never touches events, the ledger or the snapshot`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const eventsBefore = await store.list({ limit: 100 });
+      const usageBefore = await store.usageSummary();
+
+      await store.appendTelemetryPoints([telemetryPoint({})]);
+
+      const eventsAfter = await store.list({ limit: 100 });
+      const usageAfter = await store.usageSummary();
+      assert.deepEqual(eventsAfter, eventsBefore);
+      assert.deepEqual(usageAfter, usageBefore);
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: listTelemetryPoints filters by sessionId and runtimeId`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.appendTelemetryPoints([
+        telemetryPoint({ seriesKey: 's1', sessionId: 'sess-a', runtimeId: 'claude-code' }),
+        telemetryPoint({ seriesKey: 's2', sessionId: 'sess-b', runtimeId: 'claude-code' }),
+        telemetryPoint({ seriesKey: 's3', sessionId: null, runtimeId: null }),
+      ]);
+      const byAnySession = await store.listTelemetryPoints();
+      assert.equal(byAnySession.length, 3);
+      const onlyA = await store.listTelemetryPoints({ sessionId: 'sess-a' });
+      assert.equal(onlyA.length, 1);
+      assert.equal(onlyA[0].sessionId, 'sess-a');
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: telemetryStats reports pointsStored and pointsWithoutSession`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      await store.appendTelemetryPoints([
+        telemetryPoint({ seriesKey: 's1', sessionId: 'sess-a' }),
+        telemetryPoint({ seriesKey: 's2', sessionId: null }),
+      ]);
+      const stats = await store.telemetryStats();
+      assert.equal(stats.pointsStored, 2);
+      assert.equal(stats.pointsWithoutSession, 1);
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+
+  test(`${label}: getTelemetryHmacSecret returns the same 32-byte secret on every call`, async () => {
+    const { store, cleanup } = makeStore();
+    try {
+      const a = await store.getTelemetryHmacSecret();
+      const b = await store.getTelemetryHmacSecret();
+      assert.equal(a.length, 32);
+      assert.ok(a.equals(b));
+    } finally {
+      await store.close();
+      await cleanup();
+    }
+  });
+}
+
+test('MemoryEventStore: AGENT_VIEWER_TELEMETRY_MAX_POINTS rejects further points through capacity, never silently', async () => {
+  const store = new MemoryEventStore({ maxEvents: 50, telemetryMaxPoints: 2 });
+  try {
+    const first = await store.appendTelemetryPoints([
+      telemetryPoint({ seriesKey: 's1', timeUnixNano: '1' }),
+      telemetryPoint({ seriesKey: 's2', timeUnixNano: '2' }),
+    ]);
+    assert.equal(first.accepted, 2);
+
+    const overflow = await store.appendTelemetryPoints([telemetryPoint({ seriesKey: 's3', timeUnixNano: '3' })]);
+    assert.equal(overflow.accepted, 0);
+    assert.equal(overflow.rejectedCapacity, 1);
+    assert.match(overflow.messages[0], /TELEMETRY_MAX_POINTS/);
+
+    const stats = await store.telemetryStats();
+    assert.equal(stats.pointsStored, 2);
+    assert.equal(stats.truncated, true);
+  } finally {
+    await store.close();
+  }
+});
+
+test('SQLiteEventStore: the telemetry HMAC secret survives a restart, so retries still dedupe against the same series keys', async () => {
+  const { dir, file } = tempDbPath('telemetry-secret-restart');
+  try {
+    const first = new SQLiteEventStore(file);
+    const secret1 = await first.getTelemetryHmacSecret();
+    await first.appendTelemetryPoints([telemetryPoint({ value: 42 })]);
+    await first.close();
+
+    const second = new SQLiteEventStore(file);
+    const secret2 = await second.getTelemetryHmacSecret();
+    assert.ok(secret1.equals(secret2));
+
+    // The same point, submitted again after the restart, is still recognized as a duplicate.
+    const retry = await second.appendTelemetryPoints([telemetryPoint({ value: 42 })]);
+    assert.deepEqual(retry, { accepted: 0, duplicates: 1, conflicts: 0, rejectedCapacity: 0, messages: [] });
+
+    const stats = await second.telemetryStats();
+    assert.equal(stats.pointsStored, 1);
+    await second.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: telemetry_metric_points survives a restart and sumTelemetryBySession reads the persisted rows', async () => {
+  const { dir, file } = tempDbPath('telemetry-persist-restart');
+  try {
+    const first = new SQLiteEventStore(file);
+    await first.appendTelemetryPoints([
+      telemetryPoint({ seriesKey: 's1', sessionId: 'claude-code-bbbbbbbbbbbb', tokenType: 'input', value: 500 }),
+    ]);
+    await first.close();
+
+    const second = new SQLiteEventStore(file);
+    const rows = await second.listTelemetryPoints({ sessionId: 'claude-code-bbbbbbbbbbbb' });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].value, 500);
+    await second.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

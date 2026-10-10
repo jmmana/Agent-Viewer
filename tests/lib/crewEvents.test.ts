@@ -26,14 +26,3 @@ describe('Crew read-only event bridge', () => {
     expect(JSON.stringify(agents)).toBe(before);
   });
 });
-
-import { crewRoomActivity } from '../../src/crew/crewEvents';
-describe('Resumen de actividad de sala Crew', () => {
-  const a = (id:string,workspace:string,currentTaskId:string|null) => ({id,name:id,workspace,status:'IDLE',currentTaskId}) as never;
-  it('cuenta solo agentes de la sala, tareas y reuniones activas con participantes presentes', () => {
-    const agents = [a('x','development','t1'),a('y','development',null),a('z','qa_lab','t2')];
-    const meetings = [{status:'ACTIVE',participants:['y']},{status:'CONCLUDED',participants:['x']},{status:'ACTIVE',participants:['z']}] as never;
-    expect(crewRoomActivity(agents,meetings,'development')).toEqual({agents:2,withTask:1,activeMeetings:1});
-    expect(crewRoomActivity([],[],'development')).toEqual({agents:0,withTask:0,activeMeetings:0});
-  });
-});

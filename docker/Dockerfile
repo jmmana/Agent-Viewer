@@ -43,12 +43,14 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 CMD ["node", "static-server.mjs"]
 
 # Ingestion API (published as ghcr.io/jmmana/agent-viewer:<version>-api), with SQLite persistence in /app/data.
-# It listens on every interface, so it never runs without a token: AGENT_VIEWER_API_TOKEN when set, else a
-# token generated on first start, saved in /app/data/api-token and printed in the logs
-# (docker/api-entrypoint.mjs).
+# AGENT_VIEWER_HOST is set explicitly to 0.0.0.0 because the server now refuses a non-loopback bind with no
+# token (issue #71): the entrypoint always resolves a real token first (AGENT_VIEWER_API_TOKEN when set, else
+# one generated on first start, saved in /app/data/api-token and printed in the logs, docker/api-entrypoint.mjs),
+# so the published port stays reachable and the refusal never fires here.
 FROM deps AS api
 ENV NODE_ENV=production \
     PORT=8787 \
+    AGENT_VIEWER_HOST=0.0.0.0 \
     AGENT_VIEWER_STORAGE=sqlite \
     AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db \
     AGENT_VIEWER_TOKEN_FILE=/app/data/api-token

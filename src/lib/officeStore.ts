@@ -1,4 +1,4 @@
-import type { Agent, Meeting, ViewerEvent, WorkspaceZone } from '../types/agent';
+import type { Agent, Meeting, Task, ViewerEvent, WorkspaceZone } from '../types/agent';
 import type { CanonicalEvent, CanonicalEventInput } from '../integrations/canonicalTypes';
 import { createLiveSimulationState, type SimulationState } from '../engine/officeState';
 import { advanceLivingOffice, applyAmbientLife } from '../engine/livingOfficeEngine';
@@ -39,6 +39,12 @@ export interface OfficeSnapshot {
   agents: Agent[];
   activeMeetingId: string | null;
   meetings: Meeting[];
+  /**
+   * Copia de las tareas del dominio. Existe para que un consumidor de solo lectura (como el puente de
+   * eventos de Crew, issue #155) pueda leer `task.status` sin recalcularlo; Caricatura sigue sin usar
+   * este campo porque `OfficeCanvas` no lo consume.
+   */
+  tasks: Task[];
 }
 
 type EventKey = string | object;
@@ -179,6 +185,12 @@ export class OfficeStore {
         })),
       activeMeetingId: this.state.activeMeetingId,
       meetings: this.state.meetings.map((meeting) => ({ ...meeting, messages: [...meeting.messages] })),
+      tasks: this.state.tasks.map((task) => ({
+        ...task,
+        collaboratorIds: [...task.collaboratorIds],
+        toolsUsed: [...task.toolsUsed],
+        artifacts: task.artifacts.map((artifact) => ({ ...artifact })),
+      })),
     };
   }
 

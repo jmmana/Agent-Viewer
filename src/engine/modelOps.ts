@@ -87,6 +87,16 @@ export interface ProviderUsageAggregate {
   models: ModelUsageAggregate[];
 }
 
+/**
+ * @deprecated demo-only. Attributes an agent's whole running totals to its *last reported* model, so an agent
+ * that called two models during a session is counted entirely under the one it reported most recently. Issue
+ * #79 moves the Matrix, Agents and Feed tabs of Model Ops to the server's usage-ledger rollup and calls read
+ * APIs, which have one row per call instead. This function
+ * stays exported, unchanged in behavior, for `simulated` Model Ops mode (no API base configured) and for the
+ * in-office telemetry plaque (`canvasRenderer.ts`), which the office totals work (#55/#78) will migrate later.
+ * `engine/modelOps.ts` is part of the embeddable library bundle (`dist-lib/engine/modelOps.js`, pulled in by
+ * `canvasRenderer`), so this file never gains a ledger import or any new usage logic.
+ */
 export function aggregateModelUsage(agents: Agent[]): ProviderUsageAggregate[] {
   const models = new Map<string, ModelUsageAggregate>();
   let officeTotalTokens = 0;
@@ -283,13 +293,23 @@ export const MODEL_CATALOG: Record<string, ModelSpec> = {
   },
 };
 
+/** The catalog spec for a model id, or `undefined` when the demo catalog does not know it. No fallback. */
+export function getModelSpec(modelId: string): ModelSpec | undefined {
+  return MODEL_CATALOG[modelId];
+}
+
+/**
+ * Estimated cost of a call against the demo catalog, or `null` when the model is not in the catalog. A
+ * model the catalog does not know has no price: it is never shown as GPT-4o's price.
+ */
 export function calculateModelCost(
   modelId: string,
   inputTokens: number,
   outputTokens: number,
   cachedTokens = 0
-): number {
-  const spec = MODEL_CATALOG[modelId] || MODEL_CATALOG['gpt-4o'];
+): number | null {
+  const spec = getModelSpec(modelId);
+  if (!spec) return null;
   const regularInput = Math.max(0, inputTokens - cachedTokens);
   const cost =
     (regularInput / 1_000_000) * spec.inputPer1M +
@@ -298,34 +318,54 @@ export function calculateModelCost(
   return Number(cost.toFixed(6));
 }
 
-export interface InferenceLogItem {
-  id: string;
-  timestamp: number;
-  provider: string;
-  model: string;
-  agentName: string;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-  cost: number;
-  latencyMs: number;
-  status: '200 OK' | 'CACHED' | 'STREAMING';
-  promptSnippet: string;
-}
-
 export function compactTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return String(Math.round(value));
 }
 
-export interface SimulatedTokenBurst {
+/** A preset shape of the simulator / quick actions. */
+export type SimulatedCallPreset = 'chat' | 'code' | 'rag' | 'batch' | 'custom';
+
+/**
+ * A what-if call from the Model Ops simulator. It never reaches `SimulationState`: not `agents[*].tokens*`
+ * or `.cost`, not `totalTokens`/`totalCost`, not `events`. It exists only so the Simulated section of the
+ * Feed tab and the simulator summary can show it, always tagged `simulated: true`.
+ */
+export interface SimulatedCall {
+  id: string;
+  /** Literal marker, like `SocialActivity.simulated`, so nothing ever mistakes it for real usage. */
+  simulated: true;
+  timestamp: number;
   provider: string;
   model: string;
+  /** The agent whose speech bubble shows it; `null` when there is no matching agent (simulator operator). */
+  agentId: string | null;
+  preset: SimulatedCallPreset;
   inputTokens: number;
   outputTokens: number;
-  cachedTokens?: number;
-  cost: number;
-  latencyMs: number;
-  timestamp: number;
+  cachedTokens: number;
+  /** `null` when the model is not in the demo catalog: an unknown model has no estimate. */
+  estimatedCost: number | null;
+  /** `null` exactly when `estimatedCost` is `null`. */
+  currency: 'USD' | null;
+  /** Demo catalog latency; `null` when the model is not in the catalog. */
+  latencyMs: number | null;
+}
+
+export const SIMULATED_CALLS_LIMIT = 50;
+
+/** Pure helper: prepends a call and caps the list at `SIMULATED_CALLS_LIMIT`. Never touches `SimulationState`. */
+export function recordSimulatedCall(calls: SimulatedCall[], call: SimulatedCall): SimulatedCall[] {
+  const entry: SimulatedCall = { ...call, simulated: true };
+  return [entry, ...calls].slice(0, SIMULATED_CALLS_LIMIT);
+}
+
+/** Id for a simulated call: `crypto.randomUUID()` when the platform has it, a fallback otherwise. */
+export function generateSimulatedCallId(): string {
+  const cryptoApi = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+    return `sim-${cryptoApi.randomUUID()}`;
+  }
+  return `sim-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }

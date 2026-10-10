@@ -1,17 +1,16 @@
 import type { Agent } from '../types/agent';
-import type { CrewRoomDefinition, CrewView } from './crewModel';
+import type { CrewRoomDefinition } from './crewModel';
 import { crewAgentsInRoom } from './crewEvents';
-import { crewFacingToward, crewPresenceSlots, type CrewLocalPoint } from './crewSpatial';
+import { crewPresenceSlots, type CrewLocalPoint } from './crewSpatial';
 
-type PresenceAgent = Pick<Agent,'id'|'name'|'status'|'workspace'> & Partial<Pick<Agent,'role'>>;
+type PresenceAgent = Pick<Agent,'id'|'name'|'status'|'workspace'> & Partial<Pick<Agent,'role'|'facing'|'isWalking'>>;
 export interface CrewPresenceMarker extends CrewLocalPoint {
   id: string;
   name: string;
   status: Agent['status'];
   number: number;
   role?: Agent['role'];
-  /** Orientación local provisional hacia el mobiliario de trabajo; ausente equivale a `front`. */
-  facing?: CrewView;
+  facing?: Agent['facing'];
 }
 
 /** Proyección determinista de un snapshot. No genera eventos ni simula desplazamientos. */
@@ -19,7 +18,7 @@ export function projectCrewPresence(agents: readonly PresenceAgent[], room: Crew
   markers: CrewPresenceMarker[];
   unplaced: PresenceAgent[];
 } {
-  const present = crewAgentsInRoom(agents,room.id).slice().sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+  const present = crewAgentsInRoom(agents,room.id).slice().sort((a,b)=>Number(!!b.isWalking)-Number(!!a.isWalking) || (a.id<b.id?-1:a.id>b.id?1:0));
   const slots = crewPresenceSlots(room);
   const occupied = new Set<number>();
   const markers: CrewPresenceMarker[] = [], unplaced: PresenceAgent[] = [];
@@ -27,10 +26,12 @@ export function projectCrewPresence(agents: readonly PresenceAgent[], room: Crew
     if (occupied.size === slots.length) { unplaced.push(agent); continue; }
     let hash = 0;
     for (let i=0;i<agent.id.length;i++) hash = (Math.imul(hash,31)+agent.id.charCodeAt(i)) >>> 0;
-    let index = hash % slots.length;
+    const arrivalIndex = agent.isWalking ? slots.findIndex((point, index) => !occupied.has(index)
+      && room.arrivalPoints.some(arrival => arrival.x === point.x && arrival.y === point.y)) : -1;
+    let index = arrivalIndex >= 0 ? arrivalIndex : hash % slots.length;
     while (occupied.has(index)) index = (index+1)%slots.length;
     occupied.add(index);
-    markers.push({...slots[index], ...(crewFacingToward(room,slots[index]) ? {facing:crewFacingToward(room,slots[index])} : {}), id:agent.id, name:agent.name,status:agent.status,...(agent.role ? {role:agent.role} : {}),number:markers.length+1});
+    markers.push({...slots[index], id:agent.id, name:agent.name,status:agent.status,...(agent.role ? {role:agent.role} : {}),...(agent.facing !== undefined ? {facing:agent.facing} : {}),number:markers.length+1});
   }
   return {markers,unplaced};
 }

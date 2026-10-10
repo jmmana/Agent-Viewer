@@ -46,20 +46,32 @@ export interface InstallCommand {
   includeSummaries: boolean;
   url?: string;
   token?: string;
+  /** true: write or refresh the telemetry block; false: remove it; undefined: leave it as it is. */
+  telemetry?: boolean;
+}
+
+export interface OtelHeadersCommand {
+  command: 'otel-headers';
+  /** Origin the headers are for. The token is printed only if the running office has this exact origin. */
+  url: string;
 }
 
 export interface HelpCommand {
   command: 'help' | 'version';
 }
 
-export type CliCommand = StartCommand | SendCommand | ClaudeHookCommand | InstallCommand | HelpCommand;
+export type CliCommand = StartCommand | SendCommand | ClaudeHookCommand | InstallCommand | OtelHeadersCommand | HelpCommand;
 
 export const USAGE = `Usage:
   agent-viewer [options]                 Start the server and open the office in live mode
   agent-viewer send --agent <id> --status <status> [--message <text>]
   agent-viewer claude-hook               Read a Claude Code hook from stdin and send it (used by the hooks)
   agent-viewer install claude-code [--project <dir>] [--yes] [--include-summaries]
+                                   [--telemetry | --no-telemetry] [--url <url>] [--token <token>]
   agent-viewer uninstall claude-code [--project <dir>] [--yes]
+  agent-viewer otel-headers --url <office-url>
+                                          Print the bearer header for that office as JSON (used by Claude
+                                          Code's otelHeadersHelper, not meant to be run by people)
 
 Start options:
   --port <n>           Port to listen on (default: PORT, or ${DEFAULT_PORT})
@@ -73,8 +85,10 @@ send and claude-hook:
   --url <url>          Server URL (default: the running viewer, or http://${DEFAULT_HOST}:${DEFAULT_PORT})
   --token <token>      API token (default: the running viewer's token)
 
-  -h, --help           Show this help
-  -v, --version        Show the version
+install claude-code:
+  --telemetry           Send Claude Code's own token and cost figures (OpenTelemetry logs) to the office
+  --no-telemetry        Remove the telemetry block, keep the hooks
+  --token <token>       Static mode: a fixed office token, for an office on another machine or in Docker
 
 Docs: https://github.com/jmmana/Agent-Viewer/blob/main/docs/cli.md`;
 
@@ -184,13 +198,16 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
       'include-summaries': { type: 'boolean', default: false },
       url: { type: 'string' },
       token: { type: 'string' },
+      // No `default`: an absent flag must stay `undefined`, never `false`, so a plain install never touches an
+      // existing telemetry block. `allowNegative` (set on the parser above) turns `--no-telemetry` into `false`.
+      telemetry: { type: 'boolean' },
     });
     const [target, ...extra] = positionals;
     if (target !== 'claude-code') {
       throw new CliUsageError(`${first} needs a target. Supported: claude-code (for example: agent-viewer ${first} claude-code)`);
     }
     rejectPositionals(extra, `${first} claude-code`);
-    if (first === 'uninstall' && (values['include-summaries'] || values.url || values.token)) {
+    if (first === 'uninstall' && (values['include-summaries'] || values.url || values.token || values.telemetry !== undefined)) {
       throw new CliUsageError('uninstall only accepts --project and --yes');
     }
     return {
@@ -201,7 +218,18 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
       includeSummaries: Boolean(values['include-summaries']),
       url: parseUrl(values.url as string | undefined),
       token: nonEmpty('--token', values.token as string | undefined),
+      telemetry: values.telemetry as boolean | undefined,
     };
+  }
+
+  if (first === 'otel-headers') {
+    const { values, positionals } = parse(rest, { url: { type: 'string' } });
+    rejectPositionals(positionals, 'otel-headers');
+    const raw = nonEmpty('--url', values.url as string | undefined);
+    if (!raw) throw new CliUsageError('otel-headers needs --url <office-url>');
+    const url = parseUrl(raw);
+    if (!url) throw new CliUsageError('otel-headers needs --url <office-url>');
+    return { command: 'otel-headers', url };
   }
 
   const startArgs = first === 'start' ? rest : argv;

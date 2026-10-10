@@ -4,10 +4,12 @@ import {
   formatCost,
   formatTokens,
   formatUsage,
+  formatUsageBadge,
   summarizeUsage,
   type CanonicalEventInput,
+  type UsageFigures,
 } from '../../src/lib/index';
-import { T0, llmUsage, makeEvent, registered } from './fixtures';
+import { T0, llmFailed, llmUsage, makeEvent, registered } from './fixtures';
 import { USAGE_VECTORS } from './usageVectors';
 
 const en = createOfficeTranslator({ locale: 'en' });
@@ -28,6 +30,33 @@ describe('summarizeUsage', () => {
     expect(usage.byAgent?.ana).toMatchObject({ inputTokens: 1300, outputTokens: 350, totalTokens: 1650, currency: 'USD' });
     expect(usage.byAgent?.ana.cost).toBeCloseTo(0.0135, 10);
     expect(usage.byAgent?.bruno).toMatchObject({ totalTokens: 1000, cost: 0.0075, currency: 'USD' });
+  });
+
+  it('gives an identical result whether or not events carry the usage correlation fields (issue #64)', () => {
+    const without = summarizeUsage([
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      llmUsage('ana', { inputTokens: 1200, outputTokens: 300, cost: 0.0125, currency: 'USD' }, { at: T0 + 1 }),
+    ]);
+    const withCorrelation = summarizeUsage([
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      llmUsage(
+        'ana',
+        {
+          inputTokens: 1200,
+          outputTokens: 300,
+          cost: 0.0125,
+          currency: 'USD',
+          traceId: 'trace_1',
+          parentId: 'span_1',
+          toolCallId: 'call_1',
+          meetingId: 'meeting_1',
+          userId: 'usr_1',
+          tags: ['env:prod', 'feature:x'],
+        },
+        { at: T0 + 1 },
+      ),
+    ]);
+    expect(withCorrelation).toEqual(without);
   });
 
   it('makes the total cost unknown when any event lacks a cost', () => {
@@ -342,5 +371,219 @@ describe('formatUsage', () => {
       { label: 'Tokens de salida', value: 'desconocido' },
       { label: 'Costo', value: 'desconocido' },
     ]);
+  });
+
+  it('adds cache, reasoning, cost source and failed call rows only when the host sends them, in order', () => {
+    const figures: UsageFigures = {
+      totalTokens: 100,
+      cacheReadTokens: 40,
+      cacheWriteTokens: 10,
+      reasoningTokens: 5,
+      cost: 1,
+      currency: 'USD',
+      costSource: 'estimated',
+      failedCalls: 2,
+    };
+    expect(formatUsage(figures, 'en', en)).toEqual([
+      { label: 'Tokens', value: '100' },
+      { label: 'Cache read tokens', value: '40' },
+      { label: 'Cache write tokens', value: '10' },
+      { label: 'Reasoning tokens', value: '5' },
+      { label: 'Cost', value: '$1.00' },
+      { label: 'Cost source', value: 'estimated' },
+      { label: 'Failed calls', value: '2' },
+    ]);
+    // None of the new keys sent: none of the new rows appear.
+    expect(formatUsage({ totalTokens: 100, cost: 1 }, 'en', en)).toEqual([
+      { label: 'Tokens', value: '100' },
+      { label: 'Cost', value: '1' },
+    ]);
+  });
+
+  it('shows a null breakdown field as unknown, never omitted and never zero', () => {
+    const rows = formatUsage(
+      { totalTokens: 100, cacheReadTokens: null, reasoningTokens: null, costSource: null, failedCalls: null, cost: null },
+      'es',
+      es,
+    );
+    expect(rows).toEqual([
+      { label: 'Tokens', value: '100' },
+      { label: 'Tokens de caché leídos', value: 'desconocido' },
+      { label: 'Tokens de razonamiento', value: 'desconocido' },
+      { label: 'Costo', value: 'desconocido' },
+      { label: 'Origen del costo', value: 'desconocido' },
+      { label: 'Llamadas fallidas', value: 'desconocido' },
+    ]);
+  });
+
+  it.each([
+    ['provider-reported', 'provider reported'],
+    ['estimated', 'estimated'],
+    ['unknown', 'unknown'],
+    ['not-a-real-source', 'unknown'],
+  ])('translates costSource %s to %s, an unrecognized value counting as unknown', (source, label) => {
+    const rows = formatUsage({ totalTokens: 1, cost: 1, costSource: source as UsageFigures['costSource'] }, 'en', en);
+    expect(rows.find((row) => row.label === 'Cost source')?.value).toBe(label);
+  });
+});
+
+describe('formatUsageBadge', () => {
+  it('shows tokens under 10,000 exactly and compacts from 10,000 up, per locale', () => {
+    const compact = (value: number, locale: string) =>
+      new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+    expect(formatUsageBadge({ totalTokens: 9_840 }, 'en', en).tokens).toBe('9,840');
+    expect(formatUsageBadge({ totalTokens: 10_000 }, 'en', en).tokens).toBe(compact(10_000, 'en'));
+    expect(formatUsageBadge({ totalTokens: 10_000 }, 'es', es).tokens).toBe(compact(10_000, 'es'));
+    expect(formatUsageBadge({ totalTokens: 12_300 }, 'en', en).tokens).toBe(compact(12_300, 'en'));
+    expect(formatUsageBadge({ totalTokens: 12_300 }, 'es', es).tokens).toBe(compact(12_300, 'es'));
+  });
+
+  it.each([null, undefined, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'shows %s tokens as unknown, never as zero',
+    (value) => {
+      expect(formatUsageBadge({ totalTokens: value }, 'en', en).tokens).toBe('unknown');
+      expect(formatUsageBadge({ totalTokens: value }, 'es', es).tokens).toBe('desconocido');
+    },
+  );
+
+  it('shows a reported zero cost as a real zero, never "too small"', () => {
+    expect(formatUsageBadge({ totalTokens: 1, cost: 0, currency: 'USD' }, 'en', en).cost).toBe('$0.00');
+    expect(formatUsageBadge({ totalTokens: 1, cost: 0 }, 'en', en).cost).toBe('0');
+  });
+
+  it('shows a positive cost under 0.005 as "less than" the smallest shown unit, never $0.00', () => {
+    expect(formatUsageBadge({ totalTokens: 1, cost: 0.001, currency: 'USD' }, 'en', en).cost).toBe('<$0.01');
+    expect(formatUsageBadge({ totalTokens: 1, cost: 0.001 }, 'en', en).cost).toBe('<0.01');
+    // At or above 0.005 it rounds normally.
+    expect(formatUsageBadge({ totalTokens: 1, cost: 0.005, currency: 'USD' }, 'en', en).cost).toBe('$0.01');
+  });
+
+  it('rounds a normal cost to at most 2 decimals, unlike the 4-decimal usage panel', () => {
+    expect(formatUsageBadge({ totalTokens: 1, cost: 0.4217, currency: 'USD' }, 'en', en).cost).toBe('$0.42');
+  });
+
+  it('shows an unknown cost as unknown', () => {
+    expect(formatUsageBadge({ totalTokens: 1, cost: null }, 'en', en).cost).toBe('unknown');
+    expect(formatUsageBadge({ totalTokens: 1, cost: null }, 'es', es).cost).toBe('desconocido');
+  });
+
+  it('appends the estimated mark to costLabel only when costSource is estimated', () => {
+    const estimated = formatUsageBadge({ totalTokens: 1, cost: 0.42, currency: 'USD', costSource: 'estimated' }, 'en', en);
+    expect(estimated.costLabel).toBe('$0.42 est.');
+    expect(estimated.estimated).toBe(true);
+
+    for (const source of ['provider-reported', 'unknown', undefined] as const) {
+      const badge = formatUsageBadge({ totalTokens: 1, cost: 0.42, currency: 'USD', costSource: source }, 'en', en);
+      expect(badge.costLabel).toBe('$0.42');
+      expect(badge.estimated).toBe(false);
+    }
+  });
+
+  it('gives a failed chip only when failedCalls is a finite number greater than 0', () => {
+    expect(formatUsageBadge({ totalTokens: 1, failedCalls: 3 }, 'en', en).failed).toBe('3 failed');
+    expect(formatUsageBadge({ totalTokens: 1, failedCalls: 3 }, 'es', es).failed).toBe('3 fallidas');
+    for (const value of [0, null, undefined, Number.NaN]) {
+      expect(formatUsageBadge({ totalTokens: 1, failedCalls: value }, 'en', en).failed).toBeNull();
+    }
+  });
+
+  it('carries the exact figures (never the compact form) in the accessible text', () => {
+    const badge = formatUsageBadge(
+      { totalTokens: 12_300, cost: 0.42, currency: 'USD', costSource: 'estimated', failedCalls: 2 },
+      'en',
+      en,
+    );
+    expect(badge.tokens).toBe('12.3K');
+    expect(badge.text).toBe('Tokens: 12,300, Cost: $0.42, Cost source: estimated, Failed calls: 2');
+  });
+});
+
+describe('summarizeUsage: cache, reasoning, cost source and failed calls', () => {
+  it('omits a breakdown field when no counted event reports it', () => {
+    const usage = summarizeUsage([llmUsage('ana', { inputTokens: 10, outputTokens: 1 }, { at: T0 })]);
+    expect(usage.total?.cacheReadTokens).toBeUndefined();
+    expect(usage.total?.cacheWriteTokens).toBeUndefined();
+    expect(usage.total?.reasoningTokens).toBeUndefined();
+    // toEqual ignores undefined-valued keys, so this still proves nothing extra leaked into the figures.
+    expect(usage.total).toEqual({ inputTokens: 10, outputTokens: 1, totalTokens: 11, cost: null, currency: undefined });
+  });
+
+  it('sums a breakdown field when every counted event reports it', () => {
+    const usage = summarizeUsage([
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1, cacheReadTokens: 4, cacheWriteTokens: 1, reasoningTokens: 2 }, { at: T0 }),
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1, cacheReadTokens: 6, cacheWriteTokens: 2, reasoningTokens: 3 }, { at: T0 + 1 }),
+    ]);
+    expect(usage.total).toMatchObject({ cacheReadTokens: 10, cacheWriteTokens: 3, reasoningTokens: 5 });
+    expect(usage.byAgent?.ana).toMatchObject({ cacheReadTokens: 10, cacheWriteTokens: 3, reasoningTokens: 5 });
+  });
+
+  it('makes a breakdown field null when only some counted events report it', () => {
+    const usage = summarizeUsage([
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1, cacheReadTokens: 4 }, { at: T0 }),
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1 }, { at: T0 + 1 }),
+    ]);
+    expect(usage.total?.cacheReadTokens).toBeNull();
+  });
+
+  it('reads the deprecated cachedTokens as cacheReadTokens when the new field is absent', () => {
+    const usage = summarizeUsage([llmUsage('ana', { inputTokens: 10, outputTokens: 1, cachedTokens: 4 }, { at: T0 })]);
+    expect(usage.total?.cacheReadTokens).toBe(4);
+  });
+
+  it('prefers the explicit cacheReadTokens over the deprecated cachedTokens when both are sent', () => {
+    const usage = summarizeUsage([llmUsage('ana', { inputTokens: 10, outputTokens: 1, cacheReadTokens: 7, cachedTokens: 4 }, { at: T0 })]);
+    expect(usage.total?.cacheReadTokens).toBe(7);
+  });
+
+  it('omits costSource when no counted event ever sends it (back-compat: no event in this file does)', () => {
+    const usage = summarizeUsage([llmUsage('ana', { inputTokens: 10, outputTokens: 1 }, { at: T0 })]);
+    expect(usage.total?.costSource).toBeUndefined();
+  });
+
+  it('reports the common costSource once some event sends it', () => {
+    const usage = summarizeUsage([
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1, costSource: 'provider-reported' }, { at: T0 }),
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1, costSource: 'provider-reported' }, { at: T0 + 1 }),
+    ]);
+    expect(usage.total?.costSource).toBe('provider-reported');
+  });
+
+  it('makes costSource null when events disagree, including an absent key counted as unknown', () => {
+    const usage = summarizeUsage([
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1, costSource: 'estimated' }, { at: T0 }),
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1 }, { at: T0 + 1 }), // no costSource key: effective 'unknown'
+    ]);
+    expect(usage.total?.costSource).toBeNull();
+  });
+
+  it('counts llm.failed events into failedCalls, independent of llm.usage, omitted when zero', () => {
+    const usage = summarizeUsage([
+      llmUsage('ana', { inputTokens: 10, outputTokens: 1 }, { at: T0 }),
+      llmFailed('ana', { provider: 'OpenAI', errorKind: 'timeout' }, { at: T0 + 1 }),
+      llmFailed('ana', { provider: 'OpenAI', errorKind: 'rate_limited' }, { at: T0 + 2 }),
+      llmFailed('bruno', { provider: 'OpenAI', errorKind: 'timeout' }, { at: T0 + 3 }),
+    ]);
+    expect(usage.total?.failedCalls).toBe(3);
+    expect(usage.byAgent?.ana.failedCalls).toBe(2);
+    expect(usage.byAgent?.bruno.failedCalls).toBe(1);
+  });
+
+  it('gives an agent an entry from llm.failed alone, with every other figure null and no usage events counted', () => {
+    const usage = summarizeUsage([llmFailed('ana', { provider: 'OpenAI', errorKind: 'timeout' }, { at: T0 })]);
+    expect(usage.byAgent?.ana).toMatchObject({ totalTokens: null, inputTokens: null, outputTokens: null, cost: null, failedCalls: 1 });
+  });
+
+  it('omits failedCalls when there are no llm.failed events at all', () => {
+    const usage = summarizeUsage([llmUsage('ana', { inputTokens: 10, outputTokens: 1 }, { at: T0 })]);
+    expect(usage.total?.failedCalls).toBeUndefined();
+    expect(usage.byAgent?.ana.failedCalls).toBeUndefined();
+  });
+
+  it('deduplicates llm.failed events by id like every other event', () => {
+    const usage = summarizeUsage([
+      llmFailed('ana', { provider: 'OpenAI', errorKind: 'timeout' }, { id: 'f-1', at: T0 }),
+      llmFailed('ana', { provider: 'OpenAI', errorKind: 'timeout' }, { id: 'f-1', at: T0 + 1 }),
+    ]);
+    expect(usage.total?.failedCalls).toBe(1);
   });
 });

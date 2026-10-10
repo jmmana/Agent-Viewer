@@ -1,12 +1,53 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   validateCanonicalEvent,
   normalizeCanonicalEvent,
   CANONICAL_EVENT_TYPES,
   LLM_ERROR_KINDS,
   isLlmErrorKind,
+  CORRELATION_ID_MAX_LENGTH,
+  USAGE_TAGS_MAX,
+  USAGE_TAG_MAX_LENGTH,
 } from '../src/integrations/canonicalContract.ts';
+
+const vectorsPath = fileURLToPath(new URL('./fixtures/usage-correlation-vectors.json', import.meta.url));
+const vectors = JSON.parse(readFileSync(vectorsPath, 'utf8'));
+
+function baseUsagePayload(extra = {}) {
+  return {
+    schemaVersion: '1.0',
+    id: `evt_corr_${Math.random().toString(36).slice(2)}`,
+    type: 'llm.usage',
+    timestamp: 1791190800000,
+    source: 'agent:analyst',
+    summary: 'usage',
+    payload: {
+      provider: 'OpenAI',
+      model: 'gpt-4.1',
+      inputTokens: 100,
+      outputTokens: 20,
+      ...extra,
+    },
+  };
+}
+
+function baseFailedPayload(extra = {}) {
+  return {
+    schemaVersion: '1.0',
+    id: `evt_corr_failed_${Math.random().toString(36).slice(2)}`,
+    type: 'llm.failed',
+    timestamp: 1791190800000,
+    source: 'agent:analyst',
+    summary: 'failed',
+    payload: {
+      provider: 'OpenAI',
+      ...extra,
+    },
+  };
+}
 
 test('canonical contract: validates envelope and valid agent.status.changed event', () => {
   const event = {
@@ -280,6 +321,7 @@ test('llm.failed: is a canonical type and exposes the error kinds', () => {
     'auth',
     'server_error',
     'cancelled',
+    'network',
     'unknown',
   ]);
   assert.equal(isLlmErrorKind('rate_limited'), true);
@@ -346,11 +388,27 @@ test('llm.failed: negative latency, token counts and cost are rejected', () => {
   }
 });
 
-test('llm.failed: requires provider and model', () => {
-  const result = validateCanonicalEvent(failedEvent({ provider: '', model: undefined }));
+test('llm.failed: requires provider but not model', () => {
+  const result = validateCanonicalEvent(failedEvent({ provider: '' }));
   assert.equal(result.success, false);
   assert.ok(issueAt(result, 'payload.provider'));
-  assert.ok(issueAt(result, 'payload.model'));
+});
+
+// model became optional with issue #59 (OTLP receiver): Claude Code's api_error event can lack a model
+// attribute entirely (for example a connection failure before any model was chosen), and this item never
+// invents one. llm.usage keeps requiring model: a successful call always billed a specific model.
+test('llm.failed: model is optional, left out when absent', () => {
+  // A real request arrives as JSON, where an explicit `undefined` and a missing key are the same thing: the
+  // round-trip below reproduces that so this test does not depend on JS object-spread quirks around `undefined`.
+  const eventWithoutModel = JSON.parse(JSON.stringify(failedEvent({ model: undefined })));
+  assert.equal('model' in eventWithoutModel.payload, false);
+  const withoutModel = validateCanonicalEvent(eventWithoutModel);
+  assert.equal(withoutModel.success, true);
+  assert.equal('model' in withoutModel.data.payload, false);
+
+  const withModel = validateCanonicalEvent(failedEvent({ model: 'claude-sonnet-5' }));
+  assert.equal(withModel.success, true);
+  assert.equal(withModel.data.payload.model, 'claude-sonnet-5');
 });
 
 test('llm.failed: the subset check is skipped without inputTokens and applied with it', () => {
@@ -472,4 +530,161 @@ test('normalizer: an invalid llm.failed errorKind becomes unknown, a valid one i
     payload: { provider: 'Anthropic', model: 'claude-sonnet', errorKind: 'overloaded' },
   });
   assert.equal(valid.payload.errorKind, 'overloaded');
+});
+
+// -------------------------------------------------------------
+// Usage correlation block (issue #64)
+// -------------------------------------------------------------
+
+test('usage correlation: exported constants match the documented limits', () => {
+  assert.equal(CORRELATION_ID_MAX_LENGTH, 128);
+  assert.equal(USAGE_TAGS_MAX, 20);
+  assert.equal(USAGE_TAG_MAX_LENGTH, 64);
+});
+
+test('usage correlation: a full valid set passes and keeps every field, tags deduplicated in order', () => {
+  const event = baseUsagePayload({
+    traceId: 'trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4',
+    parentId: 'span_7c1d2e3f4a5b6c7d8e9f0a1b',
+    toolCallId: 'call_Ab12Cd34',
+    meetingId: 'meeting-pricing-review',
+    userId: 'usr_5e1b',
+    tags: ['env:prod', 'feature:quote-builder', 'env:prod'],
+  });
+  const result = validateCanonicalEvent(event);
+  assert.equal(result.success, true);
+  assert.equal(result.data.payload.traceId, 'trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4');
+  assert.equal(result.data.payload.parentId, 'span_7c1d2e3f4a5b6c7d8e9f0a1b');
+  assert.equal(result.data.payload.toolCallId, 'call_Ab12Cd34');
+  assert.equal(result.data.payload.meetingId, 'meeting-pricing-review');
+  assert.equal(result.data.payload.userId, 'usr_5e1b');
+  assert.deepEqual(result.data.payload.tags, ['env:prod', 'feature:quote-builder']);
+});
+
+test('usage correlation: llm.failed shares the same correlation block', () => {
+  const event = baseFailedPayload({
+    traceId: 'trace_abc',
+    tags: ['env:prod', 'env:prod', 'tier:pro'],
+  });
+  const result = validateCanonicalEvent(event);
+  assert.equal(result.success, true);
+  assert.equal(result.data.payload.traceId, 'trace_abc');
+  assert.deepEqual(result.data.payload.tags, ['env:prod', 'tier:pro']);
+});
+
+test('usage correlation: an event without any of the six fields validates exactly as before', () => {
+  const result = validateCanonicalEvent(baseUsagePayload());
+  assert.equal(result.success, true);
+  for (const field of [...vectors.idFields, 'tags']) {
+    assert.equal(field in result.data.payload, false, `${field} should be absent`);
+  }
+});
+
+test('usage correlation: null and absent are both omitted; an empty string is rejected', () => {
+  for (const field of vectors.idFields) {
+    const nullResult = validateCanonicalEvent(baseUsagePayload({ [field]: null }));
+    assert.equal(nullResult.success, true, `${field}: null should validate`);
+    assert.equal(field in nullResult.data.payload, false, `${field}: null should be omitted`);
+
+    const emptyResult = validateCanonicalEvent(baseUsagePayload({ [field]: '' }));
+    assert.equal(emptyResult.success, false, `${field}: empty string should be rejected`);
+    assert.ok(
+      emptyResult.issues.some((issue) => issue.path === `payload.${field}`),
+      `${field}: expected an issue at payload.${field}`,
+    );
+  }
+
+  const emptyTags = validateCanonicalEvent(baseUsagePayload({ tags: [] }));
+  assert.equal(emptyTags.success, true);
+  assert.equal('tags' in emptyTags.data.payload, false, 'empty tags array should be omitted');
+
+  const nullTags = validateCanonicalEvent(baseUsagePayload({ tags: null }));
+  assert.equal(nullTags.success, true);
+  assert.equal('tags' in nullTags.data.payload, false, 'null tags should be omitted');
+});
+
+for (const field of vectors.idFields) {
+  test(`usage correlation: ${field} follows the shared id vectors`, () => {
+    for (const vector of vectors.idCases) {
+      const result = validateCanonicalEvent(baseUsagePayload({ [field]: vector.value }));
+      assert.equal(
+        result.success,
+        vector.valid,
+        `${field} / ${vector.name}: expected success=${vector.valid}, got ${JSON.stringify(result.issues ?? result.data?.payload[field])}`,
+      );
+      if (!vector.valid) {
+        assert.ok(
+          result.issues.some((issue) => issue.path === `payload.${field}`),
+          `${field} / ${vector.name}: expected an issue at payload.${field}`,
+        );
+      } else {
+        assert.equal(result.data.payload[field], vector.value);
+      }
+    }
+  });
+}
+
+test('usage correlation: tags follow the shared tag vectors', () => {
+  for (const vector of vectors.tagCases) {
+    const result = validateCanonicalEvent(baseUsagePayload({ tags: vector.tags }));
+    assert.equal(
+      result.success,
+      vector.valid,
+      `${vector.name}: expected success=${vector.valid}, got ${JSON.stringify(result.issues)}`,
+    );
+    if (result.success) {
+      if (vector.normalizesToAbsent) {
+        assert.equal('tags' in result.data.payload, false, `${vector.name}: tags should be absent`);
+      } else if (vector.expectedNormalized) {
+        assert.deepEqual(result.data.payload.tags, vector.expectedNormalized);
+      }
+    } else {
+      const actualPaths = result.issues.map((issue) => issue.path).sort();
+      for (const expectedPath of vector.expectedPaths) {
+        assert.ok(actualPaths.includes(expectedPath), `${vector.name}: expected ${expectedPath} in ${actualPaths}`);
+      }
+    }
+  }
+});
+
+test('usage correlation: 400 with 21 tags, the fifth 70 characters long, reports both issue paths', () => {
+  const tags = Array.from({ length: 21 }, (_, i) => `tag-${i}`);
+  tags[4] = 'x'.repeat(70);
+  const result = validateCanonicalEvent(baseUsagePayload({ tags }));
+  assert.equal(result.success, false);
+  const paths = result.issues.map((issue) => issue.path).sort();
+  assert.deepEqual(paths, ['payload.tags', 'payload.tags.4']);
+});
+
+test('usage correlation: idempotence, an accepted payload validates again to the same output', () => {
+  // Deterministic seeded generator (no external dependency): xorshift32.
+  let seed = 0xC0FFEE;
+  function nextRandom() {
+    seed ^= seed << 13; seed |= 0; seed ^= seed >>> 17; seed ^= seed << 5; seed |= 0;
+    return ((seed >>> 0) % 1000) / 1000;
+  }
+  const tagPool = ['env:prod', 'env:staging', 'feature:quote-builder', 'tier:pro', 'tier:free'];
+
+  for (let i = 0; i < 25; i += 1) {
+    const extra = {};
+    if (nextRandom() > 0.3) extra.traceId = `trace_${Math.floor(nextRandom() * 1e6)}`;
+    if (nextRandom() > 0.3) extra.parentId = `span_${Math.floor(nextRandom() * 1e6)}`;
+    if (nextRandom() > 0.5) extra.toolCallId = `call_${Math.floor(nextRandom() * 1e6)}`;
+    if (nextRandom() > 0.5) extra.meetingId = `meeting_${Math.floor(nextRandom() * 1e6)}`;
+    if (nextRandom() > 0.5) extra.userId = `usr_${Math.floor(nextRandom() * 1e6)}`;
+    if (nextRandom() > 0.4) {
+      const count = 1 + Math.floor(nextRandom() * 4);
+      extra.tags = Array.from({ length: count }, () => tagPool[Math.floor(nextRandom() * tagPool.length)]);
+    }
+
+    const first = validateCanonicalEvent(baseUsagePayload(extra));
+    assert.equal(first.success, true, `generated case ${i} should validate`);
+    const second = validateCanonicalEvent({
+      ...baseUsagePayload(),
+      id: 'evt_idempotence_reparse',
+      payload: first.data.payload,
+    });
+    assert.equal(second.success, true, `re-parsing accepted payload ${i} should validate`);
+    assert.deepEqual(second.data.payload, first.data.payload, `re-parsing case ${i} should be idempotent`);
+  }
 });

@@ -28,17 +28,33 @@ test('REST API: /health and /ready endpoints', async () => {
     assert.equal(healthJson.ok, true);
     assert.equal(healthJson.service, 'agent-viewer');
     assert.equal(healthJson.schemaVersion, '1.0');
+    assert.ok(['open', 'token'].includes(healthJson.auth));
+    assert.ok(['open', 'token', 'signature'].includes(healthJson.webhookAuth));
 
     const readyRes = await fetch(`${baseUrl}/ready`);
     assert.equal(readyRes.status, 200);
     const readyJson = await readyRes.json();
+    // Memory storage has nothing to replay (issue #52): the rebuild is reported 'done' at once, with
+    // zero events and zero duration.
     assert.deepEqual(readyJson, {
       ok: true,
       ready: true,
       storage: 'memory',
       ingestion: { conflicts: readyJson.ingestion.conflicts, legacyUnverifiedDuplicates: 0 },
+      rebuild: {
+        state: 'done',
+        totalEvents: 0,
+        processedEvents: 0,
+        skippedEvents: 0,
+        skippedEventIds: [],
+        startedAt: readyJson.rebuild.startedAt,
+        finishedAt: readyJson.rebuild.finishedAt,
+        durationMs: 0,
+      },
     });
     assert.equal(typeof readyJson.ingestion.conflicts, 'number');
+    assert.equal(typeof readyJson.rebuild.startedAt, 'number');
+    assert.equal(readyJson.rebuild.finishedAt, readyJson.rebuild.startedAt);
   } finally {
     server.close();
   }
@@ -68,8 +84,11 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.ok, true);
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
-      schemaVersion: 2,
-      latestKnownSchemaVersion: 2,
+      // Migration 7 (usage-calls-indexes, issue #67), 8 (retention, issue #70), 9 (usage-rollup, issue #66),
+      // 10 (usage-ledger-summary, issue #69) and 11 (rollup-attribution, issue #80): the latest, adding the
+      // `tool_calls`/`meeting_labels` tables.
+      schemaVersion: 11,
+      latestKnownSchemaVersion: 11,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');
@@ -202,6 +221,113 @@ test('REST API: /api/v1/snapshot contains aggregated state', async () => {
   }
 });
 
+test('REST API: GET /api/v1/snapshot and GET /api/v1/events report retention (issue #53)', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const before = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(before.retention.storage, 'memory');
+    assert.equal(before.retention.maxEvents, 10000);
+    assert.equal(typeof before.retention.totalsSince, 'number');
+    assert.equal(before.retention.acceptedEvents, before.retention.retainedEvents + before.retention.droppedEvents);
+
+    const retentionEvent = {
+      id: 'evt_retention_api',
+      type: 'agent.message.sent',
+      timestamp: Date.now(),
+      source: 'agent:retention-tester',
+      summary: 'Retention test',
+      payload: { text: 'hi' },
+    };
+    const postRes = await postEvent(baseUrl, retentionEvent);
+    assert.equal(postRes.status, 202);
+
+    const eventsBody = await (await fetch(`${baseUrl}/api/v1/events`)).json();
+    assert.equal(eventsBody.retention.storage, 'memory');
+    assert.equal(eventsBody.retention.acceptedEvents, before.retention.acceptedEvents + 1);
+
+    const after = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(after.retention.acceptedEvents, before.retention.acceptedEvents + 1);
+
+    // A retry of the same id and content is a duplicate: it must not move acceptedEvents.
+    const retryRes = await postEvent(baseUrl, retentionEvent);
+    assert.equal(retryRes.status, 200);
+    const afterRetry = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(afterRetry.retention.acceptedEvents, after.retention.acceptedEvents);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/events pages backward with beforeId, hasMore, nextBeforeId, a clamped limit and invalid_cursor (issue #72)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  // Scoped with agentId: the server shares one store across every test in this file.
+  const agentId = 'before-id-tester';
+  const scope = `agentId=${agentId}`;
+
+  try {
+    const ids = [];
+    for (let i = 0; i < 5; i++) {
+      const id = `evt_before_id_${i}`;
+      ids.push(id);
+      const res = await postEvent(baseUrl, {
+        id,
+        type: 'agent.message.sent',
+        timestamp: Date.now() + i,
+        source: `agent:${agentId}`,
+        agentId,
+        summary: `Before id test ${i}`,
+        payload: { text: `hi ${i}` },
+      });
+      assert.equal(res.status, 202);
+    }
+    // Newest first, like the plain GET /api/v1/events response.
+    const newestFirst = [...ids].reverse();
+
+    // A full walk with limit=2 must reach every event with no duplicates and no gaps.
+    let cursor;
+    const walked = [];
+    for (let guard = 0; guard < 10; guard++) {
+      const query = `${scope}&limit=2${cursor ? `&beforeId=${cursor}` : ''}`;
+      const res = await fetch(`${baseUrl}/api/v1/events?${query}`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.ok(body.events.length <= 2);
+      walked.push(...body.events.map((e) => e.id));
+      if (!body.hasMore) {
+        assert.equal(body.nextBeforeId, null);
+        break;
+      }
+      assert.equal(body.nextBeforeId, body.events[body.events.length - 1].id);
+      cursor = body.nextBeforeId;
+    }
+    assert.deepEqual(walked, newestFirst);
+
+    // limit is clamped to [1, 500]; a non-numeric value falls back to the default of 100.
+    const over = await (await fetch(`${baseUrl}/api/v1/events?${scope}&limit=5000`)).json();
+    assert.equal(over.hasMore, false);
+    assert.equal(over.events.length, ids.length);
+    const nonNumeric = await (await fetch(`${baseUrl}/api/v1/events?${scope}&limit=not-a-number`)).json();
+    assert.equal(nonNumeric.events.length, ids.length);
+
+    // An unknown or evicted beforeId is a client error, unlike afterId.
+    const invalid = await fetch(`${baseUrl}/api/v1/events?beforeId=evt_unknown`);
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(await invalid.json(), {
+      error: 'invalid_cursor',
+      message: 'Unknown or evicted beforeId "evt_unknown"',
+    });
+
+    // The oldest event has nothing before it.
+    const lastPage = await (await fetch(`${baseUrl}/api/v1/events?${scope}&beforeId=${ids[0]}`)).json();
+    assert.deepEqual(lastPage.events, []);
+    assert.equal(lastPage.hasMore, false);
+    assert.equal(lastPage.nextBeforeId, null);
+  } finally {
+    server.close();
+  }
+});
+
 async function postEvent(baseUrl, event) {
   return fetch(`${baseUrl}/api/v1/events`, {
     method: 'POST',
@@ -254,6 +380,132 @@ test('REST API: llm.usage without cache fields round trips without invented zero
     });
     assert.equal('cachedTokens' in stored.payload, false);
     assert.equal('reasoningTokens' in stored.payload, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: llm.usage correlation fields round trip through POST and batch, tags deduplicated', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const postRes = await postEvent(baseUrl, {
+      id: 'evt_usage_correlation_single',
+      type: 'llm.usage',
+      timestamp: Date.now(),
+      source: 'agent:correlation-tester',
+      agentId: 'correlation-tester',
+      summary: 'Usage with correlation',
+      payload: {
+        provider: 'OpenAI',
+        model: 'gpt-4.1',
+        inputTokens: 1200,
+        outputTokens: 400,
+        traceId: 'trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4',
+        parentId: 'span_7c1d2e3f4a5b6c7d8e9f0a1b',
+        toolCallId: 'call_Ab12Cd34',
+        meetingId: 'meeting-pricing-review',
+        userId: 'usr_5e1b',
+        tags: ['env:prod', 'feature:quote-builder', 'env:prod'],
+      },
+    });
+    assert.equal(postRes.status, 202);
+
+    const batchRes = await fetch(`${baseUrl}/api/v1/events/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        events: [{
+          schemaVersion: '1.0',
+          id: 'evt_usage_correlation_batch',
+          type: 'llm.usage',
+          timestamp: Date.now(),
+          source: 'agent:correlation-tester',
+          agentId: 'correlation-tester',
+          summary: 'Usage with correlation (batch)',
+          payload: {
+            provider: 'OpenAI',
+            model: 'gpt-4.1',
+            inputTokens: 50,
+            outputTokens: 10,
+            traceId: 'trace_batch',
+            tags: ['tier:pro'],
+          },
+        }],
+      }),
+    });
+    assert.equal(batchRes.status, 202);
+
+    const events = await listEvents(baseUrl, 'agentId=correlation-tester&type=llm.usage');
+    const single = events.find((event) => event.id === 'evt_usage_correlation_single');
+    assert.ok(single, 'Expected the single usage event');
+    assert.equal(single.payload.traceId, 'trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4');
+    assert.equal(single.payload.parentId, 'span_7c1d2e3f4a5b6c7d8e9f0a1b');
+    assert.equal(single.payload.toolCallId, 'call_Ab12Cd34');
+    assert.equal(single.payload.meetingId, 'meeting-pricing-review');
+    assert.equal(single.payload.userId, 'usr_5e1b');
+    assert.deepEqual(single.payload.tags, ['env:prod', 'feature:quote-builder']);
+
+    const batched = events.find((event) => event.id === 'evt_usage_correlation_batch');
+    assert.ok(batched, 'Expected the batch usage event');
+    assert.equal(batched.payload.traceId, 'trace_batch');
+    assert.deepEqual(batched.payload.tags, ['tier:pro']);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: an llm.usage with 21 tags, the fifth 70 characters, is rejected with both issue paths', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const tags = Array.from({ length: 21 }, (_, i) => `tag-${i}`);
+    tags[4] = 'x'.repeat(70);
+    const postRes = await postEvent(baseUrl, {
+      id: 'evt_usage_too_many_tags',
+      type: 'llm.usage',
+      timestamp: Date.now(),
+      source: 'agent:correlation-tester',
+      agentId: 'correlation-tester',
+      summary: 'Usage with too many tags',
+      payload: { provider: 'OpenAI', model: 'gpt-4.1', inputTokens: 10, outputTokens: 1, tags },
+    });
+    assert.equal(postRes.status, 400);
+    const json = await postRes.json();
+    assert.equal(json.error, 'validation_failed');
+    const paths = json.issues.map((issue) => issue.path).sort();
+    assert.deepEqual(paths, ['payload.tags', 'payload.tags.4']);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: generic webhook usage accepts the correlation fields', async () => {
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'webhook-correlation-agent',
+        usage: {
+          provider: 'openai',
+          model: 'gpt-4',
+          inputTokens: 42,
+          outputTokens: 7,
+          traceId: 'trace_webhook',
+          tags: ['env:prod', 'env:prod'],
+        },
+      }),
+    });
+    assert.equal(res.status, 202);
+
+    const events = await listEvents(baseUrl, 'agentId=webhook-correlation-agent&type=llm.usage');
+    assert.ok(events.length >= 1, 'Expected a stored llm.usage event from the webhook');
+    const stored = events[events.length - 1];
+    assert.equal(stored.payload.traceId, 'trace_webhook');
+    assert.deepEqual(stored.payload.tags, ['env:prod']);
   } finally {
     server.close();
   }
@@ -411,7 +663,14 @@ test('REST API: llm.failed is stored, listed and streamed without changing any t
     assert.equal(failedRes.status, 202);
     const failedJson = await failedRes.json();
     assert.match(failedJson.fingerprint, /^sha256:[0-9a-f]{64}$/);
-    assert.deepEqual(failedJson, { accepted: true, duplicate: false, id: 'evt_failed_api_1', fingerprint: failedJson.fingerprint });
+    assert.equal(typeof failedJson.receivedAt, 'number');
+    assert.deepEqual(failedJson, {
+      accepted: true,
+      duplicate: false,
+      id: 'evt_failed_api_1',
+      fingerprint: failedJson.fingerprint,
+      receivedAt: failedJson.receivedAt,
+    });
 
     // A partly billed failure must not change the totals either.
     const billedRes = await postEvent(baseUrl, {
@@ -742,11 +1001,26 @@ test('REST API: re-sending an event returns 200 duplicate with the fingerprint o
     assert.equal(first.status, 202);
     const firstJson = await first.json();
     assert.match(firstJson.fingerprint, /^sha256:[0-9a-f]{64}$/);
-    assert.deepEqual(firstJson, { accepted: true, duplicate: false, id: event.id, fingerprint: firstJson.fingerprint });
+    assert.equal(typeof firstJson.receivedAt, 'number');
+    assert.deepEqual(firstJson, {
+      accepted: true,
+      duplicate: false,
+      id: event.id,
+      fingerprint: firstJson.fingerprint,
+      receivedAt: firstJson.receivedAt,
+    });
 
     const second = await postEvent(baseUrl, event);
     assert.equal(second.status, 200);
-    assert.deepEqual(await second.json(), { accepted: true, duplicate: true, id: event.id, fingerprint: firstJson.fingerprint });
+    // A duplicate echoes the original acceptance time, never the retry's (issue #65).
+    assert.deepEqual(await second.json(), {
+      accepted: true,
+      duplicate: true,
+      duplicateReason: 'event_id',
+      id: event.id,
+      fingerprint: firstJson.fingerprint,
+      receivedAt: firstJson.receivedAt,
+    });
 
     // The same event with its keys in another order is still the same content.
     const reordered = Object.fromEntries(Object.entries(event).reverse());
@@ -873,8 +1147,11 @@ test('REST API: batch reports per-item status and conflicts, and only stores and
     assert.deepEqual(json.results.map(({ status }) => status), ['accepted', 'duplicate', 'conflict', 'accepted']);
     assert.deepEqual(json.results.map(({ duplicate }) => duplicate), [false, true, false, false]);
     const [first, second, third, fourth] = json.results;
-    assert.deepEqual(Object.keys(first).sort(), ['duplicate', 'fingerprint', 'id', 'status']);
+    assert.deepEqual(Object.keys(first).sort(), ['duplicate', 'fingerprint', 'id', 'receivedAt', 'status']);
+    assert.equal(typeof first.receivedAt, 'number');
     assert.equal(second.fingerprint, first.fingerprint);
+    // The duplicate echoes the original's receive time, not the retry's (issue #65).
+    assert.equal(second.receivedAt, first.receivedAt);
     assert.equal(third.error, 'conflicting_duplicate');
     assert.equal(third.storedFingerprint, first.fingerprint);
     assert.notEqual(third.fingerprint, first.fingerprint);
@@ -1013,7 +1290,7 @@ test('REST API: a webhook whose generated ids conflict returns 409 and does not 
         fingerprint: 'sha256:test',
         storedFingerprint: 'sha256:different',
       }));
-      return { accepted: 1, duplicates: 1, conflicts: events.length - 2, results, acceptedEvents: [events[0]] };
+      return { accepted: 1, duplicates: 1, conflicts: events.length - 2, results, acceptedEvents: [events[0]], acceptedSeqs: [1] };
     };
     const res = await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
       method: 'POST',
@@ -1027,6 +1304,435 @@ test('REST API: a webhook whose generated ids conflict returns 409 and does not 
     assert.equal(json.conflictingIds.length, 1);
   } finally {
     store.appendBatch = realAppendBatch;
+    server.close();
+  }
+});
+
+// -------------------------------------------------------------
+// Request-id deduplication (issue #48)
+// -------------------------------------------------------------
+
+function usageWithRequest(id, requestId, payload = {}) {
+  return integrityEvent(id, { provider: 'openai', requestId, ...payload });
+}
+
+test('REST API: a new event id with the same (provider, requestId) is a 200 request_id duplicate pointing to the original', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = usageWithRequest('evt_reqdup_original', 'req-abc-1');
+    const firstRes = await postEvent(baseUrl, original);
+    assert.equal(firstRes.status, 202);
+
+    const before = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    const agentBefore = before.agents.find((agent) => agent.id === 'integrity');
+
+    const duplicate = usageWithRequest('evt_reqdup_second', 'req-abc-1', { inputTokens: 999 });
+    const secondRes = await postEvent(baseUrl, duplicate);
+    assert.equal(secondRes.status, 200);
+    const secondJson = await secondRes.json();
+    assert.equal(secondJson.accepted, true);
+    assert.equal(secondJson.duplicate, true);
+    assert.equal(secondJson.duplicateReason, 'request_id');
+    assert.equal(secondJson.id, 'evt_reqdup_original');
+    assert.equal(secondJson.submittedId, 'evt_reqdup_second');
+    assert.equal(secondJson.matchesOriginal, false, 'inputTokens differs from the original');
+
+    const after = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    // usageDuplicates is expected to grow by the duplicate itself; every other figure must stay identical.
+    assert.deepEqual(
+      { ...after, timestamp: 0, usageDuplicates: null },
+      { ...before, timestamp: 0, usageDuplicates: null },
+      'totals and agent fields unchanged by the duplicate'
+    );
+    assert.deepEqual(after.usageDuplicates, { count: before.usageDuplicates.count + 1, mismatched: before.usageDuplicates.mismatched + 1, unverified: before.usageDuplicates.unverified });
+    assert.equal(after.agents.find((agent) => agent.id === 'integrity').provider, agentBefore.provider);
+
+    // Never returned by GET /api/v1/events.
+    const listed = await listEvents(baseUrl, 'limit=100');
+    assert.ok(!listed.some((event) => event.id === 'evt_reqdup_second'));
+    assert.ok(listed.some((event) => event.id === 'evt_reqdup_original'));
+
+    // Re-sending the duplicate's own event id resolves to the original as an event_id duplicate.
+    const resend = await postEvent(baseUrl, duplicate);
+    assert.equal(resend.status, 200);
+    const resendJson = await resend.json();
+    assert.equal(resendJson.duplicateReason, 'event_id');
+    assert.equal(resendJson.id, 'evt_reqdup_original');
+    assert.equal(resendJson.submittedId, 'evt_reqdup_second');
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: provider matching ignores case and surrounding whitespace, requestId matches exactly after trim', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = integrityEvent('evt_reqdup_case_1', { provider: ' OpenAI ', requestId: 'req-case-1' });
+    assert.equal((await postEvent(baseUrl, original)).status, 202);
+
+    const sameKey = integrityEvent('evt_reqdup_case_2', { provider: 'openai', requestId: ' req-case-1 ' });
+    const dup = await postEvent(baseUrl, sameKey);
+    assert.equal(dup.status, 200);
+    const dupJson = await dup.json();
+    assert.equal(dupJson.duplicateReason, 'request_id');
+    assert.equal(dupJson.id, 'evt_reqdup_case_1');
+
+    // A different request id under the same normalized provider is a brand new original.
+    const otherRequest = integrityEvent('evt_reqdup_case_3', { provider: 'OPENAI', requestId: 'req-case-2' });
+    assert.equal((await postEvent(baseUrl, otherRequest)).status, 202);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: the same requestId under two different providers is counted twice', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const first = integrityEvent('evt_reqdup_provA', { provider: 'provider-a', requestId: 'shared-request-id' });
+    const second = integrityEvent('evt_reqdup_provB', { provider: 'provider-b', requestId: 'shared-request-id' });
+    assert.equal((await postEvent(baseUrl, first)).status, 202);
+    const res = await postEvent(baseUrl, second);
+    assert.equal(res.status, 202);
+    assert.equal((await res.json()).duplicate, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: llm.failed followed by llm.usage with the same key is a request_id duplicate with matchesOriginal false', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const failed = {
+      schemaVersion: '1.0',
+      id: 'evt_reqdup_failed',
+      type: 'llm.failed',
+      timestamp: 1_700_000_000_000,
+      source: 'agent:integrity',
+      agentId: 'integrity',
+      summary: 'Call failed',
+      payload: { provider: 'anthropic', model: 'claude', requestId: 'req-mixed-1', errorKind: 'rate_limited' },
+    };
+    assert.equal((await postEvent(baseUrl, failed)).status, 202);
+
+    const usage = integrityEvent('evt_reqdup_usage_after_failed', { provider: 'anthropic', requestId: 'req-mixed-1' });
+    const res = await postEvent(baseUrl, usage);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.duplicateReason, 'request_id');
+    assert.equal(json.id, 'evt_reqdup_failed');
+    assert.equal(json.matchesOriginal, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: cost null against cost 0 is a mismatch; unknown is never equal to zero', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = integrityEvent('evt_reqdup_cost_null', { provider: 'costprovider', requestId: 'req-cost-1', cost: null, currency: null, costSource: 'unknown' });
+    assert.equal((await postEvent(baseUrl, original)).status, 202);
+    const zeroCost = integrityEvent('evt_reqdup_cost_zero', { provider: 'costprovider', requestId: 'req-cost-1', cost: 0, currency: 'USD', costSource: 'provider-reported' });
+    const res = await postEvent(baseUrl, zeroCost);
+    assert.equal((await res.json()).matchesOriginal, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: events without requestId, or with a blank one, behave exactly as before (no request-key dedup)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const noRequestId = integrityEvent('evt_reqdup_none_1', { provider: 'noreq' });
+    const blankRequestId = integrityEvent('evt_reqdup_none_2', { provider: 'noreq', requestId: '   ' });
+    assert.equal((await postEvent(baseUrl, noRequestId)).status, 202);
+    const res = await postEvent(baseUrl, blankRequestId);
+    assert.equal(res.status, 202, 'a blank requestId never links two different ids');
+    assert.equal((await res.json()).duplicate, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: in a batch, two events sharing a key resolve as original then request_id duplicate, in input order', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const first = usageWithRequest('evt_reqdup_batch_1', 'req-batch-1');
+    const second = usageWithRequest('evt_reqdup_batch_2', 'req-batch-1', { inputTokens: 5 });
+    const plainDuplicate = { ...first };
+    const res = await fetch(`${baseUrl}/api/v1/events/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([first, second, plainDuplicate]),
+    });
+    assert.equal(res.status, 202);
+    const json = await res.json();
+    assert.equal(json.results.length, 3);
+    assert.equal(json.results[0].status, 'accepted');
+    assert.equal(json.results[0].duplicate, false);
+    assert.equal(json.results[1].status, 'duplicate');
+    assert.equal(json.results[1].duplicateReason, 'request_id');
+    assert.equal(json.results[1].id, 'evt_reqdup_batch_1');
+    assert.equal(json.results[1].submittedId, 'evt_reqdup_batch_2');
+    assert.equal(json.results[2].status, 'duplicate');
+    assert.equal(json.results[2].duplicateReason, 'event_id');
+    assert.equal(json.results[2].id, 'evt_reqdup_batch_1');
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/duplicates lists references, honors filters, and requires the token when configured', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = usageWithRequest('evt_reqdup_list_1', 'req-list-1');
+    const duplicate = usageWithRequest('evt_reqdup_list_2', 'req-list-1', { inputTokens: 7 });
+    await postEvent(baseUrl, original);
+    await postEvent(baseUrl, duplicate);
+
+    const res = await fetch(`${baseUrl}/api/v1/usage/duplicates?provider=openai&requestId=req-list-1`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.schemaVersion, '1.0');
+    assert.equal(json.count, 1);
+    const [ref] = json.duplicates;
+    assert.equal(ref.id, 'evt_reqdup_list_2');
+    assert.equal(ref.duplicateOf, 'evt_reqdup_list_1');
+    assert.equal(ref.provider, 'openai');
+    assert.equal(ref.requestId, 'req-list-1');
+    assert.equal(typeof ref.receivedAt, 'number');
+    assert.equal(ref.matchesOriginal, false);
+    assert.equal(ref.event.id, 'evt_reqdup_list_2');
+    assert.equal(ref.event.payload.inputTokens, 7);
+
+    const byDuplicateOf = await (await fetch(`${baseUrl}/api/v1/usage/duplicates?duplicateOf=evt_reqdup_list_1`)).json();
+    assert.equal(byDuplicateOf.count, 1);
+
+    const noMatch = await (await fetch(`${baseUrl}/api/v1/usage/duplicates?provider=someone-else`)).json();
+    assert.equal(noMatch.count, 0);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/duplicates requires the API token when one is configured', async () => {
+  process.env.AGENT_VIEWER_API_TOKEN = 'dup-endpoint-secret';
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const unauth = await fetch(`${baseUrl}/api/v1/usage/duplicates`);
+    assert.equal(unauth.status, 401);
+    const authed = await fetch(`${baseUrl}/api/v1/usage/duplicates`, {
+      headers: { Authorization: 'Bearer dup-endpoint-secret' },
+    });
+    assert.equal(authed.status, 200);
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('REST API: snapshot.usageDuplicates counts references, mismatched and unverified', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const before = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+
+    const original = usageWithRequest('evt_reqdup_snap_1', 'req-snap-1');
+    await postEvent(baseUrl, original);
+    const matching = usageWithRequest('evt_reqdup_snap_2', 'req-snap-1');
+    await postEvent(baseUrl, matching);
+    const mismatching = usageWithRequest('evt_reqdup_snap_3', 'req-snap-1', { inputTokens: 12345 });
+    await postEvent(baseUrl, mismatching);
+
+    const after = await (await fetch(`${baseUrl}/api/v1/snapshot`)).json();
+    assert.equal(after.usageDuplicates.count, before.usageDuplicates.count + 2);
+    assert.equal(after.usageDuplicates.mismatched, before.usageDuplicates.mismatched + 1);
+    assert.equal(after.usageDuplicates.unverified, before.usageDuplicates.unverified);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: a mismatched request-id duplicate logs one warning with ids and provider only, never payload text', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const original = usageWithRequest('evt_reqdup_warn_1', 'req-warn-1');
+    await postEvent(baseUrl, original);
+    await postEvent(baseUrl, usageWithRequest('evt_reqdup_warn_2', 'req-warn-1', { inputTokens: 55555, model: 'super-secret-model-name' }));
+
+    const lines = warn.mock.calls.map((call) => String(call.arguments[0])).filter((line) => line.includes('Request-id duplicate does not match'));
+    assert.equal(lines.length, 1, 'one warning line for the mismatch');
+    assert.ok(!lines[0].includes('\n'), 'a single line');
+    assert.ok(!lines[0].includes('super-secret-model-name'), 'never logs payload content');
+    const logged = JSON.parse(lines[0].slice(lines[0].indexOf('{')));
+    assert.deepEqual(Object.keys(logged).sort(), ['duplicateId', 'originalId', 'provider', 'requestId'].sort());
+    assert.equal(logged.originalId, 'evt_reqdup_warn_1');
+    assert.equal(logged.duplicateId, 'evt_reqdup_warn_2');
+  } finally {
+    server.close();
+  }
+});
+
+// -------------------------------------------------------------
+// Usage ledger (issue #65)
+// -------------------------------------------------------------
+
+test('REST API: GET /api/v1/events returns receivedAt on every event, equal to the POST response value', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const event = usageWithRequest('evt_ledger_received_at', 'req-ledger-received-at');
+    const postRes = await postEvent(baseUrl, event);
+    const postJson = await postRes.json();
+    assert.equal(typeof postJson.receivedAt, 'number');
+
+    const [listed] = await listEvents(baseUrl, `limit=1000`).then((events) =>
+      events.filter((e) => e.id === 'evt_ledger_received_at')
+    );
+    assert.equal(typeof listed.receivedAt, 'number');
+    assert.equal(listed.receivedAt, postJson.receivedAt);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/ledger/status requires the API token when one is configured, and has the documented shape', async () => {
+  process.env.AGENT_VIEWER_API_TOKEN = 'ledger-status-secret';
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const unauth = await fetch(`${baseUrl}/api/v1/usage/ledger/status`);
+    assert.equal(unauth.status, 401);
+
+    const authed = await fetch(`${baseUrl}/api/v1/usage/ledger/status`, {
+      headers: { Authorization: 'Bearer ledger-status-secret' },
+    });
+    assert.equal(authed.status, 200);
+    const json = await authed.json();
+    assert.equal(json.schemaVersion, '1.0');
+    assert.equal(json.storage, 'memory');
+    assert.equal(json.migration, null);
+    assert.ok('rows' in json && 'rowsByOrigin' in json && 'legacyRows' in json && 'skips' in json && 'complete' in json);
+    // Never a sum of tokens or cost.
+    assert.equal('tokens' in json, false);
+    assert.equal('cost' in json, false);
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('REST API: ingest_channel is tagged per route (events, events-batch, webhook)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, usageWithRequest('evt_channel_single', 'req-channel-single'));
+    await fetch(`${baseUrl}/api/v1/events/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [usageWithRequest('evt_channel_batch', 'req-channel-batch')] }),
+    });
+    await fetch(`${baseUrl}/api/v1/webhooks/generic`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: 'channel-bot', usage: { provider: 'p', model: 'm', inputTokens: 1, outputTokens: 1, requestId: 'req-channel-webhook' } }),
+    });
+
+    const byId = Object.fromEntries(store.ledger.map((row) => [row.eventId, row]));
+    assert.equal(byId.evt_channel_single.ingestChannel, 'events');
+    assert.equal(byId.evt_channel_batch.ingestChannel, 'events-batch');
+    const webhookRow = store.ledger.find((row) => row.requestId === 'req-channel-webhook');
+    assert.ok(webhookRow);
+    assert.equal(webhookRow.ingestChannel, 'webhook');
+  } finally {
+    server.close();
+  }
+});
+
+// -------------------------------------------------------------
+// Usage rollup (issue #66)
+// -------------------------------------------------------------
+
+test('REST API: GET /api/v1/usage/rollup returns 200 with the documented shape and Cache-Control: no-store', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_1', { provider: 'anthropic', requestId: 'req-rollup-http-1' }));
+
+    const res = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&agentId=integrity`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    const json = await res.json();
+    assert.equal(json.schemaVersion, '1.0');
+    assert.ok(json.totals.calls.total >= 1);
+    assert.ok(Array.isArray(json.groups));
+    assert.equal(json.query.groupBy[0], 'agent');
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup returns 400 invalid_filter with a per-field issues array', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const missingGroupBy = await fetch(`${baseUrl}/api/v1/usage/rollup`);
+    assert.equal(missingGroupBy.status, 400);
+    const missingJson = await missingGroupBy.json();
+    assert.equal(missingJson.error, 'invalid_filter');
+    assert.ok(Array.isArray(missingJson.issues) && missingJson.issues.length > 0);
+    assert.ok(missingJson.issues.some((i) => i.path === 'groupBy'));
+
+    const unknownParam = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&agentid=typo`);
+    assert.equal(unknownParam.status, 400);
+    const unknownJson = await unknownParam.json();
+    assert.equal(unknownJson.error, 'invalid_filter');
+    assert.ok(unknownJson.issues.some((i) => i.path === 'agentid'));
+
+    const unknownDimension = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=bogus`);
+    assert.equal(unknownDimension.status, 400);
+
+    const tooManyDimensions = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent,model,provider,session`);
+    assert.equal(tooManyDimensions.status, 400);
+
+    const badRange = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&from=2000&to=1000`);
+    assert.equal(badRange.status, 400);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup requires the API token when one is configured, but tolerates ?token= per issue #71', async () => {
+  process.env.AGENT_VIEWER_API_TOKEN = 'rollup-endpoint-secret';
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const unauth = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent`);
+    assert.equal(unauth.status, 401);
+
+    const authed = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent`, {
+      headers: { Authorization: 'Bearer rollup-endpoint-secret' },
+    });
+    assert.equal(authed.status, 200);
+
+    // Issue #71 (merged after this issue's spec was written) rejects any `?token=`/`?api_key=` query key outright,
+    // even a correct one, so it can never leak into logs or referrers: this route is no exception.
+    const queryToken = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&token=rollup-endpoint-secret`);
+    assert.equal(queryToken.status, 401);
+    const queryTokenJson = await queryToken.json();
+    assert.equal(queryTokenJson.error, 'query_token_not_supported');
+  } finally {
+    delete process.env.AGENT_VIEWER_API_TOKEN;
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup repeats a filter param for multiple values (OR), not a comma-split', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_or_a', { provider: 'anthropic', requestId: 'req-rollup-or-a', model: 'model-rollup-a' }));
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_or_b', { provider: 'anthropic', requestId: 'req-rollup-or-b', model: 'model-rollup-b' }));
+    await postEvent(baseUrl, integrityEvent('evt_rollup_http_or_c', { provider: 'anthropic', requestId: 'req-rollup-or-c', model: 'model-rollup-c' }));
+
+    const res = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=model&model=model-rollup-a&model=model-rollup-b`);
+    const json = await res.json();
+    const models = json.groups.map((g) => g.key.model).sort();
+    assert.deepEqual(models, ['model-rollup-a', 'model-rollup-b']);
+    assert.deepEqual(json.query.filters.model, ['model-rollup-a', 'model-rollup-b']);
+  } finally {
     server.close();
   }
 });

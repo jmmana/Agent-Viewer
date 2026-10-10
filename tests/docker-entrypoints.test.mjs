@@ -44,6 +44,18 @@ test('API image: blank variables never start the API without a token; a generate
   }
 });
 
+// Issue #71: the server now refuses a non-loopback bind with no token, so the API image must set
+// AGENT_VIEWER_HOST=0.0.0.0 explicitly, or its published port would stop being reachable from outside the
+// container (the entrypoint always resolves a real token, so the refusal itself never fires there).
+test('API image: the api stage ENV includes AGENT_VIEWER_HOST=0.0.0.0', () => {
+  const dockerfile = readFileSync(path.join(repoRoot, 'docker', 'Dockerfile'), 'utf8');
+  const stages = dockerfile.split(/^FROM /m);
+  const apiStage = stages.find((stage) => / AS api\b/.test(stage.split('\n')[0]));
+  assert.ok(apiStage, 'the Dockerfile has an "api" stage');
+  // The stage ends at the next FROM (already split away) or EOF, so this slice is the whole api stage body.
+  assert.match(apiStage, /AGENT_VIEWER_HOST=0\.0\.0\.0/);
+});
+
 /** Runs docker/app-entrypoint.sh with a stand-in CLI that prints the arguments it receives. */
 function entrypointArgs(args) {
   const dir = tempDir();
@@ -116,8 +128,9 @@ test('API image: the entry point starts the server with a printed token, and /ap
   delete env.AGENT_VIEWER_API_KEY;
   const child = spawn(process.execPath, [path.join(repoRoot, 'docker', 'api-entrypoint.mjs')], { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
+  let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; });
-  child.stderr.on('data', () => {});
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
     const base = `http://127.0.0.1:${port}`;
     let healthy = false;
@@ -129,9 +142,12 @@ test('API image: the entry point starts the server with a printed token, and /ap
       }
     }
     assert.equal(healthy, true, stdout);
+    const health = await (await fetch(`${base}/health`)).json();
+    assert.equal(health.auth, 'token');
     const token = /API token: (\S+)/.exec(stdout)?.[1];
     assert.ok(token, stdout);
     assert.equal(readFileSync(path.join(dir, 'api-token'), 'utf8').trim(), token);
+    assert.doesNotMatch(stderr, /WARNING: AGENT_VIEWER_API_TOKEN is not set/);
     assert.equal((await fetch(`${base}/api/v1/snapshot`)).status, 401);
     assert.equal((await fetch(`${base}/api/v1/snapshot`, { headers: { Authorization: `Bearer ${token}` } })).status, 200);
   } finally {

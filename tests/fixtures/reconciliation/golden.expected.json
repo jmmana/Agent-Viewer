@@ -1,0 +1,1966 @@
+{
+  "ingestion": {
+    "L1": "accepted",
+    "L2": "accepted",
+    "L3": "accepted",
+    "L4": "accepted",
+    "L5": "accepted",
+    "L6": "accepted",
+    "L7": "duplicate",
+    "L8": "conflict",
+    "L9": "request-duplicate",
+    "L10": "accepted",
+    "L11": "request-duplicate",
+    "W1": "accepted",
+    "W1-retry": "duplicate"
+  },
+  "server": {
+    "checkpointAfterLine6": {
+      "schemaVersion": "1.0",
+      "eventsReduced": 7,
+      "total": {
+        "calls": 7,
+        "tokens": {
+          "input": {
+            "sum": 3300,
+            "unreportedCount": 0
+          },
+          "output": {
+            "sum": 860,
+            "unreportedCount": 0
+          },
+          "cacheRead": {
+            "sum": 300,
+            "unreportedCount": 1
+          },
+          "cacheWrite": {
+            "sum": 50,
+            "unreportedCount": 1
+          },
+          "reasoning": {
+            "sum": 120,
+            "unreportedCount": 1
+          }
+        },
+        "byCurrency": [
+          {
+            "currency": "EUR",
+            "costSource": "provider-reported",
+            "amount": 0.02,
+            "amountExact": "0.02",
+            "calls": 1
+          },
+          {
+            "currency": "USD",
+            "costSource": "provider-reported",
+            "amount": 0.0225,
+            "amountExact": "0.0225",
+            "calls": 4
+          }
+        ],
+        "costUnknownCount": 2,
+        "costMissingCount": 1,
+        "currencyMissingCount": 1,
+        "firstTimestamp": 1768485601000,
+        "lastTimestamp": 1768485612000,
+        "failed": {
+          "calls": 0,
+          "tokens": {
+            "input": {
+              "sum": null,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": null,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": null,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": null,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": null,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [],
+          "costUnknownCount": 0,
+          "costMissingCount": 0,
+          "currencyMissingCount": 0,
+          "firstTimestamp": null,
+          "lastTimestamp": null
+        }
+      },
+      "byModel": [
+        {
+          "provider": "synthetic",
+          "model": "model-alpha",
+          "calls": 3,
+          "tokens": {
+            "input": {
+              "sum": 1700,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 320,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 300,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 50,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.018,
+              "amountExact": "0.018",
+              "calls": 2
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 0,
+          "currencyMissingCount": 1,
+          "firstTimestamp": 1768485601000,
+          "lastTimestamp": 1768485605000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          }
+        },
+        {
+          "provider": "synthetic",
+          "model": "model-beta",
+          "calls": 2,
+          "tokens": {
+            "input": {
+              "sum": 1100,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 450,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 120,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "EUR",
+              "costSource": "provider-reported",
+              "amount": 0.02,
+              "amountExact": "0.02",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 1,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485603000,
+          "lastTimestamp": 1768485604000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          }
+        },
+        {
+          "provider": "synthetic",
+          "model": "model-delta",
+          "calls": 1,
+          "tokens": {
+            "input": {
+              "sum": 100,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 10,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "cacheWrite": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "reasoning": {
+              "sum": null,
+              "unreportedCount": 1
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.0005,
+              "amountExact": "0.0005",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 0,
+          "costMissingCount": 0,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485606000,
+          "lastTimestamp": 1768485606000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          }
+        },
+        {
+          "provider": "synthetic",
+          "model": "model-gamma",
+          "calls": 1,
+          "tokens": {
+            "input": {
+              "sum": 400,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 80,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.004,
+              "amountExact": "0.004",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 0,
+          "costMissingCount": 0,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485612000,
+          "lastTimestamp": 1768485612000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          }
+        }
+      ],
+      "byAgent": [
+        {
+          "agentId": "ana",
+          "calls": 4,
+          "tokens": {
+            "input": {
+              "sum": 1800,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 330,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 300,
+              "unreportedCount": 1
+            },
+            "cacheWrite": {
+              "sum": 50,
+              "unreportedCount": 1
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 1
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.0185,
+              "amountExact": "0.0185",
+              "calls": 3
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 0,
+          "currencyMissingCount": 1,
+          "firstTimestamp": 1768485601000,
+          "lastTimestamp": 1768485606000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          },
+          "byModel": [
+            {
+              "provider": "synthetic",
+              "model": "model-alpha",
+              "calls": 3,
+              "tokens": {
+                "input": {
+                  "sum": 1700,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 320,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": 300,
+                  "unreportedCount": 0
+                },
+                "cacheWrite": {
+                  "sum": 50,
+                  "unreportedCount": 0
+                },
+                "reasoning": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "USD",
+                  "costSource": "provider-reported",
+                  "amount": 0.018,
+                  "amountExact": "0.018",
+                  "calls": 2
+                }
+              ],
+              "costUnknownCount": 1,
+              "costMissingCount": 0,
+              "currencyMissingCount": 1,
+              "firstTimestamp": 1768485601000,
+              "lastTimestamp": 1768485605000,
+              "failed": {
+                "calls": 0,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 0,
+                "costMissingCount": 0,
+                "currencyMissingCount": 0,
+                "firstTimestamp": null,
+                "lastTimestamp": null
+              }
+            },
+            {
+              "provider": "synthetic",
+              "model": "model-delta",
+              "calls": 1,
+              "tokens": {
+                "input": {
+                  "sum": 100,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 10,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": null,
+                  "unreportedCount": 1
+                },
+                "cacheWrite": {
+                  "sum": null,
+                  "unreportedCount": 1
+                },
+                "reasoning": {
+                  "sum": null,
+                  "unreportedCount": 1
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "USD",
+                  "costSource": "provider-reported",
+                  "amount": 0.0005,
+                  "amountExact": "0.0005",
+                  "calls": 1
+                }
+              ],
+              "costUnknownCount": 0,
+              "costMissingCount": 0,
+              "currencyMissingCount": 0,
+              "firstTimestamp": 1768485606000,
+              "lastTimestamp": 1768485606000,
+              "failed": {
+                "calls": 0,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 0,
+                "costMissingCount": 0,
+                "currencyMissingCount": 0,
+                "firstTimestamp": null,
+                "lastTimestamp": null
+              }
+            }
+          ]
+        },
+        {
+          "agentId": "bruno",
+          "calls": 2,
+          "tokens": {
+            "input": {
+              "sum": 1100,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 450,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 120,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "EUR",
+              "costSource": "provider-reported",
+              "amount": 0.02,
+              "amountExact": "0.02",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 1,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485603000,
+          "lastTimestamp": 1768485604000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          },
+          "byModel": [
+            {
+              "provider": "synthetic",
+              "model": "model-beta",
+              "calls": 2,
+              "tokens": {
+                "input": {
+                  "sum": 1100,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 450,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "cacheWrite": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "reasoning": {
+                  "sum": 120,
+                  "unreportedCount": 0
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "EUR",
+                  "costSource": "provider-reported",
+                  "amount": 0.02,
+                  "amountExact": "0.02",
+                  "calls": 1
+                }
+              ],
+              "costUnknownCount": 1,
+              "costMissingCount": 1,
+              "currencyMissingCount": 0,
+              "firstTimestamp": 1768485603000,
+              "lastTimestamp": 1768485604000,
+              "failed": {
+                "calls": 0,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 0,
+                "costMissingCount": 0,
+                "currencyMissingCount": 0,
+                "firstTimestamp": null,
+                "lastTimestamp": null
+              }
+            }
+          ]
+        },
+        {
+          "agentId": "dana",
+          "calls": 1,
+          "tokens": {
+            "input": {
+              "sum": 400,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 80,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.004,
+              "amountExact": "0.004",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 0,
+          "costMissingCount": 0,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485612000,
+          "lastTimestamp": 1768485612000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          },
+          "byModel": [
+            {
+              "provider": "synthetic",
+              "model": "model-gamma",
+              "calls": 1,
+              "tokens": {
+                "input": {
+                  "sum": 400,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 80,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "cacheWrite": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "reasoning": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "USD",
+                  "costSource": "provider-reported",
+                  "amount": 0.004,
+                  "amountExact": "0.004",
+                  "calls": 1
+                }
+              ],
+              "costUnknownCount": 0,
+              "costMissingCount": 0,
+              "currencyMissingCount": 0,
+              "firstTimestamp": 1768485612000,
+              "lastTimestamp": 1768485612000,
+              "failed": {
+                "calls": 0,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 0,
+                "costMissingCount": 0,
+                "currencyMissingCount": 0,
+                "firstTimestamp": null,
+                "lastTimestamp": null
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "final": {
+      "schemaVersion": "1.0",
+      "eventsReduced": 8,
+      "total": {
+        "calls": 7,
+        "tokens": {
+          "input": {
+            "sum": 3300,
+            "unreportedCount": 0
+          },
+          "output": {
+            "sum": 860,
+            "unreportedCount": 0
+          },
+          "cacheRead": {
+            "sum": 300,
+            "unreportedCount": 1
+          },
+          "cacheWrite": {
+            "sum": 50,
+            "unreportedCount": 1
+          },
+          "reasoning": {
+            "sum": 120,
+            "unreportedCount": 1
+          }
+        },
+        "byCurrency": [
+          {
+            "currency": "EUR",
+            "costSource": "provider-reported",
+            "amount": 0.02,
+            "amountExact": "0.02",
+            "calls": 1
+          },
+          {
+            "currency": "USD",
+            "costSource": "provider-reported",
+            "amount": 0.0225,
+            "amountExact": "0.0225",
+            "calls": 4
+          }
+        ],
+        "costUnknownCount": 2,
+        "costMissingCount": 1,
+        "currencyMissingCount": 1,
+        "firstTimestamp": 1768485601000,
+        "lastTimestamp": 1768485612000,
+        "failed": {
+          "calls": 1,
+          "tokens": {
+            "input": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "output": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "cacheRead": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "cacheWrite": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "reasoning": {
+              "sum": null,
+              "unreportedCount": 1
+            }
+          },
+          "byCurrency": [],
+          "costUnknownCount": 1,
+          "costMissingCount": 1,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485610000,
+          "lastTimestamp": 1768485610000
+        }
+      },
+      "byModel": [
+        {
+          "provider": "synthetic",
+          "model": "model-alpha",
+          "calls": 3,
+          "tokens": {
+            "input": {
+              "sum": 1700,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 320,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 300,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 50,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.018,
+              "amountExact": "0.018",
+              "calls": 2
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 0,
+          "currencyMissingCount": 1,
+          "firstTimestamp": 1768485601000,
+          "lastTimestamp": 1768485605000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          }
+        },
+        {
+          "provider": "synthetic",
+          "model": "model-beta",
+          "calls": 2,
+          "tokens": {
+            "input": {
+              "sum": 1100,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 450,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 120,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "EUR",
+              "costSource": "provider-reported",
+              "amount": 0.02,
+              "amountExact": "0.02",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 1,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485603000,
+          "lastTimestamp": 1768485604000,
+          "failed": {
+            "calls": 1,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 1
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 1,
+            "costMissingCount": 1,
+            "currencyMissingCount": 0,
+            "firstTimestamp": 1768485610000,
+            "lastTimestamp": 1768485610000
+          }
+        },
+        {
+          "provider": "synthetic",
+          "model": "model-delta",
+          "calls": 1,
+          "tokens": {
+            "input": {
+              "sum": 100,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 10,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "cacheWrite": {
+              "sum": null,
+              "unreportedCount": 1
+            },
+            "reasoning": {
+              "sum": null,
+              "unreportedCount": 1
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.0005,
+              "amountExact": "0.0005",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 0,
+          "costMissingCount": 0,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485606000,
+          "lastTimestamp": 1768485606000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          }
+        },
+        {
+          "provider": "synthetic",
+          "model": "model-gamma",
+          "calls": 1,
+          "tokens": {
+            "input": {
+              "sum": 400,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 80,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.004,
+              "amountExact": "0.004",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 0,
+          "costMissingCount": 0,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485612000,
+          "lastTimestamp": 1768485612000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          }
+        }
+      ],
+      "byAgent": [
+        {
+          "agentId": "ana",
+          "calls": 4,
+          "tokens": {
+            "input": {
+              "sum": 1800,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 330,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 300,
+              "unreportedCount": 1
+            },
+            "cacheWrite": {
+              "sum": 50,
+              "unreportedCount": 1
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 1
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.0185,
+              "amountExact": "0.0185",
+              "calls": 3
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 0,
+          "currencyMissingCount": 1,
+          "firstTimestamp": 1768485601000,
+          "lastTimestamp": 1768485606000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          },
+          "byModel": [
+            {
+              "provider": "synthetic",
+              "model": "model-alpha",
+              "calls": 3,
+              "tokens": {
+                "input": {
+                  "sum": 1700,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 320,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": 300,
+                  "unreportedCount": 0
+                },
+                "cacheWrite": {
+                  "sum": 50,
+                  "unreportedCount": 0
+                },
+                "reasoning": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "USD",
+                  "costSource": "provider-reported",
+                  "amount": 0.018,
+                  "amountExact": "0.018",
+                  "calls": 2
+                }
+              ],
+              "costUnknownCount": 1,
+              "costMissingCount": 0,
+              "currencyMissingCount": 1,
+              "firstTimestamp": 1768485601000,
+              "lastTimestamp": 1768485605000,
+              "failed": {
+                "calls": 0,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 0,
+                "costMissingCount": 0,
+                "currencyMissingCount": 0,
+                "firstTimestamp": null,
+                "lastTimestamp": null
+              }
+            },
+            {
+              "provider": "synthetic",
+              "model": "model-delta",
+              "calls": 1,
+              "tokens": {
+                "input": {
+                  "sum": 100,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 10,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": null,
+                  "unreportedCount": 1
+                },
+                "cacheWrite": {
+                  "sum": null,
+                  "unreportedCount": 1
+                },
+                "reasoning": {
+                  "sum": null,
+                  "unreportedCount": 1
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "USD",
+                  "costSource": "provider-reported",
+                  "amount": 0.0005,
+                  "amountExact": "0.0005",
+                  "calls": 1
+                }
+              ],
+              "costUnknownCount": 0,
+              "costMissingCount": 0,
+              "currencyMissingCount": 0,
+              "firstTimestamp": 1768485606000,
+              "lastTimestamp": 1768485606000,
+              "failed": {
+                "calls": 0,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 0,
+                "costMissingCount": 0,
+                "currencyMissingCount": 0,
+                "firstTimestamp": null,
+                "lastTimestamp": null
+              }
+            }
+          ]
+        },
+        {
+          "agentId": "bruno",
+          "calls": 2,
+          "tokens": {
+            "input": {
+              "sum": 1100,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 450,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 120,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "EUR",
+              "costSource": "provider-reported",
+              "amount": 0.02,
+              "amountExact": "0.02",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 1,
+          "costMissingCount": 1,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485603000,
+          "lastTimestamp": 1768485604000,
+          "failed": {
+            "calls": 1,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 1
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 1
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 1,
+            "costMissingCount": 1,
+            "currencyMissingCount": 0,
+            "firstTimestamp": 1768485610000,
+            "lastTimestamp": 1768485610000
+          },
+          "byModel": [
+            {
+              "provider": "synthetic",
+              "model": "model-beta",
+              "calls": 2,
+              "tokens": {
+                "input": {
+                  "sum": 1100,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 450,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "cacheWrite": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "reasoning": {
+                  "sum": 120,
+                  "unreportedCount": 0
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "EUR",
+                  "costSource": "provider-reported",
+                  "amount": 0.02,
+                  "amountExact": "0.02",
+                  "calls": 1
+                }
+              ],
+              "costUnknownCount": 1,
+              "costMissingCount": 1,
+              "currencyMissingCount": 0,
+              "firstTimestamp": 1768485603000,
+              "lastTimestamp": 1768485604000,
+              "failed": {
+                "calls": 1,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 1
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 1
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 1
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 1
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 1
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 1,
+                "costMissingCount": 1,
+                "currencyMissingCount": 0,
+                "firstTimestamp": 1768485610000,
+                "lastTimestamp": 1768485610000
+              }
+            }
+          ]
+        },
+        {
+          "agentId": "dana",
+          "calls": 1,
+          "tokens": {
+            "input": {
+              "sum": 400,
+              "unreportedCount": 0
+            },
+            "output": {
+              "sum": 80,
+              "unreportedCount": 0
+            },
+            "cacheRead": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "cacheWrite": {
+              "sum": 0,
+              "unreportedCount": 0
+            },
+            "reasoning": {
+              "sum": 0,
+              "unreportedCount": 0
+            }
+          },
+          "byCurrency": [
+            {
+              "currency": "USD",
+              "costSource": "provider-reported",
+              "amount": 0.004,
+              "amountExact": "0.004",
+              "calls": 1
+            }
+          ],
+          "costUnknownCount": 0,
+          "costMissingCount": 0,
+          "currencyMissingCount": 0,
+          "firstTimestamp": 1768485612000,
+          "lastTimestamp": 1768485612000,
+          "failed": {
+            "calls": 0,
+            "tokens": {
+              "input": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "output": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheRead": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "cacheWrite": {
+                "sum": null,
+                "unreportedCount": 0
+              },
+              "reasoning": {
+                "sum": null,
+                "unreportedCount": 0
+              }
+            },
+            "byCurrency": [],
+            "costUnknownCount": 0,
+            "costMissingCount": 0,
+            "currencyMissingCount": 0,
+            "firstTimestamp": null,
+            "lastTimestamp": null
+          },
+          "byModel": [
+            {
+              "provider": "synthetic",
+              "model": "model-gamma",
+              "calls": 1,
+              "tokens": {
+                "input": {
+                  "sum": 400,
+                  "unreportedCount": 0
+                },
+                "output": {
+                  "sum": 80,
+                  "unreportedCount": 0
+                },
+                "cacheRead": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "cacheWrite": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                },
+                "reasoning": {
+                  "sum": 0,
+                  "unreportedCount": 0
+                }
+              },
+              "byCurrency": [
+                {
+                  "currency": "USD",
+                  "costSource": "provider-reported",
+                  "amount": 0.004,
+                  "amountExact": "0.004",
+                  "calls": 1
+                }
+              ],
+              "costUnknownCount": 0,
+              "costMissingCount": 0,
+              "currencyMissingCount": 0,
+              "firstTimestamp": 1768485612000,
+              "lastTimestamp": 1768485612000,
+              "failed": {
+                "calls": 0,
+                "tokens": {
+                  "input": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "output": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheRead": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "cacheWrite": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  },
+                  "reasoning": {
+                    "sum": null,
+                    "unreportedCount": 0
+                  }
+                },
+                "byCurrency": [],
+                "costUnknownCount": 0,
+                "costMissingCount": 0,
+                "currencyMissingCount": 0,
+                "firstTimestamp": null,
+                "lastTimestamp": null
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "portal": {
+    "total": {
+      "calls": 7,
+      "inputTokens": {
+        "sum": 3300,
+        "reportedCalls": 7
+      },
+      "outputTokens": {
+        "sum": 860,
+        "reportedCalls": 7
+      },
+      "cacheReadTokens": {
+        "sum": 300,
+        "reportedCalls": 6
+      },
+      "cacheWriteTokens": {
+        "sum": 50,
+        "reportedCalls": 6
+      },
+      "reasoningTokens": {
+        "sum": 120,
+        "reportedCalls": 6
+      },
+      "cost": {
+        "buckets": [
+          {
+            "currency": "USD",
+            "source": "provider-reported",
+            "amount": 0.0225,
+            "calls": 4
+          },
+          {
+            "currency": "EUR",
+            "source": "provider-reported",
+            "amount": 0.02,
+            "calls": 1
+          },
+          {
+            "currency": null,
+            "source": "provider-reported",
+            "amount": 0.001,
+            "calls": 1
+          }
+        ],
+        "unknownCalls": 1
+      }
+    },
+    "byAgent": {
+      "ana": {
+        "calls": 4,
+        "inputTokens": {
+          "sum": 1800,
+          "reportedCalls": 4
+        },
+        "outputTokens": {
+          "sum": 330,
+          "reportedCalls": 4
+        },
+        "cacheReadTokens": {
+          "sum": 300,
+          "reportedCalls": 3
+        },
+        "cacheWriteTokens": {
+          "sum": 50,
+          "reportedCalls": 3
+        },
+        "reasoningTokens": {
+          "sum": 0,
+          "reportedCalls": 3
+        },
+        "cost": {
+          "buckets": [
+            {
+              "currency": "USD",
+              "source": "provider-reported",
+              "amount": 0.0185,
+              "calls": 3
+            },
+            {
+              "currency": null,
+              "source": "provider-reported",
+              "amount": 0.001,
+              "calls": 1
+            }
+          ],
+          "unknownCalls": 0
+        }
+      },
+      "bruno": {
+        "calls": 2,
+        "inputTokens": {
+          "sum": 1100,
+          "reportedCalls": 2
+        },
+        "outputTokens": {
+          "sum": 450,
+          "reportedCalls": 2
+        },
+        "cacheReadTokens": {
+          "sum": 0,
+          "reportedCalls": 2
+        },
+        "cacheWriteTokens": {
+          "sum": 0,
+          "reportedCalls": 2
+        },
+        "reasoningTokens": {
+          "sum": 120,
+          "reportedCalls": 2
+        },
+        "cost": {
+          "buckets": [
+            {
+              "currency": "EUR",
+              "source": "provider-reported",
+              "amount": 0.02,
+              "calls": 1
+            }
+          ],
+          "unknownCalls": 1
+        }
+      },
+      "dana": {
+        "calls": 1,
+        "inputTokens": {
+          "sum": 400,
+          "reportedCalls": 1
+        },
+        "outputTokens": {
+          "sum": 80,
+          "reportedCalls": 1
+        },
+        "cacheReadTokens": {
+          "sum": 0,
+          "reportedCalls": 1
+        },
+        "cacheWriteTokens": {
+          "sum": 0,
+          "reportedCalls": 1
+        },
+        "reasoningTokens": {
+          "sum": 0,
+          "reportedCalls": 1
+        },
+        "cost": {
+          "buckets": [
+            {
+              "currency": "USD",
+              "source": "provider-reported",
+              "amount": 0.004,
+              "calls": 1
+            }
+          ],
+          "unknownCalls": 0
+        }
+      }
+    }
+  },
+  "library": {
+    "total": {
+      "totalTokens": 4160,
+      "inputTokens": 3300,
+      "outputTokens": 860,
+      "cost": null
+    },
+    "byAgent": {
+      "ana": {
+        "totalTokens": 2130,
+        "inputTokens": 1800,
+        "outputTokens": 330,
+        "cost": null
+      },
+      "bruno": {
+        "totalTokens": 1550,
+        "inputTokens": 1100,
+        "outputTokens": 450,
+        "cost": null
+      },
+      "dana": {
+        "totalTokens": 480,
+        "inputTokens": 400,
+        "outputTokens": 80,
+        "cost": 0.004,
+        "currency": "USD"
+      }
+    }
+  }
+}

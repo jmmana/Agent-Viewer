@@ -66,6 +66,127 @@ function applyCachedAlias<T extends { cachedTokens?: number | null; cacheReadTok
     : value;
 }
 
+// -------------------------------------------------------------
+// Usage correlation block (issue #64): shared by llm.usage and llm.failed
+// -------------------------------------------------------------
+
+export const CORRELATION_ID_MAX_LENGTH = 128;
+export const USAGE_TAGS_MAX = 20;
+export const USAGE_TAG_MAX_LENGTH = 64;
+
+/**
+ * Exact whitespace set used by ECMAScript's `String.prototype.trim` (`value !== value.trim()`), kept
+ * explicit here so the TypeScript SDK and the Python SDK can mirror it without relying on each runtime's
+ * own idea of "whitespace" (which differs, for example Python's `str.strip()` also strips U+0085 and
+ * U+001C to U+001F).
+ */
+const TRIMMABLE_WHITESPACE_CLASS =
+  '\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF';
+const LEADING_OR_TRAILING_WHITESPACE = new RegExp(`^[${TRIMMABLE_WHITESPACE_CLASS}]|[${TRIMMABLE_WHITESPACE_CLASS}]$`);
+/** C0 controls, DEL and C1 controls. Internal whitespace (not leading or trailing) is allowed. */
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
+
+/**
+ * Builds the schema for one correlation id field (`traceId`, `parentId`, `toolCallId`, `meetingId` or
+ * `userId`). `null` and absent both mean "not reported" (handled by `normalizeUsageCorrelation`); an empty
+ * string is rejected rather than treated as "not reported", so a bug in the sender stays visible. Nothing
+ * is ever truncated.
+ */
+function correlationId(name: string) {
+  return z
+    .string()
+    // Zod 4's built-in `.min()`/`.max()` on `z.string()` count Unicode code points, not UTF-16 code units
+    // (a string made only of astral characters passes `.max(64)` well past 64 UTF-16 units). The contract
+    // counts `String.length` (UTF-16 code units) so an explicit refinement is used instead; see the Python
+    // SDK note about matching with `len(s.encode("utf-16-le")) // 2`.
+    .refine((value) => value.length >= 1, `${name} must not be empty`)
+    .refine(
+      (value) => value.length <= CORRELATION_ID_MAX_LENGTH,
+      `${name} must be at most ${CORRELATION_ID_MAX_LENGTH} characters`,
+    )
+    .refine((value) => !CONTROL_CHARACTERS.test(value), `${name} must not contain control characters`)
+    .refine(
+      (value) => !LEADING_OR_TRAILING_WHITESPACE.test(value),
+      `${name} must not have leading or trailing whitespace`,
+    )
+    .nullish();
+}
+
+const usageTag = z
+  .string()
+  // Same reason as `correlationId`: explicit UTF-16 length checks instead of Zod's code-point-aware `.max()`.
+  .refine((value) => value.length >= 1, 'Each tag must not be empty')
+  .refine(
+    (value) => value.length <= USAGE_TAG_MAX_LENGTH,
+    `Each tag must be at most ${USAGE_TAG_MAX_LENGTH} characters`,
+  )
+  .refine((value) => !CONTROL_CHARACTERS.test(value), 'Each tag must not contain control characters')
+  .refine(
+    (value) => !LEADING_OR_TRAILING_WHITESPACE.test(value),
+    'Each tag must not have leading or trailing whitespace',
+  );
+
+/**
+ * Correlation and attribution fields shared by `llm.usage` and `llm.failed` (issue #64). Opaque to Agent
+ * Viewer: no referential checks, no aggregation, no UI. All fields are optional and live in the payload,
+ * never the envelope, so `schemaVersion` stays `"1.0"`.
+ */
+export const UsageCorrelationSchema = z.object({
+  /** Id of the trace or run in the caller's own tracing system (W3C trace id, `trace_...`, a root run id). */
+  traceId: correlationId('traceId'),
+  /** Id of the span, run or step in the same tracing system that issued this model call. */
+  parentId: correlationId('parentId'),
+  /** The tool call during whose execution this model call was made. Same value space as `tool.*` payloads. */
+  toolCallId: correlationId('toolCallId'),
+  /** The office meeting during which the call happened. Same value as `payload.meetingId` on `meeting.*`. */
+  meetingId: correlationId('meetingId'),
+  /** Opaque, pseudonymous id of the user or account the work was done for. Never an email or a name. */
+  userId: correlationId('userId'),
+  /** Free-form labels such as `env:prod` or `feature:quote-builder`. Must never hold prompt text or PII. */
+  tags: z
+    .array(usageTag)
+    .max(USAGE_TAGS_MAX, `At most ${USAGE_TAGS_MAX} tags are allowed`)
+    .nullish(),
+});
+
+export type UsageCorrelation = z.infer<typeof UsageCorrelationSchema>;
+
+/**
+ * Omits `null`, `undefined` and an empty `tags` array (all three mean "not reported"), and removes
+ * duplicate tags keeping the first occurrence and the original order. The 20-item limit is enforced by
+ * `UsageCorrelationSchema` on the array as sent, before this function deduplicates it. Never truncates and
+ * never invents a default. Works on a plain object (not a `Record`) because a field-level
+ * `.transform(v => v ?? undefined)` would leave the key present with value `undefined`, which breaks
+ * `deepStrictEqual` and the memory store output.
+ */
+export function normalizeUsageCorrelation<T extends Partial<UsageCorrelation>>(payload: T): T {
+  const result: Record<string, unknown> = { ...payload };
+  for (const field of ['traceId', 'parentId', 'toolCallId', 'meetingId', 'userId'] as const) {
+    if (result[field] === null || result[field] === undefined) {
+      delete result[field];
+    }
+  }
+  const tags = result.tags as string[] | null | undefined;
+  if (tags === null || tags === undefined) {
+    delete result.tags;
+  } else {
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (const tag of tags) {
+      if (!seen.has(tag)) {
+        seen.add(tag);
+        deduped.push(tag);
+      }
+    }
+    if (deduped.length === 0) {
+      delete result.tags;
+    } else {
+      result.tags = deduped;
+    }
+  }
+  return result as T;
+}
+
 /**
  * Payload of a successful model call. Token semantics: `inputTokens` includes `cacheReadTokens` and
  * `cacheWriteTokens`; `outputTokens` includes `reasoningTokens` when the provider bills them as output.
@@ -82,11 +203,18 @@ export const LlmUsagePayloadSchema = z.object({
   cachedTokens: tokenCount.nullish(),
   reasoningTokens: tokenCount.nullish(),
   latencyMs: tokenCount.nullish(),
+  /**
+   * The provider's own request or response id. The server deduplicates `llm.usage` and `llm.failed` on
+   * `(provider, requestId)`, so this should be the id that also appears on the provider side or in an invoice
+   * or usage export, never a synthetic counter such as `"1"` reused across sessions: that would make two
+   * different calls collide and hide one of them from the figures.
+   */
   requestId: z.string().nullish(),
   cost: costSchema,
   costSource: costSourceSchema,
   currency: currencySchema,
-}).superRefine(checkCacheFields).transform(applyCachedAlias);
+  ...UsageCorrelationSchema.shape,
+}).superRefine(checkCacheFields).transform((value) => normalizeUsageCorrelation(applyCachedAlias(value)));
 
 export type LlmUsagePayload = z.infer<typeof LlmUsagePayloadSchema>;
 
@@ -97,12 +225,19 @@ export type LlmUsagePayload = z.infer<typeof LlmUsagePayloadSchema>;
  */
 export const LlmFailedPayloadSchema = z.object({
   provider: z.string().min(1, 'Provider is required'),
-  model: z.string().min(1, 'Model is required'),
+  /**
+   * Optional since issue #59: the OTLP receiver maps `claude_code.api_error`, whose `model` attribute can be
+   * absent (for example a connection failure before the model was even chosen). Left out, never invented.
+   */
+  model: z.string().min(1).nullish(),
   errorKind: z.enum(LLM_ERROR_KINDS).default('unknown'),
   httpStatus: z.number().int().min(100).max(599).nullish(),
   retryable: z.boolean().nullish(),
+  /** Same dedup rule and warning as `LlmUsagePayloadSchema.requestId`: it shares one key space with `llm.usage`. */
   requestId: z.string().max(200).nullish(),
   providerErrorCode: z.string().max(100).nullish(),
+  /** Attempts made before giving up, including the first one (OTLP's `attempt`). Added by issue #59. */
+  attempts: tokenCount.nullish(),
   latencyMs: tokenCount.nullish(),
   inputTokens: tokenCount.nullish(),
   outputTokens: tokenCount.nullish(),
@@ -112,7 +247,8 @@ export const LlmFailedPayloadSchema = z.object({
   cost: costSchema,
   costSource: costSourceSchema,
   currency: currencySchema,
-}).superRefine(checkCacheFields);
+  ...UsageCorrelationSchema.shape,
+}).superRefine(checkCacheFields).transform(normalizeUsageCorrelation);
 
 export type LlmFailedPayload = z.infer<typeof LlmFailedPayloadSchema>;
 

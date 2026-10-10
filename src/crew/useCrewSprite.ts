@@ -1,24 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CrewView } from './crewModel';
 import { loadCrewSprite } from './crewSprites';
 
-type SpriteMap = Partial<Record<CrewView, HTMLImageElement>>;
-
-/** Carga las vistas distintas requeridas por la sala; cada imagen pertenece a la escena montada. */
-export function useCrewSprites(views: readonly CrewView[]) {
-  const key = [...new Set(views)].sort().join(',');
-  const [loaded, setLoaded] = useState<{key: string; images: SpriteMap}>({key: '', images: {}});
-  const [failed, setFailed] = useState<{key: string; views: CrewView[]}>({key: '', views: []});
+/** La imagen pertenece a la escena montada, sin caché global ni cambios de dominio. */
+export function useCrewSprite(view: CrewView | null) {
+  const [loaded, setLoaded] = useState<{view: CrewView; image: HTMLImageElement} | null>(null);
+  const [failedView, setFailedView] = useState<CrewView | null>(null);
   useEffect(() => {
-    setLoaded({key, images: {}});
-    setFailed({key, views: []});
-    const stops = (key ? key.split(',') as CrewView[] : []).map(view => loadCrewSprite(view,
-      image => setLoaded(prev => prev.key === key ? {key, images: {...prev.images, [view]: image}} : prev),
-      () => setFailed(prev => prev.key === key ? {key, views: [...prev.views, view]} : prev)));
-    return () => stops.forEach(stop => stop());
-  }, [key]);
-  return {
-    images: loaded.key === key ? loaded.images : {},
-    failed: failed.key === key && failed.views.length > 0,
-  };
+    setLoaded(null);
+    setFailedView(null);
+    if (!view) return;
+    return loadCrewSprite(view, image => setLoaded({view, image}), () => setFailedView(view));
+  }, [view]);
+  return { image: loaded?.view === view ? loaded.image : undefined, failed: view !== null && failedView === view };
+}
+
+/** Cada orientación requerida se carga una sola vez por escena, aunque varios agentes la compartan. */
+export function useCrewSprites(views: readonly CrewView[]) {
+  const front = useCrewSprite(views.includes('front') ? 'front' : null);
+  const right = useCrewSprite(views.includes('right') ? 'right' : null);
+  const back = useCrewSprite(views.includes('back') ? 'back' : null);
+  const left = useCrewSprite(views.includes('left') ? 'left' : null);
+  const images = useMemo(() => ({front:front.image,right:right.image,back:back.image,left:left.image}),
+    [front.image,right.image,back.image,left.image]);
+  return {images,failed:front.failed || right.failed || back.failed || left.failed};
 }

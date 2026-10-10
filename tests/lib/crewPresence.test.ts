@@ -1,12 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import { CREW_ROOMS } from '../../src/crew/crewModel';
 import { projectCrewPresence } from '../../src/crew/crewPresence';
-import { crewFacingToward, crewPointIsFree, crewPresenceSlots, CREW_PRESENCE_RADIUS } from '../../src/crew/crewSpatial';
+import { crewPointIsFree, crewPresenceSlots, CREW_PRESENCE_RADIUS } from '../../src/crew/crewSpatial';
 
 const room = CREW_ROOMS[1];
 const agent = (index: number) => Object.freeze({id:`agent-${index}`,name:`Fixture ${index}`,workspace:'development' as const,status:'CODING' as const});
 
 describe('Presencia espacial Crew de solo lectura', () => {
+  it('usa la llegada solo para tránsito reportado y cambia de sala siguiendo workspace', () => {
+    const walker = Object.freeze({...agent(1),isWalking:true});
+    const before = JSON.stringify(walker);
+    const result = projectCrewPresence([walker,agent(2)],room);
+    const marker = result.markers.find(item=>item.id===walker.id)!;
+    expect({x:marker.x,y:marker.y}).toEqual({x:room.arrivalPoints[0].x,y:room.arrivalPoints[0].y});
+    expect(projectCrewPresence([walker],CREW_ROOMS[0]).markers).toHaveLength(0);
+    const moved = {...walker,workspace:'boss_office' as const};
+    expect(projectCrewPresence([moved],room).markers).toHaveLength(0);
+    expect(projectCrewPresence([moved],CREW_ROOMS[0]).markers).toHaveLength(1);
+    expect(JSON.stringify(walker)).toBe(before);
+  });
+  it('copia la orientación sin mover al actor ni modificar el snapshot', () => {
+    const original = Object.freeze({...agent(1),role:'boss' as const,facing:'NE' as const});
+    const before = JSON.stringify(original);
+    const first = projectCrewPresence([original],room).markers[0];
+    const second = projectCrewPresence([{...original,facing:'SW'}],room).markers[0];
+    expect(first.facing).toBe('NE');
+    expect(second.facing).toBe('SW');
+    expect([first.x,first.y]).toEqual([second.x,second.y]);
+    expect(JSON.stringify(original)).toBe(before);
+  });
   it('no crea presencia cuando no hay eventos o la sala no corresponde', () => {
     expect(projectCrewPresence([],room)).toEqual({markers:[],unplaced:[]});
     expect(projectCrewPresence([agent(1)],CREW_ROOMS[0]).markers).toHaveLength(0);
@@ -43,14 +65,5 @@ describe('Presencia espacial Crew de solo lectura', () => {
     expect(crewPointIsFree(room,desk)).toBe(false);
     expect(crewPointIsFree(room,{x:desk.x+.8,y:desk.y+.5})).toBe(false);
     expect(crewPointIsFree(room,{x:room.width+1,y:room.depth+1})).toBe(false);
-  });
-  it('orienta a cada actor hacia el escritorio o pantalla más cercano', () => {
-    const r = CREW_ROOMS[0]; // escritorio en (5,3), pantalla en (8,2)
-    expect(crewFacingToward(r,{x:5,y:1})).toBe('front');
-    expect(crewFacingToward(r,{x:5,y:7})).toBe('back');
-    expect(crewFacingToward(r,{x:1,y:3})).toBe('right');
-    expect(crewFacingToward(r,{x:10,y:2})).toBe('left');
-    expect(crewFacingToward({...r,furniture:[]},{x:1,y:1})).toBeUndefined();
-    for (const m of projectCrewPresence([agent(1)],room).markers) expect(m.facing).toBeDefined();
   });
 });

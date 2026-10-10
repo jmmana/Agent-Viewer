@@ -357,6 +357,52 @@ describe('AgentOffice: usage privacy', () => {
   });
 });
 
+describe('AgentOffice: usage badges', () => {
+  const byAgentUsage: OfficeUsage = {
+    byAgent: { planner: { totalTokens: 1_000, cost: 2.25, currency: 'USD' } },
+  };
+
+  it('puts no usage figure in the DOM when showUsageBadges is omitted, even with usage.byAgent set', () => {
+    render(<AgentOffice events={englishTeam} usage={byAgentUsage} />);
+    expect(document.querySelector('.av-usage')).toBeNull();
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking');
+  });
+
+  it('puts no usage figure in the DOM when showUsageBadges is false', () => {
+    render(<AgentOffice events={englishTeam} usage={byAgentUsage} showUsageBadges={false} />);
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking');
+  });
+
+  it('feeds the accessible agent list from showUsageBadges alone, without showing the total panel', () => {
+    render(<AgentOffice events={englishTeam} usage={byAgentUsage} showUsageBadges />);
+    expect(document.querySelector('.av-usage')).toBeNull(); // total panel needs showUsage, not showUsageBadges
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking. Tokens: 1,000, Cost: $2.25');
+    // Builder has no byAgent entry: no usage text is added for it.
+    expect(agentLines().builder).toBe('Bruno Díaz, Engineer: Coding');
+  });
+
+  it('shows the same figures whether showUsage or showUsageBadges turned them on', () => {
+    const { unmount } = render(<AgentOffice events={englishTeam} usage={byAgentUsage} showUsage />);
+    const withShowUsage = agentLines().planner;
+    unmount();
+    render(<AgentOffice events={englishTeam} usage={byAgentUsage} showUsageBadges />);
+    expect(agentLines().planner).toBe(withShowUsage);
+  });
+
+  it('never adds up llm.usage or llm.failed events itself when showUsageBadges is on', () => {
+    const events: OfficeEventInput[] = [
+      ...englishTeam,
+      llmUsage('planner', { provider: 'OpenAI', model: 'gpt-x', inputTokens: 1200, outputTokens: 300, cost: 0.75, currency: 'USD' }, { at: T0 + 4000 }),
+      llmFailed('builder', { provider: 'Anthropic', model: 'claude-x', errorKind: 'timeout', inputTokens: 900, outputTokens: 600, cost: 1.25, currency: 'USD' }, { at: T0 + 5000 }),
+    ];
+    render(<AgentOffice events={events} showUsageBadges usage={byAgentUsage} />);
+    const html = document.body.innerHTML;
+    for (const fragment of ['0.75', '1.25', '2.00', '1,500', '2,100']) {
+      expect(html).not.toContain(fragment);
+    }
+  });
+});
+
 describe('AgentOffice: independent instances', () => {
   it('keeps two offices on the same page apart', () => {
     const north: OfficeEventInput[] = [

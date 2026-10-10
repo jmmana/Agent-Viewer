@@ -13,8 +13,8 @@ The renderer must never require private chain-of-thought. It visualizes observab
 
 Two layers are intentionally separate:
 
-1. **Operational state** — authoritative data received from the connected runtime or local demo engine.
-2. **Presentation state** — walking interpolation, gestures, temporary mood, ambient chatter, bubble placement, animation and camera effects.
+1. **Operational state**: authoritative data received from the connected runtime or local demo engine.
+2. **Presentation state**: walking interpolation, gestures, temporary mood, ambient chatter, bubble placement, animation and camera effects.
 
 Presentation behavior must not silently overwrite authoritative work state.
 

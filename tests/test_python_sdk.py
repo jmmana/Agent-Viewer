@@ -1,4 +1,5 @@
 import http.server
+import importlib.util
 import json
 import logging
 import os
@@ -8,11 +9,45 @@ import time
 import socket
 import subprocess
 import unittest
+import unittest.mock
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, ".")
 
 from sdk.python.agent_viewer import AgentViewer, AgentHandle, AgentViewerError
+
+_VECTORS_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "usage-correlation-vectors.json")
+with open(_VECTORS_PATH, "r", encoding="utf-8") as _f:
+    USAGE_CORRELATION_VECTORS = json.load(_f)
+
+_EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+
+
+def _load_example_module(filename):
+    """Loads an example adapter module by file path. The example files have hyphens in their names
+    (``autogen-adapter.py``, ``crewai-adapter.py``), so they cannot be imported with a normal ``import``.
+    """
+    path = os.path.join(_EXAMPLES_DIR, filename)
+    module_name = filename.replace("-", "_").replace(".py", "")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _capture_adapter_viewer(adapter):
+    """Patches the adapter's internal AgentViewer so emitted events are captured instead of sent over the
+    network. Returns the list that each emitted event body is appended to, in order.
+    """
+    captured = []
+
+    def fake_post_with_retry(endpoint, body, idempotency_key=None):
+        captured.append(body)
+        return {"accepted": True, "duplicate": False}
+
+    adapter.viewer._post_with_retry = fake_post_with_retry
+    return captured
 
 
 def get_free_port():
@@ -53,6 +88,42 @@ class LogCapture(logging.Handler):
     def __exit__(self, *exc):
         logging.getLogger("agent_viewer").removeHandler(self)
         return False
+
+
+class _ScriptedGetHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every GET with the next (status, body) pair from ``type(self).responses``, cycling to the last
+    one once exhausted. Records every request's path and headers in ``type(self).requests``, for issue #67's
+    ``list_calls``/``iter_calls`` tests (query mapping, header-only auth, error mapping, retry on 429).
+    """
+
+    responses = []
+    requests = []
+
+    def do_GET(self):  # noqa: N802 (http.server naming)
+        type(self).requests.append({"path": self.path, "headers": dict(self.headers.items())})
+        index = min(len(type(self).requests) - 1, len(type(self).responses) - 1)
+        status, payload = type(self).responses[index]
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _run_scripted_server(responses):
+    """Starts a background `_ScriptedGetHandler` server with the given scripted (status, body) responses.
+    Returns (httpd, thread, base_url); the caller must call httpd.shutdown() when done.
+    """
+    _ScriptedGetHandler.responses = responses
+    _ScriptedGetHandler.requests = []
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), _ScriptedGetHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, thread, f"http://127.0.0.1:{httpd.server_address[1]}"
 
 
 class _ConflictHandler(http.server.BaseHTTPRequestHandler):
@@ -314,6 +385,304 @@ class TestPythonSDK(unittest.TestCase):
         viewer.agent("a").usage("OpenAI", "gpt-4o", 10, 5)
         self.assertEqual(viewer.usage_events()[-1]["payload"]["inputTokens"], 10)
 
+    # -------------------------------------------------------------
+    # Usage correlation block (issue #64)
+    # -------------------------------------------------------------
+
+    def test_usage_correlation_fields_forwarded_and_omitted(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        agent.usage(
+            "OpenAI", "gpt-4o", 10, 5,
+            trace_id="trace_1", parent_id="span_1", tool_call_id="call_1",
+            meeting_id="meeting_1", user_id="usr_1", tags=["env:prod", "feature:x"],
+        )
+        agent.usage("OpenAI", "gpt-4o", 10, 5)
+        with_correlation, without = [e["payload"] for e in viewer.usage_events()]
+        self.assertEqual(with_correlation["traceId"], "trace_1")
+        self.assertEqual(with_correlation["parentId"], "span_1")
+        self.assertEqual(with_correlation["toolCallId"], "call_1")
+        self.assertEqual(with_correlation["meetingId"], "meeting_1")
+        self.assertEqual(with_correlation["userId"], "usr_1")
+        self.assertEqual(with_correlation["tags"], ["env:prod", "feature:x"])
+        for key in ("traceId", "parentId", "toolCallId", "meetingId", "userId", "tags"):
+            self.assertNotIn(key, without)
+
+    def test_tool_helpers_forward_tool_call_id(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        agent.tool_started("git.commit", tool_call_id="call_started")
+        agent.tool_completed("git.commit", tool_call_id="call_completed")
+        agent.tool_failed("git.commit", tool_call_id="call_failed")
+        agent.tool_started("git.push")
+        tool_events = [e for e in viewer.captured if e["type"].startswith("tool.")]
+        started, completed, failed, plain = tool_events
+        self.assertEqual(started["payload"]["toolCallId"], "call_started")
+        self.assertEqual(completed["payload"]["toolCallId"], "call_completed")
+        self.assertEqual(failed["payload"]["toolCallId"], "call_failed")
+        self.assertNotIn("toolCallId", plain["payload"])
+
+    def test_usage_correlation_id_vectors_match_the_shared_fixture(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        for field in USAGE_CORRELATION_VECTORS["idFields"]:
+            kwarg = {
+                "traceId": "trace_id", "parentId": "parent_id", "toolCallId": "tool_call_id",
+                "meetingId": "meeting_id", "userId": "user_id",
+            }[field]
+            for vector in USAGE_CORRELATION_VECTORS["idCases"]:
+                with self.subTest(field=field, case=vector["name"]):
+                    if vector["valid"]:
+                        agent.usage("OpenAI", "gpt-4o", 10, 5, **{kwarg: vector["value"]})
+                    else:
+                        with self.assertRaises(ValueError):
+                            agent.usage("OpenAI", "gpt-4o", 10, 5, **{kwarg: vector["value"]})
+
+    def test_usage_tags_vectors_match_the_shared_fixture(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        for vector in USAGE_CORRELATION_VECTORS["tagCases"]:
+            with self.subTest(case=vector["name"]):
+                if vector["valid"]:
+                    agent.usage("OpenAI", "gpt-4o", 10, 5, tags=vector["tags"])
+                else:
+                    with self.assertRaises(ValueError):
+                        agent.usage("OpenAI", "gpt-4o", 10, 5, tags=vector["tags"])
+
+    def test_tags_as_str_raises_type_error(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        with self.assertRaises(TypeError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, tags="env:prod")
+        with self.assertRaises(TypeError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, tags=b"env:prod")
+        self.assertEqual(viewer.captured, [])
+
+    def test_non_string_correlation_id_raises_type_error(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        with self.assertRaises(TypeError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id=12345)
+        self.assertEqual(viewer.captured, [])
+
+    def test_utf16_length_parity_with_astral_characters(self):
+        from sdk.python.agent_viewer import _utf16_length, CORRELATION_ID_MAX_LENGTH
+
+        emoji = "\U0001F600"  # one astral character, 2 UTF-16 code units
+        exactly_at_limit = emoji * (CORRELATION_ID_MAX_LENGTH // 2)
+        self.assertEqual(_utf16_length(exactly_at_limit), CORRELATION_ID_MAX_LENGTH)
+
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        # Exactly at the limit (128 UTF-16 code units) must validate.
+        agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id=exactly_at_limit)
+        # One more astral character pushes it to 130 UTF-16 units: rejected.
+        with self.assertRaises(ValueError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id=exactly_at_limit + emoji)
+
+    def test_whitespace_set_parity_u0085_and_ufeff(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        # U+0085 (NEL) is stripped by Python's str.strip() but is NOT in the JavaScript trim set used by the
+        # contract, so a leading or trailing U+0085 must be accepted, not rejected.
+        agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="\u0085leading")
+        agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="trailing\u0085")
+        # U+FEFF (BOM) IS in the JavaScript trim set, so it must be rejected at the edges.
+        with self.assertRaises(ValueError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="﻿leading")
+        with self.assertRaises(ValueError):
+            agent.usage("OpenAI", "gpt-4o", 10, 5, trace_id="trailing﻿")
+
+    def test_llm_failed_helper(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        agent.llm_failed(
+            "OpenAI", "gpt-4.1", "rate_limited",
+            http_status=429, retryable=True,
+            trace_id="trace_failed", tags=["env:prod"], task_id="task_1",
+        )
+        failed = [e for e in viewer.captured if e["type"] == "llm.failed"][-1]
+        self.assertEqual(failed["taskId"], "task_1")
+        self.assertNotIn("taskId", failed["payload"])
+        self.assertEqual(failed["severity"], "high")
+        self.assertEqual(failed["payload"]["provider"], "OpenAI")
+        self.assertEqual(failed["payload"]["model"], "gpt-4.1")
+        self.assertEqual(failed["payload"]["errorKind"], "rate_limited")
+        self.assertEqual(failed["payload"]["httpStatus"], 429)
+        self.assertEqual(failed["payload"]["retryable"], True)
+        self.assertEqual(failed["payload"]["traceId"], "trace_failed")
+        self.assertEqual(failed["payload"]["tags"], ["env:prod"])
+
+        agent.llm_failed("OpenAI")
+        bare = [e for e in viewer.captured if e["type"] == "llm.failed"][-1]
+        self.assertNotIn("model", bare["payload"])
+        self.assertNotIn("errorKind", bare["payload"])
+
+        with self.assertRaises(ValueError):
+            agent.llm_failed("OpenAI", trace_id="")
+
+    def test_list_calls_query_mapping_and_header_only_auth(self):
+        """``start``/``end`` map to ``from``/``to``; repeatable filters are sent as repeated query parameters;
+        the token is sent only in the Authorization header, never in the URL."""
+        page = {
+            "schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [],
+            "page": {"limit": 2, "order": "asc", "hasMore": False, "nextCursor": None},
+        }
+        httpd, thread, base_url = _run_scripted_server([(200, page)])
+        try:
+            viewer = AgentViewer(url=base_url, token="secret-token", max_retries=1, timeout=5.0)
+            result = viewer.list_calls(
+                start=1700000000000,
+                end="2026-10-08T00:00:00Z",
+                time_basis="occurred",
+                agent_id=["researcher", "writer"],
+                provider="anthropic",
+                status="rate_limited",
+                cost_source="unknown",
+                currency=["USD", "none"],
+                request_id="req_1",
+                trace_id="trace_1",
+                order="asc",
+                limit=2,
+                cursor="abc",
+            )
+            self.assertEqual(result["page"]["order"], "asc")
+
+            request = _ScriptedGetHandler.requests[-1]
+            parsed = urllib.parse.urlparse(request["path"])
+            query = urllib.parse.parse_qs(parsed.query)
+            self.assertEqual(parsed.path, "/api/v1/usage/calls")
+            self.assertEqual(query["from"], ["1700000000000"])
+            self.assertEqual(query["to"], ["2026-10-08T00:00:00Z"])
+            self.assertEqual(query["timeBasis"], ["occurred"])
+            self.assertEqual(query["agentId"], ["researcher", "writer"])
+            self.assertEqual(query["provider"], ["anthropic"])
+            self.assertEqual(query["status"], ["rate_limited"])
+            self.assertEqual(query["costSource"], ["unknown"])
+            self.assertEqual(query["currency"], ["USD", "none"])
+            self.assertEqual(query["requestId"], ["req_1"])
+            self.assertEqual(query["traceId"], ["trace_1"])
+            self.assertEqual(query["order"], ["asc"])
+            self.assertEqual(query["limit"], ["2"])
+            self.assertEqual(query["cursor"], ["abc"])
+            self.assertNotIn("token", query)
+            self.assertEqual(request["headers"].get("Authorization"), "Bearer secret-token")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_iter_calls_follows_cursor_until_has_more_is_false(self):
+        pages = [
+            (200, {"schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 1}], "page": {"limit": 1, "order": "desc", "hasMore": True, "nextCursor": "c1"}}),
+            (200, {"schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 2}], "page": {"limit": 1, "order": "desc", "hasMore": False, "nextCursor": None}}),
+        ]
+        httpd, thread, base_url = _run_scripted_server(pages)
+        try:
+            viewer = AgentViewer(url=base_url, max_retries=1, timeout=5.0)
+            seen = [call["seq"] for call in viewer.iter_calls()]
+            self.assertEqual(seen, [1, 2])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_iter_calls_raises_if_the_server_returns_the_same_cursor_twice(self):
+        page = {
+            "schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 1}],
+            "page": {"limit": 1, "order": "desc", "hasMore": True, "nextCursor": "same-cursor"},
+        }
+        httpd, thread, base_url = _run_scripted_server([(200, page)])
+        try:
+            viewer = AgentViewer(url=base_url, max_retries=1, timeout=5.0)
+            with self.assertRaises(AgentViewerError) as ctx:
+                list(viewer.iter_calls(cursor="same-cursor"))
+            self.assertIn("same cursor twice", str(ctx.exception))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_list_calls_fails_immediately_on_400_and_410(self):
+        for status, code in [(400, "invalid_filter"), (410, "cursor_expired")]:
+            httpd, thread, base_url = _run_scripted_server([(status, {"error": code, "issues": []})])
+            try:
+                viewer = AgentViewer(url=base_url, max_retries=3, timeout=5.0)
+                with self.assertRaises(AgentViewerError) as ctx:
+                    viewer.list_calls()
+                self.assertEqual(ctx.exception.status_code, status)
+                self.assertEqual(len(_ScriptedGetHandler.requests), 1, f"status {status} must not be retried")
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5)
+
+    def test_list_calls_retries_429_and_succeeds(self):
+        ok_page = {"schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [], "page": {"limit": 100, "order": "desc", "hasMore": False, "nextCursor": None}}
+        responses = [(429, {"error": "rate_limit_exceeded"}), (429, {"error": "rate_limit_exceeded"}), (200, ok_page)]
+        httpd, thread, base_url = _run_scripted_server(responses)
+        try:
+            viewer = AgentViewer(url=base_url, max_retries=3, timeout=5.0)
+            result = viewer.list_calls()
+            self.assertEqual(result["data"], [])
+            self.assertEqual(len(_ScriptedGetHandler.requests), 3)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_usage_rollup_builds_the_right_url_and_header_and_rejects_unknown_kwargs(self):
+        viewer = AgentViewer(url="http://sdk.test", token="secret-token")
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+            def read(self_inner):
+                return json.dumps({"schemaVersion": "1.0", "groups": [], "totals": {}}).encode("utf-8")
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["headers"] = dict(req.headers)
+            captured["method"] = req.get_method()
+            return FakeResponse()
+
+        with unittest.mock.patch("urllib.request.urlopen", fake_urlopen):
+            result = viewer.usage_rollup(
+                ["agent", "model"],
+                from_=1700000000000,
+                to="2026-10-12",
+                utc_offset_minutes=-300,
+                sort="calls",
+                limit=50,
+                agent_id=["a1", "a2"],
+                tag="solo-tag",
+            )
+
+        self.assertEqual(result["schemaVersion"], "1.0")
+        self.assertEqual(captured["method"], "GET")
+        parsed = urllib.parse.urlparse(captured["url"])
+        self.assertEqual(parsed.path, "/api/v1/usage/rollup")
+        query = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(query["groupBy"], ["agent,model"])
+        self.assertEqual(query["from"], ["1700000000000"])
+        self.assertEqual(query["to"], ["2026-10-12"])
+        self.assertEqual(query["utcOffsetMinutes"], ["-300"])
+        self.assertEqual(query["sort"], ["calls"])
+        self.assertEqual(query["limit"], ["50"])
+        self.assertEqual(sorted(query["agentId"]), ["a1", "a2"])
+        self.assertEqual(query["tag"], ["solo-tag"])
+        self.assertNotIn("token", query)
+        # The dict comes back with case-normalized header keys from http.client.
+        self.assertEqual(captured["headers"].get("Authorization"), "Bearer secret-token")
+
+        with self.assertRaises(TypeError):
+            viewer.usage_rollup("agent", not_a_real_filter="x")
+
     def test_live_server_integration(self):
         port = get_free_port()
         env = os.environ.copy()
@@ -442,12 +811,96 @@ class TestPythonSDK(unittest.TestCase):
             # One call is provider-reported and the other estimated: two pairs, so no single legacy figure.
             self.assertIsNone(snapshot["totalCost"])
 
+            # usage_rollup() round trip (issue #66): grouped sums over the same ledger rows just appended.
+            rollup = viewer.usage_rollup(["agent", "model"], agent_id="py_bot")
+            self.assertEqual(rollup["schemaVersion"], "1.0")
+            self.assertEqual(rollup["query"]["groupBy"], ["agent", "model"])
+            self.assertEqual(rollup["query"]["filters"]["agentId"], ["py_bot"])
+            rollup_group = next(
+                g for g in rollup["groups"] if g["key"]["agent"] == "py_bot" and g["key"]["model"] == "gpt-4o"
+            )
+            self.assertEqual(rollup_group["calls"]["total"], 1)
+            self.assertEqual(rollup_group["tokens"]["input"]["sum"], 500)
+            self.assertEqual(
+                [(e["currency"], e["costSource"], e["sum"]) for e in rollup_group["cost"]["entries"]],
+                [("USD", "provider-reported", 0.005)],
+            )
+
+            with self.assertRaises(TypeError):
+                viewer.usage_rollup("agent", not_a_real_filter="x")
+
         finally:
             proc.terminate()
             try:
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+class TestExampleAdapters(unittest.TestCase):
+    """One test per Python example adapter (issue #64): checks the trace/parent/tool-call-id mapping
+    table and the "omitted when not exposed" cases, with a fake viewer that captures emitted payloads.
+    """
+
+    def test_autogen_adapter_forwards_call_id_and_trace_id_only_when_given(self):
+        autogen_adapter = _load_example_module("autogen-adapter.py")
+        adapter = autogen_adapter.AutoGenViewerAdapter()
+        captured = _capture_adapter_viewer(adapter)
+
+        adapter.on_function_call("researcher", "web_search", "query", call_id="call_abc")
+        adapter.on_function_return("researcher", "web_search", "done", call_id="call_abc")
+        adapter.on_function_call("researcher", "web_search")  # AutoGen gave no call id this time
+        adapter.on_llm_response(
+            "researcher", "OpenAI", "gpt-4.1", 100, 20,
+            trace_id="trace_autogen", tool_call_id="call_abc", tags=["env:prod"],
+        )
+        adapter.on_llm_response("researcher", "OpenAI", "gpt-4.1", 10, 2)
+
+        tool_started = [e for e in captured if e["type"] == "tool.started"]
+        tool_completed = [e for e in captured if e["type"] == "tool.completed"]
+        self.assertEqual(tool_started[0]["payload"]["toolCallId"], "call_abc")
+        self.assertEqual(tool_completed[0]["payload"]["toolCallId"], "call_abc")
+        self.assertNotIn("toolCallId", tool_started[1]["payload"])
+
+        usage_events = [e for e in captured if e["type"] == "llm.usage"]
+        with_correlation, without = usage_events
+        self.assertEqual(with_correlation["payload"]["traceId"], "trace_autogen")
+        self.assertEqual(with_correlation["payload"]["toolCallId"], "call_abc")
+        self.assertEqual(with_correlation["payload"]["tags"], ["env:prod"])
+        # AutoGen exposes no parent span id at this layer: the adapter never sends one.
+        self.assertNotIn("parentId", with_correlation["payload"])
+        for field in ("traceId", "parentId", "toolCallId", "tags"):
+            self.assertNotIn(field, without["payload"])
+
+    def test_crewai_adapter_omits_tool_call_id_unless_the_caller_passes_one(self):
+        crewai_adapter = _load_example_module("crewai-adapter.py")
+        adapter = crewai_adapter.CrewAIViewerAdapter()
+        captured = _capture_adapter_viewer(adapter)
+
+        adapter.register_crew_agent("writer", "Writer", "Write the report")
+        adapter.on_tool_start("writer", "file.read", "report.md")  # CrewAI gives no tool call id
+        adapter.on_tool_start("writer", "file.read", "report.md", tool_call_id="explicit_1")
+        adapter.on_tool_end("writer", "file.read", "contents", tool_call_id="explicit_1")
+        adapter.on_token_usage(
+            "writer", "OpenAI", "gpt-4.1", 100, 20,
+            trace_id="trace_crewai", tool_call_id="explicit_1", tags=["tier:pro"],
+        )
+        adapter.on_token_usage("writer", "OpenAI", "gpt-4.1", 10, 2)
+
+        tool_started = [e for e in captured if e["type"] == "tool.started"]
+        tool_completed = [e for e in captured if e["type"] == "tool.completed"]
+        self.assertNotIn("toolCallId", tool_started[0]["payload"])
+        self.assertEqual(tool_started[1]["payload"]["toolCallId"], "explicit_1")
+        self.assertEqual(tool_completed[0]["payload"]["toolCallId"], "explicit_1")
+
+        usage_events = [e for e in captured if e["type"] == "llm.usage"]
+        with_correlation, without = usage_events
+        self.assertEqual(with_correlation["payload"]["traceId"], "trace_crewai")
+        self.assertEqual(with_correlation["payload"]["toolCallId"], "explicit_1")
+        self.assertEqual(with_correlation["payload"]["tags"], ["tier:pro"])
+        self.assertNotIn("parentId", with_correlation["payload"])
+        for field in ("traceId", "parentId", "toolCallId", "tags"):
+            self.assertNotIn(field, without["payload"])
 
 
 if __name__ == "__main__":

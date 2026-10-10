@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CREW_CEO_SPRITE } from '../src/crew/crewSprites.ts';
-import { validateCrewAssets } from '../scripts/crew-assets.mjs';
+import { validateCrewAssets, CREW_CHARACTER_CANVAS, CREW_CHARACTER_ANCHOR } from '../scripts/crew-assets.mjs';
 
 const root = fileURLToPath(new URL('../',import.meta.url));
 const manifest = () => JSON.parse(readFileSync(new URL('../assets/crew/asset-manifest.json',import.meta.url),'utf8'));
@@ -24,12 +24,24 @@ for (const [name,mutate,pattern] of [
   ['dimensiones alteradas',m=>m.assets[0].width=1,/Dimensiones/],
   ['perspectiva inventada',m=>m.assets[0].viewAvailability.back='prototype',/Perspectiva/],
   ['anclaje fuera del sprite',m=>m.assets[0].anchor.x=2,/Anclaje/],
+  ['lienzo de personaje fuera del contrato visual',m=>{m.assets.find(asset=>asset.kind==='furniture').kind='character';},/contrato visual Crew exige lienzo/],
+  ['anclaje de personaje fuera del contrato visual',m=>m.assets[0].anchor={x:.4,y:.9375},/contrato visual Crew exige lienzo/],
 ]) {
   test(`banco Crew rechaza ${name}`,()=>{
     const value=manifest();mutate(value);
     assert.throws(()=>validateCrewAssets(root,value),pattern);
   });
 }
+
+test('el contrato visual Crew exige lienzo 256x352 y anclaje 0.5/0.9375 en los once personajes', () => {
+  const characters = manifest().assets.filter(asset => asset.kind === 'character');
+  assert.equal(characters.length, 11);
+  for (const asset of characters) {
+    assert.equal(asset.width, CREW_CHARACTER_CANVAS.width);
+    assert.equal(asset.height, CREW_CHARACTER_CANVAS.height);
+    assert.deepEqual(asset.anchor, CREW_CHARACTER_ANCHOR);
+  }
+});
 
 test('el piloto CEO conserva dimensiones y anclaje del banco en sus cuatro vistas', () => {
   for (const view of ['front','right','back','left']) {

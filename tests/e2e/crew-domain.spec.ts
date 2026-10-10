@@ -12,6 +12,10 @@ const events = [
 
 for (const transport of ['sse','log'] as const) {
   test(`conserva presencia y consumo de ${transport} entre salas y modos`, async ({page}) => {
+    // El portal carga el historial del servidor antes de suscribirse al stream (issue #72): un snapshot vacío
+    // mantiene este fixture igual que antes de ese cambio.
+    await page.route('**/api/v1/snapshot', route => route.fulfill({ contentType:'application/json',
+      body: JSON.stringify({ lastEventId:null, events:[], agents:[], totalTokens:{input:0,output:0,cached:0,reasoning:0}, totalCost:0 }) }));
     await page.route('**/api/v1/events/stream*', route => transport === 'sse'
       ? route.fulfill({ contentType:'text/event-stream', headers:{'Access-Control-Allow-Origin':'*'},
         body:events.map(event => `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`).join('') })
@@ -30,6 +34,9 @@ for (const transport of ['sse','log'] as const) {
     await expect(page.getByText('$0.250',{exact:true})).toBeVisible();
     await page.getByRole('button',{name:'Crew · Beta',exact:true}).click();
     const crew = page.getByRole('region',{name:'Crew mode: independent office'});
+    // Puente LIVE/DEMO/REPLAY (#155): SSE en vivo muestra LIVE; soltar un archivo de eventos para
+    // reproducirlo pasa la insignia a REPLAY de forma explícita, nunca inferida en silencio.
+    await expect(crew.getByTestId('crew-viewer-mode')).toHaveText(transport === 'sse' ? 'LIVE' : 'REPLAY');
     await expect(crew.getByText('Agents in this room: 0',{exact:true})).toBeVisible();
     await page.locator('#crew-room').selectOption('development');
     await expect(crew.getByText('QA Fixture Developer: CODING',{exact:true})).toBeVisible();
@@ -49,6 +56,8 @@ for (const transport of ['sse','log'] as const) {
 }
 
 test('LIVE sin eventos permanece vacío en todas las salas del catálogo', async ({page}) => {
+  await page.route('**/api/v1/snapshot', route => route.fulfill({ contentType:'application/json',
+    body: JSON.stringify({ lastEventId:null, events:[], agents:[], totalTokens:{input:0,output:0,cached:0,reasoning:0}, totalCost:0 }) }));
   await page.route('**/api/v1/events/stream*', route => route.abort());
   await page.goto('/?mode=live');
   await page.getByRole('button',{name:'Crew · Beta',exact:true}).click();
@@ -59,6 +68,12 @@ test('LIVE sin eventos permanece vacío en todas las salas del catálogo', async
     await expect(page.getByText('Agents in this room: 0',{exact:true})).toBeVisible();
     await expect(page.locator('canvas')).toHaveCount(1);
   }
+});
+
+test('fuera de LIVE, Crew muestra la insignia DEMO explícita (#155)', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button',{name:'Crew · Beta',exact:true}).click();
+  await expect(page.getByTestId('crew-viewer-mode')).toHaveText('DEMO');
 });
 
 test('libera observadores Crew al salir y mantiene controles ES en cuatro tamaños', async ({page}, testInfo) => {

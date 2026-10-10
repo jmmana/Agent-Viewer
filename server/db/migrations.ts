@@ -2,6 +2,15 @@ import fs from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { baseline } from './migrations/0001-baseline';
 import { contentHash } from './migrations/0002-content-hash';
+import { requestKeyDedup } from './migrations/0003-request-key-dedup';
+import { eventsSeq } from './migrations/0004-events-seq';
+import { telemetryMetrics } from './migrations/0005-telemetry-metrics';
+import { usageLedger } from './migrations/0006-usage-ledger';
+import { usageCallsIndexes } from './migrations/0007-usage-calls-indexes';
+import { retention } from './migrations/0008-retention';
+import { usageRollup } from './migrations/0009-usage-rollup';
+import { usageLedgerSummary } from './migrations/0010-usage-ledger-summary';
+import { rollupAttribution } from './migrations/0011-rollup-attribution';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -12,7 +21,19 @@ export interface Migration {
   up(db: DatabaseSync): void;
 }
 
-export const MIGRATIONS: readonly Migration[] = [baseline, contentHash];
+export const MIGRATIONS: readonly Migration[] = [
+  baseline,
+  contentHash,
+  requestKeyDedup,
+  eventsSeq,
+  telemetryMetrics,
+  usageLedger,
+  usageCallsIndexes,
+  retention,
+  usageRollup,
+  usageLedgerSummary,
+  rollupAttribution,
+];
 
 export interface MigrationOptions {
   appVersion: string;

@@ -33,6 +33,10 @@ async function run(command: CliCommand): Promise<number> {
       const { runInstall } = await import('./claudeInstall.ts');
       return runInstall(command);
     }
+    case 'otel-headers': {
+      const { runOtelHeaders } = await import('./otelHeaders.ts');
+      return runOtelHeaders(command);
+    }
     case 'start': {
       const { runStart } = await import('./start.ts');
       return runStart(command);

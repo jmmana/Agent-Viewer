@@ -4,6 +4,10 @@ export type { AgentOfficeProps } from './AgentOffice';
 export type { VisualMode, CrewView, CrewRoomDefinition } from '../crew/crewModel';
 export type { CrewCamera, CrewCameraByRoom } from '../crew/crewCamera';
 
+export type { CrewPreferences } from '../crew/crewPreferences';
+export { crewAgentActivity, crewActivityLine, crewViewerModeLabel } from '../crew/crewEventBridge';
+export type { CrewAgentActivity, CrewViewerMode, CrewVisibility } from '../crew/crewEventBridge';
+
 // Event-driven office model, usable without React (server, tests, exports)
 export { OfficeStore, buildOfficeSnapshot } from './officeStore';
 export type { AgentProfile, OfficeEventInput, OfficeMode, OfficeSnapshot, OfficeStoreOptions } from './officeStore';
@@ -15,8 +19,8 @@ export { ReplayControls } from './ReplayControls';
 export type { ReplayControlsProps } from './ReplayControls';
 
 // Usage figures (display only)
-export { formatUsage, formatTokens, formatCost, summarizeUsage } from './usage';
-export type { OfficeUsage, UsageFigures, FormattedUsageItem } from './usage';
+export { formatUsage, formatTokens, formatCost, formatUsageBadge, summarizeUsage } from './usage';
+export type { OfficeUsage, UsageFigures, FormattedUsageItem, UsageBadge, UsageCostSource } from './usage';
 
 // Texts
 export {
@@ -71,7 +75,13 @@ export type {
   ValidationIssue,
   ValidationResult,
 } from '../integrations/canonicalTypes';
-export { validateCanonicalEvent } from '../integrations/canonicalContract';
+export {
+  validateCanonicalEvent,
+  CORRELATION_ID_MAX_LENGTH,
+  USAGE_TAGS_MAX,
+  USAGE_TAG_MAX_LENGTH,
+} from '../integrations/canonicalContract';
+export type { UsageCorrelation, LlmUsagePayload, LlmFailedPayload } from '../integrations/canonicalContract';
 
 // Usage tally (portal display only)
 export type {
@@ -83,11 +93,17 @@ export type {
 
 // Realtime stream from an Agent Viewer server
 export { connectEventStream } from '../integrations/realtimeClient';
-export type { RealtimeConnection, RealtimeStatus, RealtimeConnectionOptions } from '../integrations/realtimeClient';
+export type {
+  RealtimeConnection,
+  RealtimeStatus,
+  RealtimeConnectionOptions,
+  RealtimeResync,
+  RealtimeReplayed,
+} from '../integrations/realtimeClient';
 
 // Event log files (JSONL V1)
 export { parseEventLog, MAX_EVENT_LOG_SIZE_BYTES } from '../integrations/eventLogParser';
-export type { EventLogParseResult, EventLogParseIssue } from '../integrations/eventLogParser';
+export type { EventLogParseResult, EventLogParseIssue, EventLogIssueCode, EventLogOtlpSummary } from '../integrations/eventLogParser';
 
 // Video export
 export { recordReplay, computeReplaySchedule, isRecordingSupported, getSupportedMimeType } from './recordReplay';

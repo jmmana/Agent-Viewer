@@ -153,6 +153,7 @@ Give every event a stable, unique `id`. The office ignores an event whose `id` i
 | `t` | `HostTranslate` | none | Your translate function. Wins over `messages` when it returns a value. Keep it stable. |
 | `theme` | `'dark' \| 'light'` | `'dark'` | Palette of the canvas drawing and the `av-theme-dark` or `av-theme-light` class. |
 | `showUsage` | `boolean` | `false` | Shows the figures passed in `usage`. See [Usage figures](#usage-figures). |
+| `showUsageBadges` | `boolean` | `false` | Draws a compact usage badge on each agent card from `usage.byAgent`. Independent of `showUsage`. See [Usage figures](#usage-figures). |
 | `usage` | `OfficeUsage` | none | Usage figures computed by your app. The office never computes them. |
 | `selectedAgentId` | `string \| null` | none | Controlled selection. Leave it undefined to let the office keep its own. When it changes, the camera centers on that agent. |
 | `onSelectAgent` | `(agentId: string \| null) => void` | none | Called when the viewer clicks an agent on the canvas. |
@@ -303,7 +304,7 @@ const officeT = useCallback<HostTranslate>(
 
 ### Message keys
 
-There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` and `modelOps.*` keys belong to the demo app's Model Ops console and timeline; the embedded office does not show them.
+There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` and `modelOps.*` keys belong to the demo app's Model Ops console and timeline; the embedded office does not show them. As of issue #79, Model Ops reads the server's usage ledger: that read client and its ledger-backed tab components live under `src/integrations/ledgerClient.ts` and `src/components/modelOps/`, both demo-app-only. `@warlockcode/agent-viewer` ships no ledger client, no usage-ledger endpoint reference and no Model Ops component (enforced by `tests/lib/libraryIsolation.test.ts`).
 
 #### `rooms.*` (10)
 
@@ -456,7 +457,7 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | `office.agentLineNoRole` | {name}: {status} | {name}: {status} |
 | `office.empty` | Waiting for agent activity | Esperando actividad de los agentes |
 
-#### `usage.*` (6)
+#### `usage.*` (26)
 
 | Key | English | Spanish |
 |---|---|---|
@@ -464,8 +465,28 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | `usage.tokens` | Tokens | Tokens |
 | `usage.inputTokens` | Input tokens | Tokens de entrada |
 | `usage.outputTokens` | Output tokens | Tokens de salida |
+| `usage.cacheRead` | Cache read | Lectura de caché |
+| `usage.cacheWrite` | Cache write | Escritura de caché |
+| `usage.cacheReadTokens` | Cache read tokens | Tokens de caché leídos |
+| `usage.cacheWriteTokens` | Cache write tokens | Tokens de caché escritos |
+| `usage.reasoningTokens` | Reasoning tokens | Tokens de razonamiento |
 | `usage.cost` | Cost | Costo |
+| `usage.costSource` | Cost source | Origen del costo |
+| `usage.costSource.providerReported` | provider reported | informado por el proveedor |
+| `usage.costSource.estimated` | estimated | estimado |
+| `usage.failedCalls` | Failed calls | Llamadas fallidas |
+| `usage.badge.estimatedMark` | est. | est. |
+| `usage.badge.failed` | {count} failed | {count} fallidas |
+| `usage.badge.lessThan` | <{value} | <{value} |
 | `usage.unknown` | unknown | desconocido |
+| `usage.partialTokens` | {value} (unknown in {count} of {calls} calls) | {value} (desconocido en {count} de {calls} llamadas) |
+| `usage.partialCost` | + {count} calls with unknown cost | + {count} llamadas con costo desconocido |
+| `usage.partialShort` | + unknown | + desconocido |
+| `usage.mixedCurrencies` | mixed currencies | múltiples monedas |
+| `usage.mixedSources` | mixed sources | múltiples fuentes |
+| `usage.noCurrency` | Currency not reported | Moneda no reportada |
+| `usage.estimatedShort` | estimated | estimado |
+| `usage.sourceUnknown` | Source unknown | Fuente desconocida |
 
 #### `replay.*` (8)
 
@@ -546,7 +567,7 @@ Notes:
 
 - The office is a `<section>` named by `ariaLabel` (default: the `office.label` text).
 - The canvas has `role="img"` and an `aria-label` (`canvas.aria`) that points to the text list.
-- An agent list, announced politely (`aria-live="polite"`), names every agent with its role and status, for example "Atlas, Builder: Coding". With `showUsage`, each line also carries that agent's figures from `usage.byAgent`. The list stays visually hidden until it receives keyboard focus (Tab); then it opens as a panel of buttons.
+- An agent list, announced politely (`aria-live="polite"`), names every agent with its role and status, for example "Atlas, Builder: Coding". With `showUsage` or `showUsageBadges` (either one), each line also carries that agent's exact figures from `usage.byAgent`, so the screen-reader text always agrees with a visible badge even when the badge itself is hidden below zoom 0.55. The list stays visually hidden until it receives keyboard focus (Tab); then it opens as a panel of buttons.
 - The toolbar (`role="toolbar"`) and the replay controls are real buttons with accessible names and a visible focus ring. The replay slider announces its progress, and the speed buttons use `aria-pressed`.
 - With `prefers-reduced-motion: reduce`, nothing animates: agents move to their destination without walking, animated details stay still and button transitions are off.
 - Keyboard selection: each agent in that list is a button (`aria-pressed` shows the selected one). Pressing it selects the agent and moves the camera to it, like a click on the canvas; pressing it again clears the selection. The office registers no global keyboard shortcuts.
@@ -567,19 +588,34 @@ const usage = useMemo(() => ({
 <AgentOffice events={events} showUsage usage={usage} />
 ```
 
-`OfficeUsage` is `{ total?: UsageFigures; byAgent?: Record<string, UsageFigures> }`, and `UsageFigures` has `totalTokens`, `inputTokens`, `outputTokens`, `cost` and `currency` (all optional).
+`OfficeUsage` is `{ total?: UsageFigures; byAgent?: Record<string, UsageFigures> }`. `UsageFigures` has `totalTokens`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `cost`, `currency`, `costSource` (`'provider-reported' | 'estimated' | 'unknown'`) and `failedCalls` (all optional and nullable).
 
 Display rules:
 
 - `showUsage` is `false` by default. Without it, `usage` is ignored.
-- `total` appears in a small panel in the top right corner: tokens and cost always, input and output tokens only when you send those fields.
+- `total` appears in a small panel in the top right corner: tokens and cost always, every other field only when you send that key.
 - `byAgent` figures, keyed by agent id, appear in the accessible agent list.
 - A missing value (`undefined`, `null` or not a finite number) is shown as "unknown" (`usage.unknown`), never as zero. `totalTokens` is not derived from input and output tokens: send it yourself.
 - `cost` is formatted as money when `currency` is an ISO 4217 code such as `USD` or `EUR`, and as a plain number otherwise. Numbers follow `locale`.
+- `costSource` is shown as "provider reported" or "estimated"; `null`, missing or an unrecognized value is shown as unknown. `failedCalls` follows the same token formatting rules as any other count.
 
 `formatUsage(figures, locale, translate)`, `formatTokens` and `formatCost` return the same formatted values, so you can show them elsewhere in your UI.
 
-If your app has no usage service, `summarizeUsage(events)` is an explicit opt-in helper. It only adds up the figures reported by `llm.usage` events and never prices tokens:
+### Usage badges on the canvas
+
+`showUsageBadges` (`false` by default, independent of `showUsage`) draws a compact badge on every agent card from `usage.byAgent`:
+
+```tsx
+<AgentOffice events={events} usage={usage} showUsageBadges />
+```
+
+- An agent with **no** `usage.byAgent` entry gets **no badge**: that is neither a zero nor a claim, so the library draws nothing rather than guess. An agent with an entry whose fields are missing or `null` gets a badge that reads "unknown" for those fields.
+- The badge shows the compact total tokens (`9,840` below 10,000, `12.3K` / `12,3 mil` from 10,000 up), the cost (`$0.42`, `<$0.01` for a positive cost under half a cent, `$0.00` for a reported zero), an `est.` mark when `costSource` is `'estimated'`, and a `N failed` chip when `failedCalls` is greater than 0. None of this is color-only: every state has its own text.
+- Badges live on the agent card, so they are hidden below camera zoom 0.55 unless the agent is selected, hovered or speaking, exactly like the card itself. The accessible agent list (above) is the always-available channel with the exact figures.
+- The canvas receives only the pre-formatted strings `formatUsageBadge` produces, never a number: it does not import the demo app's token aggregator and adds up nothing itself.
+- `formatUsageBadge(figures, locale, translate)` returns `{ tokens, cost, costLabel, estimated, failed, text }` and is exported if you want the same badge content elsewhere in your UI; `UsageBadge` and `UsageCostSource` are exported types.
+
+If your app has no usage service, `summarizeUsage(events)` is an explicit opt-in helper. It only adds up the figures reported by `llm.usage` and `llm.failed` events and never prices tokens:
 
 ```tsx
 const usage = useMemo(() => summarizeUsage(events), [events]);
@@ -587,6 +623,9 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 
 - Events are deduplicated by `id`, like the office and the server do: the first event with a given id wins, whatever its type or agent, and later events with that id are ignored (SSE reconnects, retries and merged replay files repeat events). An event without an `id` (or with an empty or non-string one) cannot be matched, so each one is counted; the same object passed twice counts once.
 - Token counts come from the raw payload. A count is reported only when it is a non-negative integer. If any event does not report `inputTokens`, the `inputTokens` figure is `null` (shown as "unknown"), and the same goes for `outputTokens`. `totalTokens` is `inputTokens + outputTokens` only when both are known, and `null` otherwise.
+- `cacheReadTokens`, `cacheWriteTokens` and `reasoningTokens` follow a similar rule but with a third state: the key is **omitted** when no counted event reports it at all, the **sum** when every counted event does, and `null` when only some do. The deprecated `cachedTokens` field is read as `cacheReadTokens` when the new field is absent.
+- `costSource` is omitted when no counted event ever sends the key. Once some event does, a missing or unrecognized value on any event counts as `'unknown'` (the same default the canonical contract applies), and the figure is the common value when every event agrees, `null` when they do not; so a mix of an explicit `'estimated'` and an event that said nothing yields `null`.
+- `failedCalls` counts `llm.failed` events, independently of `llm.usage`: an agent with only failed calls and no successful ones still gets a `byAgent` entry, with every other figure `null`. The key is omitted when there are no failed calls to report.
 - A cost is reported only when it is a finite, non-negative number, and a currency counts only when it is an ISO 4217 code (`^[A-Z]{3}$`, such as `USD`). Values like `'usd'`, `'dollars'` or `''` count as no currency. Costs are never converted:
 
   | Costs seen (after deduplication) | `cost` | `currency` |
@@ -600,7 +639,9 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 
 - `currency` is set only when `cost` is known, so no currency label ever appears next to an unknown cost. A partial sum is never shown.
 - The same rules apply to each agent in `byAgent`, using only that agent's events: when one agent lacks a figure, only that agent and the run total become unknown.
-- Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}`.
+- Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}` (unless some agent has `llm.failed` events of its own, in which case it gets an entry with `failedCalls` set and everything else `null`).
+
+**Usage correlation fields (issue #64).** `llm.usage` and `llm.failed` payloads may carry `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` and `tags` (see [docs/integration.md](integration.md#correlation-and-attribution-fields-issue-64) for the validation rules). `summarizeUsage` does not read them: its output is identical whether or not an event carries these fields, and it never groups by them. No library component renders `userId` or `tags`, since `userId` is pseudonymous attribution and `tags` can be used for internal labels, neither meant for the embedded display. The library exports the matching limits and type as values and a type only, with no new behavior: `CORRELATION_ID_MAX_LENGTH` (128), `USAGE_TAGS_MAX` (20), `USAGE_TAG_MAX_LENGTH` (64) and the type `UsageCorrelation`.
 
 ### Figures from the Agent Viewer server
 
@@ -641,6 +682,36 @@ const usage = {
 - `totalTokens` is the host's own addition of the two, sent only when both pass that test; otherwise `null`.
 - `cost` and `currency` are sent only when the bucket has calls, `costUnknownCount` is `0` and `byCurrency` has exactly one entry (one currency, one cost source). Otherwise send `cost: null`, shown as "unknown".
 - The `agentId: null` bucket (calls without an agent) has no key in `byAgent`; it only counts in `total`. Failed calls (`failed`) are not part of these figures.
+
+### Feeding `usage` from the server (issue #66)
+
+`GET /api/v1/usage/rollup` ([full reference](integration.md#usage-rollup-get-apiv1usagerollup-issue-66)) answers a sharper question than `GET /api/v1/usage`: a time range, a time basis, and up to 3 grouping dimensions. The TypeScript SDK's `toUsageFigures()` does the same "only an exact figure becomes a number" mapping `toFigures()` does above, already written for a rollup group:
+
+```tsx
+import type { UsageFigures } from '@warlockcode/agent-viewer';
+import { toUsageFigures } from './sdk/typescript/index';
+
+const rollup = await viewer.usageRollup({
+  groupBy: ['agent'],
+  from: '2026-10-05T00:00:00Z',
+  to: '2026-10-12T00:00:00Z',
+});
+
+const usage = {
+  total: toUsageFigures(rollup.totals, { costSource: 'provider-reported' }),
+  byAgent: Object.fromEntries(
+    rollup.groups
+      .filter((group) => group.key.agent !== null)
+      .map((group) => [group.key.agent as string, toUsageFigures(group, { costSource: 'provider-reported' })]),
+  ),
+};
+
+<AgentOffice events={events} showUsage usage={usage} />
+```
+
+`toUsageFigures(group, { costSource })` returns `cost` as a number only when the group has exactly one cost entry, that entry's source matches the `costSource` you asked for, and `unknownCostCalls` is `0`; two currencies, a reported/estimated mix, or any unknown cost all give `cost: null`. `inputTokens`/`outputTokens` are `null` unless every call in the group reported that kind, and `totalTokens` is their sum (cache and reasoning tokens are excluded) only when both are known. This helper runs in your host backend, next to the SDK call: the component still only ever displays the `UsageFigures` you pass it, imported here as a type, never computed by `@warlockcode/agent-viewer` itself.
+
+Per-meeting and per-tool spend (issue #80, `groupBy: ['meeting']`/`['tool']` on the same endpoint) work exactly the same way: `toUsageFigures()` maps one of those groups just like any other, and if a host wants to show a meeting's or a tool's cost in the office, it computes that figure server-side and passes it through its own props, same as the per-agent example above. The library itself has no `meeting`/`tool` concept: it never fetches the rollup, never sums anything, and this item adds no new import or prop to `@warlockcode/agent-viewer`.
 
 ## Replay
 
@@ -691,7 +762,7 @@ Seeking backwards rebuilds the office from the start of the run up to the new po
 
 ## Loading a log file
 
-`parseEventLog(input)` reads a canonical JSONL V1 log (a `string`, `File` or `Blob`, up to `MAX_EVENT_LOG_SIZE_BYTES`, 25 MB) and validates every line. See [event-log.md](event-log.md) for the format.
+`parseEventLog(input)` reads a canonical JSONL V1 log, or an OTLP/JSON file (a `string`, `File` or `Blob`, up to `MAX_EVENT_LOG_SIZE_BYTES`, 25 MB) and validates every line. See [event-log.md](event-log.md) for the format, including the OTLP logs/metrics/traces files section.
 
 ```tsx
 async function loadRun(file: File) {
@@ -701,7 +772,7 @@ async function loadRun(file: File) {
 }
 ```
 
-The result is `{ events, issues, totalLines, format }`. Invalid lines are reported in `issues` (`line`, `error`, `raw`) without stopping the parse. OTLP traces are not supported: they return no events and one issue saying that OTLP traces are not supported yet. The component has no built-in file drop; wire your own file input to `parseEventLog`.
+The result is `{ events, issues, totalLines, format, otlp? }`. Invalid lines are reported in `issues` (`line`, `error`, `raw?`, `code?`, `path?`) without stopping the parse. OTLP logs convert to `llm.usage`/`llm.failed` events; OTLP metrics return no events and one issue explaining they are pre-aggregated counters; OTLP traces are not supported yet and also return no events plus one issue. `otlp` (present whenever `format === "otlp"`) reports which signals were found and the per-record `logRecords`/`converted`/`skipped`/`rejected` counters. The component has no built-in file drop; wire your own file input to `parseEventLog`.
 
 ## Video export
 
@@ -819,15 +890,41 @@ Everything is exported from `@warlockcode/agent-viewer`. The stylesheet is `@war
 | Office | `AgentOffice` | `AgentOfficeProps` |
 | Office model | `OfficeStore`, `buildOfficeSnapshot` | `AgentProfile`, `OfficeEventInput`, `OfficeMode`, `OfficeSnapshot`, `OfficeStoreOptions` |
 | Replay | `useEventReplay`, `ReplayControls` | `EventReplay`, `EventReplayOptions`, `ReplayControlsProps` |
-| Usage | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem` |
+| Usage | `formatUsage`, `formatTokens`, `formatCost`, `formatUsageBadge`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Core types | none | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
 | Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
-| Live stream | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions` |
-| Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue` |
+| Live stream | `connectEventStream` | `RealtimeConnection`, `RealtimeStatus`, `RealtimeConnectionOptions`, `RealtimeResync`, `RealtimeReplayed` |
+| Log files | `parseEventLog`, `MAX_EVENT_LOG_SIZE_BYTES` | `EventLogParseResult`, `EventLogParseIssue`, `EventLogIssueCode`, `EventLogOtlpSummary` |
 | Video | `recordReplay`, `computeReplaySchedule`, `isRecordingSupported`, `getSupportedMimeType` | `RecordReplayOptions`, `ReplaySchedule` |
 
-`connectEventStream(baseUrl, onEvent, onStatus?, options?)` opens the stream at `${baseUrl}/api/v1/events/stream`, calls `onEvent` for every valid event and reconnects with backoff, resuming from the last event id. Options: `token` (sent in an `Authorization: Bearer` header over a streamed `fetch`, so it stays out of URLs and access logs; only where `fetch` cannot stream does it fall back to an `EventSource` with the `token` query parameter), `fetch` (the `fetch` used for that stream, the global one by default), `maxReconnectAttempts` (default unlimited), `initialBackoffMs` (1000), `maxBackoffMs` (15000) and `heartbeatTimeoutMs` (35000). `onStatus` receives `connecting`, `connected`, `reconnecting`, `disconnected`, `error` or `closed`. The returned connection has `close()`, `status()` and `getLastEventId()`.
+`connectEventStream(baseUrl, onEvent, onStatus?, options?)` opens the stream at `${baseUrl}/api/v1/events/stream`, calls `onEvent` for every valid event and reconnects with backoff, resuming from the last event id. The token never travels in a URL, on any transport (issue #71). Options: `token` (sent in an `Authorization: Bearer` header over a streamed `fetch`, when the browser can stream a `fetch` body; where it cannot, the client instead calls `POST /api/v1/stream-tickets` with the token, before every connect and reconnect, and opens `EventSource` with the single-use ticket it gets back; with a token and no `fetch` at all, the connection stops with status `error` and never makes a network call), `fetch` (the `fetch` used for that stream and for minting tickets, the global one by default), `maxReconnectAttempts` (default unlimited), `initialBackoffMs` (1000), `maxBackoffMs` (15000), `heartbeatTimeoutMs` (35000), `lastEventId` (starts the stream from this cursor, typically `snapshot.lastEventId`) and `onResync` / `onReplayed` (below). `onStatus` receives `connecting`, `connected`, `reconnecting`, `disconnected`, `error`, `closed` or `resyncing`. The returned connection has `close()`, `status()`, `getLastEventId()` and `resyncCount()`.
+
+### Reconnect replay and resync (issue #54)
+
+After a reconnect, the server either replays every event the client missed, in order and exactly once, or tells it so with a `resync` frame; it never sends a partial replay. The wire format and server-side rule are in [integration.md](integration.md#reconnect-replay-and-resync). The helper surfaces both outcomes instead of hiding them:
+
+- `onResync?: (info: RealtimeResync) => string | null | undefined | Promise<...>` is called when the server could not replay everything missed. `info.reason` is `cursor_unknown`, `gap_too_large` or `buffer_overflow`; `info.missed` is the number of events the client never saw, or `null` when the server itself does not know (an unknown cursor: never treat `null` as `0`). Reload your state (typically `GET /api/v1/snapshot`) and return the cursor to resume from, usually `snapshot.lastEventId`; returning `null` or `undefined` resumes live only. Throwing or rejecting reconnects with the existing backoff and calls `onResync` again on the next resync, leaving the cursor unchanged. Consecutive resyncs with nothing received in between also wait for the backoff delay, so a server stuck resyncing cannot cause a tight reconnect loop.
+- `onReplayed?: (info: RealtimeReplayed) => void` is called after a reconnect replay completes, including one that replayed `0` events. `info.replayed` is the frame count and `info.lastEventId` the id of the last one (`null` when `replayed` is `0`).
+- Without `onResync`, a resync still reports the `resyncing` status and increments `resyncCount()`, then reconnects live only: the host learns about the gap even without reloading a snapshot.
+
+Host pattern: load the snapshot once, start the stream from its cursor, and reload the same way on a resync. `snapshot.events` carries only the newest 100 events (it rebuilds the office, never the totals), and usage figures must come from the snapshot's own aggregates (`totalTokens`, `totalCost`), never from re-adding those 100 events:
+
+```ts
+const load = async () => {
+  const snapshot = await fetch(`${base}/api/v1/snapshot`).then((r) => r.json());
+  setEvents(snapshot.events.slice().reverse());
+  setServerTotals({ tokens: snapshot.totalTokens, cost: snapshot.totalCost });
+  return snapshot.lastEventId ?? undefined;
+};
+const lastEventId = await load();
+const connection = connectEventStream(base, (event) => setEvents((prev) => [...prev, event]), setStatus, {
+  lastEventId,
+  onResync: async () => (await load()) ?? null,
+});
+```
+
+`snapshot.totalCost` and `agents[].cost` currently count a missing cost as `0` on the server (tracked separately); do not present them to a user as a certain figure.
 
 ## Isolation guarantees
 

@@ -199,6 +199,8 @@ All events follow the single official V1 envelope:
 | | `runtime.disconnected` | External runtime disconnects. |
 | | `runtime.heartbeat` | Periodic runtime health heartbeat. |
 
+`llm.usage` and `llm.failed` do not only come from `POST /api/v1/events`: a Claude Code session with `--telemetry` on sends its own OpenTelemetry logs to `POST /v1/logs`, which the server maps into the same two canonical types, with `runtimeId: "claude-code"` and `source`/`agentId` set to the session's main agent. The same session's OpenTelemetry *metrics* (`claude_code.token.usage`, `claude_code.cost.usage`) go to `POST /v1/metrics` instead, stored in their own tables as a second, independent measurement; they never become canonical events and never reach `GET /api/v1/events`. Both routes accept `http/json` and `http/protobuf`. See [docs/otlp.md](otlp.md) for both receivers' reference.
+
 ---
 
 ## 🛡️ 2. Validation & Error Handling
@@ -235,16 +237,212 @@ Validation rules enforced:
 Base URL: `http://localhost:8787`
 
 ### Health & Readiness
-- `GET /health`: Health status, server version, connected SSE client count.
-- `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`).
+- `GET /health`: Health status, server version, connected SSE client count, and current `auth` / `webhookAuth` modes. An open server still returns HTTP 200 with `ok: true`, including during a SQLite startup rebuild: point container liveness probes here.
+- `GET /ready`: Verification that storage engine is ready, plus `ingestion: { conflicts, legacyUnverifiedDuplicates }` counted since the process started. SQLite includes `database.schemaVersion`, `database.latestKnownSchemaVersion` and `database.appliedAt`; these describe the database schema, unlike `/health`'s event-contract `schemaVersion` (`1.0`). With SQLite storage, `/ready` also answers `503` with `Retry-After: 1` and a `rebuild` object until the server finishes replaying the stored events into derived state; point container and orchestrator readiness probes here, not at `/health`.
+
+**SQLite startup rebuild.** On startup, a `sqlite`-backed server replays every stored event, in insertion order, through the same reducer the live path uses, rebuilding agents, runtimes, sessions, tasks, meetings and usage totals from scratch. The state after a restart is identical to the state before it. `GET /ready` reports progress:
+
+```json
+{
+  "ok": false,
+  "ready": false,
+  "storage": "sqlite",
+  "rebuild": {
+    "state": "running",
+    "totalEvents": 100000,
+    "processedEvents": 42000,
+    "skippedEvents": 0,
+    "skippedEventIds": [],
+    "startedAt": 1791460800000,
+    "finishedAt": null,
+    "durationMs": null
+  }
+}
+```
+
+`rebuild.state` is `"done"` once the replay finishes (`/ready` then answers `200`), or `"failed"` with a `rebuild.error` message if the replay could not complete (`/ready` stays `503`). A stored row that cannot be parsed or applied is skipped, counted in `rebuild.skippedEvents`, and its id listed in `rebuild.skippedEventIds` (first 20); the rest of the rebuild still completes. Memory storage has nothing to replay: `/ready` answers `200` immediately with `rebuild.state: "done"`.
+
+While the rebuild runs, routes that read or write derived state answer `503 store_rebuilding` (or `503 store_rebuild_failed` if the rebuild failed) with a `rebuild` object in the body and a `Retry-After: 1` header:
+
+| Route | Behavior during the rebuild |
+|---|---|
+| `GET /api/v1/snapshot`, `GET /api/v1/runtimes`, `GET /api/v1/sessions`, `GET /api/v1/sessions/:id`, `POST /api/v1/agents`, `PATCH /api/v1/agents/:agentId`, `POST /api/v1/runtimes` | `503 store_rebuilding` (or `store_rebuild_failed`). |
+| `POST /api/v1/events`, `POST /api/v1/events/batch`, `POST /api/v1/webhooks/generic` | Accepted, stored and broadcast as usual; the rebuild (or a later restart) applies them to derived state once it reaches them. |
+| `GET /api/v1/events`, `GET /api/v1/events/stream` | Unchanged: these read SQLite directly. |
+
+Both SDKs only write through the events routes, which stay open during the rebuild, and both already retry `5xx` responses on writes; no SDK change is needed. A client calling `snapshot()` during a rebuild sees the `503` as an error, which is the correct signal to retry after `Retry-After`.
+
+The `auth` field is `token` or `open`; `webhookAuth` is `signature`, `token` or `open`. These fields never include the token:
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "open",
+  "webhookAuth": "open"
+}
+```
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "service": "agent-viewer",
+  "version": "0.3.0",
+  "schemaVersion": "1.0",
+  "clientsConnected": 1,
+  "auth": "token",
+  "webhookAuth": "signature"
+}
+```
 
 ### Events
-- `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header. Answers `202` (accepted), `200` (duplicate: same id, same content) or `409 conflicting_duplicate` (same id, different content, not applied), each with the event `fingerprint`. A header that differs from a non-empty body `id` is a `400 idempotency_key_mismatch`.
-- `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch). Each result has a `status` of `accepted`, `duplicate` or `conflict`.
-- `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`).
-- `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream with `Last-Event-ID` missed event replay.
-- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block and the deprecated `totalTokens` and `totalCost`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
+- `POST /api/v1/events`: Ingest a single canonical event. Supports `Idempotency-Key` header. Answers `202` (accepted), `200` (duplicate: same id, same content) or `409 conflicting_duplicate` (same id, different content, not applied), each with the event `fingerprint`. A header that differs from a non-empty body `id` is a `400 idempotency_key_mismatch`. Both `202` and `200` also carry `receivedAt` (ms epoch, server clock, issue #65): the server's own receive time, echoed back so a caller can record it; a duplicate's `receivedAt` is the *original* acceptance time, never the retry's.
+- `POST /api/v1/events/batch`: Ingest multiple events (up to 100 per batch). Each result has a `status` of `accepted`, `duplicate` or `conflict`, and (except for `conflict`) a `receivedAt` with the same rule as above. All events of one batch call share one `receivedAt`.
+- `GET /api/v1/events`: Query events with filters (`limit`, `since`, `afterId`, `beforeId`, `runtimeId`, `sessionId`, `agentId`, `type`). Always newest first, the arrival order (the durable `seq`, not `timestamp`), on both the memory and the SQLite store. Every returned event carries a read-only `receivedAt` (server clock; SQLite always stored it in `created_at` but never returned it before issue #65): a top-level `receivedAt` sent by a client is ignored on ingest and never stored or returned. The body also carries `retention` (see below), so a caller can tell whether the list is complete.
+  - `limit`: absent or not a number gives `100`; otherwise `Math.floor` then clamp to `[1, 500]` (issue #72; previously unbounded and unchecked).
+  - `beforeId` (issue #72): only events stored strictly before the cursor event, for paging backward from a known cursor (typically `snapshot.lastEventId` or an earlier page's `nextBeforeId`) down to the oldest stored event. An unknown or evicted `beforeId` answers `400 { "error": "invalid_cursor", "message": "..." }` instead of silently ignoring it, unlike `afterId`, since a partial history must never look complete.
+  - `hasMore` and `nextBeforeId` (issue #72) are additive response fields: `hasMore` is `true` when more, older events exist past this page; `nextBeforeId` is the id of the oldest event in the page to pass as the next `beforeId`, or `null` when `hasMore` is `false`. Paging from the newest event down with `beforeId` reaches the oldest stored event with no duplicates and no gaps, on both stores, even when events arrived with a non-monotonic `timestamp`. A client talking to an older server that does not return `hasMore` should stop paging after the first page.
+  - The recommended open sequence for a client that wants the full picture before showing anything is: `GET /api/v1/snapshot` (roster, task and meeting state, the newest 100 events), optionally `GET /api/v1/events?beforeId=...` to page further back for a deeper timeline, then `GET /api/v1/events/stream` with `lastEventId` set to the snapshot's own `lastEventId`. This is what the demo app's live mode does (issue #72, `src/integrations/historyLoader.ts`), bounded by `VITE_AGENT_VIEWER_HISTORY_LIMIT`.
+- `GET /api/v1/usage/ledger/status`: Usage ledger health (issue #65), row counts by origin, legacy rows, skip counts and the oldest/newest server receive time. Never a sum of tokens or cost (that is issue #66). [Full reference](usage-ledger.md).
+- `GET /api/v1/events/stream`: Server-Sent Events (SSE) live stream. On reconnect (`Last-Event-ID` header or `lastEventId` query parameter), it replays every missed event in full or sends an explicit `resync` frame, never a partial replay; see [Reconnect replay and resync](#reconnect-replay-and-resync-issue-54) below. The first frames after `: connected` are a heartbeat whose `data` carries `{ "retention": {...} }`, and every later heartbeat (every 15s) carries it too; a client that does not read `data` on the `heartbeat` event is unaffected.
+- `GET /api/v1/snapshot`: Aggregate snapshot: agents, tasks, meetings, runtimes, the `usage` block, `usageDuplicates: { count, mismatched, unverified }` (request-id duplicate references, see [Idempotency & Replays](#-5-idempotency--replays)), `retention` (see below) and the deprecated `totalTokens`, `totalCost` and `eventsCount`. `totalCost` is `null` unless every call reported a cost in one single currency with one single cost source. See [Usage aggregates](#usage-aggregates-get-apiv1usage).
+
+`retention` (added by issue #53) tells a reader whether the event list is complete, so a truncated history is never mistaken for the full one:
+
+```json
+{
+  "storage": "memory",
+  "maxEvents": 10000,
+  "retainedEvents": 10000,
+  "acceptedEvents": 10250,
+  "droppedEvents": 250,
+  "since": 1791459731000,
+  "totalsSince": 1791452400000
+}
+```
+
+`maxEvents` is `null` in `sqlite` mode (the database keeps every row). `retainedEvents` is how many events `GET /api/v1/events` and SSE replay can currently return; `acceptedEvents` is how many were accepted since `totalsSince` (duplicates never counted), including any that no longer fit in the retained window; `droppedEvents` is the difference, `0` meaning the list is complete. `since` is the server receive time of the oldest retained event, or `null` before anything was dropped. `totalsSince` is when the totals and per-agent figures started counting (the process start time; after a future SQLite rebuild, issue #52, it becomes the receive time of the oldest stored event). In memory mode, a retry of an event id (or, for `llm.usage`/`llm.failed`, a `(provider, requestId)` pair) is still recognized as a duplicate after the event itself falls out of the retained window: the dedup index is never trimmed by eviction, so totals never double count a late retry.
+#### Reconnect replay and resync (issue #54)
+
+The rule: after a reconnect, a client either gets every event it missed, in insertion order and exactly once, or it is told plainly that it must resync from the snapshot. There is no third, silent outcome. `AGENT_VIEWER_SSE_REPLAY_MAX` (default `10000`, `0` allowed) caps how many missed events a reconnect replays in full; past that, or when the cursor is unknown (never stored, evicted in memory mode, or lost after a memory-mode restart), the server sends a `resync` frame instead and no event frames from the gap. A `resync` whose reason is `buffer_overflow` means too many live events arrived while a replay was already in flight; the replay already sent is valid, only the live events after it were not delivered.
+
+The server always keeps the connection open and keeps streaming live events after a `resync`, on purpose: a 0.2.x client ignores the named frame and would otherwise reconnect with the same cursor in a loop. A client built against this contract closes the connection itself and reconnects from a fresh snapshot.
+
+Both frames are named SSE events with no `id:` line, so they never move a reader's `Last-Event-ID` cursor and a 0.2.x client (which only reads unnamed `onmessage` frames) never sees them:
+
+```text
+event: replayed
+data: {"schemaVersion":"1.0","cursor":"evt_0412","replayed":5000,"lastEventId":"evt_5412"}
+
+event: resync
+data: {"schemaVersion":"1.0","reason":"gap_too_large","cursor":"evt_0412","missed":12873,"replayMax":10000,"snapshotPath":"/api/v1/snapshot"}
+
+event: resync
+data: {"schemaVersion":"1.0","reason":"cursor_unknown","cursor":"evt_gone","missed":null,"replayMax":10000,"snapshotPath":"/api/v1/snapshot"}
+```
+
+`reason` is `cursor_unknown`, `gap_too_large` or `buffer_overflow`. `missed` is the event count, or `null` only when the server cannot know it (an unknown cursor); it is never `0` for an unknown cursor. On any `resync`, a client must reload its state from `snapshotPath` (`GET /api/v1/snapshot`): apply `snapshot.events` oldest first to rebuild the office, but take usage figures (`totalTokens`, `totalCost`, `agents[].tokens*`) from the snapshot's own aggregates, never from re-adding those events, since the snapshot carries only the newest 100. The [library guide](library.md#reconnect-replay-and-resync-issue-54) documents the `connectEventStream` helper that implements this (`lastEventId`, `onResync`, `onReplayed`, the `resyncing` status and `resyncCount()`).
+
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
+- `GET /api/v1/usage/rollup`: Grouped sums over the usage ledger for an audit question such as "how much did agent X spend with model Y this week" (issue #66), with a time range, a time basis (`received`/`occurred`), up to 3 dimensions (`agent`, `model`, `provider`, `session`, `task`, `day`, `user`, `tag`, `meeting`, `tool`) and a `coverage` block that says when the answer may be incomplete. `meeting` and `tool` (issue #80) answer "how much did this meeting cost" and "which tool is the expensive one", attributed only through an explicit `meetingId`/`toolCallId` the reporter sent, never by time overlap. [Full reference](#usage-rollup-get-apiv1usagerollup-issue-66).
+- `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
+- `GET /api/v1/usage/export` and `GET /api/v1/usage/export/totals`: CSV/JSONL streaming export of the usage ledger with per-currency, per-cost-source reconciliation totals (issue #69), redacted, with a CSV formula-injection guard and a pinned `asOfSeq` snapshot. Full reference: [docs/usage-export.md](usage-export.md).
+
+#### Usage calls: `GET /api/v1/usage/calls` (issue #67)
+
+A read-only, metadata-only listing of the usage ledger (issue #65): the drill-down behind a rollup figure, for an operator reconciling a provider invoice who needs to list every call for an agent and model, match each one by `requestId` against the provider's console, and see which ones failed or carry no provider-reported cost. Unlike `GET /api/v1/events?type=llm.usage` (whole events, including free text, and an `afterId` cursor that cannot walk history), this endpoint never returns prompt, completion, message, tool input/output or a provider error message, and its cursor can walk the full history in either direction.
+
+**Request:**
+
+```http
+GET /api/v1/usage/calls?agentId=researcher&model=claude-sonnet-4-5&from=2026-10-01T00:00:00Z&to=2026-10-08T00:00:00Z&limit=2
+Authorization: Bearer <token>
+```
+
+**Parameters** (parsed by the one `parseUsageFilters` function shared with the future rollup endpoint, so an identical query string selects an identical row set on both):
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `from`, `to` | epoch ms, or an ISO 8601 date-time with an explicit offset | Half-open window `[from, to)`. A date-only value or one without an offset is rejected. |
+| `timeBasis` | `received` \| `occurred` | Which clock `from`/`to` apply to. Default `received` (the server receive time from issue #65), so an audit never depends on a client clock. |
+| `agentId`, `sessionId`, `runtimeId`, `taskId` | string, repeatable | OR within one key, AND across keys. |
+| `provider`, `model` | string, repeatable | Exact match on the stored value (`provider` is normalized lowercase at ingestion, issue #65). |
+| `status` | string, repeatable | `ok`, or one of issue #46's `LLM_ERROR_KINDS` (`rate_limited`, `overloaded`, `timeout`, `invalid_request`, `auth`, `server_error`, `cancelled`, `network`, `unknown`). |
+| `costSource` | `provider-reported` \| `estimated` \| `unknown`, repeatable | |
+| `currency` | uppercase ISO 4217, or the literal `none`, repeatable | `none` selects rows with no currency; combine with codes (`currency=USD&currency=none`). |
+| `requestId` | string, repeatable | Exact match on the provider request id, for invoice reconciliation. |
+| `traceId` | string | Every call in one trace (issue #64). |
+| `order` | `desc` \| `asc` | Default `desc` (newest first). |
+| `limit` | integer 1..1000 | Default 100. Out of range, non-numeric or repeated answers `400`, never a silent fallback. |
+| `cursor` | opaque string | `page.nextCursor` from a previous response. |
+
+Every value must be a non-empty string; an unknown parameter, an array where a single value is expected (or vice versa), or more than 100 values for one key all answer `400 invalid_filter`.
+
+**Response `200`:**
+
+```json
+{
+  "schemaVersion": "1.0",
+  "asOf": 1791417600000,
+  "storage": "sqlite",
+  "data": [
+    {
+      "seq": 48213,
+      "eventId": "evt_01JA7Q9X3M2V",
+      "type": "llm.usage",
+      "status": "ok",
+      "backfilled": false,
+      "occurredAt": 1791331199120,
+      "receivedAt": 1791331199342,
+      "agentId": "researcher",
+      "sessionId": "sess_42",
+      "runtimeId": "crew-marketing",
+      "taskId": "task_7",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "tokens": { "input": 1834, "output": 412, "cacheRead": 12000, "cacheWrite": null, "reasoning": null },
+      "latencyMs": 2310,
+      "requestId": "req_011CT8xK2",
+      "cost": 0.0213,
+      "currency": "USD",
+      "costSource": "provider-reported",
+      "errorCode": null,
+      "trace": { "traceId": "4bf92f3577b34da6a3ce929d0e0e4736", "parentId": null, "toolCallId": null, "meetingId": null },
+      "userId": null,
+      "tags": []
+    }
+  ],
+  "page": { "limit": 2, "order": "desc", "hasMore": true, "nextCursor": "eyJ2IjoxLCJlIjoiN2Q..." }
+}
+```
+
+**Never returned:** `summary`, `payload`, `event_json`, message text, tool input or output, or a provider error message. The serializer (`toCallRecord`) is an explicit allow-list over the already-typed ledger row, never "event minus some keys": every field above is the full set, and a new ledger column is never exposed until it is added here and to the key-set test. `errorCode` is the stored value only when it matches a short machine-code shape (`^[A-Za-z0-9_.:-]{1,64}$`); the ledger today only ever stores `errorKind` there, never the provider's own free-text error code. Unlike the issue's original proposal (`trace.spanId`), issue #65 never added a `spanId` column (it stores `meetingId` from issue #64 instead), so `trace.meetingId` takes that place; `source` (the envelope's `source` identifier) is also not in the ledger and is therefore not in a `CallRecord` either.
+
+**Backfilled rows:** a row created by issue #65's one-time backfill over events stored before 0.4.0 carries `backfilled: true` and is returned exactly as the ledger stored it, with no reinterpretation. Such a row may carry a schema default (for example `cacheRead: 0`) that was never actually reported; the flag lets an auditor exclude or discount these rows. A live row is always `backfilled: false`.
+
+**No totals.** The response carries no sum, count or total of any kind: aggregation belongs to the rollup endpoint. `page.hasMore` (computed with one extra row fetched, never `COUNT(*)`) is enough to know whether to keep paging.
+
+**Cursor.** Opaque to the client, at most 512 characters, carrying position only (a forged cursor can at most move the position; auth and filters are re-evaluated on every request). It keeps working across a SQLite restart (the store's "epoch" is a persistent random id); in memory mode, a cursor from a previous process always answers `410 cursor_expired`, since `seq` restarts there. With `order=desc`, `page.nextCursor` is a string only while `hasMore` is `true`. With `order=asc`, it is a string whenever the page returned at least one row (even with `hasMore: false`), so a tail-following client can resume later and pick up rows inserted after it last looked; it is `null` only for an empty page. A `Link: <...>; rel="next"` response header carries the same next-page URL (as a relative reference, never built from the `Host` header, and never containing a token) whenever `hasMore` is `true`.
+
+**Errors** (same shape as the rest of `/api/v1`, `{ "error": "...", "issues": [...] }` where applicable):
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `invalid_filter` | Unknown parameter, bad value shape, bad date, `from >= to`, bad enum, too many values, `limit` out of `1..1000`. |
+| 400 | `invalid_cursor` | The cursor could not be decoded, or is too long. |
+| 400 | `cursor_mismatch` | The cursor was issued for a different filter set or a different `order`. Changing only `limit` between pages is always allowed. |
+| 410 | `cursor_expired` | The store's epoch differs from the cursor's (a memory-mode restart). |
+| 401 | `unauthorized` | Missing or wrong `Authorization: Bearer` token. |
+| 429 | `rate_limit_exceeded` | Existing `/api/v1` rate limiter. |
+
+**Invoice reconciliation recipe:** to check one provider invoice line against what was recorded, walk `GET /api/v1/usage/calls?provider=anthropic&requestId=<id>` (or filter by `agentId`/`model`/a `from`/`to` window and match by eye) and compare `cost`, `currency` and `costSource` for that `requestId` against the provider's own console or export. A `costSource: "unknown"` or `"estimated"` row means the recorded figure is not what the provider billed; reconcile those first. Prefer the `Authorization` header over anything else for this endpoint: it is read by whoever holds the server's token, and nothing about the request should ever end up in a browser history or a proxy access log.
+- `POST /v1/logs`: OTLP/HTTP logs receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Maps Claude Code's `claude_code.api_request`/`claude_code.api_error` into `llm.usage`/`llm.failed`. See [docs/otlp.md](otlp.md).
+- `POST /v1/metrics`: OTLP/HTTP metrics receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Stores `claude_code.token.usage`/`claude_code.cost.usage` as independent evidence, never as canonical events: never summed into the snapshot, never broadcast over SSE, never part of `GET /api/v1/events`. See [docs/otlp.md](otlp.md#otlp-metrics-post-v1metrics).
 
 ### Agents
 - `POST /api/v1/agents`: Register or upsert an agent profile.
@@ -367,6 +565,28 @@ Each conflict writes one `warn` log line on the server with the id, type, source
 
 Ids the server generates itself (`POST /api/v1/agents`, `PATCH /api/v1/agents/:agentId`, `POST /api/v1/runtimes` and the generic webhook) are `evt_<kind>_<uuid>`, for example `evt_reg_0b9f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4`, so two requests in the same millisecond never collide. The generic webhook response adds `duplicateCount` and `conflictCount` next to `acceptedCount`; both are `0` in normal operation.
 
+### A second dedup key: `(provider, requestId)`
+
+The event id above tells a retry of the exact same request from a conflicting one, but a provider call can still reach the server twice under two different event ids: the application calls `usage()` again after giving up, a process replays its own buffer with fresh ids, two layers (a framework adapter and hand-written code) report the same call, or a webhook delivery is retried. `llm.usage` and `llm.failed` have a second, independent key for this: `payload.provider` (normalized: trimmed, lowercased) and `payload.requestId` (trimmed). They share one key space, so a call reported as failed and then as used is not counted twice. An event without a usable `requestId` (missing, not a string, or blank after trimming) has no request key and behaves exactly as described above, event-id dedup only.
+
+A new event id that reports an already-used `(provider, requestId)` is accepted as a **duplicate reference**: stored with its full content for audit, `duplicateOf` pointing at the original, but with no side effects at all. It is never added to any total (agent or global), never changes the agent's status, provider, model or last-seen time, is never broadcast over SSE or passed to a `--record` listener, is excluded from `GET /api/v1/events` and from `Last-Event-ID` replay, and its own event id is remembered too (resending it resolves to the original as an ordinary `event_id` duplicate). The response says which key matched:
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "duplicateReason": "request_id",
+  "id": "evt_req_9921",
+  "submittedId": "evt_req_9988",
+  "matchesOriginal": true,
+  "fingerprint": "sha256:9b0e..."
+}
+```
+
+`id` is always the id the figure is held under (the original for a `request_id` duplicate), `submittedId` is the id the client actually sent (present only when it differs from `id`), and `matchesOriginal` appears only for a `request_id` duplicate: whether its usage-relevant fields (`model`, every token field, `cost`, `currency`, `costSource`) match the original's, compared null-safe (`null` equals `null`, a field absent on both sides is equal, but `null` never equals `0`: unknown is never zero). A mismatch writes one `warn` log line with both event ids, the provider and a request id truncated to 80 characters, never payload text. `POST /api/v1/events/batch` applies both keys in input order, so two items of the same batch can resolve against each other; `GET /api/v1/usage/duplicates` lists every reference, and `GET /api/v1/snapshot`'s `usageDuplicates` gives the running counts (`unverified` is a reference migrated from a database written before this existed, whose legacy content was never compared).
+
+This should be the provider's own request or response id, the same one that appears on the provider side or in an invoice or usage export, never a synthetic counter such as `"1"` reused across sessions: the server would then treat two different calls as the same one and drop the second from the figures.
+
 ---
 
 ## 🔒 6. Webhook Security (HMAC-SHA256)
@@ -393,7 +613,7 @@ The server rejects requests if `|now - timestamp| > 300_000` (5 minutes) or if s
 
 ## 💰 7. Canonical LLM Usage Normalization
 
-Every token count and cost enters Agent Viewer through `llm.usage` (a successful call) or `llm.failed` (a failed attempt). The server stores, replays and adds up exactly what the validator accepts, so the contract never invents a figure.
+Every token count and cost enters Agent Viewer through `llm.usage` (a successful call) or `llm.failed` (a failed attempt). The server stores, replays and adds up exactly what the validator accepts, so the contract never invents a figure. This section covers the contract fields; for the binding rules behind them (unknown versus zero, currencies, `costSource`, cache read versus write, and how to reconcile against an invoice), see [docs/usage-semantics.md](usage-semantics.md).
 
 **Missing means unknown, never 0.** A field that the runtime did not report is left out of the stored event (or kept as `null` when sent as `null`). The validator never turns it into `0`. A `0` in a stored event is always a zero that the sender reported.
 
@@ -435,7 +655,7 @@ With these rules, "total tokens = `inputTokens` + `outputTokens`" stays correct,
 | `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. No default. |
 | `cachedTokens` | No | **Deprecated**, see below. Non-negative integer or `null`. No default. |
 | `latencyMs` | No | Non-negative integer or `null`. |
-| `requestId` | No | String or `null`. |
+| `requestId` | No | String or `null`. Should be the provider's own request or response id: the server deduplicates on `(provider, requestId)` (see [Idempotency & Replays](#-5-idempotency--replays)). Never reuse a synthetic counter such as `"1"` across sessions, or the server will treat two different calls as the same one and drop the second from the figures. |
 | `cost` | No | Non-negative number or `null`. Defaults to `null` (unknown). |
 | `costSource` | No | `provider-reported`, `estimated` or `unknown`. Defaults to `unknown`. |
 | `currency` | No | ISO 4217 code such as `USD`, or `null`. |
@@ -461,6 +681,47 @@ A conflicting alias gets this response:
 }
 ```
 
+### Correlation and attribution fields (issue #64)
+
+`llm.usage` and `llm.failed` share one correlation block, so a call can be linked to a trace, a tool call, a meeting or a user without Agent Viewer having to guess from timing. Every field is optional, lives in the payload (never the envelope) and means "not reported" when absent or `null`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `traceId` | string or `null` | Id of the trace or run in the caller's own tracing system (a W3C trace id, an OpenAI Agents `trace_...`, a LangChain root run id, and so on). Opaque to Agent Viewer. |
+| `parentId` | string or `null` | Id of the span, run or step in that same tracing system that issued this model call. Not an Agent Viewer event id. |
+| `toolCallId` | string or `null` | The tool call during whose execution this model call was made (for example a sub-agent call started by a tool). Same value space as `toolCallId` on `tool.*` events. It is **not** the id of a tool call the model is requesting. |
+| `meetingId` | string or `null` | The office meeting during which the call happened. Same value as `payload.meetingId` on `meeting.*` events. |
+| `userId` | string or `null` | Opaque, pseudonymous id of the user or account the work was done for. Client-asserted, not authenticated. **Must never be an email address or a person's name.** |
+| `tags` | string array or `null` | Free-form labels for attribution, for example `env:prod`, `feature:quote-builder`, `tier:pro`. **Must never hold prompt text, names or emails.** |
+
+Validation, applied by the server and mirrored by both SDKs:
+
+- `traceId`, `parentId`, `toolCallId`, `meetingId` and `userId` must be 1 to 128 characters, contain no control characters (U+0000 to U+001F, U+007F) and have no leading or trailing whitespace. The exact whitespace set matches ECMAScript's `String.prototype.trim` (U+0009 to U+000D, U+0020, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF); length is counted in UTF-16 code units (JavaScript `String.length`), and the Python SDK counts the same way (`len(s.encode("utf-16-le")) // 2`) so a value accepted locally is never rejected by the server.
+- An empty string is rejected (`payload.<field>`), never silently treated as "not reported". Nothing is ever truncated.
+- `tags` allows at most 20 items, each 1 to 64 characters with the same control-character and whitespace rules. The 20-item limit applies to the array as sent, before deduplication. Exact duplicate tags are removed, keeping the first occurrence and the original order; an empty array is treated as "not reported" and omitted.
+- There are no referential checks: the server never requires that a `toolCallId` or `meetingId` already exists, because events can arrive out of order.
+
+A full example:
+
+```json
+{
+  "payload": {
+    "provider": "OpenAI",
+    "model": "gpt-4.1",
+    "inputTokens": 1200,
+    "outputTokens": 400,
+    "traceId": "trace_3f9a0c7d2b4e4a51b8c6d9e0f1a2b3c4",
+    "parentId": "span_7c1d2e3f4a5b6c7d8e9f0a1b",
+    "toolCallId": "call_Ab12Cd34",
+    "meetingId": "meeting-pricing-review",
+    "userId": "usr_5e1b",
+    "tags": ["env:prod", "feature:quote-builder", "env:prod"]
+  }
+}
+```
+
+After validation, `tags` is stored as `["env:prod", "feature:quote-builder"]` (deduplicated). These fields travel through `POST /api/v1/events` and `POST /api/v1/events/batch`, the generic webhook's `usage` object, `GET /api/v1/events`, `parseEventLog` (JSONL import) and the SSE stream (`GET /api/v1/events/stream`): whatever was stored is exactly what gets replayed or streamed. They add no aggregation and no UI: `summarizeUsage` and the embedded library never read, sum or display `userId` or `tags`. A 0.4.0 or later server is required to keep these fields; an older server accepts the event and silently drops them (see [Compatibility notes](#compatibility-notes) below).
+
 ### Usage from the SDKs
 
 The Python and TypeScript SDKs send each figure exactly as the caller gives it, and never sum or price anything:
@@ -468,7 +729,8 @@ The Python and TypeScript SDKs send each figure exactly as the caller gives it, 
 - A token count or `currency` that is not given (or is `None` / `null`) is left out of the payload; an explicit `0` is kept. The SDKs never work out `cachedTokens` from `cacheReadTokens` and `cacheWriteTokens`, or the reverse.
 - `costSource` is exactly what the caller states. A cost given without it is sent as `"unknown"`, and each client (`AgentViewer` instance) prints one warning. With no cost, `costSource` is the stated value or `"unknown"`. A value other than `provider-reported`, `estimated` or `unknown` fails before anything is sent (`ValueError` in Python, a rejected promise with `TypeError` in TypeScript).
 - `currency` is never defaulted to `USD` and never rewritten; the server checks the ISO 4217 format.
-- `task_id` / `taskId` goes to the envelope `taskId`, not to the payload:
+- `task_id` / `taskId` goes to the envelope `taskId`, not to the payload.
+- `trace_id` / `traceId`, `parent_id` / `parentId`, `tool_call_id` / `toolCallId`, `meeting_id` / `meetingId`, `user_id` / `userId` and `tags` (issue #64) are keyword-only arguments on `usage()`, the `llmFailed()` / `llm_failed()` helper and the legacy `llm_usage()`. Both SDKs validate them locally with the exact limits above before sending anything: Python raises `ValueError` naming the argument (`TypeError` for a wrong type, for example `tags="env:prod"`, since a `str` is itself a sequence and would otherwise be split into one tag per character); TypeScript rejects with `AgentViewerError` whose `issues` use the same `{ path, message }` shape the server returns. `tool_started` / `toolStarted`, `tool_completed` / `toolCompleted` and `tool_failed` / `toolFailed` accept a `tool_call_id` / `toolCallId` option, sent as `payload.toolCallId`.
 
 ```json
 {
@@ -523,7 +785,9 @@ Adapters for providers that report cache counters separately must add them into 
 | Anthropic (Messages) | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` | `cache_creation_input_tokens` | `output_tokens` (already includes thinking) | Not reported separately, leave it out |
 | Google (Gemini) | `promptTokenCount` (already includes cached content) | `cachedContentTokenCount` | Not reported per call, leave it out | `candidatesTokenCount` + `thoughtsTokenCount` | `thoughtsTokenCount` |
 
-The Claude Code mapping from OpenTelemetry is specified separately, with the Claude Code receiver.
+Field names checked against the providers' own API reference on 2026-10-09: [OpenAI Chat Completions usage object](https://platform.openai.com/docs/api-reference/chat/object), [OpenAI Responses usage object](https://platform.openai.com/docs/api-reference/responses/object), [Anthropic Messages usage object and prompt caching](https://docs.claude.com/en/docs/build-with-claude/prompt-caching), [Gemini `UsageMetadata`](https://ai.google.dev/api/generate-content#UsageMetadata). A provider that renames or removes one of these fields needs an update here, not a guess downstream.
+
+The Claude Code mapping from OpenTelemetry is specified separately, with the Claude Code receiver (see [docs/otlp.md](otlp.md) and [docs/claude-code.md#tokens-and-cost](claude-code.md#tokens-and-cost); checked against the [Claude Code OpenTelemetry monitoring guide](https://code.claude.com/docs/en/monitoring-usage) on 2026-10-09).
 
 ### `llm.failed`: failed model calls
 
@@ -557,11 +821,12 @@ The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, 
 | `errorKind` | No | One of the kinds below. Defaults to `unknown` when absent; `null` or an unlisted value is rejected with HTTP 400. |
 | `httpStatus` | No | Integer from 100 to 599, or `null`. |
 | `retryable` | No | Boolean or `null`. No default. |
-| `requestId` | No | String of up to 200 characters, or `null`. |
+| `requestId` | No | String of up to 200 characters, or `null`. Same dedup rule as `llm.usage.requestId`: it shares one key space with `llm.usage`, so a call reported as failed and then as used under the same `(provider, requestId)` is counted once. |
 | `providerErrorCode` | No | The provider's error code (for example `insufficient_quota`), up to 100 characters. A code, never a message. |
 | `latencyMs` | No | Non-negative integer or `null`. |
 | `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. Same meaning as in `llm.usage`. No default. |
 | `cost`, `costSource`, `currency` | No | Same rules as in `llm.usage`. |
+| `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId`, `tags` | No | Same [correlation and attribution block](#correlation-and-attribution-fields-issue-64) as `llm.usage`, validated and normalized the same way. |
 
 Token and cost fields are filled only when the provider actually billed the failed attempt (for example, a stream cut off after output started). Otherwise leave them out. Consumers must never read a missing value as `0`. The subset check of `llm.usage` applies only when `inputTokens` is sent.
 
@@ -703,6 +968,91 @@ The snapshot keeps `totalTokens`, `totalCost` and the `AgentRecord` usage fields
 
 Every figure traces back to its calls: `GET /api/v1/events?type=llm.usage&agentId=<id>` lists the successful calls of an agent and `GET /api/v1/events?type=llm.failed&agentId=<id>` the failed ones. In memory mode that list only covers the events still in the ring.
 
+#### Reconciliation guarantee
+
+A token or cost figure means the same thing wherever it is read: the memory store, the SQLite store across a restart, the portal and the embeddable library's `summarizeUsage` are all checked against one hand-worked fixture in CI (`npm run test:golden`, issue #62). See [`tests/fixtures/reconciliation/README.md`](../tests/fixtures/reconciliation/README.md) for the fixture itself, including the cases it covers (mixed currencies, a missing cost, a missing currency, missing cache tokens, a duplicate id, a conflicting duplicate, a repeated `requestId`, and a failed call) and what is deferred to a follow-up (the HTTP routes, webhook HMAC signing, the `PATCH` rejection path and memory eviction).
+
+### Usage rollup (`GET /api/v1/usage/rollup`, issue #66)
+
+`GET /api/v1/usage` always groups by agent and by `(provider, model)`, with no time control. The rollup endpoint answers an audit question such as "how much did agent X spend with model Y this week": it groups the usage ledger (issue #65) by up to 3 dimensions, over an explicit time range and time basis, and returns sums an auditor can trust. It is read only, mounted under `/api/v1` (same rate limit and token requirement as every other route there, open when no token is configured), and always answers `Cache-Control: no-store`.
+
+```http
+GET /api/v1/usage/rollup?groupBy=agent,model&from=2026-10-05T00:00:00Z&to=2026-10-12T00:00:00Z&provider=anthropic
+Authorization: Bearer <token>
+```
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `groupBy` | comma-separated, 1 to 3 of `agent`, `model`, `provider`, `session`, `task`, `day`, `user`, `tag`, `meeting`, `tool` | required | A repeated `groupBy` is flattened into the same list. `model` alone does not separate same-named models from different providers; use `provider,model` for that. `meeting` and `tool` are the two attribution dimensions, see below. |
+| `from` / `to` | epoch ms, `YYYY-MM-DD` (UTC midnight), or ISO 8601 with `Z`/an explicit offset | open | `[from, to)`: `from` inclusive, `to` exclusive. A date-time with no offset is rejected as ambiguous. |
+| `timeBasis` | `received` \| `occurred` | `received` | `received` is the ledger's server receive time; client clocks are not trusted for an audit. `occurred` is the client event `timestamp`. Drives the filter, the `day` buckets, and `firstAt`/`lastAt`. |
+| `utcOffsetMinutes` | integer, -720..840 | `0` | A fixed offset for `day` buckets, no IANA zone and no DST. |
+| `agentId`, `model`, `provider`, `sessionId`, `taskId`, `runtimeId`, `userId`, `tag`, `status`, `costSource`, `currency` | repeatable | none | Same param repeated is OR, different params are AND. Exact match, never split on commas. `currency=none` matches rows with no currency. `status` takes the ledger's own values (`ok`, or an `llm.failed` error kind). |
+| `meetingId`, `toolCallId` | repeatable | none | Row-level equality on the ledger's own `meeting_id`/`tool_call_id` (issue #80), independent of `groupBy`. |
+| `tool` | repeatable | none | Row-level equality on the *resolved* tool name (issue #80): matches only rows whose `tool` attribution is `attributed` with that name. |
+| `meetingAttribution` | repeatable, `attributed` \| `unattributed` | none | Row-level equality on the row's `meeting` attribution state (issue #80). |
+| `toolAttribution` | repeatable, `attributed` \| `unattributed` \| `unresolved` \| `ambiguous` | none | Row-level equality on the row's `tool` attribution state (issue #80). |
+| `asOfSeq` | integer >= 1 | current end of ledger | Only rows with ledger `seq <= asOfSeq`, so a figure can be reproduced later (barring retention or memory-mode eviction; see `coverage` below). |
+| `sort` | `key` \| `calls` | `key` | `key` is ascending by each group key (UTF-8 byte order, `null` last); `calls` is `calls.total` descending, tied by key ascending. Cost is never a sort key: it is not comparable across currencies. |
+| `limit` | 1..10000 | 1000 | Maximum groups returned; `truncated` and `groupCount` say when there were more. |
+
+Example response:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "query": { "groupBy": ["agent", "model"], "timeBasis": "received", "from": 1791158400000, "to": 1791763200000, "utcOffsetMinutes": 0, "filters": { "provider": ["anthropic"] }, "asOfSeq": null, "sort": "key", "limit": 1000 },
+  "asOf": { "ledgerSeq": 184213, "lastRowReceivedAt": 1791460181233, "generatedAt": 1791460200000 },
+  "coverage": { "storage": "sqlite", "complete": true, "droppedRows": 0, "purgedThrough": null, "backfilledRows": 0, "legacyContractRows": 0 },
+  "groupsAreAdditive": true,
+  "groupCount": 1,
+  "truncated": false,
+  "groups": [
+    {
+      "key": { "agent": "researcher", "model": "claude-sonnet-4-5" },
+      "calls": { "total": 412, "succeeded": 405, "failed": 7 },
+      "tokens": {
+        "input": { "sum": 1830211, "reportedCalls": 405, "unreportedCalls": 7 },
+        "output": { "sum": 210933, "reportedCalls": 405, "unreportedCalls": 7 },
+        "cacheRead": { "sum": 902112, "reportedCalls": 380, "unreportedCalls": 32 },
+        "cacheWrite": { "sum": 120400, "reportedCalls": 380, "unreportedCalls": 32 },
+        "reasoning": { "sum": null, "reportedCalls": 0, "unreportedCalls": 412 }
+      },
+      "cost": { "entries": [{ "currency": "USD", "costSource": "provider-reported", "sum": 14.482113, "calls": 380 }], "unknownCostCalls": 14 },
+      "firstAt": 1791177102000,
+      "lastAt": 1791460181233
+    }
+  ],
+  "totals": { "...": "same shape as a group, without key/bucketStart/bucketEnd" }
+}
+```
+
+**Aggregation rules.** Everything here is normative, enforced identically by the memory and SQLite stores through one shared result shaper (`server/usage/rollup.ts`):
+
+- **Cost entries are keyed by `(currency, costSource)`.** Different currencies, or `provider-reported` vs `estimated` vs `unknown`, are never summed into one number; there is no currency conversion. A cost with no currency gets its own `currency: null` entry. A reported `0` is a real entry. A `null` cost adds to `unknownCostCalls` instead, never to a sum; `sum(entries[].calls) + unknownCostCalls === calls.total` for every group and for `totals`. Entries are ordered by currency ascending (`null` last), then `provider-reported`, `estimated`, `unknown`.
+- **Tokens** (`input`, `output`, `cacheRead`, `cacheWrite`, `reasoning`) sum only the non-null rows; `sum` is `null`, never `0`, when nobody reported that kind. `reportedCalls + unreportedCalls === calls.total` always holds.
+- **Calls.** `succeeded` counts `llm.usage` rows, `failed` counts `llm.failed` rows; finer failure reasons are a `status` filter, not an extra counter. No deduplication happens here: the ledger (issues #47/#48) already holds one row per call.
+- **No derived totals.** There is no "total tokens" or a single total cost: their meaning depends on the provider and the mix of currencies/cost sources. A caller that needs one number computes it itself, outside the embedded component.
+- **Group keys.** A row with no value for a dimension goes to a `null` group, never dropped, so group sums reconcile with `totals` (when `groupsAreAdditive` is `true` and `truncated` is `false`). `day` is a `YYYY-MM-DD` string on the selected time basis plus `utcOffsetMinutes`, never `null`; each `day` group also carries `bucketStart`/`bucketEnd` (epoch ms, `[bucketStart, bucketEnd)`, `bucketEnd = bucketStart + 86400000`).
+- **Tags are not additive.** A row with 2 tags is counted once per tag group (`groupsAreAdditive: false` whenever `groupBy` includes `tag`), and once in `totals`, which is always computed over distinct rows with no tag join.
+- **Truncation.** `groupCount` is the number of groups before `limit`; when `truncated` is `true`, group sums do not have to add up to `totals`, which always covers every matching row.
+- **Precision.** Costs are summed as IEEE 754 doubles of the stored per-row values and rounded only once, to 9 decimals, in the shared shaper; memory and SQLite agree within `1e-9` on realistic data.
+
+**Attribution dimensions: `meeting` and `tool` (issue #80).** "Cost of a tool" means the sum of model calls the reporter explicitly linked to that tool call through `toolCallId`; it is *not* the calls that happened to run while the tool was in flight, and *not* the call that decided to use the tool. "Cost of a meeting" means the sum of calls the reporter linked to it through `meetingId`. Both are only ever answered from an explicit link the reporter sent on the `llm.usage`/`llm.failed` payload; there is no time-overlap inference ("the agent was in a meeting at that moment"), no nearest `tool.started`, and no inference from `taskId` or agent. A call the reporter did not link is `unattributed`, full stop; this is the honest answer, since the server cannot distinguish "not inside a tool call" from "inside one but unlinked".
+
+- **`meeting`.** `attributed` when the row has a non-empty `meetingId` (key `{ "meetingId": "...", "title": "..." }`, `title` is the latest accepted non-empty title from `meeting.requested`/`meeting.started` for that id, `null` when none was ever sent); `unattributed` otherwise (key `{ "meetingId": null }`). A `meeting`-grouped response also carries `sessionIds` (distinct, sorted, capped at 20) and `sessionCount` (the true distinct count, uncapped) per group, since one `meetingId` is not required to be unique across sessions.
+- **`tool`.** Resolution scope is `(sessionId, agentId, toolCallId)` of the usage row, matched against `tool.started` events stored with the same three values (a missing session or agent is its own scope, never guessed from another). `attributed` (key `{ "tool": "Bash" }`) when exactly one distinct tool name matches that scope; `unresolved` (key `{ "tool": null }`) when the row has a `toolCallId` but no matching `tool.started`; `ambiguous` (key `{ "tool": null }`) when more than one distinct name matches (two `tool.started` events in the same scope with different names); `unattributed` (key `{ "tool": null }`) when the row has no `toolCallId` at all. Resolution happens at query time, so arrival order never matters: a `tool.started` that lands after the `llm.usage` referencing it still resolves on the next query. Only `tool.started` ever resolves a name; `tool.completed`/`tool.failed` are never read for this.
+- **`attribution`.** Present on every group when `groupBy` includes `meeting` and/or `tool`: `{ "meeting"?: "attributed" | "unattributed", "tool"?: "attributed" | "unattributed" | "unresolved" | "ambiguous" }`, always an object, never a bare string.
+- **Ordering and `limit`.** Groups sort by attribution rank first (`attributed` 0, `unresolved` 1, `ambiguous` 2, `unattributed` 3, in `meeting`-then-`tool` order when both are present), then the usual `sort`/key rules. `limit` only ever truncates groups that are fully `attributed`: every unattributed/unresolved/ambiguous group is always returned, however many there are, and `truncated` reflects only the attributed subset.
+- **Free text.** `title` and `tool` are the only free text this feature adds to a response; they are truncated to 200 characters and redacted per issue #68. Two groups whose key becomes equal only after truncation are merged (their cells summed), so the group-sum invariant still holds.
+- **Which producers can link calls.** The Python and TypeScript SDKs' `usage()` accept `meeting_id`/`meetingId` and `tool_call_id`/`toolCallId` directly, and their `tool_started`/`tool_completed`/`tool_failed` accept an optional `tool_call_id`/`toolCallId` (issue #64), so a custom reporter using either SDK can link both sides. The Claude Code hooks adapter sends `toolCallId` on tool events but no `llm.usage` at all, so its tool calls stay `unattributed` on the usage side until a model-call reporter also sends the link. OTLP telemetry (issue #59) reports API requests, not tool calls, so it never produces a `tool` link either. No SDK ever invents a call id on the caller's behalf.
+
+**`coverage`** says when the answer may be incomplete instead of returning a partial figure as if it were whole: `storage` is which store answered, `complete` is `false` when rows that could match the query may be gone (memory mode once its ledger cap drops rows, future retention purges reaching the query range), `droppedRows` is memory mode's own upper bound on rows it could not keep, `purgedThrough` is `null` until retention (issue #70) lands, and `backfilledRows`/`legacyContractRows` count matching rows that came from a pre-0.4.0 database (whose receive time is the original insert time).
+
+**Errors.** `400 { "error": "invalid_filter", "issues": [{ "path", "message" }] }` for an unknown dimension, more than 3 dimensions, a duplicate dimension, an unknown query parameter, `from >= to`, an unparsable or offset-less date, `limit`/`asOfSeq`/`utcOffsetMinutes` out of range, more than 100 values in one filter, an empty `meetingId`/`toolCallId`/`tool` value, or an unknown `meetingAttribution`/`toolAttribution` value. `401` comes from the usual token middleware.
+
+**Feeding the embedded library.** The TypeScript SDK's `usageRollup()` calls this endpoint (same `buildHeaders()`, token in the `Authorization` header, array filters sent as repeated params), and its `toUsageFigures(group, { costSource })` helper maps one group (or `totals`) to the library's own `UsageFigures` shape, returning `cost: null` whenever there is more than one cost entry, an entry of a different source than requested, or any unknown cost. See [Feeding `usage` from the server](library.md#feeding-usage-from-the-server-issue-66) in the library guide. The Python SDK's `usage_rollup()` calls the same endpoint with snake_case keyword filters. The library itself is unchanged: it still never sums, prices or estimates anything, and `showUsage` stays off until the host passes a `usage` prop.
+
 ---
 
 ## 🔄 8. Multi-Runtime & Session Tracking
@@ -725,17 +1075,57 @@ Events are tagged with `runtimeId` and `sessionId`, and queryable via:
 
 Agent Viewer supports two persistence backends:
 
-1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer (up to 10,000 events).
-2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). Runtime, session, and agent state remains in memory.
+1. **`memory`** (Default): Fast, zero-dependency in-memory ring buffer, capped by `AGENT_VIEWER_MAX_EVENTS` (default 10,000 events), derived state included.
+2. **`sqlite`**: Persistent event storage using the `node:sqlite` module built into Node.js (Node.js 24 or later, the version this project requires). `AGENT_VIEWER_MAX_EVENTS` has no effect here. Runtimes, sessions, agents, tasks, meetings and usage totals are not stored separately: at startup the server rebuilds all of them by replaying the stored events, in order, through the same reducer the live path uses (see [Health & Readiness](#health--readiness) above). Rebuilding 100,000 events is expected to take about 1 to 2 seconds (see `tests/sqlite-rebuild.test.mjs`). Because the reducer ships with the server, a version upgrade that changes it (for example a fix to how a missing cost is counted) recomputes the whole history with the new reducer at the next startup: that is intended, not a bug.
 
 To enable SQLite persistence:
 ```env
 AGENT_VIEWER_STORAGE=sqlite
 AGENT_VIEWER_SQLITE_PATH=./data/agent-viewer.db
 AGENT_VIEWER_SQLITE_BACKUP=auto
+AGENT_VIEWER_REBUILD_PAGE_SIZE=2000
+AGENT_VIEWER_REBUILD_PAGE_DELAY_MS=0
 ```
 
+`AGENT_VIEWER_REBUILD_PAGE_SIZE` (default `2000`) controls how many rows the startup rebuild replays per page; `AGENT_VIEWER_REBUILD_PAGE_DELAY_MS` (default `0`) adds an extra delay after each page, useful for tests and diagnostics. The server yields to the event loop between pages, so `/health` and `/ready` keep answering during a long rebuild.
+
+**No silent loss, no double counting (issue #53).** In memory mode, evicting an event from the retained window never forgets its id (or its `(provider, requestId)` key): a retry of an evicted event is still answered as `200 { duplicate: true }`, never counted again in totals. `AGENT_VIEWER_MAX_EVENTS` (default `10000`, must be a positive integer) raises or lowers the retained window; an invalid value stops the server at startup instead of silently falling back to the default. Remembering every accepted id costs roughly 100-150 bytes per event for the process lifetime; the server logs one warning when it crosses 1,000,000 known ids. `GET /api/v1/snapshot`, `GET /api/v1/events` and the SSE heartbeat all carry a `retention` block reporting `maxEvents`, `retainedEvents`, `acceptedEvents`, `droppedEvents` and `since`, so a reader can tell when the event list is truncated even though the totals still cover everything. `AGENT_VIEWER_MAX_EVENTS` has no effect in `sqlite` mode (a one-time startup log says so if it is set): every event is stored and replayed by the rebuild above, so `snapshot.retention` there reports `maxEvents: null`, `droppedEvents: 0` and `acceptedEvents` equal to `retainedEvents`, the true row count.
+
 SQLite schema migrations run automatically at startup. Existing databases are backed up next to the file before migration by default. Backups contain the same events, are never pruned automatically, and can delay startup for large databases. Set `AGENT_VIEWER_SQLITE_BACKUP=off` if backups are managed separately. A server refuses a database with a newer schema. For rollback, stop the server and restore the `.bak` file before starting an older version.
+
+Migration 3 (`request-key-dedup`) adds the `(provider, requestId)` dedup key described in [Idempotency & Replays](#-5-idempotency--replays). It backfills `request_provider` and `request_id` from every stored `llm.usage` and `llm.failed` row and marks pre-existing rows that already shared a key as duplicates of the earliest one (`matchesOriginal` stays unknown for those: the legacy content was never compared under this rule). Because SQLite totals before this release lived only in the in-memory fallback and reset on restart, this migration itself changes no persisted figure; but totals rebuilt from an upgraded database by migration 4 are lower wherever such duplicates existed, and that is the correction, not data loss. Downgrading to an older release is not supported for exact figures: it ignores the new columns and counts the duplicate rows again.
+
+Migration 4 (`events-seq`) adds `events.seq`, a durable insertion-order counter independent of `rowid` (`events.id` is a `TEXT PRIMARY KEY`, so SQLite is free to renumber `rowid` on `VACUUM`). It is backfilled from `rowid`, the true insertion order at the moment the migration runs; new rows get their `seq` from an in-memory counter seeded from the stored maximum. The startup rebuild replays events in `seq` order, and the `afterId` cursor used by `GET /api/v1/events` moved from `rowid` to `seq`.
+
+### Usage ledger (issue #65)
+
+Migration 6 (`usage-ledger`) adds `usage_ledger` and `usage_ledger_skips`: one append-only, typed row per
+accepted `llm.usage`/`llm.failed` event, carrying the **server** receive time (`received_at`, always equal to
+that event's `events.created_at`), never the client's own `timestamp`. The row is written in the same transaction
+as the event, so an event can never exist without a ledger row or a recorded skip. `NULL` always means unknown, a
+reported `0` is stored as `0`, and a duplicate `(provider, requestId)` with different figures becomes a
+`conflict` skip instead of silently overwriting anything. Neither table has a foreign key to `events`, so
+retention (issue #70) can prune old events without touching their ledger rows. The first start of a 0.4.0 server
+backfills every event already stored (paged, with a summary log line); every later start runs the same pass to
+catch up on any gap, normally finding nothing to do. Full reference, including the legacy-contract rules and the
+memory-mode cap: [docs/usage-ledger.md](usage-ledger.md). Migration 7 (`usage-calls-indexes`, issue #67) adds the
+`(agent_id, seq)`/`(session_id, seq)`/`(trace_id, seq)`/`(request_id)` indexes [`GET
+/api/v1/usage/calls`](#usage-calls-get-apiv1usagecalls-issue-67) needs, plus `usage_ledger_meta` (the cursor
+"store epoch"). Migration 8 (`retention`, issue #70) adds `retention_runs` and `retention_state`, including the
+`usage_ledger` scope's `purged_before` cutoff that [`GET
+/api/v1/usage/rollup`](#usage-rollup-get-apiv1usagerollup-issue-66) reads for its `coverage.purgedThrough`.
+Migration 9 (`usage-rollup`, issue #66) adds `usage_ledger_tags` (one `(ledger_seq, tag)` row per tag, since
+`usage_ledger.tags` is a JSON array and cannot be indexed or grouped by in SQL) plus indexes on `model`, `task_id`
+and `user_id`, so that route can filter and group on every dimension with a named index, never a bare table scan.
+
+**Memory-mode `coverage`.** `GET /api/v1/usage/rollup` never silently returns a partial figure. In memory mode,
+once the ledger reaches its cap (`AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS`), further rows are refused rather than
+evicting older ones, so the response's `coverage.complete` turns `false` and stays `false`, and
+`coverage.droppedRows` counts the refused rows (an upper bound, since a refused row's own attributes are never
+recorded). `coverage.purgedThrough` is the highest `received_at` retention (issue #70) has purged the usage
+ledger through, in both storage modes, read from `retention_state`'s `usage_ledger` scope (`null` until a
+retention run actually reaches a row); a query whose range could include rows at or before that cutoff (an
+unbounded query, or one starting at or before it) also turns `complete` to `false`.
 
 ---
 
@@ -750,3 +1140,36 @@ Functional adapter implementations are available in `examples/`:
 - **Google ADK** (`examples/google-adk-adapter.ts`): Gemini turns, function calling, grounding, token telemetry.
 
 All adapters adhere to the **Trust Boundary Principle**: Only observable states, dialogues, and telemetry are transmitted; internal chain-of-thought scratchpads are never leaked.
+
+## 📈 11. Seeing your usage in Model Ops
+
+The demo app's Model Ops console (issue #79) is a thin, read-only view over the usage ledger: it never invents a figure, and it never shows a provider price list. Once a server with a usage ledger (0.4.0 or later) is connected, Model Ops switches from its "Simulated demo data" banner to the real Matrix, Agents and Feed tabs.
+
+**Sending a call.** Any `llm.usage` or `llm.failed` event, sent the normal way (see [Quickstart](#-quickstart-under-5-minutes) and the [REST API reference](#-3-rest-api-reference)), reaches Model Ops. From a shell, a complete, valid V1 envelope:
+
+```bash
+curl -X POST https://your-server/api/v1/events \
+  -H "Authorization: Bearer $AGENT_VIEWER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"schemaVersion":"1.0","id":"evt_demo_1","type":"llm.usage","timestamp":1700000000000,"source":"agent:demo","agentId":"demo","summary":"demo call","payload":{"provider":"anthropic","model":"claude-sonnet-4-5","inputTokens":1200,"outputTokens":300}}'
+```
+
+From the Python SDK: `agent.usage(provider=..., model=..., input_tokens=..., output_tokens=...)`. From the TypeScript SDK: `agent.usage({ provider, model, inputTokens, outputTokens })`.
+
+**The empty state.** With no calls recorded yet, every data tab shows this exact snippet (with your own server's address filled in) instead of an empty table, so there is always a next step, never a silent zero.
+
+**Which field feeds which column.** Model Ops never recomputes a figure from `inputTokens`/`outputTokens` minus the breakdown fields: it shows the ledger's own per-metric counts.
+
+| Model Ops column | Source field |
+|---|---|
+| Input | `inputTokens` |
+| Output | `outputTokens` |
+| Cache read | `cacheReadTokens` |
+| Cache write | `cacheWriteTokens` |
+| Reasoning | `reasoningTokens` |
+| Cost (per currency, per source) | `cost`, `currency`, `costSource` |
+| Failed, with its reason | an `llm.failed` row; the reason is its `errorKind` |
+
+A field your runtime never reports renders as "n/a" in Model Ops, never as `0`. Note that some SDK helpers still default `cached_tokens`/`reasoning_tokens` to `0` rather than leaving them unset; until that is fixed (issue #58), those two columns will read `0` for calls sent through those helpers instead of "n/a", even though the raw API and Model Ops itself never invent a zero on their own.
+
+Model Ops never writes to the server: reassigning a model or editing spend from the console only ever exists in its separate, clearly labelled Simulator tab, and only in `simulated` mode.

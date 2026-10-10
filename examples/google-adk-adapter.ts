@@ -47,19 +47,21 @@ export class GoogleADKViewerAdapter {
   }
 
   /**
-   * Called when a Gemini function call / tool is invoked.
+   * Called when a Gemini function call / tool is invoked. `callId` is the ADK function call's `id`
+   * (`genai.types.FunctionCall.id` in the Google GenAI SDK), never invented when it is absent.
    */
-  async onFunctionCall(agentId: string, functionName: string, argsSummary?: string): Promise<void> {
+  async onFunctionCall(agentId: string, functionName: string, argsSummary?: string, callId?: string): Promise<void> {
     const agent = this.viewer.agent(agentId);
-    await agent.toolStarted(functionName, argsSummary);
+    await agent.toolStarted(functionName, argsSummary, { toolCallId: callId });
   }
 
   /**
-   * Called when function call result is provided back to Gemini.
+   * Called when function call result is provided back to Gemini. Same function call `id` as
+   * `onFunctionCall` for the matching call.
    */
-  async onFunctionResponse(agentId: string, functionName: string, resultSummary?: string): Promise<void> {
+  async onFunctionResponse(agentId: string, functionName: string, resultSummary?: string, callId?: string): Promise<void> {
     const agent = this.viewer.agent(agentId);
-    await agent.toolCompleted(functionName, resultSummary);
+    await agent.toolCompleted(functionName, resultSummary, { toolCallId: callId });
   }
 
   /**
@@ -78,6 +80,13 @@ export class GoogleADKViewerAdapter {
    * estimate cost. The counts are forwarded as reported: a missing cache count stays unknown,
    * and a call without both prompt and candidate counts is not reported, because the contract
    * requires them and the adapter never fills them with 0.
+   *
+   * `traceId` is the ADK `invocation_id` (the id ADK assigns to one `run_async` invocation), forwarded
+   * only when the host passes it. ADK does not expose a parent span id at this layer, so `parentId` is
+   * never sent by this adapter. `toolCallId` is forwarded here only when this usage was itself produced
+   * inside a function call's execution, not the id of a function Gemini is about to call. `tags` is never
+   * read from ADK's own session state or metadata (unbounded, can carry prompt text): it is only ever an
+   * explicit value the host chooses to pass.
    */
   async onUsageMetadata(
     agentId: string,
@@ -87,6 +96,9 @@ export class GoogleADKViewerAdapter {
       cachedContentTokenCount?: number;
       model?: string;
       costEstimate?: number | null;
+      traceId?: string;
+      toolCallId?: string;
+      tags?: readonly string[];
     }
   ): Promise<void> {
     if (metadata.promptTokenCount === undefined || metadata.candidatesTokenCount === undefined) return;
@@ -100,6 +112,9 @@ export class GoogleADKViewerAdapter {
       cachedTokens: metadata.cachedContentTokenCount,
       cost,
       costSource: cost !== null ? 'estimated' : 'unknown',
+      traceId: metadata.traceId,
+      toolCallId: metadata.toolCallId,
+      tags: metadata.tags,
     });
   }
 

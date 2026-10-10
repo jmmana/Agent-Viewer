@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "ceo.blink.front.v1",
+  "status": "prototype",
+  "license": "MIT",
+  "file": "assets/crew/clips/ceo-blink-front-v1.png",
+  "sha256": "663e6d8e638c4cddf0479fc0b6e8548cd4df5ae0b9f55cd3c2a221b6f7bcc960",
+  "width": 1070,
+  "height": 1470,
+  "source": "image_gen built-in, 2026-10-09",
+  "reference": "assets/crew/bank/characters/ceo/idle-front.png",
+  "purpose": "Parpadeo cosm\u00e9tico frontal, sin acciones laborales ni locomoci\u00f3n",
+  "frames": [
+    {
+      "index": 0,
+      "rgbaSha256": "f2a96ae0160c13be19eb1176ae6b416056b1f8617c2572fc37e1fe48eaf6bd56"
+    },
+    {
+      "index": 1,
+      "rgbaSha256": "08c2c69472391db69198422956ec7383cc21734408196c2aac2f6510bd006700"
+    },
+    {
+      "index": 2,
+      "rgbaSha256": "cb911675b5d23649f123e3e276cd3990271d790bb9bcc42850993b11ad5836c2"
+    },
+    {
+      "index": 3,
+      "rgbaSha256": "1972b75866edffdf17b43fb9af48d3317be8ea585b338da3521b87286fafb9a3"
+    }
+  ],
+  "review": "Identidad y expresiones revisadas. Anclajes de pies medidos por fotograma; arte prototipo, no aprobado como final."
+}

@@ -1,7 +1,9 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { defaultCrewPreferences, type CrewPreferences } from '../crew/crewPreferences';
 import { CrewStage } from '../crew/CrewStage';
 import { CREW_ROOMS, type VisualMode } from '../crew/crewModel';
 import type { CrewCameraByRoom } from '../crew/crewCamera';
+import type { CrewViewerMode, CrewVisibility } from '../crew/crewEventBridge';
 import { OfficeCanvas } from '../components/OfficeCanvas';
 import { type CameraState, agentRoleLabel } from '../engine/canvasRenderer';
 import {
@@ -16,7 +18,8 @@ import {
   type OfficeEventInput,
   type OfficeMode,
 } from './officeStore';
-import { formatUsage, type OfficeUsage } from './usage';
+import { formatUsage, formatUsageBadge, type OfficeUsage } from './usage';
+import type { AgentBadge } from '../engine/canvasRenderer';
 
 /** How often the office checks whether walks finished and meetings can start. */
 const TICK_MS = 250;
@@ -40,6 +43,16 @@ export interface AgentOfficeProps {
   /** Cámaras controladas por el host; la biblioteca no escribe localStorage. */
   crewCameras?: CrewCameraByRoom;
   onCrewCamerasChange?: (cameras: CrewCameraByRoom) => void;
+  /** Preferencias visuales por instancia, sin almacenamiento ni cambios al dominio. */
+  crewPreferences?: CrewPreferences;
+  onCrewPreferencesChange?: (preferences: CrewPreferences) => void;
+  /**
+   * LIVE/DEMO/REPLAY explícito (issue #155). AgentOffice nunca lo infiere de los eventos recibidos:
+   * sin esta prop, Crew no muestra ninguna insignia de modo.
+   */
+  crewViewerMode?: CrewViewerMode;
+  /** `full` (por defecto) o `minimized` para pantallas públicas/televisores (issue #155): oculta el texto de tarea y reunión en Crew, conservando solo su categoría. */
+  crewVisibility?: CrewVisibility;
   /** BCP 47 locale for the built-in texts and number formats, for example `es-CO`. Defaults to `en`. */
   locale?: string;
   /** Overrides for single texts. Missing keys fall back to the built-in catalog, then to English. */
@@ -49,6 +62,13 @@ export interface AgentOfficeProps {
   theme?: 'dark' | 'light';
   /** Show the usage figures passed in `usage`. Off by default. */
   showUsage?: boolean;
+  /**
+   * Draw a compact usage badge on each agent card from `usage.byAgent`. Off by default. An agent without a
+   * `byAgent` entry gets no badge. Badges follow the agent card's own visibility rule (hidden below camera
+   * zoom 0.55 unless the agent is selected, hovered or speaking); the accessible agent list is always
+   * available and carries the exact figures regardless of zoom.
+   */
+  showUsageBadges?: boolean;
   /** Usage figures computed by the host. The office never computes them. */
   usage?: OfficeUsage;
   /** Controlled selection. Leave undefined to let the office keep its own. */
@@ -71,11 +91,16 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   onCrewRoomChange,
   crewCameras,
   onCrewCamerasChange,
+  crewPreferences,
+  onCrewPreferencesChange,
+  crewViewerMode,
+  crewVisibility = 'full',
   locale = 'en',
   messages,
   t,
   theme = 'dark',
   showUsage = false,
+  showUsageBadges = false,
   usage,
   selectedAgentId,
   onSelectAgent,
@@ -93,6 +118,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const listId = useId();
   const cartoonCameraMemory = useRef<CameraState | null>(null);
+  const [internalCrewPreferences, setInternalCrewPreferences] = useState(defaultCrewPreferences);
   const [internalCrewRoom, setInternalCrewRoom] = useState(CREW_ROOMS[0].id);
   const [internalCrewCameras, setInternalCrewCameras] = useState<CrewCameraByRoom>({});
 
@@ -120,6 +146,19 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   };
 
   const usageItems = showUsage && usage?.total ? formatUsage(usage.total, locale, translate) : [];
+  // `showUsage || showUsageBadges` feeds the same figures into the accessible list, so the visible badge
+  // and the screen-reader text always agree, whichever prop turned the figures on.
+  const usageInDom = showUsage || showUsageBadges;
+
+  const agentBadges = useMemo<ReadonlyMap<string, AgentBadge>>(() => {
+    if (!showUsageBadges || !usage?.byAgent) return new Map();
+    const map = new Map<string, AgentBadge>();
+    for (const [agentId, figures] of Object.entries(usage.byAgent)) {
+      const badge = formatUsageBadge(figures, locale, translate);
+      map.set(agentId, { tokens: badge.tokens, costLabel: badge.costLabel, failed: badge.failed });
+    }
+    return map;
+  }, [showUsageBadges, usage, locale, translate]);
 
   const rootClass = ['av-office', `av-theme-${theme}`, className].filter(Boolean).join(' ');
 
@@ -129,7 +168,10 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
         {visualMode === 'crew' ? <CrewStage
           locale={locale}
           agents={snapshot.agents}
+          tasks={snapshot.tasks}
           meetings={snapshot.meetings}
+          viewerMode={crewViewerMode}
+          visibility={crewVisibility}
           selectedRoomId={crewRoomId ?? internalCrewRoom}
           onRoomChange={roomId => {
             if (crewRoomId === undefined) setInternalCrewRoom(roomId);
@@ -139,6 +181,11 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           onCameraStateChange={cameras => {
             if (crewCameras === undefined) setInternalCrewCameras(cameras);
             onCrewCamerasChange?.(cameras);
+          }}
+          preferences={crewPreferences ?? internalCrewPreferences}
+          onPreferencesChange={preferences => {
+            if (crewPreferences === undefined) setInternalCrewPreferences(preferences);
+            onCrewPreferencesChange?.(preferences);
           }}
           persistCamera={false}
           showRoomLink={false}
@@ -152,6 +199,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           theme={theme}
           translate={translate}
           themeScope={false}
+          agentBadges={agentBadges}
         />}
 
         {visualMode === 'cartoon' && snapshot.agents.length === 0 && (
@@ -185,7 +233,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
             const line = role
               ? translate('office.agentLine', { name: agent.name, role, status })
               : translate('office.agentLineNoRole', { name: agent.name, status });
-            const agentUsage = showUsage ? usage?.byAgent?.[agent.id] : undefined;
+            const agentUsage = usageInDom ? usage?.byAgent?.[agent.id] : undefined;
             const usageText = agentUsage
               ? formatUsage(agentUsage, locale, translate).map((item) => `${item.label}: ${item.value}`).join(', ')
               : '';

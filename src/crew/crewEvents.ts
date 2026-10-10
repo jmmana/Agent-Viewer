@@ -1,4 +1,4 @@
-import type { Agent, Meeting } from '../types/agent';
+import type { Agent } from '../types/agent';
 
 /**
  * Read-only room-to-agent bridge. It does not create agent events or alter
@@ -22,26 +22,4 @@ export function crewAgentsInRoom<T extends Pick<Agent, 'id' | 'workspace' | 'sta
   agents: readonly T[], roomId: string,
 ): readonly T[] {
   return agents.filter(agent => crewRoomForWorkspace(agent.workspace) === roomId);
-}
-
-export interface CrewRoomActivity {
-  agents: number;
-  withTask: number;
-  /** Reuniones ACTIVAS con al menos un participante presente en la sala. */
-  activeMeetings: number;
-}
-
-/** Resumen de solo lectura de lo que los datos dicen de la sala; sin datos devuelve ceros, nunca valores inventados. */
-export function crewRoomActivity(
-  agents: readonly Pick<Agent, 'id' | 'workspace' | 'status' | 'name' | 'currentTaskId'>[],
-  meetings: readonly Pick<Meeting, 'status' | 'participants'>[],
-  roomId: string,
-): CrewRoomActivity {
-  const present = crewAgentsInRoom(agents, roomId);
-  const ids = new Set(present.map(agent => agent.id));
-  return {
-    agents: present.length,
-    withTask: present.filter(agent => agent.currentTaskId).length,
-    activeMeetings: meetings.filter(m => m.status === 'ACTIVE' && m.participants.some(id => ids.has(id))).length,
-  };
 }

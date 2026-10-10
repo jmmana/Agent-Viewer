@@ -486,6 +486,13 @@ analista.done("Resumen entregado")
 
 El agente se registra solo en su primera llamada. Las peticiones se reintentan con espera creciente, y `usage()` sin `cost` lo reporta como desconocido. Los tokens que no envías siguen desconocidos, nunca `0`. El SDK nunca supone `provider-reported`: un `cost` sin `cost_source` se envía como `unknown`, con un solo aviso por cliente. Los reintentos de transporte reutilizan el mismo id de evento y el mismo `requestId`. Si tu código vuelve a llamar a `usage()` para la misma llamada al proveedor, pasa el mismo `requestId` y el servidor guarda una sola copia.
 
+Lee las llamadas detrás de una cifra con `list_calls()` (una página) o `iter_calls()` (recorre el cursor por ti), ambos sobre `GET /api/v1/usage/calls` (issue #67):
+
+```python
+for call in viewer.iter_calls(agent_id="analyst", cost_source="unknown"):
+    print(call["requestId"], call["tokens"]["input"], call["status"])
+```
+
 ### SDK de TypeScript
 
 ```ts
@@ -503,6 +510,14 @@ await builder.done('Pull request abierto');
 ```
 
 Varias crews pueden compartir un servidor: marca cada cliente con su propio `runtimeId` y `sessionId`, y filtra con `GET /api/v1/events?runtimeId=...`. Más detalles en la [guía de integración](integration.md) (en inglés). Los reintentos de transporte reutilizan el mismo id de evento y el mismo `requestId`. Si tu código vuelve a llamar a `usage()` para la misma llamada al proveedor, pasa el mismo `requestId` y el servidor guarda una sola copia.
+
+Lee las llamadas detrás de una cifra con `listCalls()` (una página) o `iterateCalls()` (recorre el cursor por ti), ambos sobre `GET /api/v1/usage/calls` (issue #67):
+
+```ts
+for await (const call of viewer.iterateCalls({ agentId: 'builder', costSource: 'unknown' })) {
+  console.log(call.requestId, call.tokens.input, call.status);
+}
+```
 
 ---
 
@@ -602,12 +617,13 @@ flowchart LR
 | `GET` | `/ready` | Disponibilidad del almacenamiento y los contadores `ingestion` (conflictos rechazados y filas antiguas que coincidieron solo por id). SQLite también devuelve la versión del esquema y la hora de la última migración. |
 | `POST` | `/api/v1/events` | Ingesta de un evento. Respeta el encabezado `Idempotency-Key`. Un reintento real es un duplicado `200`; el mismo id con otro contenido es un `409`. |
 | `POST` | `/api/v1/events/batch` | Ingesta de hasta 100 eventos (configurable). Cada elemento informa `accepted`, `duplicate` o `conflict`; solo los aceptados se guardan y se transmiten. |
-| `GET` | `/api/v1/events` | Consulta con `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. |
+| `GET` | `/api/v1/events` | Consulta con `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. No es el camino de auditoría: devuelve eventos completos (con texto libre) y `afterId` no puede recorrer el historial; usa `GET /api/v1/usage/calls` para eso. |
 | `POST` | `/api/v1/stream-tickets` | Emite un ticket de un solo uso y corta duración para clientes `EventSource`, que no pueden enviar una cabecera `Authorization`. Exige el token Bearer; un ticket no puede generar tickets. |
 | `GET` | `/api/v1/events/stream` | Server-Sent Events. Se autentica con `Authorization: Bearer <token>` o con un `?ticket=` de `POST /api/v1/stream-tickets`; un parámetro de consulta `token` nunca autentica. Al reconectar, reenvía todo lo perdido desde `Last-Event-ID` en su totalidad, hasta `AGENT_VIEWER_SSE_REPLAY_MAX` (10.000 por defecto), o envía un cuadro `resync` explícito en vez de un reenvío parcial; la conexión sigue abierta en ambos casos. Latido cada 15 s. |
 | `GET` | `/api/v1/snapshot` | Foto agregada: agentes, tareas, reuniones, runtimes y el bloque `usage`. Los campos obsoletos `totalCost` y `cost` de cada agente son `null` salvo que todas las llamadas reporten una sola moneda conocida (una moneda, un origen de costo). |
 | `GET` | `/api/v1/usage` | Solo los agregados de consumo, llamada por llamada: por agente y por `(provider, model)`, con los conteos de lo desconocido y los costos por moneda, nunca sumados entre monedas. [Detalles](integration.md#usage-aggregates-get-apiv1usage) (en inglés). |
 | `GET` | `/api/v1/usage/ledger/status` | Estado del libro mayor de consumo: filas por origen (`live`/`backfill`), filas legadas, conteos de omisiones y el receive time más antiguo/más nuevo del servidor. Nunca una suma de tokens o costo. [Detalles](usage-ledger.md) (en inglés). |
+| `GET` | `/api/v1/usage/calls` | Listado de solo lectura, solo metadatos, de las filas del libro mayor de consumo (issue #67), con los mismos filtros que `GET /api/v1/usage` y un cursor estable y opaco que recorre todo el historial en cualquier dirección. Nunca devuelve texto de prompt, de respuesta, de mensaje, de herramienta ni de error del proveedor. [Detalles](integration.md#usage-calls-get-apiv1usagecalls-issue-67) (en inglés). |
 | `POST` | `/api/v1/agents` | Registra o actualiza un agente. |
 | `PATCH` | `/api/v1/agents/:agentId` | Actualiza el perfil o el estado de un agente (solo campos descriptivos; el uso se reporta con `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Registra un runtime (latido) / lista los runtimes. |

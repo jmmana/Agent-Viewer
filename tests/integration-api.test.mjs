@@ -84,8 +84,8 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.ok, true);
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
-      schemaVersion: 6,
-      latestKnownSchemaVersion: 6,
+      schemaVersion: 7,
+      latestKnownSchemaVersion: 7,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');

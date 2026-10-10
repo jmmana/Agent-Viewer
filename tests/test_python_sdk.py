@@ -9,6 +9,7 @@ import time
 import socket
 import subprocess
 import unittest
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, ".")
@@ -86,6 +87,42 @@ class LogCapture(logging.Handler):
     def __exit__(self, *exc):
         logging.getLogger("agent_viewer").removeHandler(self)
         return False
+
+
+class _ScriptedGetHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every GET with the next (status, body) pair from ``type(self).responses``, cycling to the last
+    one once exhausted. Records every request's path and headers in ``type(self).requests``, for issue #67's
+    ``list_calls``/``iter_calls`` tests (query mapping, header-only auth, error mapping, retry on 429).
+    """
+
+    responses = []
+    requests = []
+
+    def do_GET(self):  # noqa: N802 (http.server naming)
+        type(self).requests.append({"path": self.path, "headers": dict(self.headers.items())})
+        index = min(len(type(self).requests) - 1, len(type(self).responses) - 1)
+        status, payload = type(self).responses[index]
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _run_scripted_server(responses):
+    """Starts a background `_ScriptedGetHandler` server with the given scripted (status, body) responses.
+    Returns (httpd, thread, base_url); the caller must call httpd.shutdown() when done.
+    """
+    _ScriptedGetHandler.responses = responses
+    _ScriptedGetHandler.requests = []
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), _ScriptedGetHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, thread, f"http://127.0.0.1:{httpd.server_address[1]}"
 
 
 class _ConflictHandler(http.server.BaseHTTPRequestHandler):
@@ -482,6 +519,116 @@ class TestPythonSDK(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             agent.llm_failed("OpenAI", trace_id="")
+
+    def test_list_calls_query_mapping_and_header_only_auth(self):
+        """``start``/``end`` map to ``from``/``to``; repeatable filters are sent as repeated query parameters;
+        the token is sent only in the Authorization header, never in the URL."""
+        page = {
+            "schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [],
+            "page": {"limit": 2, "order": "asc", "hasMore": False, "nextCursor": None},
+        }
+        httpd, thread, base_url = _run_scripted_server([(200, page)])
+        try:
+            viewer = AgentViewer(url=base_url, token="secret-token", max_retries=1, timeout=5.0)
+            result = viewer.list_calls(
+                start=1700000000000,
+                end="2026-10-08T00:00:00Z",
+                time_basis="occurred",
+                agent_id=["researcher", "writer"],
+                provider="anthropic",
+                status="rate_limited",
+                cost_source="unknown",
+                currency=["USD", "none"],
+                request_id="req_1",
+                trace_id="trace_1",
+                order="asc",
+                limit=2,
+                cursor="abc",
+            )
+            self.assertEqual(result["page"]["order"], "asc")
+
+            request = _ScriptedGetHandler.requests[-1]
+            parsed = urllib.parse.urlparse(request["path"])
+            query = urllib.parse.parse_qs(parsed.query)
+            self.assertEqual(parsed.path, "/api/v1/usage/calls")
+            self.assertEqual(query["from"], ["1700000000000"])
+            self.assertEqual(query["to"], ["2026-10-08T00:00:00Z"])
+            self.assertEqual(query["timeBasis"], ["occurred"])
+            self.assertEqual(query["agentId"], ["researcher", "writer"])
+            self.assertEqual(query["provider"], ["anthropic"])
+            self.assertEqual(query["status"], ["rate_limited"])
+            self.assertEqual(query["costSource"], ["unknown"])
+            self.assertEqual(query["currency"], ["USD", "none"])
+            self.assertEqual(query["requestId"], ["req_1"])
+            self.assertEqual(query["traceId"], ["trace_1"])
+            self.assertEqual(query["order"], ["asc"])
+            self.assertEqual(query["limit"], ["2"])
+            self.assertEqual(query["cursor"], ["abc"])
+            self.assertNotIn("token", query)
+            self.assertEqual(request["headers"].get("Authorization"), "Bearer secret-token")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_iter_calls_follows_cursor_until_has_more_is_false(self):
+        pages = [
+            (200, {"schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 1}], "page": {"limit": 1, "order": "desc", "hasMore": True, "nextCursor": "c1"}}),
+            (200, {"schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 2}], "page": {"limit": 1, "order": "desc", "hasMore": False, "nextCursor": None}}),
+        ]
+        httpd, thread, base_url = _run_scripted_server(pages)
+        try:
+            viewer = AgentViewer(url=base_url, max_retries=1, timeout=5.0)
+            seen = [call["seq"] for call in viewer.iter_calls()]
+            self.assertEqual(seen, [1, 2])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_iter_calls_raises_if_the_server_returns_the_same_cursor_twice(self):
+        page = {
+            "schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 1}],
+            "page": {"limit": 1, "order": "desc", "hasMore": True, "nextCursor": "same-cursor"},
+        }
+        httpd, thread, base_url = _run_scripted_server([(200, page)])
+        try:
+            viewer = AgentViewer(url=base_url, max_retries=1, timeout=5.0)
+            with self.assertRaises(AgentViewerError) as ctx:
+                list(viewer.iter_calls(cursor="same-cursor"))
+            self.assertIn("same cursor twice", str(ctx.exception))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_list_calls_fails_immediately_on_400_and_410(self):
+        for status, code in [(400, "invalid_filter"), (410, "cursor_expired")]:
+            httpd, thread, base_url = _run_scripted_server([(status, {"error": code, "issues": []})])
+            try:
+                viewer = AgentViewer(url=base_url, max_retries=3, timeout=5.0)
+                with self.assertRaises(AgentViewerError) as ctx:
+                    viewer.list_calls()
+                self.assertEqual(ctx.exception.status_code, status)
+                self.assertEqual(len(_ScriptedGetHandler.requests), 1, f"status {status} must not be retried")
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join(timeout=5)
+
+    def test_list_calls_retries_429_and_succeeds(self):
+        ok_page = {"schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [], "page": {"limit": 100, "order": "desc", "hasMore": False, "nextCursor": None}}
+        responses = [(429, {"error": "rate_limit_exceeded"}), (429, {"error": "rate_limit_exceeded"}), (200, ok_page)]
+        httpd, thread, base_url = _run_scripted_server(responses)
+        try:
+            viewer = AgentViewer(url=base_url, max_retries=3, timeout=5.0)
+            result = viewer.list_calls()
+            self.assertEqual(result["data"], [])
+            self.assertEqual(len(_ScriptedGetHandler.requests), 3)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
 
     def test_live_server_integration(self):
         port = get_free_port()

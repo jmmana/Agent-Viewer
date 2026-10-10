@@ -11,9 +11,10 @@ import logging
 import random
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 logger = logging.getLogger("agent_viewer")
 
@@ -166,6 +167,18 @@ class AgentViewerError(Exception):
         self.status_code = status_code
         self.issues = issues
         self.code = code
+
+
+def _append_repeatable(
+    params: List[Tuple[str, str]], key: str, value: Optional[Union[str, Sequence[str]]]
+) -> None:
+    """Appends one query parameter per value of a repeatable filter (issue #67's ``list_calls``): a single
+    string becomes one pair, a sequence becomes one pair per item, sent as repeated query parameters."""
+    if value is None:
+        return
+    values: Sequence[str] = [value] if isinstance(value, str) else list(value)
+    for v in values:
+        params.append((key, v))
 
 
 def _default_event_id() -> str:
@@ -624,6 +637,91 @@ class AgentViewer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def list_calls(
+        self,
+        *,
+        start: Optional[Union[int, str]] = None,
+        end: Optional[Union[int, str]] = None,
+        time_basis: Optional[str] = None,
+        agent_id: Optional[Union[str, Sequence[str]]] = None,
+        session_id: Optional[Union[str, Sequence[str]]] = None,
+        runtime_id: Optional[Union[str, Sequence[str]]] = None,
+        task_id: Optional[Union[str, Sequence[str]]] = None,
+        provider: Optional[Union[str, Sequence[str]]] = None,
+        model: Optional[Union[str, Sequence[str]]] = None,
+        status: Optional[Union[str, Sequence[str]]] = None,
+        cost_source: Optional[Union[str, Sequence[str]]] = None,
+        currency: Optional[Union[str, Sequence[str]]] = None,
+        request_id: Optional[Union[str, Sequence[str]]] = None,
+        trace_id: Optional[str] = None,
+        order: Optional[str] = None,
+        limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetch one page of ``GET /api/v1/usage/calls`` (issue #67): read-only, metadata-only ledger rows
+        (never prompt, completion, message or error text), with a stable, opaque cursor.
+
+        ``start``/``end`` map to the server's ``from``/``to`` query parameters (``from`` is a reserved word in
+        Python); both accept epoch milliseconds or an ISO 8601 date-time with an explicit offset, sent through
+        unmodified, never reformatted. Every repeatable filter accepts one value or a sequence of values, sent
+        as repeated query parameters (OR within the key, AND across keys). ``cursor`` is the opaque
+        ``page["nextCursor"]`` of a previous page; use :meth:`iter_calls` to follow it automatically.
+
+        Returns the raw response body (``schemaVersion``, ``asOf``, ``storage``, ``data``, ``page``). ``None``
+        values in ``data`` are never defaulted to ``0``; nothing is summed or priced here.
+        """
+        params: List[Tuple[str, str]] = []
+        if start is not None:
+            params.append(("from", str(start)))
+        if end is not None:
+            params.append(("to", str(end)))
+        if time_basis is not None:
+            params.append(("timeBasis", time_basis))
+        _append_repeatable(params, "agentId", agent_id)
+        _append_repeatable(params, "sessionId", session_id)
+        _append_repeatable(params, "runtimeId", runtime_id)
+        _append_repeatable(params, "taskId", task_id)
+        _append_repeatable(params, "provider", provider)
+        _append_repeatable(params, "model", model)
+        _append_repeatable(params, "status", status)
+        _append_repeatable(params, "costSource", cost_source)
+        _append_repeatable(params, "currency", currency)
+        _append_repeatable(params, "requestId", request_id)
+        if trace_id is not None:
+            params.append(("traceId", trace_id))
+        if order is not None:
+            params.append(("order", order))
+        if limit is not None:
+            params.append(("limit", str(limit)))
+        if cursor is not None:
+            params.append(("cursor", cursor))
+
+        query = urllib.parse.urlencode(params)
+        endpoint = "/api/v1/usage/calls" + (f"?{query}" if query else "")
+        return self._get_with_retry(endpoint)
+
+    def iter_calls(self, **kwargs: Any) -> Iterator[Dict[str, Any]]:
+        """Walks every page of :meth:`list_calls` by following ``page["nextCursor"]`` until ``hasMore`` is
+        false, yielding one call record (a ``dict``) at a time. Accepts the same keyword arguments as
+        :meth:`list_calls` except ``cursor``, which this method manages itself (an initial ``cursor`` may still
+        be passed to resume a previous walk). Raises :class:`AgentViewerError` if the server ever returns the
+        same cursor twice in a row, instead of looping forever.
+        """
+        cursor = kwargs.pop("cursor", None)
+        while True:
+            page = self.list_calls(cursor=cursor, **kwargs)
+            for call in page.get("data", []):
+                yield call
+            page_info = page.get("page") or {}
+            if not page_info.get("hasMore"):
+                return
+            next_cursor = page_info.get("nextCursor")
+            if not next_cursor or next_cursor == cursor:
+                raise AgentViewerError(
+                    "Agent Viewer usage calls walk did not advance: the server returned the same cursor twice in a row."
+                )
+            cursor = next_cursor
+
     # Legacy method compatibility
     def register_agent(
         self,
@@ -752,6 +850,59 @@ class AgentViewer:
                     raise AgentViewerError(f"Agent Viewer connection error: {err.reason}")
                 time.sleep(delay + random.uniform(0, 0.1))
                 delay = min(delay * 2, 5.0)
+
+        raise AgentViewerError(f"Agent Viewer request failed after {self.max_retries} retries")
+
+    def _get_with_retry(self, endpoint: str) -> Dict[str, Any]:
+        """Shared GET helper (issue #67). ``snapshot()`` and ``usage_summary()`` predate it and keep their own
+        direct ``urlopen`` call with no error mapping; a failed call to either raises a raw ``urllib.error``
+        instead of :class:`AgentViewerError`. Sends the token only in the ``Authorization`` header, never in the
+        URL. 400, 401 and 410 fail immediately; 429 and 5xx are retried with the same backoff as
+        ``_post_with_retry``, since a GET is always safe to repeat.
+        """
+        url = f"{self.url}{endpoint}"
+        headers = self._build_headers()
+
+        attempt = 0
+        delay = 0.3
+
+        while attempt <= self.max_retries:
+            try:
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    resp_bytes = resp.read()
+                    return json.loads(resp_bytes.decode("utf-8")) if resp_bytes else {}
+            except urllib.error.HTTPError as err:
+                error_body = err.read().decode("utf-8")
+                issues = None
+                code = None
+                try:
+                    parsed = json.loads(error_body)
+                    issues = parsed.get("issues") or parsed.get("errors")
+                    if isinstance(parsed.get("error"), str):
+                        code = parsed["error"]
+                except Exception:
+                    pass
+
+                # Client errors (4xx except 429) fail immediately: 400 invalid_filter/invalid_cursor/cursor_mismatch,
+                # 401 unauthorized and 410 cursor_expired are all final, never retried.
+                if 400 <= err.code < 500 and err.code != 429:
+                    raise AgentViewerError(f"Agent Viewer rejected request: {err.code} {error_body}", err.code, issues, code)
+
+                attempt += 1
+                if attempt > self.max_retries:
+                    raise AgentViewerError(f"Agent Viewer request failed: {err.code} {error_body}", err.code, issues, code)
+
+                time.sleep(delay + random.uniform(0, 0.1))
+                delay = min(delay * 2, 5.0)
+            except urllib.error.URLError as err:
+                attempt += 1
+                if attempt > self.max_retries:
+                    raise AgentViewerError(f"Agent Viewer connection error: {err.reason}")
+                time.sleep(delay + random.uniform(0, 0.1))
+                delay = min(delay * 2, 5.0)
+
+        raise AgentViewerError(f"Agent Viewer request failed after {self.max_retries} retries")
 
 
 # Backward compatibility alias

@@ -20,6 +20,7 @@ import {
 } from './requestKey';
 import {
   dbRowToLedgerRowInput,
+  LEDGER_COLUMNS,
   ledgerRequestKey,
   runUsageLedgerBackfill,
   sameCall,
@@ -31,8 +32,8 @@ import {
 } from './usageLedger';
 import { buildListCallsQuery, listCallsInMemory, sqliteRowToCallRecord, type CallsPage, type CallsQuery } from './usage/calls';
 import { type UsageSummary } from './usageAggregates';
-import { computeMemoryRollup, computeSqliteRollup } from './usage/rollup';
-import type { RollupQuery, UsageRollupResponse } from './usage/types';
+import { buildWhere, computeMemoryRollup, computeSqliteRollup, rowMatchesFilters } from './usage/rollup';
+import type { RollupQuery, UsageFilters, UsageRollupResponse } from './usage/types';
 import {
   applyEvent,
   createServerState,
@@ -523,6 +524,14 @@ export interface EventStore {
   /** Grouped sums over the usage ledger (issue #66): `GET /api/v1/usage/rollup`. Both stores go through the same
    * shaper (`server/usage/rollup.ts`), so rounding, key ordering and `day` buckets never diverge. */
   rollup(query: RollupQuery): Promise<UsageRollupResponse>;
+  /** Streams ledger rows matching `filters` (issue #69: `GET /api/v1/usage/export`), ascending by `seq`, with
+   * `filters.afterSeq < seq <= asOfSeq`. Never materializes the full match set: SQLite mode pages through
+   * `chunkSize` rows at a time via keyset pagination on `seq` (bounded peak memory for a million-row export);
+   * memory mode walks the array it already holds, yielding to the event loop every `chunkSize` rows so a very
+   * large export does not block it outright. `asOfSeq` must already be resolved (the caller pins it once, from
+   * the same `rollup()` call it used for the row-count guard and the totals sidecar, so the count, the totals and
+   * the streamed rows all describe the same snapshot). */
+  iterateExportRows(filters: UsageFilters, asOfSeq: number, chunkSize?: number): AsyncIterable<UsageLedgerRow>;
 
   /** The original event id already stored under this `(provider, requestId)` key, normalizing both arguments. */
   findByRequest(provider: string, requestId: string): Promise<{ id: string } | null>;
@@ -1128,6 +1137,25 @@ export class MemoryEventStore implements EventStore {
         purgedThrough: this.retentionState.usageLedger.purgedBefore,
       },
     });
+  }
+
+  /** `this.ledger` is already fully resident (append-only, seq-ascending; see its own field comment), so this
+   * only needs to filter and yield, not page: the RSS budget issue #69 cares about is SQLite mode streaming a
+   * result set that was never otherwise in memory. Still chunked with a `setImmediate` yield so one huge export
+   * does not monopolize the event loop end to end. */
+  async *iterateExportRows(filters: UsageFilters, asOfSeq: number, chunkSize = 1000): AsyncIterable<UsageLedgerRow> {
+    let sinceYield = 0;
+    for (const row of this.ledger) {
+      if (row.seq > asOfSeq) break;
+      if (filters.afterSeq !== null && row.seq <= filters.afterSeq) continue;
+      if (!rowMatchesFilters(row, filters)) continue;
+      yield row;
+      sinceYield++;
+      if (sinceYield >= chunkSize) {
+        sinceYield = 0;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
   }
 
   /** One warning, the first time the dedup index crosses the documented memory-cost threshold. */
@@ -2292,6 +2320,33 @@ export class SQLiteEventStore implements EventStore {
 
   async rollup(query: RollupQuery): Promise<UsageRollupResponse> {
     return computeSqliteRollup(this.db, query);
+  }
+
+  /** Keyset pagination on `seq`, `chunkSize` rows per `SELECT` (issue #69): the 1,000,000-row export streams
+   * without ever materializing the full match set, since each page is read, yielded and dropped before the next
+   * one is fetched. Reuses `buildWhere` (issue #66) for the exact same non-seq filter semantics the rollup and
+   * the totals sidecar use, with `ledgerSeq` as its upper bound and one extra `seq > :cursorSeq` clause (distinct
+   * bound parameter name, so it never collides with `buildWhere`'s own `:afterSeq`) that this method advances
+   * itself, one page at a time. */
+  async *iterateExportRows(filters: UsageFilters, asOfSeq: number, chunkSize = 1000): AsyncIterable<UsageLedgerRow> {
+    const tsCol = filters.timeBasis === 'occurred' ? 'occurred_at' : 'received_at';
+    const { sql: whereSql, params: whereParams } = buildWhere(filters, tsCol, asOfSeq);
+    const stmt = this.db.prepare(
+      `SELECT seq, ${LEDGER_COLUMNS.join(', ')} FROM usage_ledger WHERE ${whereSql} AND seq > :cursorSeq ORDER BY seq ASC LIMIT :chunkSize`
+    );
+    let cursorSeq = 0;
+    while (true) {
+      const rows = stmt.all({ ...whereParams, cursorSeq, chunkSize }) as Array<Record<string, unknown>>;
+      if (rows.length === 0) return;
+      for (const row of rows) {
+        yield { seq: Number(row.seq), ...dbRowToLedgerRowInput(row) };
+      }
+      cursorSeq = Number(rows[rows.length - 1]!.seq);
+      if (rows.length < chunkSize) return;
+      // Yield to the event loop between pages so a long export never starves other requests, and so a client
+      // abort (checked by the route between chunks) is noticed promptly.
+      await new Promise((resolve) => setImmediate(resolve));
+    }
   }
 
   /** Counters and log lines, applied only once the outcome is final (after the commit for a batch). */

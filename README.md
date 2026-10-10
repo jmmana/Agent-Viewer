@@ -396,6 +396,14 @@ Want the spend visible on the canvas itself, not only in the hidden agent list? 
 
 Each visible agent card with a `usage.byAgent` entry gets a compact badge (tokens, cost, an `est.` mark when `costSource` is `'estimated'`, and a failed-call chip); an agent with no entry gets no badge. The badge is display only: every figure still comes from `usage`, and `UsageFigures` now also carries `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `costSource` and `failedCalls` for hosts that have them.
 
+Want to answer "which calls made up that number" for one agent? Add `showCallDetails` with `agentCallDetails` (off by default, independent of `showUsage`/`showUsageBadges`):
+
+```tsx
+<AgentOffice events={events} showCallDetails agentCallDetails={agentCallDetails} />
+```
+
+Clicking an agent opens a read-only panel of its calls (provider, model, tokens by kind, request id, latency, status, cost source), exactly as `agentCallDetails[agentId]` reports them: the office never fetches, sums, prices or sorts any of it, and `AgentCallDetail` has no field that can carry a prompt, a completion or any other free text.
+
 </details>
 
 **Full guide:** props, event effects, workspaces, translations, theming, usage rules, replay, video export and the store without React are in the [library guide](docs/library.md) ([español](docs/library.es.md)).

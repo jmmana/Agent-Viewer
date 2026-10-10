@@ -157,6 +157,20 @@ const EN = {
   'usage.estimatedShort': 'estimated',
   'usage.sourceUnknown': 'Source unknown',
 
+  // Per-call detail panel (only shown when the host allows it, for the selected agent)
+  'calls.title': 'Call details: {name}',
+  'calls.close': 'Close call details',
+  'calls.empty': 'No call details provided',
+  'calls.provider': 'Provider',
+  'calls.model': 'Model',
+  'calls.status': 'Status',
+  'calls.status.ok': 'OK',
+  'calls.status.failed': 'Failed',
+  'calls.status.rate_limited': 'Rate limited',
+  'calls.latency': 'Latency',
+  'calls.latencyValue': '{value} ms',
+  'calls.requestId': 'Request id',
+
   // Replay controls
   'replay.label': 'Replay controls',
   'replay.play': 'Play',
@@ -314,6 +328,19 @@ const ES: OfficeMessages = {
   'usage.noCurrency': 'Moneda no reportada',
   'usage.estimatedShort': 'estimado',
   'usage.sourceUnknown': 'Fuente desconocida',
+
+  'calls.title': 'Detalle de llamadas: {name}',
+  'calls.close': 'Cerrar el detalle de llamadas',
+  'calls.empty': 'No se proporcionó detalle de llamadas',
+  'calls.provider': 'Proveedor',
+  'calls.model': 'Modelo',
+  'calls.status': 'Estado',
+  'calls.status.ok': 'Correcta',
+  'calls.status.failed': 'Fallida',
+  'calls.status.rate_limited': 'Limitada por frecuencia',
+  'calls.latency': 'Latencia',
+  'calls.latencyValue': '{value} ms',
+  'calls.requestId': 'Id de solicitud',
 
   'replay.label': 'Controles de repetición',
   'replay.play': 'Reproducir',

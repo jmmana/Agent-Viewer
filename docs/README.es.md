@@ -388,6 +388,14 @@ export function OficinaConConsumo({ events }: { events: readonly OfficeEventInpu
 
 `showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`: ignora los ids de evento repetidos, deja como desconocido un conteo de tokens que un evento no reporta y devuelve un costo desconocido antes que una suma parcial o una suma de monedas mezcladas o ausentes.
 
+¿Quieres responder "qué llamadas formaron ese número" para un agente? Agrega `showCallDetails` con `agentCallDetails` (apagado por defecto, independiente de `showUsage`/`showUsageBadges`):
+
+```tsx
+<AgentOffice events={events} locale="es" showCallDetails agentCallDetails={agentCallDetails} />
+```
+
+Al hacer clic en un agente se abre un panel de solo lectura con sus llamadas (proveedor, modelo, tokens por tipo, id de solicitud, latencia, estado, origen del costo), tal como las reporta `agentCallDetails[agentId]`: la oficina nunca calcula, suma, cotiza ni ordena nada de esto, y `AgentCallDetail` no tiene ningún campo que pueda llevar un prompt, una respuesta ni ningún otro texto libre.
+
 </details>
 
 **Guía completa:** props, efecto de cada evento, espacios de trabajo, traducciones, temas, reglas de consumo, repetición, exportación de video y el store sin React están en la [guía de la librería](library.es.md) ([English](library.md)).

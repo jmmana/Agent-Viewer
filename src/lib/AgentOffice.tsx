@@ -20,6 +20,8 @@ import {
 } from './officeStore';
 import { formatUsage, formatUsageBadge, type OfficeUsage } from './usage';
 import type { AgentBadge } from '../engine/canvasRenderer';
+import { CallDetailsPanel } from './CallDetailsPanel';
+import type { AgentCallDetails } from './callDetails';
 
 /** How often the office checks whether walks finished and meetings can start. */
 const TICK_MS = 250;
@@ -71,6 +73,16 @@ export interface AgentOfficeProps {
   showUsageBadges?: boolean;
   /** Usage figures computed by the host. The office never computes them. */
   usage?: OfficeUsage;
+  /**
+   * Shows the per-call detail panel for the selected agent. Off by default: without it, `agentCallDetails`
+   * is never read and none of its data reaches the DOM, even when an agent is selected.
+   */
+  showCallDetails?: boolean;
+  /**
+   * Call metadata per agent id, computed and paged by the host. The office only reads the entry of the
+   * selected agent; it never fetches, sums, prices or sorts this data.
+   */
+  agentCallDetails?: AgentCallDetails;
   /** Controlled selection. Leave undefined to let the office keep its own. */
   selectedAgentId?: string | null;
   onSelectAgent?: (agentId: string | null) => void;
@@ -102,6 +114,8 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   showUsage = false,
   showUsageBadges = false,
   usage,
+  showCallDetails = false,
+  agentCallDetails,
   selectedAgentId,
   onSelectAgent,
   bubbleDurationMs = DEFAULT_BUBBLE_MS,
@@ -159,6 +173,12 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
     }
     return map;
   }, [showUsageBadges, usage, locale, translate]);
+
+  // The panel only exists while `showCallDetails` is on and the selected id is an agent in the current
+  // snapshot; a stale `selectedAgentId` (not in this snapshot) renders nothing, same as a click would.
+  const selectedAgentForDetails = showCallDetails
+    ? snapshot.agents.find((agent) => agent.id === selectedId)
+    : undefined;
 
   const rootClass = ['av-office', `av-theme-${theme}`, className].filter(Boolean).join(' ');
 
@@ -253,6 +273,16 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           })}
         </ul>
       </div>
+
+      {selectedAgentForDetails && (
+        <CallDetailsPanel
+          agentName={selectedAgentForDetails.name}
+          calls={agentCallDetails?.[selectedAgentForDetails.id] ?? []}
+          locale={locale}
+          translate={translate}
+          onClose={() => handleSelect(null)}
+        />
+      )}
     </section>
   );
 };

@@ -72,8 +72,11 @@ export function formatCost(
   return formatCurrencyNumber(value, currency, locale, 4);
 }
 
-/** A `costSource` outside the three known literals (including `null` or missing) is shown as unknown. */
-function formatCostSource(value: UsageCostSource | null | undefined, translate: OfficeTranslate): string {
+/**
+ * A `costSource` outside the three known literals (including `null` or missing) is shown as unknown. Also
+ * used by the call detail panel (`AgentCallDetail.costSource` is the same three literals by contract).
+ */
+export function formatCostSource(value: UsageCostSource | null | undefined, translate: OfficeTranslate): string {
   if (value === 'provider-reported') return translate('usage.costSource.providerReported');
   if (value === 'estimated') return translate('usage.costSource.estimated');
   return translate('usage.unknown');

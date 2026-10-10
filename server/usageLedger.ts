@@ -77,6 +77,9 @@ export interface UsageLedgerRow {
   meetingId: string | null;
   userId: string | null;
   tags: string[];
+  /** `event.summary` (issue #69, migration `usage-ledger-summary`). `null` for a row written before that
+   * migration: `usage_ledger` is append-only (`usage_ledger_no_update`), so an old row can never be backfilled. */
+  summary: string | null;
 }
 
 export type LedgerRowInput = Omit<UsageLedgerRow, 'seq'>;
@@ -213,6 +216,7 @@ export function toLedgerRow(event: CanonicalEvent, ctx: ToLedgerRowContext): Led
     meetingId: stringOrNull(payload.meetingId),
     userId: stringOrNull(payload.userId),
     tags: tagsOf(payload.tags),
+    summary: event.summary,
   };
 }
 
@@ -277,7 +281,7 @@ export const LEDGER_COLUMNS = [
   'ingest_channel', 'runtime_id', 'session_id', 'agent_id', 'task_id', 'provider', 'model', 'input_tokens',
   'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens', 'cost', 'currency',
   'cost_source', 'latency_ms', 'status', 'error_kind', 'trace_id', 'parent_id', 'tool_call_id', 'meeting_id',
-  'user_id', 'tags',
+  'user_id', 'tags', 'summary',
 ] as const;
 
 function ledgerInsertSql(): string {
@@ -317,6 +321,7 @@ function ledgerRowParams(row: LedgerRowInput): unknown[] {
     row.meetingId,
     row.userId,
     JSON.stringify(row.tags),
+    row.summary,
   ];
 }
 
@@ -361,6 +366,7 @@ export function dbRowToLedgerRowInput(r: any): LedgerRowInput {
     meetingId: r.meeting_id,
     userId: r.user_id,
     tags,
+    summary: r.summary ?? null,
   };
 }
 

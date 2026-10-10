@@ -309,7 +309,9 @@ function tsOf(row: UsageLedgerRow, timeBasis: UsageFilters['timeBasis']): number
   return timeBasis === 'occurred' ? row.occurredAt : row.receivedAt;
 }
 
-function rowMatchesFilters(row: UsageLedgerRow, filters: UsageFilters): boolean {
+/** Exported for the export route (issue #69), which reuses this unchanged instead of re-deriving the same
+ * non-seq filter semantics for its own row stream (`server/usage/export.ts`). */
+export function rowMatchesFilters(row: UsageLedgerRow, filters: UsageFilters): boolean {
   const tsValue = tsOf(row, filters.timeBasis);
   if (filters.from !== null && tsValue < filters.from) return false;
   if (filters.to !== null && tsValue >= filters.to) return false;
@@ -458,7 +460,11 @@ export function computeMemoryRollup(input: MemoryRollupInput): UsageRollupRespon
   const ledgerSeq = maxSeq === null ? null : query.filters.asOfSeq !== null ? Math.min(query.filters.asOfSeq, maxSeq) : maxSeq;
   const lastRowReceivedAt = ledgerSeq === null ? null : (ledger.find((row) => row.seq === ledgerSeq)?.receivedAt ?? null);
 
-  const eligible = ledgerSeq === null ? [] : ledger.filter((row) => row.seq <= ledgerSeq);
+  // Export-only (issue #69): `afterSeq` is `null` for every rollup-route query, so this is a no-op for #66's own
+  // route; the export's totals sidecar sets it to pin the same `(afterSeq, asOfSeq]` window this aggregation runs
+  // over.
+  const afterSeq = query.filters.afterSeq;
+  const eligible = ledgerSeq === null ? [] : ledger.filter((row) => row.seq <= ledgerSeq && (afterSeq === null || row.seq > afterSeq));
   const { groups, totals } = computeMemoryAggregates(eligible, query);
 
   return shapeRollupResponse({
@@ -537,6 +543,13 @@ export function buildWhere(filters: UsageFilters, tsCol: string, ledgerSeq: numb
   const params: Record<string, SqlParam> = { ledgerSeq };
   let counter = 0;
   const parts: string[] = ['seq <= :ledgerSeq'];
+
+  // Export-only (issue #69): the lower half of an `(afterSeq, asOfSeq]` incremental window. `null` (the only value
+  // any rollup-route query ever sets) adds nothing, so this is a no-op for #66's own route.
+  if (filters.afterSeq !== null) {
+    params.afterSeq = filters.afterSeq;
+    parts.push('seq > :afterSeq');
+  }
 
   function inClause(column: string, values: readonly string[]): string {
     const names = values.map((value) => {

@@ -12,8 +12,13 @@ import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
 import { OpenApiBanner } from './components/OpenApiBanner';
 import { ResyncNotice } from './components/ResyncNotice';
-import type { CameraState } from './engine/canvasRenderer';
+import type { CameraState, AgentBadge } from './engine/canvasRenderer';
 import { OfficeCanvas } from './components/OfficeCanvas';
+import { formatCost, formatTokens, formatUsageBadge } from './lib/usage';
+import { rollupToOfficeUsage } from './integrations/ledgerToUsage';
+import type { RollupResponse } from './integrations/ledgerClient';
+import { useLedgerAgentUsage } from './components/usage/useLedgerAgentUsage';
+import { loadUsageWindow, saveUsageWindow, type UsageWindowOption } from './integrations/usageWindow';
 import { CrewStage } from './crew/CrewStage';
 import type { VisualMode } from './crew/crewModel';
 import { readCrewPreferences, saveCrewPreferences } from './crew/crewPreferences';
@@ -128,6 +133,32 @@ export default function App() {
   // `sessionStorage`, see `liveConnection.ts`). `resolved` stays false until that finishes, so the modal shows a
   // loading state instead of ever reading a real 401 as "unauthorized" too early.
   const [liveTokenState, setLiveTokenState] = useState<{ resolved: boolean; token?: string }>({ resolved: false });
+  // Shared by Model Ops and the office spend badges/top-bar total (issue #78): one `LedgerConnection` so both
+  // read the same base URL and token instead of building their own.
+  const ledgerConnection = useMemo(
+    () => (apiBase ? { baseUrl: apiBase, token: liveTokenState.token, tokenResolved: liveTokenState.resolved } : null),
+    [apiBase, liveTokenState.token, liveTokenState.resolved],
+  );
+
+  // Usage window for the office spend badges and top-bar total (issue #78), persisted across reloads.
+  const [usageWindow, setUsageWindowState] = useState<UsageWindowOption>(() =>
+    loadUsageWindow(typeof window !== 'undefined' ? window.localStorage : undefined)
+  );
+  const handleChangeUsageWindow = (option: UsageWindowOption) => {
+    setUsageWindowState(option);
+    saveUsageWindow(typeof window !== 'undefined' ? window.localStorage : undefined, option);
+  };
+  const ledgerUsage = useLedgerAgentUsage({ ledger: ledgerConnection, window: usageWindow, events: simState.events });
+  // Kept across a loading/error refetch so the badges and top-bar total never flash back to the (misleading)
+  // locally summed figures while the ledger is merely re-fetching; cleared only when the server tells us the
+  // ledger truly is not available (`unavailable`/`unauthorized`), when the previous figures would be wrong to
+  // keep showing.
+  const [lastReadyRollup, setLastReadyRollup] = useState<RollupResponse | null>(null);
+  useEffect(() => {
+    if (ledgerUsage.query.status === 'ready') setLastReadyRollup(ledgerUsage.query.data);
+    else if (ledgerUsage.query.status === 'unavailable' || ledgerUsage.query.status === 'unauthorized') setLastReadyRollup(null);
+  }, [ledgerUsage.query]);
+  const officeLedgerUsage = lastReadyRollup ? rollupToOfficeUsage(lastReadyRollup) : null;
 
   // Agent Detail Modal state (triggered on double click)
   const [detailModalAgentId, setDetailModalAgentId] = useState<string | null>(null);
@@ -644,6 +675,29 @@ export default function App() {
     return roleTitle === agent.roleTitle ? agent : { ...agent, roleTitle };
   });
 
+  // Per-agent spend badges drawn on the canvas (issue #78), built only from the ledger rollup: an agent with no
+  // row in `byAgent` gets no badge at all (not an "unknown" one), since it recorded no calls in this window.
+  let agentBadges: Map<string, AgentBadge> | undefined;
+  if (officeLedgerUsage?.byAgent) {
+    const badges = new Map<string, AgentBadge>();
+    for (const agent of canvasAgents) {
+      const figures = officeLedgerUsage.byAgent[agent.id];
+      if (!figures) continue;
+      const badge = formatUsageBadge(figures, locale, officeTranslate);
+      badges.set(agent.id, { tokens: badge.tokens, costLabel: badge.costLabel, failed: badge.failed });
+    }
+    if (badges.size > 0) agentBadges = badges;
+  }
+  // While the ledger has ever answered, the badges are the only source of truth: the canvas, top bar, inspector
+  // etc. must stop drawing figures summed from local agents so nothing on screen contradicts a badge.
+  const usageSummary = officeLedgerUsage?.total
+    ? {
+        tokens: formatTokens(officeLedgerUsage.total.totalTokens, locale, officeTranslate),
+        cost: formatCost(officeLedgerUsage.total.cost, officeLedgerUsage.total.currency, locale, officeTranslate),
+        windowLabel: t(locale, `usage.window.${usageWindow}` as TranslationKey),
+      }
+    : undefined;
+
   const handleFileDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
@@ -724,6 +778,9 @@ export default function App() {
           output: simState.totalTokens.output,
         }}
         totalCost={simState.totalCost}
+        usageSummary={usageSummary}
+        usageWindow={isLiveMode ? usageWindow : undefined}
+        onChangeUsageWindow={isLiveMode ? handleChangeUsageWindow : undefined}
         theme={theme}
         onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -779,7 +836,8 @@ export default function App() {
                     activeMeetingId={simState.activeMeetingId}
                     theme={theme}
                     translate={officeTranslate}
-                    usageTelemetry
+                    usageTelemetry={!officeLedgerUsage}
+                    agentBadges={agentBadges}
                     isInspectorOpen={isSidebarOpen}
                     isSidebarOpen={isSidebarOpen}
                     onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
@@ -927,7 +985,7 @@ export default function App() {
         events={simState.events}
         locale={locale}
         isLiveMode={isLiveMode}
-        ledger={apiBase ? { baseUrl: apiBase, token: liveTokenState.token, tokenResolved: liveTokenState.resolved } : null}
+        ledger={ledgerConnection}
       />
 
       {/* Comprehensive Agent Detail Modal (Double click on agent) */}

@@ -42,7 +42,7 @@ describe('Contrato de dos modos #166: Caricatura <-> Crew', () => {
       const [visualMode, setVisualMode] = useState<'cartoon' | 'crew'>('crew');
       const [room, setRoom] = useState('development');
       const [cameras, setCameras] = useState<CrewCameraByRoom>({});
-      const [preferences, setPreferences] = useState<CrewPreferences>({ version: 1, reducedMotion: true });
+      const [preferences, setPreferences] = useState<CrewPreferences>({ ...defaultCrewPreferences(), reducedMotion: true });
       return (
         <>
           <button type="button" onClick={() => setVisualMode((m) => (m === 'crew' ? 'cartoon' : 'crew'))}>
@@ -100,7 +100,7 @@ describe('Contrato de dos modos #166: Caricatura <-> Crew', () => {
       <AgentOffice
         visualMode="crew"
         ariaLabel="Oficina"
-        crewPreferences={{ version: 1, reducedMotion: false }}
+        crewPreferences={{ ...defaultCrewPreferences(), reducedMotion: false }}
       />,
     );
     // El checkbox refleja la preferencia propia (false); el sistema prevalece en la animación interna, no en
@@ -113,12 +113,12 @@ describe('Contrato de dos modos #166: Caricatura <-> Crew', () => {
         <AgentOffice
           visualMode={i % 2 === 0 ? 'cartoon' : 'crew'}
           ariaLabel="Oficina"
-          crewPreferences={{ version: 1, reducedMotion: false }}
+          crewPreferences={{ ...defaultCrewPreferences(), reducedMotion: false }}
         />,
       );
     }
     rerender(
-      <AgentOffice visualMode="crew" ariaLabel="Oficina" crewPreferences={{ version: 1, reducedMotion: false }} />,
+      <AgentOffice visualMode="crew" ariaLabel="Oficina" crewPreferences={{ ...defaultCrewPreferences(), reducedMotion: false }} />,
     );
     expect(checkbox().checked).toBe(false);
   });

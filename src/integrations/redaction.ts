@@ -86,6 +86,11 @@ export function redactionMarker(ruleName: string): string {
   return `[REDACTED:${ruleName}]`;
 }
 
+/** Matches any marker `redactionMarker` can produce, so a caller that only has a string value (for example a
+ * `requestId` read back from the ledger, issue #78) can detect a redacted field without reimplementing the
+ * marker format. Purely additive: nothing else in this module changes. */
+export const REDACTION_MARKER_PATTERN = /\[REDACTED:[a-z0-9_]+\]/;
+
 /** Envelope fields that are identifiers or enums, never free text, and are therefore guarded rather
  * than scanned for replacement. */
 export const IDENTIFIER_ENVELOPE_FIELDS: readonly string[] = [

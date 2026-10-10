@@ -1,10 +1,15 @@
-import React, { useState, useEffect, useId } from 'react';
+import React, { useState, useEffect, useId, useMemo, useRef } from 'react';
 import { Agent, AgentStatus, PricingConfig, Task, ViewerEvent } from '../types/agent';
 import { OFFICE_ROOMS } from '../engine/officeModel';
 import { APP_MESSAGES, t, type Locale, type TranslationKey } from '../i18n';
 import { localizeDemoText } from '../content/demoScript';
 import type { LedgerConnection } from './modelOps/useModelOpsLedger';
 import { ToolSpendTooltip } from './usage/ToolSpendTooltip';
+import { useAgentCalls } from './usage/useAgentCalls';
+import { AgentCallsTable } from './usage/AgentCallsTable';
+import { createOfficeTranslator } from '../content/officeMessages';
+import { formatCost, formatTokens, type UsageFigures } from '../lib/usage';
+import type { UsageWindowOption } from '../integrations/usageWindow';
 import {
   X,
   Copy,
@@ -26,6 +31,8 @@ import {
   FolderGit2,
 } from 'lucide-react';
 
+type DetailTab = 'overview' | 'tasks' | 'metrics' | 'logs' | 'console';
+
 interface AgentDetailModalProps {
   isOpen: boolean;
   agent: Agent | null;
@@ -40,11 +47,27 @@ interface AgentDetailModalProps {
   onSendMessage: (agentId: string, message: string) => void;
   onUpdateStatus: (agentId: string, status: AgentStatus) => void;
   onOpenNewTaskForAgent?: (agent: Agent) => void;
-  /** `null` in demo mode: tool chip spend tooltips then render nothing extra. */
+  /** `null` in demo mode: tool chip spend tooltips then render nothing extra, and the metrics tab's call list
+   * never fetches. */
   ledger: LedgerConnection | null;
+  /** This agent's row from the usage ledger rollup (issue #78), `undefined` when it has no row (no calls in the
+   * current window). Read only while `ledgerReady` is `true`. */
+  usageFigures?: UsageFigures;
+  /** `true` once the ledger has ever answered: the metrics tab then reads `usageFigures` instead of this
+   * agent's local accumulators. */
+  ledgerReady?: boolean;
+  /** `true` when the last ledger refetch failed but earlier figures are kept: shown dimmed with a notice. */
+  isStale?: boolean;
+  /** Usage window selector state (issue #78), shared with the top bar: the call list and its "N calls in
+   * <window>" heading use it. */
+  usageWindow?: UsageWindowOption;
+  /** Display preference (issue #78): shortens `requestId` in the call list and hides free-text fields. */
+  maskSecrets?: boolean;
+  /** Which tab to land on the next time the modal opens (issue #78's "View calls" from the inspector). The
+   * modal keeps its own `activeTab` state across opens, so this only applies on the open edge or while already
+   * open if it changes. */
+  initialTab?: DetailTab;
 }
-
-type DetailTab = 'overview' | 'tasks' | 'metrics' | 'logs' | 'console';
 
 /** Quick orders offered in the console tab: button label key and the prompt actually sent. */
 const QUICK_PROMPTS: ReadonlyArray<{ icon: string; label: TranslationKey; prompt: TranslationKey }> = [
@@ -76,12 +99,19 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
   onUpdateStatus,
   onOpenNewTaskForAgent,
   ledger,
+  usageFigures,
+  ledgerReady = false,
+  isStale = false,
+  usageWindow = 'all',
+  maskSecrets = true,
+  initialTab,
 }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [copiedId, setCopiedId] = useState(false);
   const [promptText, setPromptText] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const titleId = useId();
+  const officeTranslate = useMemo(() => createOfficeTranslator({ locale }), [locale]);
 
   // Close on Escape key
   useEffect(() => {
@@ -94,6 +124,26 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  // The modal keeps `activeTab` across opens (it is never unmounted while the app runs), so a caller asking for
+  // a specific tab (the inspector's "View calls") needs an explicit edge: jump to `initialTab` when the modal
+  // transitions from closed to open, or if `initialTab` itself changes while already open.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (isOpen && (!wasOpen.current || initialTab)) {
+      setActiveTab(initialTab ?? 'overview');
+    }
+    wasOpen.current = isOpen;
+  }, [isOpen, initialTab]);
+
+  const agentId = agent?.id ?? '';
+  const agentCalls = useAgentCalls({
+    ledger,
+    agentId,
+    window: usageWindow,
+    enabled: isOpen && activeTab === 'metrics' && Boolean(agent) && ledger !== null,
+    events,
+  });
 
   if (!isOpen || !agent) return null;
 
@@ -670,40 +720,76 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
           {/* TAB 3: METRICS & USAGE */}
           {activeTab === 'metrics' && (
             <div className="space-y-6">
-              {/* 4 Stat Cards */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-                  <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.inputTokens')}</span>
-                  <span className="text-lg font-bold text-white font-mono">
-                    {agent.tokensInput.toLocaleString(intlLocale)}
-                  </span>
-                  <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.inputTokensHint')}</span>
+              {ledgerReady && !usageFigures ? (
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-slate-400 text-center text-xs">
+                  {t(locale, 'agentDetail.noCallsInWindow')}
                 </div>
+              ) : (
+                <div
+                  className={`grid grid-cols-2 md:grid-cols-4 gap-3 ${ledgerReady && isStale ? 'opacity-60' : ''}`}
+                  title={ledgerReady && isStale ? t(locale, 'agentDetail.staleNotice') : undefined}
+                >
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.inputTokens')}</span>
+                    <span className="text-lg font-bold text-white font-mono">
+                      {ledgerReady
+                        ? formatTokens(usageFigures?.inputTokens, intlLocale, officeTranslate)
+                        : agent.tokensInput.toLocaleString(intlLocale)}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.inputTokensHint')}</span>
+                  </div>
 
-                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-                  <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.outputTokens')}</span>
-                  <span className="text-lg font-bold text-sky-400 font-mono">
-                    {agent.tokensOutput.toLocaleString(intlLocale)}
-                  </span>
-                  <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.outputTokensHint')}</span>
-                </div>
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.outputTokens')}</span>
+                    <span className="text-lg font-bold text-sky-400 font-mono">
+                      {ledgerReady
+                        ? formatTokens(usageFigures?.outputTokens, intlLocale, officeTranslate)
+                        : agent.tokensOutput.toLocaleString(intlLocale)}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.outputTokensHint')}</span>
+                  </div>
 
-                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-                  <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.reasoningTokens')}</span>
-                  <span className="text-lg font-bold text-purple-400 font-mono">
-                    {(agent.reasoningTokens || 0).toLocaleString(intlLocale)}
-                  </span>
-                  <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.reasoningTokensHint')}</span>
-                </div>
+                  {ledgerReady && (
+                    <>
+                      <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                        <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.cacheReadTokens')}</span>
+                        <span className="text-lg font-bold text-slate-200 font-mono">
+                          {formatTokens(usageFigures?.cacheReadTokens, intlLocale, officeTranslate)}
+                        </span>
+                        <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.cacheReadTokensHint')}</span>
+                      </div>
 
-                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
-                  <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.accumulatedCost')}</span>
-                  <span className="text-lg font-bold text-emerald-400 font-mono">
-                    ${agent.cost.toFixed(4)}
-                  </span>
-                  <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.accumulatedCostHint')}</span>
+                      <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                        <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.cacheWriteTokens')}</span>
+                        <span className="text-lg font-bold text-slate-200 font-mono">
+                          {formatTokens(usageFigures?.cacheWriteTokens, intlLocale, officeTranslate)}
+                        </span>
+                        <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.cacheWriteTokensHint')}</span>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.reasoningTokens')}</span>
+                    <span className="text-lg font-bold text-purple-400 font-mono">
+                      {ledgerReady
+                        ? formatTokens(usageFigures?.reasoningTokens, intlLocale, officeTranslate)
+                        : (agent.reasoningTokens || 0).toLocaleString(intlLocale)}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.reasoningTokensHint')}</span>
+                  </div>
+
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <span className="text-slate-400 text-[11px] block">{t(locale, 'agentDetail.accumulatedCost')}</span>
+                    <span className="text-lg font-bold text-emerald-400 font-mono">
+                      {ledgerReady
+                        ? formatCost(usageFigures?.cost, usageFigures?.currency, intlLocale, officeTranslate)
+                        : `$${agent.cost.toFixed(4)}`}
+                    </span>
+                    <span className="text-[10px] text-slate-400 block">{t(locale, 'agentDetail.accumulatedCostHint')}</span>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Efficiency & Speed */}
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
@@ -735,6 +821,26 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* Call list (issue #78): the only place the full per-call list is shown, never duplicated in the
+                  side inspector. Only rendered against a live ledger connection; demo mode makes no request. */}
+              {ledger !== null && (
+                <div className="pt-2 border-t border-slate-800">
+                  <AgentCallsTable
+                    query={agentCalls.query}
+                    calls={agentCalls.calls}
+                    hasMore={agentCalls.hasMore}
+                    atCap={agentCalls.atCap}
+                    loadingMore={agentCalls.loadingMore}
+                    loadMoreError={agentCalls.loadMoreError}
+                    onLoadMore={agentCalls.loadMore}
+                    onRetry={agentCalls.retry}
+                    maskSecrets={maskSecrets}
+                    windowLabel={t(locale, `usage.window.${usageWindow}` as TranslationKey)}
+                    locale={locale}
+                  />
+                </div>
+              )}
             </div>
           )}
 

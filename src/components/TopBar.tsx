@@ -15,6 +15,7 @@ import {
   Activity,
   Users,
   CheckCircle2,
+  Clock,
 } from 'lucide-react';
 import { isSoundEnabled, setSoundEnabled } from '../engine/soundEffects';
 import { Locale, t, type TranslationKey } from '../i18n';
@@ -47,6 +48,9 @@ interface TopBarProps {
   /** Present only when the host has a ledger to query; draws the Last hour/Today/7 days/All selector. */
   usageWindow?: UsageWindowOption;
   onChangeUsageWindow?: (option: UsageWindowOption) => void;
+  /** `true` when the last ledger refetch failed but `usageSummary` still shows earlier figures (issue #78): the
+   * chip is then shown dimmed with a clock marker instead of looking like a confirmed-fresh reading. */
+  isUsageStale?: boolean;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
   onOpenSettings: () => void;
@@ -85,6 +89,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   usageSummary,
   usageWindow,
   onChangeUsageWindow,
+  isUsageStale = false,
   theme,
   onToggleTheme,
   onOpenSettings,
@@ -320,10 +325,11 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Global Live Tokens & Cost Pill (Interactive Model Ops Launcher) */}
         <button
           onClick={onOpenModelOps}
-          title={t(locale, 'controls.modelOpsTitle')}
-          className="flex items-center gap-2 text-xs font-mono tabular-nums bg-slate-950/80 hover:bg-slate-850 px-3 py-1.5 rounded-lg border border-slate-800 hover:border-cyan-500/50 shadow-sm transition-all group cursor-pointer"
+          title={usageSummary && isUsageStale ? t(locale, 'usage.stale') : t(locale, 'controls.modelOpsTitle')}
+          className={`flex items-center gap-2 text-xs font-mono tabular-nums bg-slate-950/80 hover:bg-slate-850 px-3 py-1.5 rounded-lg border border-slate-800 hover:border-cyan-500/50 shadow-sm transition-all group cursor-pointer ${usageSummary && isUsageStale ? 'opacity-60' : ''}`}
         >
           <div className="w-2 h-2 rounded-full bg-emerald-400 group-hover:bg-cyan-400 animate-pulse shrink-0" aria-hidden="true" />
+          {usageSummary && isUsageStale && <Clock className="w-3 h-3 text-amber-400 shrink-0" aria-hidden="true" />}
           <div className="flex items-center gap-1 text-slate-300">
             <span className="text-slate-400">{t(locale, 'controls.tokens')}</span>
             <span className="text-sky-400 font-semibold">{formattedTokens}</span>

@@ -13,7 +13,7 @@
  * `unknownCostCalls` is zero: more than one entry (mixed currency or cost source) or any unknown-cost call makes
  * the figure `null`, never a cross-currency sum and never a partial total.
  */
-import type { RollupGroup, RollupResponse, RollupTotals } from './ledgerClient';
+import type { RollupGroup, RollupResponse, RollupTotals, TokenKindRollup } from './ledgerClient';
 import type { OfficeUsage, UsageFigures } from '../lib/usage';
 
 function tokenTotal(totals: RollupTotals): number | null {
@@ -21,6 +21,13 @@ function tokenTotal(totals: RollupTotals): number | null {
   if (input.sum === null || output.sum === null) return null;
   if (input.unreportedCalls > 0 || output.unreportedCalls > 0) return null;
   return input.sum + output.sum;
+}
+
+/** One token kind (input, output, cache read, cache write, reasoning) read unchanged: `unknown` the moment any
+ * call in the group did not report it, never a partial sum passed off as complete. */
+function tokenKindFigure(kind: TokenKindRollup): number | null {
+  if (kind.unreportedCalls > 0) return null;
+  return kind.sum;
 }
 
 function costFigures(totals: RollupTotals): Pick<UsageFigures, 'cost' | 'currency' | 'costSource'> {
@@ -32,10 +39,17 @@ function costFigures(totals: RollupTotals): Pick<UsageFigures, 'cost' | 'currenc
 }
 
 /** One rollup row (a group, or the response `totals`) as `UsageFigures`. Every value is read, never invented:
- * a field the server did not fully report stays `null`, never `0`. */
+ * a field the server did not fully report stays `null`, never `0`. The per-kind breakdown (input, output, cache
+ * read, cache write, reasoning) feeds the inspector, sidebar and detail-modal stat cards (issue #78); the badge
+ * itself only ever reads `totalTokens`/`cost`. */
 export function rollupTotalsToUsageFigures(totals: RollupTotals): UsageFigures {
   return {
     totalTokens: tokenTotal(totals),
+    inputTokens: tokenKindFigure(totals.tokens.input),
+    outputTokens: tokenKindFigure(totals.tokens.output),
+    cacheReadTokens: tokenKindFigure(totals.tokens.cacheRead),
+    cacheWriteTokens: tokenKindFigure(totals.tokens.cacheWrite),
+    reasoningTokens: tokenKindFigure(totals.tokens.reasoning),
     ...costFigures(totals),
     failedCalls: totals.calls.failed > 0 ? totals.calls.failed : undefined,
   };

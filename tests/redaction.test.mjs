@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   BUILTIN_REDACTION_RULES,
+  REDACTION_MARKER_PATTERN,
   REDACTION_POLICY_VERSION,
   RedactionConfigError,
   adversarialRedactionCorpus,
@@ -576,4 +577,19 @@ test('performance: a 1MB batch body is redacted comfortably under a loose bound'
 
 test('redactionMarker: builds the "[REDACTED:<rule>]" shape', () => {
   assert.equal(redactionMarker('github_token'), '[REDACTED:github_token]');
+});
+
+// REDACTION_MARKER_PATTERN (issue #78): lets a caller that only has a string value (the portal's call list,
+// reading `requestId` back from the ledger) detect a server-applied marker without reimplementing its format.
+test('REDACTION_MARKER_PATTERN: matches every marker redactionMarker can produce', () => {
+  for (const rule of BUILTIN_REDACTION_RULES) {
+    assert.match(redactionMarker(rule.name), REDACTION_MARKER_PATTERN);
+  }
+  assert.match('prefix ' + redactionMarker('aws_secret_access_key') + ' suffix', REDACTION_MARKER_PATTERN);
+});
+
+test('REDACTION_MARKER_PATTERN: does not match an ordinary request id or unrelated bracketed text', () => {
+  assert.doesNotMatch('req_9f2c9c9e-1234-4a5b-8c7d-abcdef012345', REDACTION_MARKER_PATTERN);
+  assert.doesNotMatch('[REDACTED]', REDACTION_MARKER_PATTERN);
+  assert.doesNotMatch('[redacted:github_token]', REDACTION_MARKER_PATTERN);
 });

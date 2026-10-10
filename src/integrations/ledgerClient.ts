@@ -58,6 +58,8 @@ const TokenKindRollupSchema = z.object({
   unreportedCalls: z.number(),
 });
 
+export type TokenKindRollup = z.infer<typeof TokenKindRollupSchema>;
+
 const CostEntrySchema = z.object({
   currency: z.string().nullable(),
   costSource: z.enum(['provider-reported', 'estimated', 'unknown']),
@@ -297,6 +299,10 @@ export interface CallsQueryParams {
   model?: string[];
   provider?: string[];
   status?: string[];
+  /** Epoch ms, inclusive lower bound (issue #78's per-agent call list reuses the same usage window as the
+   * rollup). Omitted means "All time", same convention as `RollupQueryParams.from`. */
+  from?: number;
+  to?: number;
 }
 
 export function fetchCalls(
@@ -312,5 +318,7 @@ export function fetchCalls(
   appendQuery(search, 'model', params.model);
   appendQuery(search, 'provider', params.provider);
   appendQuery(search, 'status', params.status);
+  appendQuery(search, 'from', params.from);
+  appendQuery(search, 'to', params.to);
   return request(`${trimBase(base)}/api/v1/usage/calls?${search.toString()}`, token, CallsResponseSchema, fetchImpl);
 }

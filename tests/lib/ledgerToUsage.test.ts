@@ -99,6 +99,38 @@ describe('rollupTotalsToUsageFigures', () => {
     expect(rollupTotalsToUsageFigures(row).cost).toBeNull();
   });
 
+  it('reads each token kind (input, output, cache read, cache write, reasoning) independently (issue #78)', () => {
+    const figures = rollupTotalsToUsageFigures(totals());
+    expect(figures.inputTokens).toBe(100);
+    expect(figures.outputTokens).toBe(50);
+    // cacheRead/cacheWrite/reasoning in the shared `totals()` fixture have zero reported calls (all unreported).
+    expect(figures.cacheReadTokens).toBeNull();
+    expect(figures.cacheWriteTokens).toBeNull();
+    expect(figures.reasoningTokens).toBeNull();
+  });
+
+  it('is unknown for a token kind with any unreported call, even when its sibling kinds are fully known', () => {
+    const row = totals({ tokens: { ...totals().tokens, cacheRead: tokenMetric(80, 9, 1) } });
+    const figures = rollupTotalsToUsageFigures(row);
+    expect(figures.cacheReadTokens).toBeNull();
+    expect(figures.inputTokens).toBe(100);
+  });
+
+  it('reads a token kind as its sum once every call reported it, including a fully-reported cache/reasoning kind', () => {
+    const row = totals({
+      tokens: {
+        ...totals().tokens,
+        cacheRead: tokenMetric(40, 10, 0),
+        cacheWrite: tokenMetric(10, 10, 0),
+        reasoning: tokenMetric(5, 10, 0),
+      },
+    });
+    const figures = rollupTotalsToUsageFigures(row);
+    expect(figures.cacheReadTokens).toBe(40);
+    expect(figures.cacheWriteTokens).toBe(10);
+    expect(figures.reasoningTokens).toBe(5);
+  });
+
   it('never reports failedCalls as 0: omitted when there are none', () => {
     const row = totals({ calls: { total: 5, succeeded: 5, failed: 0 } });
     expect(rollupTotalsToUsageFigures(row).failedCalls).toBeUndefined();

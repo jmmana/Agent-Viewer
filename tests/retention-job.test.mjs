@@ -212,3 +212,48 @@ test('startRetention: totals() tracks rows deleted since process start, per scop
   assert.deepEqual(job.totals(), { events: 15, usageLedger: null });
   await job.stop();
 });
+
+test('startRetention: the one log line per completed run names both scopes, counts and the cutoff, never row contents', async () => {
+  const store = new FakeStore();
+  store.purgeScript.push({ eventsDeleted: 1204, ledgerDeleted: 0, eventsOldestReceivedAt: null, ledgerOldestReceivedAt: null });
+
+  const logs = [];
+  const job = startRetention({
+    store,
+    config: { eventsDays: 30, ledgerDays: null, intervalMinutes: 60 },
+    now: () => 1_791_460_800_000, // 2026-10-08T12:00:00.000Z
+    log: (m) => logs.push(m),
+    startupDelayMs: 10_000_000,
+  });
+
+  await job.runOnce('schedule');
+  assert.equal(logs.length, 1);
+  assert.equal(
+    logs[0],
+    '[agent-viewer] retention: deleted 1204 events older than 30 days (cutoff 2026-09-08T12:00:00.000Z); usage ledger: kept (no window)'
+  );
+  await job.stop();
+});
+
+test('startRetention: a skipped tick logs its own line and is never silently dropped', async () => {
+  const store = new FakeStore();
+  let resolvePurge;
+  store.purgeScript.push(() => new Promise((resolve) => { resolvePurge = resolve; }));
+  const logs = [];
+  const job = startRetention({
+    store,
+    config: { eventsDays: 30, ledgerDays: null, intervalMinutes: 60 },
+    log: (m) => logs.push(m),
+    startupDelayMs: 10_000_000,
+  });
+
+  const first = job.runOnce('schedule');
+  await flush();
+  const skipped = await job.runOnce('schedule');
+  assert.equal(skipped.status, 'skipped');
+  assert.ok(logs.some((line) => line.includes('skipped')));
+
+  resolvePurge({ eventsDeleted: 0, ledgerDeleted: 0, eventsOldestReceivedAt: null, ledgerOldestReceivedAt: null });
+  await first;
+  await job.stop();
+});

@@ -2,7 +2,7 @@
 
 - **Issue:** [#173](https://github.com/jmmana/Agent-Viewer/issues/173)
 - **Epic:** [#114](https://github.com/jmmana/Agent-Viewer/issues/114)
-- **Estado:** **Propuesto para implementación** (decisión técnica documentada; requiere validación G1 antes de considerar #173 completo)
+- **Estado:** Decisión implementada y contrato de cámara operativo en main. **El issue #173 está resuelto a su propio alcance** (ADR fusionado, contrato de cámara con presets y zoom continuo, prueba de orientación por ángulo, sin mezcla 2D/3D, experiencia fluida desktop/móvil; auditoría completa en `docs/crew/IMPLEMENTATION-STATUS.md`, fila de #173). Esto es distinto de la **certificación G1 del épico #114 completo** (arte ilustrado final por vista, QA en dispositivos físicos), que sigue sin certificar y es responsabilidad de otros issues del épico, no de #173.
 - **Fecha:** 2026-10-08
 - **Restricción principal:** `Caricatura` y `Crew` son dos modos visuales **independientes**. No reutilizar el renderer actual como base de Crew.
 
@@ -105,6 +105,8 @@ interface CrewViewDefinition {
 ## 7. Acceptance test plan de #173 y hito G1
 
 **Entrega documental de #173:** ADR versionado, comparación de enfoques, especificación tipada, matriz de assets y pruebas definidas. No declarar #173 funcionalmente completo hasta demostración del motor real.
+
+**Actualización 2026-10-10:** el motor real ya existe y fue demostrado. Auditoría contra el código en main confirma que los cinco criterios bloqueantes literales de #173 están satisfechos (contrato de cámara con presets `front`/`right`/`back`/`left` y zoom continuo, prueba E2E dedicada de orientación por ángulo en `tests/e2e/crew-facing.spec.ts`, documentación sin mezclar rotación 2D con perspectiva 3D, selección de oficina aislada y experiencia fluida desktop/móvil con evidencia en `docs/crew/evidence/camera-156/`). Detalle completo en `docs/crew/IMPLEMENTATION-STATUS.md`. Esto cierra #173 a su propio alcance; no certifica G1 del épico #114, que exige además arte ilustrado final y QA en dispositivos físicos.
 
 **Después, implementación en #166/#167/#170/#168/#169/#156/#171:**
 

@@ -84,10 +84,11 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.ok, true);
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
-      // Migration 7 (usage-calls-indexes, issue #67), 8 (retention, issue #70), 9 (usage-rollup, issue #66) and
-      // 10 (usage-ledger-summary, issue #69): the usage_ledger.summary column is the latest, from migration 10.
-      schemaVersion: 10,
-      latestKnownSchemaVersion: 10,
+      // Migration 7 (usage-calls-indexes, issue #67), 8 (retention, issue #70), 9 (usage-rollup, issue #66),
+      // 10 (usage-ledger-summary, issue #69) and 11 (rollup-attribution, issue #80): the latest, adding the
+      // `tool_calls`/`meeting_labels` tables.
+      schemaVersion: 11,
+      latestKnownSchemaVersion: 11,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');

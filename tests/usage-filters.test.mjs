@@ -5,7 +5,8 @@
 // assertion below includes them (always present, empty/null unless `allowRollupOnly` is set) so this file stays
 // the single source of truth for the shared contract's exact shape. Issue #69 added `afterSeq`, export-only and
 // never parsed from a query string by this function at all (the export route sets it directly on the filters
-// object it got back from here), so it is always `null` regardless of options.
+// object it got back from here), so it is always `null` regardless of options. Issue #80 added five more
+// rollup-only fields under the same gate: `meetingId`, `toolCallId`, `tool`, `meetingAttribution`, `toolAttribution`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseUsageFilters } from '../server/usage/filters.ts';
@@ -43,6 +44,11 @@ test('parseUsageFilters: defaults with no query at all', () => {
     tag: [],
     asOfSeq: null,
     utcOffsetMinutes: 0,
+    meetingId: [],
+    toolCallId: [],
+    tool: [],
+    meetingAttribution: [],
+    toolAttribution: [],
     afterSeq: null,
   });
   assert.equal(value.order, 'desc');

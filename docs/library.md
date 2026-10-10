@@ -711,6 +711,8 @@ const usage = {
 
 `toUsageFigures(group, { costSource })` returns `cost` as a number only when the group has exactly one cost entry, that entry's source matches the `costSource` you asked for, and `unknownCostCalls` is `0`; two currencies, a reported/estimated mix, or any unknown cost all give `cost: null`. `inputTokens`/`outputTokens` are `null` unless every call in the group reported that kind, and `totalTokens` is their sum (cache and reasoning tokens are excluded) only when both are known. This helper runs in your host backend, next to the SDK call: the component still only ever displays the `UsageFigures` you pass it, imported here as a type, never computed by `@warlockcode/agent-viewer` itself.
 
+Per-meeting and per-tool spend (issue #80, `groupBy: ['meeting']`/`['tool']` on the same endpoint) work exactly the same way: `toUsageFigures()` maps one of those groups just like any other, and if a host wants to show a meeting's or a tool's cost in the office, it computes that figure server-side and passes it through its own props, same as the per-agent example above. The library itself has no `meeting`/`tool` concept: it never fetches the rollup, never sums anything, and this item adds no new import or prop to `@warlockcode/agent-viewer`.
+
 ## Replay
 
 `useEventReplay` plays a recorded run at its own pace and returns the visible slice, ready for `<AgentOffice events>`. It only reveals events; it never creates any. `ReplayControls` is an optional bar for it: play and pause, back to start, a position slider and speed buttons.

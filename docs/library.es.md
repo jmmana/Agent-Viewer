@@ -711,6 +711,8 @@ const usage = {
 
 `toUsageFigures(group, { costSource })` devuelve `cost` como número solo cuando el grupo tiene exactamente una entrada de costo, esa entrada tiene el origen (`costSource`) que pediste y `unknownCostCalls` es `0`; dos monedas, una mezcla de reportado/estimado o cualquier costo desconocido dan `cost: null`. `inputTokens`/`outputTokens` son `null` salvo que toda llamada del grupo haya reportado ese tipo, y `totalTokens` es su suma (sin tokens de cache ni de razonamiento) solo cuando ambos se conocen. Este helper corre en tu backend anfitrión, junto a la llamada del SDK: el componente sigue mostrando solo el `UsageFigures` que le pasas, importado aquí solo como tipo, nunca calculado por `@warlockcode/agent-viewer`.
 
+El gasto por reunión y por herramienta (issue #80, `groupBy: ['meeting']`/`['tool']` en el mismo endpoint) funciona igual: `toUsageFigures()` mapea uno de esos grupos como cualquier otro, y si un anfitrión quiere mostrar el costo de una reunión o de una herramienta en la oficina, lo calcula del lado del servidor y lo pasa por sus propias props, igual que el ejemplo por agente de arriba. La librería no tiene ningún concepto de `meeting`/`tool`: nunca llama al rollup, nunca suma nada, y este cambio no agrega ningún import ni prop nuevo a `@warlockcode/agent-viewer`.
+
 ## Repetición
 
 `useEventReplay` reproduce una ejecución grabada a su propio ritmo y devuelve el tramo visible, listo para `<AgentOffice events>`. Solo revela eventos; nunca crea ninguno. `ReplayControls` es una barra opcional para el hook: reproducir y pausar, volver al inicio, una barra de posición y botones de velocidad.

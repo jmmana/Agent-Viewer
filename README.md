@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/jmmana/Agent-Viewer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/jmmana/Agent-Viewer/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white" alt="CI status" /></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.2.1-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.2.1" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.5.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.5.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" alt="MIT license" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer"><img src="https://img.shields.io/github/stars/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=a855f7&label=stars" alt="GitHub stars" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer/network/members"><img src="https://img.shields.io/github/forks/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=4c1d95&label=forks" alt="GitHub forks" /></a>
@@ -57,7 +57,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
   <tr>
     <td align="center" width="25%"><h2>23</h2><sub>canonical event types<br/>in contract V1</sub></td>
     <td align="center" width="25%"><h2>9</h2><sub>rooms agents<br/>work and meet in</sub></td>
-    <td align="center" width="25%"><h2>EN · ES</h2><sub>116 text keys,<br/>all replaceable</sub></td>
+    <td align="center" width="25%"><h2>EN · ES</h2><sub>156 text keys,<br/>all replaceable</sub></td>
     <td align="center" width="25%"><h2>0</h2><sub>usage figures computed<br/>by the component</sub></td>
   </tr>
 </table>
@@ -69,7 +69,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
 | Piece | What it does |
 |---|---|
 | 🏢 **Living office** | React + Canvas2D scene with 9 rooms. Agents walk to their desks and to meeting rooms, show their status and the tool they use, and talk in speech bubbles headed by the kind of message. Rotate, fit, pan, zoom and click to select. |
-| 🧩 **Embeddable library** | `@warlockcode/agent-viewer`: `<AgentOffice events={events} />` in any React 19 app. Professional mode by default, isolated `av-` CSS, English and Spanish built in, replay controls and video export. |
+| 🧩 **Embeddable library** | `@warlockcode/agent-viewer`: `<AgentOffice events={events} />` in any React 19 app. Professional mode by default, isolated `av-` CSS, English and Spanish built in, replay controls and video export. Optional, opt-in per-agent usage badges, a per-call detail panel and meeting spend figures, fed only by host props: the component never computes, sums or prices anything. |
 | 📡 **Ingestion server** | Express API on port 8787: single and batch ingestion with idempotency, a Server-Sent Events stream that resumes from the last event, a generic webhook with HMAC signatures, in-memory or SQLite storage. |
 | 🐍 **SDKs and adapters** | Python and TypeScript clients, plus example adapters for LangGraph, CrewAI, AutoGen, OpenAI Agents SDK and Google ADK. |
 | 🎬 **Replay and export** | Load a JSONL V1 log, replay it at its original pace with seek and speed, and record it to WebM or MP4 in the browser. |
@@ -202,12 +202,12 @@ This starts the API on **:8787** with SQLite on a named volume, and the built de
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> in professional mode: a meeting where agents propose, object, agree and decide. Only the events passed to the component are drawn.</sub>
 </p>
 
-Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.2.1**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
+Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.5.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
 
 Publication on npm is coming soon. Until then, install it from the GitHub release asset (the package name and your imports stay the same when you switch to npm):
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
 ```
 
 ### Minimal example
@@ -891,7 +891,7 @@ Agent Viewer needs no model provider keys: usage figures come from your runtime.
 
 ## 🧭 Roadmap
 
-Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
+Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. Shipped in [0.5.0](CHANGELOG.md): per-agent usage badges and a per-call detail panel on the canvas, cost per meeting and per tool, Model Ops reconciling against the real ledger call by call, and the library guide's four usage privacy rules stated together in [docs/library.md](docs/library.md#usage-figures). See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
 
 Planned, not available yet:
 

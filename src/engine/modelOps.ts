@@ -87,6 +87,16 @@ export interface ProviderUsageAggregate {
   models: ModelUsageAggregate[];
 }
 
+/**
+ * @deprecated demo-only. Attributes an agent's whole running totals to its *last reported* model, so an agent
+ * that called two models during a session is counted entirely under the one it reported most recently. Issue
+ * #79 moves the Matrix, Agents and Feed tabs of Model Ops to the server's usage-ledger rollup and calls read
+ * APIs, which have one row per call instead. This function
+ * stays exported, unchanged in behavior, for `simulated` Model Ops mode (no API base configured) and for the
+ * in-office telemetry plaque (`canvasRenderer.ts`), which the office totals work (#55/#78) will migrate later.
+ * `engine/modelOps.ts` is part of the embeddable library bundle (`dist-lib/engine/modelOps.js`, pulled in by
+ * `canvasRenderer`), so this file never gains a ledger import or any new usage logic.
+ */
 export function aggregateModelUsage(agents: Agent[]): ProviderUsageAggregate[] {
   const models = new Map<string, ModelUsageAggregate>();
   let officeTotalTokens = 0;

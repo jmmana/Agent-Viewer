@@ -124,6 +124,10 @@ export default function App() {
   const [modelOpsInitialProvider, setModelOpsInitialProvider] = useState<string | null>(null);
   // What-if calls from the Model Ops simulator. Kept outside simState: never persisted, exported or counted.
   const [simulatedCalls, setSimulatedCalls] = useState<SimulatedCall[]>([]);
+  // Token for Model Ops' usage-ledger client (issue #79): resolved asynchronously (URL fragment, launch code or
+  // `sessionStorage`, see `liveConnection.ts`). `resolved` stays false until that finishes, so the modal shows a
+  // loading state instead of ever reading a real 401 as "unauthorized" too early.
+  const [liveTokenState, setLiveTokenState] = useState<{ resolved: boolean; token?: string }>({ resolved: false });
 
   // Agent Detail Modal state (triggered on double click)
   const [detailModalAgentId, setDetailModalAgentId] = useState<string | null>(null);
@@ -261,6 +265,7 @@ export default function App() {
       // Not streaming, but a token in the address still leaves the address bar and the history entry.
       takeLiveCredentials(window);
       setIsLiveConnected(false);
+      setLiveTokenState({ resolved: false });
       return;
     }
 
@@ -269,9 +274,11 @@ export default function App() {
     const abortController = new AbortController();
     let connection: ReturnType<typeof connectEventStream> | undefined;
     setLivePhase('loading');
+    setLiveTokenState({ resolved: false });
 
     void loadLiveToken(window, apiBase).then(async (token) => {
       if (cancelled) return;
+      setLiveTokenState({ resolved: true, token });
 
       // Load order on open (issue #72): the server's own record, through the snapshot and a deeper page of
       // events, before ever subscribing to the stream. A reload or a second tab must never start from an empty
@@ -920,6 +927,7 @@ export default function App() {
         events={simState.events}
         locale={locale}
         isLiveMode={isLiveMode}
+        ledger={apiBase ? { baseUrl: apiBase, token: liveTokenState.token, tokenResolved: liveTokenState.resolved } : null}
       />
 
       {/* Comprehensive Agent Detail Modal (Double click on agent) */}

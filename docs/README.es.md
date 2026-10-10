@@ -73,7 +73,7 @@ Es código abierto (MIT), corre en tu máquina, no necesita ninguna clave de pro
 | 📡 **Servidor de ingesta** | API Express en el puerto 8787: ingesta individual y por lotes con idempotencia, flujo Server-Sent Events que se reanuda desde el último evento, webhook genérico con firma HMAC y almacenamiento en memoria o SQLite. |
 | 🐍 **SDKs y adaptadores** | Clientes en Python y TypeScript, y adaptadores de ejemplo para LangGraph, CrewAI, AutoGen, OpenAI Agents SDK y Google ADK. |
 | 🎬 **Repetición y exportación** | Carga un log JSONL V1, repítelo a su ritmo original con salto y velocidad, y grábalo en WebM o MP4 desde el navegador. |
-| 📊 **Consola Model Ops** | En la app de demostración: tokens y costo reportado por proveedor y modelo, agregados a partir de los eventos `llm.usage`. |
+| 📊 **Consola Model Ops** | En la app de demostración: las pestañas Matriz, Agentes y Flujo leen el ledger de uso del servidor (`GET /api/v1/usage/rollup` y `/usage/calls`), así que las cifras concilian llamada por llamada; un valor que el ledger nunca reportó se muestra como "n/d", nunca como cero. Una pestaña Simulador separada se mantiene, claramente etiquetada, sin efecto en los datos reales. Sin un servidor conectado, Model Ops cae a una vista simulada y etiquetada sobre el estado local de la demo. |
 
 ## 🧠 Principios
 

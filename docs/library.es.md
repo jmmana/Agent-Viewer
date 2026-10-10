@@ -304,7 +304,7 @@ const officeT = useCallback<HostTranslate>(
 
 ### Claves de texto
 
-Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` y `modelOps.*` pertenecen a la consola Model Ops y a la línea de tiempo de la app de demostración; la oficina embebida no las muestra.
+Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` y `modelOps.*` pertenecen a la consola Model Ops y a la línea de tiempo de la app de demostración; la oficina embebida no las muestra. Desde el issue #79, Model Ops lee el ledger de uso del servidor: ese cliente de lectura y sus componentes de pestañas basados en el ledger viven en `src/integrations/ledgerClient.ts` y `src/components/modelOps/`, ambos exclusivos de la app de demostración. `@warlockcode/agent-viewer` no incluye ningún cliente de ledger, ninguna referencia al endpoint del ledger de uso ni ningún componente de Model Ops (verificado por `tests/lib/libraryIsolation.test.ts`).
 
 #### `rooms.*` (10)
 

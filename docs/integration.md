@@ -1127,3 +1127,36 @@ Functional adapter implementations are available in `examples/`:
 - **Google ADK** (`examples/google-adk-adapter.ts`): Gemini turns, function calling, grounding, token telemetry.
 
 All adapters adhere to the **Trust Boundary Principle**: Only observable states, dialogues, and telemetry are transmitted; internal chain-of-thought scratchpads are never leaked.
+
+## 📈 11. Seeing your usage in Model Ops
+
+The demo app's Model Ops console (issue #79) is a thin, read-only view over the usage ledger: it never invents a figure, and it never shows a provider price list. Once a server with a usage ledger (0.4.0 or later) is connected, Model Ops switches from its "Simulated demo data" banner to the real Matrix, Agents and Feed tabs.
+
+**Sending a call.** Any `llm.usage` or `llm.failed` event, sent the normal way (see [Quickstart](#-quickstart-under-5-minutes) and the [REST API reference](#-3-rest-api-reference)), reaches Model Ops. From a shell, a complete, valid V1 envelope:
+
+```bash
+curl -X POST https://your-server/api/v1/events \
+  -H "Authorization: Bearer $AGENT_VIEWER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"schemaVersion":"1.0","id":"evt_demo_1","type":"llm.usage","timestamp":1700000000000,"source":"agent:demo","agentId":"demo","summary":"demo call","payload":{"provider":"anthropic","model":"claude-sonnet-4-5","inputTokens":1200,"outputTokens":300}}'
+```
+
+From the Python SDK: `agent.usage(provider=..., model=..., input_tokens=..., output_tokens=...)`. From the TypeScript SDK: `agent.usage({ provider, model, inputTokens, outputTokens })`.
+
+**The empty state.** With no calls recorded yet, every data tab shows this exact snippet (with your own server's address filled in) instead of an empty table, so there is always a next step, never a silent zero.
+
+**Which field feeds which column.** Model Ops never recomputes a figure from `inputTokens`/`outputTokens` minus the breakdown fields: it shows the ledger's own per-metric counts.
+
+| Model Ops column | Source field |
+|---|---|
+| Input | `inputTokens` |
+| Output | `outputTokens` |
+| Cache read | `cacheReadTokens` |
+| Cache write | `cacheWriteTokens` |
+| Reasoning | `reasoningTokens` |
+| Cost (per currency, per source) | `cost`, `currency`, `costSource` |
+| Failed, with its reason | an `llm.failed` row; the reason is its `errorKind` |
+
+A field your runtime never reports renders as "n/a" in Model Ops, never as `0`. Note that some SDK helpers still default `cached_tokens`/`reasoning_tokens` to `0` rather than leaving them unset; until that is fixed (issue #58), those two columns will read `0` for calls sent through those helpers instead of "n/a", even though the raw API and Model Ops itself never invent a zero on their own.
+
+Model Ops never writes to the server: reassigning a model or editing spend from the console only ever exists in its separate, clearly labelled Simulator tab, and only in `simulated` mode.

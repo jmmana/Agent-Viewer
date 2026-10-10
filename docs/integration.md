@@ -351,6 +351,7 @@ data: {"schemaVersion":"1.0","reason":"cursor_unknown","cursor":"evt_gone","miss
 - `GET /api/v1/usage`: Usage aggregates only (`UsageSummary`), without the event list.
 - `GET /api/v1/usage/rollup`: Grouped sums over the usage ledger for an audit question such as "how much did agent X spend with model Y this week" (issue #66), with a time range, a time basis (`received`/`occurred`), up to 3 dimensions (`agent`, `model`, `provider`, `session`, `task`, `day`, `user`, `tag`) and a `coverage` block that says when the answer may be incomplete. [Full reference](#usage-rollup-get-apiv1usagerollup-issue-66).
 - `GET /api/v1/usage/duplicates`: Audit view of request-id duplicate references for `llm.usage` and `llm.failed` (`duplicateOf`, `receivedAt`, `matchesOriginal` and the full submitted event). Optional `limit` (default 100, clamped to 1..1000), `provider`, `requestId` and `duplicateOf` filters. Same `/api/v1` auth and rate limit as every other route.
+- `GET /api/v1/usage/export` and `GET /api/v1/usage/export/totals`: CSV/JSONL streaming export of the usage ledger with per-currency, per-cost-source reconciliation totals (issue #69), redacted, with a CSV formula-injection guard and a pinned `asOfSeq` snapshot. Full reference: [docs/usage-export.md](usage-export.md).
 
 #### Usage calls: `GET /api/v1/usage/calls` (issue #67)
 

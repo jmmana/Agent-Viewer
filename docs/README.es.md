@@ -880,6 +880,8 @@ Planeado, todavía no disponible:
 - [ ] Un web component para apps que no usan React.
 - [ ] Una demo publicada en GitHub Pages.
 
+Las próximas versiones (0.3.0 a 0.8.0) convierten a Agent Viewer en una herramienta de observabilidad y auditoría de los tokens y el costo que consumen tus agentes, con la oficina como vista protagonista. Consulta la [hoja de ruta de observabilidad y auditoría](roadmap.es.md) completa.
+
 ¿Quieres alguno antes? [Abre un issue](https://github.com/jmmana/Agent-Viewer/issues/new) y cuenta para qué lo usarías.
 
 ---

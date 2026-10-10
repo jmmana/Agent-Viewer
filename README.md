@@ -888,6 +888,8 @@ Planned, not available yet:
 - [ ] A web component for apps that do not use React.
 - [ ] A hosted demo on GitHub Pages.
 
+The next releases (0.3.0 to 0.8.0) turn Agent Viewer into an observability and audit tool for the tokens and cost your agents consume, with the office as the hero view. See the full [observability and audit roadmap](docs/roadmap.md).
+
 Want one of these sooner? [Open an issue](https://github.com/jmmana/Agent-Viewer/issues/new) and say what you would use it for.
 
 ---

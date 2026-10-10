@@ -57,16 +57,16 @@ Every one of the 11 character prototypes in the bank (`ceo` x6 poses, `analyst`,
 
 ## 6. The six roles: silhouette and palette cards
 
-All six roles share one system (chibi head, glasses, lanyard badge, corporate dress code) and differ on exactly two deliberate variables: **outerwear color/cut** and **the prop in hand**, which is also the functional cue of what that role does. Palette values below for the five non-CEO roles were measured automatically from the existing `idle-front` prototype PNGs (16-level color quantization, alpha ≥ 200, low-saturation/near-neutral pixels excluded to skip background, skin and line art); they describe what is already drawn, not an art director's ratified spec (see section 13). The CEO's palette is instead the one **authored on the approved reference sheet itself** and should be treated as settled.
+All six roles share one system (chibi head, glasses, lanyard badge, corporate dress code) and differ on exactly two deliberate variables: **outerwear color/cut** and **the prop in hand**, which is also the functional cue of what that role does. Palette values below for the five non-CEO roles are measured automatically from the existing `idle-front` prototype PNGs by [`scripts/crew-palette-measure.mjs`](../../scripts/crew-palette-measure.mjs) (`npm run crew:palette:measure`): 16-level color quantization, alpha ≥ 200, with hair/outline (dark reddish-brown hues) and light skin pixels explicitly excluded by hue+lightness so they cannot be confused with the outerwear color. [`tests/crew-palette-measure.test.mjs`](../../tests/crew-palette-measure.test.mjs) locks each role's swatch against the real bank PNG, so the table below cannot silently drift from the art it describes. They still describe what is already drawn, not an art director's ratified spec (see section 13): an earlier revision of this table carried the same five swatches as hand-eyeballed approximations (prefixed `~`) with no script behind them; this revision replaces them with the exact, reproducible, test-checked values, without promoting any of them past `unratified`. The CEO's palette is instead the one **authored on the approved reference sheet itself** and should be treated as settled.
 
 | Role | Status today | Outerwear (silhouette cue) | Measured/authored swatch | Prop in hand | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `ceo` | `prototype`, 4 facings + 2 extra poses | Single-breasted navy blazer, tie | `#1E3A84` (Azul oscuro), accent `#2563EB` (Azul corporativo), authored | Phone / laptop; badge "CEO" | Longest torso proportion of the six; only role with a full concept sheet |
-| `analyst` | `prototype`, `idle-front` only | Teal blazer, tie | ~`#005060` (measured, unratified) | Tablet showing a bar chart | Lightest hair tone of the six in the current prototype |
-| `developer` | `prototype`, `idle-front` only | Bright blue casual jacket with contrasting light-blue cuffs | ~`#1040C0` (measured, unratified) | Laptop under one arm | Only role in a casual jacket rather than a blazer or vest |
-| `finance` | `prototype`, `idle-front` only | Dark teal/forest waistcoat (vest) over shirt and tie, no outer jacket | ~`#203030` (measured, unratified) | Handheld calculator / POS device | Buttons visible on the vest; no lapels |
-| `planner` | `prototype`, `idle-front` only | Indigo/purple blazer | ~`#402080` (measured, unratified) | Clipboard with a checklist | Lighter blue tie than the blazer |
-| `reviewer` | `prototype`, `idle-front` only | Rust/terracotta blazer, open over a white shirt and black tie | ~`#C05030` (measured, unratified) | Clipboard | Warmest hue of the six |
+| `analyst` | `prototype`, `idle-front` only | Teal blazer, tie | `#085868` (measured, script-verified, unratified) | Tablet showing a bar chart | Lightest hair tone of the six in the current prototype |
+| `developer` | `prototype`, `idle-front` only | Bright blue casual jacket with contrasting light-blue cuffs | `#1848C8` (measured, script-verified, unratified) | Laptop under one arm | Only role in a casual jacket rather than a blazer or vest |
+| `finance` | `prototype`, `idle-front` only | Dark teal/forest waistcoat (vest) over shirt and tie, no outer jacket | `#283838` (measured, script-verified, unratified) | Handheld calculator / POS device | Buttons visible on the vest; no lapels |
+| `planner` | `prototype`, `idle-front` only | Indigo/purple blazer | `#482888` (measured, script-verified, unratified) | Clipboard with a checklist | Lighter blue tie than the blazer |
+| `reviewer` | `prototype`, `idle-front` only | Rust/terracotta blazer, open over a white shirt and black tie | `#C85838` (measured, script-verified, unratified) | Clipboard | Warmest hue of the six |
 
 Shared, cross-role values:
 
@@ -124,5 +124,5 @@ This section is not new policy; it restates ADR-001 section 3 and `renderCrewRoo
 
 - Wiring an `approved` status transition into `scripts/crew-assets.mjs` once a future issue actually promotes a real asset.
 - A formal `vector-study` manifest classification, if the 1,584 PR #43 SVGs are ever catalogued instead of being deliberately excluded as they are today.
-- Art-director ratification of the five non-CEO roles' palettes; today's swatches in section 6 are measured from existing prototype art, not an authored decision like the CEO's.
+- Art-director ratification of the five non-CEO roles' palettes; today's swatches in section 6 are script-verified measurements of existing prototype art (see `scripts/crew-palette-measure.mjs`), not an authored decision like the CEO's. Making the measurement exact and reproducible is not the same thing as ratifying it: that still requires a human art-director call this document does not make.
 - Per-facing furniture and electronics art, to replace the placeholder geometric boxes `renderCrewRoom.ts` draws today.

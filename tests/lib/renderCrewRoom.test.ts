@@ -126,6 +126,41 @@ describe('Crew native 2.5D renderer', () => {
     expect(drawn).toHaveLength(0);
   });
 
+  // Superposición de llamada (#145): se ancla al mismo punto ya proyectado por la
+  // cámara que el resto del marcador, así que zoom/pan/las cuatro vistas no requieren
+  // ningún cálculo adicional aquí; solo se dibuja para el marcador con registro.
+  it('dibuja la superposición de llamada solo para el marcador con un registro activo', () => {
+    const arcs: unknown[][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) { return key === 'arc' ? (...args: unknown[]) => arcs.push(args) : () => {}; },
+      set() { return true; },
+    });
+    const markers = [
+      { id: 'in-call', name: 'In call', role: 'custom' as const, status: 'PHONE_CALL' as const, x: 2, y: 3, number: 1 },
+      { id: 'idle', name: 'Idle', role: 'custom' as const, status: 'IDLE' as const, x: 4, y: 3, number: 2 },
+    ];
+    renderCrewRoom({ ctx, width: 900, height: 600, room: CREW_ROOMS[0],
+      camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } }, markers,
+      calls: { 'in-call': { phase: 'talking', pulseT: 0, opacity: 1 } } });
+    // Fondo 2.5D no agrega arcos; la única fuente de `arc` aquí es la superposición de llamada
+    // (anillo + glifo de respaldo, ver crewCallLayer.test.ts), y solo para el marcador en llamada.
+    expect(arcs.length).toBeGreaterThan(0);
+    renderCrewRoom({ ctx: new Proxy({} as CanvasRenderingContext2D, { get() { return () => {}; }, set() { return true; } }),
+      width: 900, height: 600, room: CREW_ROOMS[0], camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } },
+      markers: [markers[1]], calls: { 'in-call': { phase: 'talking', pulseT: 0, opacity: 1 } } });
+  });
+
+  it('no dibuja nada de la superposición de llamada sin la prop `calls`, aunque el status real sea PHONE_CALL', () => {
+    const arcs: unknown[][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) { return key === 'arc' ? (...args: unknown[]) => arcs.push(args) : () => {}; },
+      set() { return true; },
+    });
+    const markers = [{ id: 'in-call', name: 'In call', role: 'custom' as const, status: 'PHONE_CALL' as const, x: 2, y: 3, number: 1 }];
+    renderCrewRoom({ ctx, width: 900, height: 600, room: CREW_ROOMS[0], camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } }, markers });
+    expect(arcs).toHaveLength(0);
+  });
+
   it('draws exactly the selected room, without consulting legacy office', () => {
     const calls: Array<[string, ...unknown[]]> = [];
     const ctx = new Proxy({} as CanvasRenderingContext2D, {

@@ -1,4 +1,4 @@
-import { CREW_ROOM_MUSIC, type CrewAudioTrackId } from './crewAudioAssets';
+import { CREW_ROOM_MUSIC, type CrewAudioCueId, type CrewAudioTrackId } from './crewAudioAssets';
 
 /**
  * Motor de audio propio de Crew (#150). Independiente del motor de Caricatura
@@ -233,11 +233,19 @@ export class CrewAudioEngine {
     }
   }
 
-  /** Efecto corto de un disparo (aviso/notificación), independiente de la música de fondo. */
-  playCue(): void {
+  /**
+   * Efecto corto de un disparo (aviso/notificación), independiente de la música de fondo.
+   * `id` elige el patrón sintetizado del manifiesto (`CREW_AUDIO_MANIFEST`); por defecto,
+   * el aviso genérico de `ui-notification` (#150). Sigue respetando mute igual que siempre.
+   */
+  playCue(id: CrewAudioCueId = 'ui-notification'): void {
     if (this._disposed || this.muted) return;
     const ctx = this.ensureContext();
     if (!ctx || !this.master) return;
+    if (id === 'phone-ring') {
+      this.playPhoneRingCue(ctx, this.master);
+      return;
+    }
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -251,6 +259,28 @@ export class CrewAudioEngine {
     osc.start(now);
     osc.stop(now + 0.32);
     setTimeout(() => gain.disconnect(), 340);
+  }
+
+  /** Timbre de teléfono (#145): dos ráfagas de tonos distintos, patrón de timbre de dos golpes. */
+  private playPhoneRingCue(ctx: CrewAudioContextLike, master: CrewGainNode): void {
+    const base = ctx.currentTime;
+    const burst = (offsetSeconds: number, frequency: number) => {
+      const start = base + offsetSeconds;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(frequency, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.linearRampToValueAtTime(0.45, start + 0.03);
+      gain.gain.linearRampToValueAtTime(0.0001, start + 0.22);
+      osc.connect(gain);
+      gain.connect(master);
+      osc.start(start);
+      osc.stop(start + 0.24);
+      setTimeout(() => gain.disconnect(), offsetSeconds * 1000 + 260);
+    };
+    burst(0, 480);
+    burst(0.28, 620);
   }
 
   private startActiveTrack(): void {

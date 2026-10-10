@@ -27,6 +27,10 @@ services:
       - AGENT_VIEWER_CORS_ORIGIN=http://localhost:3000
       - AGENT_VIEWER_MAX_BATCH_SIZE=100
       - AGENT_VIEWER_RATE_LIMIT=1000
+      # Retention (docs/retention.md): unset/empty means keep forever for a window, or the default interval.
+      - AGENT_VIEWER_RETENTION_DAYS=${AGENT_VIEWER_RETENTION_DAYS:-}
+      - AGENT_VIEWER_USAGE_RETENTION_DAYS=${AGENT_VIEWER_USAGE_RETENTION_DAYS:-}
+      - AGENT_VIEWER_RETENTION_INTERVAL_MINUTES=${AGENT_VIEWER_RETENTION_INTERVAL_MINUTES:-}
     volumes:
       - agent_viewer_data:/app/data
     restart: unless-stopped

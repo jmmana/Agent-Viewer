@@ -388,6 +388,14 @@ export function OfficeWithUsage({ events }: { events: readonly OfficeEventInput[
 
 `showUsage` is off by default. A missing value is shown as "unknown", never as zero. No usage service? `summarizeUsage(events)` is an explicit opt-in that only adds up what `llm.usage` events reported: it ignores repeated event ids, keeps a token count unknown when an event does not report it, and returns an unknown cost rather than a partial sum or a sum of mixed or missing currencies.
 
+Want the spend visible on the canvas itself, not only in the hidden agent list? Add `showUsageBadges` (also off by default, independent of `showUsage`):
+
+```tsx
+<AgentOffice events={events} usage={usage} showUsageBadges />
+```
+
+Each visible agent card with a `usage.byAgent` entry gets a compact badge (tokens, cost, an `est.` mark when `costSource` is `'estimated'`, and a failed-call chip); an agent with no entry gets no badge. The badge is display only: every figure still comes from `usage`, and `UsageFigures` now also carries `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `costSource` and `failedCalls` for hosts that have them.
+
 </details>
 
 **Full guide:** props, event effects, workspaces, translations, theming, usage rules, replay, video export and the store without React are in the [library guide](docs/library.md) ([español](docs/library.es.md)).

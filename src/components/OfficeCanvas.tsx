@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Agent } from '../types/agent';
-import { CameraState, renderOfficeScene } from '../engine/canvasRenderer';
+import { CameraState, renderOfficeScene, type AgentBadge } from '../engine/canvasRenderer';
 import { getOfficeRenderedBounds, gridToScreen, screenToGrid } from '../engine/officeModel';
 import { compactTokens } from '../engine/modelOps';
 import { OfficeMotion } from '../engine/visualMotion';
@@ -28,6 +28,8 @@ interface OfficeCanvasProps {
   translate: OfficeTranslate;
   /** Draw token and cost telemetry aggregated from the agents. Only the demo app turns it on. */
   usageTelemetry?: boolean;
+  /** Pre-formatted per-agent usage badges, keyed by agent id. The canvas never computes these itself. */
+  agentBadges?: ReadonlyMap<string, AgentBadge>;
   /**
    * Declare the theme tokens on the canvas root. Turn it off when a parent (such as `.av-office`) already
    * declares them, so host overrides on that parent reach the toolbar too.
@@ -95,6 +97,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   theme,
   translate,
   usageTelemetry = false,
+  agentBadges,
   themeScope = true,
   isInspectorOpen = false,
   onToggleSidebar,
@@ -296,6 +299,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         theme,
         translate,
         usageTelemetry,
+        agentBadges,
       });
 
       ctx.restore();
@@ -308,7 +312,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, translate, usageTelemetry, reducedMotion]);
+  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, translate, usageTelemetry, agentBadges, reducedMotion]);
 
   // Mouse drag & pan
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {

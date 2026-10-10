@@ -18,7 +18,8 @@ import {
   type OfficeEventInput,
   type OfficeMode,
 } from './officeStore';
-import { formatUsage, type OfficeUsage } from './usage';
+import { formatUsage, formatUsageBadge, type OfficeUsage } from './usage';
+import type { AgentBadge } from '../engine/canvasRenderer';
 
 /** How often the office checks whether walks finished and meetings can start. */
 const TICK_MS = 250;
@@ -61,6 +62,13 @@ export interface AgentOfficeProps {
   theme?: 'dark' | 'light';
   /** Show the usage figures passed in `usage`. Off by default. */
   showUsage?: boolean;
+  /**
+   * Draw a compact usage badge on each agent card from `usage.byAgent`. Off by default. An agent without a
+   * `byAgent` entry gets no badge. Badges follow the agent card's own visibility rule (hidden below camera
+   * zoom 0.55 unless the agent is selected, hovered or speaking); the accessible agent list is always
+   * available and carries the exact figures regardless of zoom.
+   */
+  showUsageBadges?: boolean;
   /** Usage figures computed by the host. The office never computes them. */
   usage?: OfficeUsage;
   /** Controlled selection. Leave undefined to let the office keep its own. */
@@ -92,6 +100,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   t,
   theme = 'dark',
   showUsage = false,
+  showUsageBadges = false,
   usage,
   selectedAgentId,
   onSelectAgent,
@@ -137,6 +146,19 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   };
 
   const usageItems = showUsage && usage?.total ? formatUsage(usage.total, locale, translate) : [];
+  // `showUsage || showUsageBadges` feeds the same figures into the accessible list, so the visible badge
+  // and the screen-reader text always agree, whichever prop turned the figures on.
+  const usageInDom = showUsage || showUsageBadges;
+
+  const agentBadges = useMemo<ReadonlyMap<string, AgentBadge>>(() => {
+    if (!showUsageBadges || !usage?.byAgent) return new Map();
+    const map = new Map<string, AgentBadge>();
+    for (const [agentId, figures] of Object.entries(usage.byAgent)) {
+      const badge = formatUsageBadge(figures, locale, translate);
+      map.set(agentId, { tokens: badge.tokens, costLabel: badge.costLabel, failed: badge.failed });
+    }
+    return map;
+  }, [showUsageBadges, usage, locale, translate]);
 
   const rootClass = ['av-office', `av-theme-${theme}`, className].filter(Boolean).join(' ');
 
@@ -177,6 +199,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           theme={theme}
           translate={translate}
           themeScope={false}
+          agentBadges={agentBadges}
         />}
 
         {visualMode === 'cartoon' && snapshot.agents.length === 0 && (
@@ -210,7 +233,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
             const line = role
               ? translate('office.agentLine', { name: agent.name, role, status })
               : translate('office.agentLineNoRole', { name: agent.name, status });
-            const agentUsage = showUsage ? usage?.byAgent?.[agent.id] : undefined;
+            const agentUsage = usageInDom ? usage?.byAgent?.[agent.id] : undefined;
             const usageText = agentUsage
               ? formatUsage(agentUsage, locale, translate).map((item) => `${item.label}: ${item.value}`).join(', ')
               : '';

@@ -10,6 +10,7 @@ import { WORKSPACE_ANCHORS } from '../../src/engine/livingOfficeEngine';
 import type { CanonicalEvent } from '../../src/lib/index';
 import {
   T0,
+  budgetAlert,
   llmFailed,
   llmUsage,
   makeEvent,
@@ -378,6 +379,38 @@ describe('llm.failed', () => {
     expect(stored).toBeDefined();
     expect(state.events.some((event) => event.type === 'agent.status.changed')).toBe(false);
     expect(agentIn(state, 'ana').status).toBe('IDLE');
+  });
+});
+
+describe('budget.alert: library privacy guard (issue #320)', () => {
+  it('is ignored completely when trackUsage is false (the embedded office)', () => {
+    const state = apply(createLiveSimulationState(), [budgetAlert({}, { id: 'evt_budget_1', at: T0 })], PROFESSIONAL);
+    expect(state.events).toHaveLength(0);
+  });
+
+  it('is ignored completely when trackUsage is left unset', () => {
+    const state = createLiveSimulationState();
+    applyExternalEvent(state, budgetAlert({}, { id: 'evt_budget_2', at: T0 }), { now: NOW, narrate: false });
+    expect(state.events).toHaveLength(0);
+  });
+
+  it('lands in the event history when trackUsage is true (a host that tracks usage, like the demo portal)', () => {
+    const state = createLiveSimulationState();
+    applyExternalEvent(state, budgetAlert({}, { id: 'evt_budget_3', at: T0 }), { ...PROFESSIONAL, trackUsage: true });
+    expect(state.events).toHaveLength(1);
+    // `budget.alert` is a server-only canonical type outside the library's own `EventType` union (no UI
+    // renders it), so the comparison goes through `string` the same way the library casts it into history.
+    expect(String(state.events[0].type)).toBe('budget.alert');
+  });
+
+  it('never breaks applyExternalEvent\'s switch, which has no default case, and later events still apply', () => {
+    const state = apply(createLiveSimulationState(), [
+      registered('ana', 'Ana Rivas', {}, { at: T0 }),
+      budgetAlert({}, { id: 'evt_budget_4', at: T0 + 10 }),
+      statusChanged('ana', 'THINKING', { at: T0 + 20 }),
+    ], { ...PROFESSIONAL, trackUsage: true });
+    expect(agentIn(state, 'ana').status).toBe('THINKING');
+    expect(state.events.some((event) => String(event.type) === 'budget.alert')).toBe(true);
   });
 });
 

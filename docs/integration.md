@@ -195,6 +195,7 @@ All events follow the single official V1 envelope:
 | | `meeting.cancelled` | Meeting cancelled. |
 | **Telemetry** | `llm.usage` | Reports one successful model call: input and output tokens, cache read and cache write tokens, reasoning tokens, latency, cost. |
 | | `llm.failed` | Reports one failed model call attempt: error kind, HTTP status, retryable flag, and tokens and cost only when the provider billed the attempt. |
+| **Budgets** | `budget.alert` | Server-emitted only (issue #86): a budget (#85) crossed into `warning` or `exceeded`. `POST /api/v1/events` and `/events/batch` reject a client-submitted event of this type, or whose `id` starts with the reserved prefix `evt_budget_` (`server/budgetAlerts.ts`). The library (`src/integrations/eventIngestion.ts`) drops every `budget.alert` it receives unless the host opts in with `trackUsage: true`; see [docs/library.md](library.md#how-events-change-the-office) / [docs/library.es.md](library.es.md#cómo-cambian-la-oficina-los-eventos). |
 | **Runtime** | `runtime.connected` | External runtime connects. |
 | | `runtime.disconnected` | External runtime disconnects. |
 | | `runtime.heartbeat` | Periodic runtime health heartbeat. |

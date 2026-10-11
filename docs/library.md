@@ -216,9 +216,12 @@ The agent of an event is `agentId`, then `payload.agentId`, then `payload.id` fo
 | `task.blocked` | `taskId`, `reason` | Status `BLOCKED`. |
 | `llm.usage` | `provider`, `model` | Stores the agent's provider and model. Tokens and cost are not added up (see [Usage figures](#usage-figures)). |
 | `llm.failed` | `provider`, `model` | Stores the agent's provider and model. No status change; tokens and cost are never added up. |
+| `budget.alert` | none | Ignored entirely (see **Budget alerts are never evaluated here** below). |
 | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | none | No visible change. |
 
 More details:
+
+- **Budget alerts are never evaluated here.** `budget.alert` (issue #86) is a server-emitted event: a budget's own evaluation engine decides when spend crosses a warning or an exceeded threshold, never the office. The library ignores every `budget.alert` it receives unless the host passes `trackUsage: true` to `applyExternalEvent`, exactly like the embedded `<AgentOffice>` (always `trackUsage: false`): a dropped `budget.alert` is not applied to any agent, task or meeting and never added to `events`. A host that does pass `trackUsage: true` (typically a server-backed portal, not the embedded office) keeps the raw event in its own history, but the library still renders none of its `summary` or `payload`: there is no desk marker or alert list for it here, only the [budget state](#budget-state) your app decides and passes in explicitly.
 
 - **Statuses.** `OFFLINE`, `IDLE`, `AVAILABLE`, `THINKING`, `READING`, `RESEARCHING`, `CODING`, `WRITING`, `TESTING`, `USING_TOOL`, `WAITING`, `WAITING_APPROVAL`, `BLOCKED`, `DELEGATING`, `PHONE_CALL`, `WALKING`, `IN_MEETING`, `COFFEE_BREAK`, `CHATTING`, `REVIEWING`, `DELIVERING`, `DONE`, `ERROR`.
 - **Agents the office does not know yet.** An event for an unknown agent adds it with a default profile (its id as name). An explicit `agentId` always names an agent, whatever the `source`. An event with a `runtime:` source and no `agentId` is about the runtime itself and adds no agent. Registering agents first (with `agent.registered` or the `agents` prop) gives them their real name, role title and workspace.

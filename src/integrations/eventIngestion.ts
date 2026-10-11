@@ -172,6 +172,14 @@ export function applyExternalEvent(
   // Check idempotency against existing events in state
   if (state.events.some((event) => event.id === incoming.id)) return;
 
+  // Privacy guard (issue #320): `budget.alert` is server-only and carries spend figures the office never
+  // computes. A host must opt in with `trackUsage: true` to keep it; everyone else (the embedded office,
+  // which always sets `trackUsage: false`) drops it entirely before it touches state or event history, the
+  // same way the `llm.usage` guard below keeps figures out of a host that does not track usage.
+  if (incoming.type === 'budget.alert' && options.trackUsage !== true) {
+    return;
+  }
+
   const agentId = incoming.agentId ?? incoming.source.replace(/^agent:/, '');
   let agent = state.agents.find((item) => item.id === agentId);
   const payload = incoming.payload ?? {};

@@ -89,6 +89,22 @@ export function llmFailed(agentId: string, payload: Record<string, unknown>, opt
   return makeEvent('llm.failed', agentId, payload, options);
 }
 
+/** A server-emitted `budget.alert` (issue #86/#319), with no agent in scope by default: the common case for a
+ * budget scoped to the whole run rather than a single agent. */
+export function budgetAlert(payload: Record<string, unknown> = {}, options: EventOptions = {}): CanonicalEvent {
+  sequence += 1;
+  return {
+    schemaVersion: '1.0',
+    id: options.id ?? `evt_budget_${sequence}`,
+    type: 'budget.alert',
+    timestamp: options.at ?? T0,
+    source: 'server:budgets',
+    severity: 'high',
+    summary: options.summary ?? 'Budget "Monthly" reached 80% of 100.00 USD',
+    payload: { alertId: `evt_budget_${sequence}`, budgetId: 'budget-1', state: 'warning', ...payload },
+  };
+}
+
 /* ------------------------------------------------------------------------------------------------ */
 /* Language checks                                                                                  */
 /* ------------------------------------------------------------------------------------------------ */

@@ -216,9 +216,12 @@ El agente de un evento es `agentId`; si falta, `payload.agentId`; luego `payload
 | `task.blocked` | `taskId`, `reason` | Estado `BLOCKED`. |
 | `llm.usage` | `provider`, `model` | Guarda el proveedor y el modelo del agente. Los tokens y el costo no se suman (consulta [Cifras de consumo](#cifras-de-consumo)). |
 | `llm.failed` | `provider`, `model` | Guarda el proveedor y el modelo del agente. Sin cambio de estado; los tokens y el costo nunca se suman. |
+| `budget.alert` | ninguno | Se ignora por completo (consulta **Los presupuestos nunca se evalúan aquí** más abajo). |
 | `runtime.connected`, `runtime.disconnected`, `runtime.heartbeat` | ninguno | Sin cambio visible. |
 
 Más detalles:
+
+- **Los presupuestos nunca se evalúan aquí.** `budget.alert` (issue #86) es un evento que solo emite el servidor: el motor de presupuestos decide cuándo el gasto cruza un umbral de alerta o de excedido, nunca la oficina. La librería ignora todo `budget.alert` que recibe salvo que el host pase `trackUsage: true` a `applyExternalEvent`, igual que `<AgentOffice>` embebido (siempre `trackUsage: false`): un `budget.alert` descartado no se aplica a ningún agente, tarea ni reunión, y nunca se agrega a `events`. Un host que sí pase `trackUsage: true` (típicamente un portal respaldado por el servidor, no la oficina embebida) conserva el evento crudo en su propio historial, pero la librería sigue sin renderizar su `summary` ni su `payload`: aquí no hay marcador en el escritorio ni lista de alertas, solo el [estado de presupuesto](#estado-de-presupuesto) que tu app decide y pasa explícitamente.
 
 - **Estados.** `OFFLINE`, `IDLE`, `AVAILABLE`, `THINKING`, `READING`, `RESEARCHING`, `CODING`, `WRITING`, `TESTING`, `USING_TOOL`, `WAITING`, `WAITING_APPROVAL`, `BLOCKED`, `DELEGATING`, `PHONE_CALL`, `WALKING`, `IN_MEETING`, `COFFEE_BREAK`, `CHATTING`, `REVIEWING`, `DELIVERING`, `DONE`, `ERROR`.
 - **Agentes que la oficina aún no conoce.** Un evento de un agente desconocido lo agrega con un perfil por defecto (su id como nombre). Un `agentId` explícito siempre nombra a un agente, sea cual sea el `source`. Un evento con `source` `runtime:` y sin `agentId` habla del runtime mismo y no agrega agentes. Registrar primero a los agentes (con `agent.registered` o con la prop `agents`) les da su nombre real, su cargo y su espacio de trabajo.

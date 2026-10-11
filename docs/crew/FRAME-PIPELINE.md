@@ -49,3 +49,7 @@ The PNG previews and [runtime MP4](evidence/walk-117/runtime.mp4) live in `evide
 ## Final validation
 
 Validated on main `5560b2c`: 1,051 Node tests passed (one skipped), 740 Vitest, 29 Python and 29 Chrome E2E tests passed. Typecheck, production audit, app/library/CLI builds, package checks and golden reconciliation passed. The full suite ran once; a fixture enum typo was corrected and only typecheck repeated before browser execution. Existing SSE/log replay and Cartoon regression suites passed; the new pure renderer test confirms that event-prefix replay and full snapshots retain events and usage. No private provider data is used.
+
+## Desktop extension (Refs #118)
+
+`actions.v1.json` registers 16 prototype clips / 64 original frames for turn, sit, stand and typing. It preserves the walk metadata pattern without changing the walk-only importer. Actual atlas sizes, prompts and rejected turn v1 are documented in `assets/crew/origins/desktop-118/README.md`. Per-frame `referenceHeight` preserves common body scale when sitting; actual crop height remains independent. `crew-desktop-assets.test.mjs` verifies source/frame/prompt hashes, dimensions and alpha. See [runtime evidence and limitations](evidence/desktop-118/README.md).

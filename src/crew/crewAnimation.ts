@@ -2,6 +2,8 @@ export interface CrewAnimationFrame {
   x: number; y: number; width: number; height: number;
   anchor: { x: number; y: number };
   durationMs: number;
+  /** Escala de origen común para no agrandar poses sentadas. */
+  referenceHeight?: number;
 }
 export interface CrewAnimationClip {
   id: string;
@@ -28,6 +30,7 @@ export function validateCrewClip(clip: CrewAnimationClip): boolean {
       [frame.x,frame.y,frame.width,frame.height].every(Number.isInteger)
       && frame.x >= 0 && frame.y >= 0 && frame.width > 0 && frame.height > 0
       && frame.x + frame.width <= clip.width && frame.y + frame.height <= clip.height
+      && (frame.referenceHeight === undefined || (Number.isFinite(frame.referenceHeight) && frame.referenceHeight > 0))
       && Number.isFinite(frame.durationMs) && frame.durationMs > 0
       && Number.isFinite(frame.anchor.x) && Number.isFinite(frame.anchor.y)
       && frame.anchor.x >= 0 && frame.anchor.x <= frame.width

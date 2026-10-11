@@ -9,6 +9,8 @@ import { crewSpriteView } from './crewSprites';
 import { useCrewPropImages } from './useCrewPropImages';
 import { CREW_ROOM_PROP_IMAGES, type CrewPropImageId } from './crewPropImages';
 import { useCrewBlink } from './useCrewBlink';
+import { useCrewActions } from './useCrewActions';
+import { crewActionMarkers } from './crewActorActions';
 import { useCrewWalk } from './useCrewWalk';
 import { preloadCrewWalk } from './crewWalkRegistry';
 import { builtInMessages } from '../content/officeMessages';
@@ -31,6 +33,8 @@ import { crewAgentActivity, crewActivityLine, crewViewerModeLabel, type CrewView
 import type { Agent, Meeting, Task } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
+const EMPTY_CREW_AGENTS: readonly Agent[] = [];
+
 /** Oculta visualmente un texto sin quitarlo de la lectura por lector de pantalla. */
 const srOnlyStyle: React.CSSProperties = {
   position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
@@ -41,7 +45,7 @@ const srOnlyStyle: React.CSSProperties = {
  * Escena Crew independiente con arte incremental y geometría provisional.
  * Consume presencia del dominio sin importar el renderer ni la cuadrícula Caricatura.
  */
-export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [], viewerMode, visibility = 'full',
+export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [], meetings = [], viewerMode, visibility = 'full',
   selectedRoomId, onRoomChange, missingRoom = false,
   cameraState, onCameraStateChange, preferences, onPreferencesChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
   locale?: string;
@@ -187,8 +191,12 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
       : 'The browser blocked audio playback; press Play again.');
   }, [audio.state, isEs, pushCaption]);
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
-  const visibleAgents = crewAgentsInRoom(agents, roomId);
-  const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
+  const visibleAgents = useMemo(() => crewAgentsInRoom(agents, roomId), [agents, roomId]);
+  const action = useCrewActions(visibleAgents, room, view, visualPreferences.reducedMotion);
+  const presence = useMemo(() => {
+    const projected = projectCrewPresence(agents, room);
+    return { ...projected, markers: crewActionMarkers(projected.markers, action.actions) };
+  }, [agents, room, action.actions]);
 
   const directions = presence.markers.map(marker => crewSpriteView(marker, view)).filter((direction): direction is CrewView => direction !== null);
   const sprite = useCrewSprites(directions);
@@ -223,8 +231,8 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, visualPreferences.highContrast, propImages.images]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, seats: action.actions.flatMap(actor => actor.workstation ? [actor.workstation] : []), locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, action.actions, visualPreferences.highContrast, propImages.images]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -434,6 +442,7 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
       {isEs ? `Ilustraciones: ${illustratedAgents}.` : `Illustrations: ${illustratedAgents}.`}
       {!sprite.failed && directions.some(direction => !sprite.images[direction]) && (isEs ? ' Cargando ilustraciones…' : ' Loading illustrations…')}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
+      {action.failed && <span data-testid="crew-action-fallback"> {messages['crew.actionFallback']}</span>}
       {walk.failed && <span data-testid="crew-walk-fallback"> {messages['crew.walkFallback']}</span>}
     </p>
     <p aria-live="polite" data-testid="crew-prop-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>

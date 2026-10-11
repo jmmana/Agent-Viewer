@@ -57,7 +57,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
   <tr>
     <td align="center" width="25%"><h2>23</h2><sub>canonical event types<br/>in contract V1</sub></td>
     <td align="center" width="25%"><h2>9</h2><sub>rooms agents<br/>work and meet in</sub></td>
-    <td align="center" width="25%"><h2>EN · ES</h2><sub>156 text keys,<br/>all replaceable</sub></td>
+    <td align="center" width="25%"><h2>EN · ES</h2><sub>162 text keys,<br/>all replaceable</sub></td>
     <td align="center" width="25%"><h2>0</h2><sub>usage figures computed<br/>by the component</sub></td>
   </tr>
 </table>
@@ -326,6 +326,7 @@ Every visible text comes from a catalog of 116 keys. Rename a room with `message
 | Office model without React | `OfficeStore`, `buildOfficeSnapshot` |
 | Replay | `useEventReplay`, `ReplayControls` |
 | Usage (display only) | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` |
+| Budget state (display only) | `normalizeBudgetState`, `formatBudgetState`, `MAX_BUDGET_LABEL_LENGTH` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` |
 | Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
 | Live stream | `connectEventStream` |
@@ -409,6 +410,27 @@ Want to answer "what did this meeting cost"? Add `meetingUsage`, keyed by meetin
 ```tsx
 <AgentOffice events={events} showUsage usage={usage} meetingUsage={meetingUsage} />
 ```
+
+</details>
+
+<details>
+<summary><b>🎯 Show budget state (that you decided)</b></summary>
+<br/>
+
+```tsx
+import { useMemo } from 'react';
+import { AgentOffice, type AgentBudgetState } from '@warlockcode/agent-viewer';
+
+const budgetStateByAgent = useMemo<Record<string, AgentBudgetState>>(() => ({
+  planner: { state: 'warning', label: 'Daily budget at 82%' },
+  builder: { state: 'exceeded' },
+  reviewer: { state: 'unknown' },
+}), []);
+
+<AgentOffice events={events} showBudget budgetStateByAgent={budgetStateByAgent} />
+```
+
+`showBudget` is off by default. The office never computes a budget: it never holds a limit, never receives a spend figure and never compares one against the other, so `AgentBudgetState` has only `state` (`'ok' | 'warning' | 'exceeded' | 'unknown'`) and an optional already-translated `label`, nothing numeric. `ok` draws no marker (quiet when healthy); `warning` an amber triangle; `exceeded` a red octagon; `unknown` (or any invalid value) a grey circle, never `ok`. Shape and glyph carry the state, not only color. An agent id absent from the map shows no marker and no text: absence is never read as `ok`.
 
 </details>
 

@@ -57,7 +57,7 @@ Es código abierto (MIT), corre en tu máquina, no necesita ninguna clave de pro
   <tr>
     <td align="center" width="25%"><h2>23</h2><sub>tipos de evento<br/>en el contrato V1</sub></td>
     <td align="center" width="25%"><h2>9</h2><sub>salas donde los agentes<br/>trabajan y se reúnen</sub></td>
-    <td align="center" width="25%"><h2>ES · EN</h2><sub>156 claves de texto,<br/>todas reemplazables</sub></td>
+    <td align="center" width="25%"><h2>ES · EN</h2><sub>162 claves de texto,<br/>todas reemplazables</sub></td>
     <td align="center" width="25%"><h2>0</h2><sub>cifras de consumo calculadas<br/>por el componente</sub></td>
   </tr>
 </table>
@@ -326,6 +326,7 @@ Todo texto visible sale de un catálogo de 116 claves. Cambia el nombre de una s
 | Modelo de la oficina sin React | `OfficeStore`, `buildOfficeSnapshot` |
 | Repetición | `useEventReplay`, `ReplayControls` |
 | Consumo (solo visualización) | `formatUsage`, `formatTokens`, `formatCost`, `summarizeUsage` |
+| Estado de presupuesto (solo visualización) | `normalizeBudgetState`, `formatBudgetState`, `MAX_BUDGET_LABEL_LENGTH` |
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` |
 | Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` |
 | Flujo en vivo | `connectEventStream` |
@@ -401,6 +402,27 @@ Al hacer clic en un agente se abre un panel de solo lectura con sus llamadas (pr
 ```tsx
 <AgentOffice events={events} locale="es" showUsage usage={usage} meetingUsage={meetingUsage} />
 ```
+
+</details>
+
+<details>
+<summary><b>🎯 Muestra el estado de presupuesto (decidido por ti)</b></summary>
+<br/>
+
+```tsx
+import { useMemo } from 'react';
+import { AgentOffice, type AgentBudgetState } from '@warlockcode/agent-viewer';
+
+const budgetStateByAgent = useMemo<Record<string, AgentBudgetState>>(() => ({
+  planner: { state: 'warning', label: 'Presupuesto diario al 82%' },
+  builder: { state: 'exceeded' },
+  reviewer: { state: 'unknown' },
+}), []);
+
+<AgentOffice events={events} locale="es" showBudget budgetStateByAgent={budgetStateByAgent} />
+```
+
+`showBudget` viene apagado. La oficina nunca calcula un presupuesto: nunca guarda un límite, nunca recibe una cifra de gasto y nunca compara una contra la otra, así que `AgentBudgetState` solo tiene `state` (`'ok' | 'warning' | 'exceeded' | 'unknown'`) y un `label` opcional ya traducido, nada numérico. `ok` no dibuja marcador (silencioso cuando está sano); `warning` un triángulo ámbar; `exceeded` un octágono rojo; `unknown` (o cualquier valor inválido) un círculo gris, nunca `ok`. La forma y el glifo llevan el estado, no solo el color. Un id de agente ausente del mapa no muestra marcador ni texto: la ausencia nunca se lee como `ok`.
 
 </details>
 

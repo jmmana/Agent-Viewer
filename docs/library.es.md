@@ -828,6 +828,8 @@ const usage = {
 
 El gasto por reunión y por herramienta (issue #80, `groupBy: ['meeting']`/`['tool']` en el mismo endpoint) funciona igual: `toUsageFigures()` mapea uno de esos grupos como cualquier otro, y si un anfitrión quiere mostrar el costo de una reunión o de una herramienta en la oficina, lo calcula del lado del servidor y lo pasa por sus propias props, igual que el ejemplo por agente de arriba. La librería no tiene ningún concepto de `meeting`/`tool`: nunca llama al rollup, nunca suma nada, y este cambio no agrega ningún import ni prop nuevo a `@warlockcode/agent-viewer`.
 
+Los percentiles de latencia y las tasas de fallas (`include=latency,failures` en el mismo endpoint de rollup, issue #89) son una característica solo del servidor y de la app de demostración, mostrada en la consola Model Ops; la librería nunca los obtiene, calcula ni muestra.
+
 ## Estado de presupuesto
 
 Un presupuesto es una comparación de gasto contra un límite. Si la oficina hiciera esa comparación tendría que guardar un límite, recibir una cifra de gasto, sumar o convertir monedas y decidir un umbral, rompiendo cada una de [las cuatro reglas](#las-cuatro-reglas) de arriba. Así que tu app (normalmente respaldada por el motor de presupuestos del servidor) decide el veredicto y solo pasa ese veredicto; la oficina lo dibuja, con una alternativa de texto accesible, y nada más.

@@ -828,6 +828,8 @@ const usage = {
 
 Per-meeting and per-tool spend (issue #80, `groupBy: ['meeting']`/`['tool']` on the same endpoint) work exactly the same way: `toUsageFigures()` maps one of those groups just like any other, and if a host wants to show a meeting's or a tool's cost in the office, it computes that figure server-side and passes it through its own props, same as the per-agent example above. The library itself has no `meeting`/`tool` concept: it never fetches the rollup, never sums anything, and this item adds no new import or prop to `@warlockcode/agent-viewer`.
 
+Latency percentiles and failure rates (`include=latency,failures` on the same rollup endpoint, issue #89) are a server and demo-app feature only, shown in the Model Ops console; the library never fetches, computes or shows them.
+
 ## Budget state
 
 A budget is a comparison of spend against a limit. If the office did that comparison it would have to hold a limit, receive a spend figure, sum or convert currency, and decide a threshold, breaking every rule in [the four rules](#the-four-rules) above. So your app (typically backed by the server's budgets engine) decides the verdict and passes only that verdict; the office draws it, with an accessible text alternative, and nothing else.

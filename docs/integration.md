@@ -674,7 +674,7 @@ With these rules, "total tokens = `inputTokens` + `outputTokens`" stays correct,
 | `inputTokens`, `outputTokens` | Yes | Non-negative integers. |
 | `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. No default. |
 | `cachedTokens` | No | **Deprecated**, see below. Non-negative integer or `null`. No default. |
-| `latencyMs` | No | Non-negative integer or `null`. |
+| `latencyMs` | No | Non-negative integer or `null`. Must be the **measured** wall-clock latency of this call, as the host observed it (issue #89). Omit the field (never send `0`) when the host did not measure it: a `0` is treated as a real zero-latency observation, and the server's latency percentiles (below) would otherwise be dragged down by invented zeros. |
 | `requestId` | No | String or `null`. Should be the provider's own request or response id: the server deduplicates on `(provider, requestId)` (see [Idempotency & Replays](#-5-idempotency--replays)). Never reuse a synthetic counter such as `"1"` across sessions, or the server will treat two different calls as the same one and drop the second from the figures. |
 | `cost` | No | Non-negative number or `null`. Defaults to `null` (unknown). |
 | `costSource` | No | `provider-reported`, `estimated` or `unknown`. Defaults to `unknown`. |
@@ -749,6 +749,7 @@ The Python and TypeScript SDKs send each figure exactly as the caller gives it, 
 - A token count or `currency` that is not given (or is `None` / `null`) is left out of the payload; an explicit `0` is kept. The SDKs never work out `cachedTokens` from `cacheReadTokens` and `cacheWriteTokens`, or the reverse.
 - `costSource` is exactly what the caller states. A cost given without it is sent as `"unknown"`, and each client (`AgentViewer` instance) prints one warning. With no cost, `costSource` is the stated value or `"unknown"`. A value other than `provider-reported`, `estimated` or `unknown` fails before anything is sent (`ValueError` in Python, a rejected promise with `TypeError` in TypeScript).
 - `currency` is never defaulted to `USD` and never rewritten; the server checks the ISO 4217 format.
+- `latency_ms` / `latencyMs` (on `usage()` and `llm_failed()` / `llmFailed()`) must be the **measured** wall-clock latency of that call, as your host observed it (issue #89); pass nothing when you did not measure it, never `0` as a stand-in for "unknown". Both SDKs send it exactly as given, like every other figure: an omitted or `None`/`undefined` value stays absent from the payload, so the server's latency percentiles never mistake an unmeasured call for an instant one.
 - `task_id` / `taskId` goes to the envelope `taskId`, not to the payload.
 - `trace_id` / `traceId`, `parent_id` / `parentId`, `tool_call_id` / `toolCallId`, `meeting_id` / `meetingId`, `user_id` / `userId` and `tags` (issue #64) are keyword-only arguments on `usage()`, the `llmFailed()` / `llm_failed()` helper and the legacy `llm_usage()`. Both SDKs validate them locally with the exact limits above before sending anything: Python raises `ValueError` naming the argument (`TypeError` for a wrong type, for example `tags="env:prod"`, since a `str` is itself a sequence and would otherwise be split into one tag per character); TypeScript rejects with `AgentViewerError` whose `issues` use the same `{ path, message }` shape the server returns. `tool_started` / `toolStarted`, `tool_completed` / `toolCompleted` and `tool_failed` / `toolFailed` accept a `tool_call_id` / `toolCallId` option, sent as `payload.toolCallId`.
 
@@ -843,7 +844,7 @@ The server answers `202 Accepted` with `{ "accepted": true, "duplicate": false, 
 | `retryable` | No | Boolean or `null`. No default. |
 | `requestId` | No | String of up to 200 characters, or `null`. Same dedup rule as `llm.usage.requestId`: it shares one key space with `llm.usage`, so a call reported as failed and then as used under the same `(provider, requestId)` is counted once. |
 | `providerErrorCode` | No | The provider's error code (for example `insufficient_quota`), up to 100 characters. A code, never a message. |
-| `latencyMs` | No | Non-negative integer or `null`. |
+| `latencyMs` | No | Non-negative integer or `null`. Same "measured, never invented" rule as `llm.usage.latencyMs`. A failed call's own latency is never mixed into the server's success-only latency percentiles (issue #89). |
 | `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens` | No | Non-negative integer or `null`. Same meaning as in `llm.usage`. No default. |
 | `cost`, `costSource`, `currency` | No | Same rules as in `llm.usage`. |
 | `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId`, `tags` | No | Same [correlation and attribution block](#correlation-and-attribution-fields-issue-64) as `llm.usage`, validated and normalized the same way. |

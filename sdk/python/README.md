@@ -86,6 +86,10 @@ except AgentViewerError as err:
 - `llm_failed(provider, model=None, error_kind=None, *, http_status=None, retryable=None, request_id=None, provider_error_code=None, attempts=None, latency_ms=None, input_tokens=None, output_tokens=None, cache_read_tokens=None, cache_write_tokens=None, reasoning_tokens=None, cost=None, cost_source=None, currency=None, task_id=None, trace_id=None, parent_id=None, tool_call_id=None, meeting_id=None, user_id=None, tags=None)` reports one failed model call attempt. There is no free-text error field on purpose.
 - `viewer.llm_usage(agent_id, provider, model, input_tokens, output_tokens, ...)` is the legacy helper. It takes the same arguments (including the correlation keywords below) and follows the same rules.
 
+### `latency_ms` is measured, never invented (issue #89)
+
+`latency_ms` (on `usage()` and `llm_failed()`) must be the real wall-clock latency of that call, as your own code measured it. Pass nothing (leave it `None`) when you did not measure it: the SDK never defaults it to `0`, and the server's latency percentiles (`GET /api/v1/usage/rollup?include=latency`) would otherwise read an unmeasured call as an impossibly fast one.
+
 ### Correlation fields (issue #64)
 
 `trace_id`, `parent_id`, `tool_call_id`, `meeting_id`, `user_id` and `tags` (on `usage()`, `llm_failed()` and `llm_usage()`) link a call to a trace, a tool call, a meeting or a user. Each is `None` by default, which means "not reported"; an id must be 1 to 128 characters with no control characters and no leading or trailing whitespace, and `tags` holds at most 20 items of 1 to 64 characters each. A value that breaks a rule raises `ValueError` naming the argument before anything is sent; a non-string id, or `tags` given as a `str` or `bytes` (which would otherwise be split into one tag per character), raises `TypeError`. `tool_call_id` on `tool_started`/`tool_completed`/`tool_failed` is sent as `payload.toolCallId`. These fields need a 0.4.0 or later Agent Viewer server to be kept: an older server accepts the event and silently drops them. Full rules: [docs/integration.md](../../docs/integration.md#correlation-and-attribution-fields-issue-64).

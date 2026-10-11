@@ -53,3 +53,7 @@ Validado sobre main `5560b2c`: 1.051 Node aprobados (uno omitido), 740 Vitest, 2
 ## Extensión de escritorio (Refs #118)
 
 `actions.v1.json` registra 16 clips prototype / 64 cuadros originales para girar, sentarse, levantarse y teclear. Conserva el patrón de metadatos de caminar sin cambiar su importador específico. Tamaños reales, prompts y giro v1 descartado en `assets/crew/origins/desktop-118/README.md`. `referenceHeight` por cuadro conserva la escala corporal al sentarse; la altura real del recorte es independiente. `crew-desktop-assets.test.mjs` verifica hashes de origen/cuadros/prompts, dimensiones y alfa. Ver [evidencia y límites](evidence/desktop-118/README.es.md).
+
+## Extensión de gestos (Refs #118)
+
+`gestures.v1.json` agrega 12 clips prototype / 48 cuadros originales para pensar, hablar y revisar, usando el registro de acciones existente. Los PNG reales miden 1254 x 1254; la presentación lógica sigue en 256 x 352. Ver [procedencia](../../assets/crew/origins/gestures-118/README.es.md) y [evidencia runtime](evidence/gestures-280/README.es.md).

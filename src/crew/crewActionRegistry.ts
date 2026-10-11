@@ -1,4 +1,5 @@
 import catalog from '../../assets/crew/clips/actions.v1.json';
+import gestures from '../../assets/crew/clips/gestures.v1.json';
 import type { CrewAnimationClip } from './crewAnimation';
 import type { CrewActionId } from './crewActorActions';
 import type { CrewView } from './crewModel';
@@ -9,12 +10,15 @@ export interface CrewActionClip extends CrewAnimationClip {
   facing: CrewView;
   status: 'prototype';
 }
-export const CREW_ACTION_CLIPS: readonly CrewActionClip[] = catalog.clips as CrewActionClip[];
+export const CREW_ACTION_CLIPS: readonly CrewActionClip[] = [...catalog.clips, ...gestures.clips] as CrewActionClip[];
 const sources = {
   turn: () => import('./sprites/ceo-turn'),
   sit: () => import('./sprites/ceo-sit'),
   stand: () => import('./sprites/ceo-stand'),
   typing: () => import('./sprites/ceo-typing'),
+  think: () => import('./sprites/ceo-think'),
+  talk: () => import('./sprites/ceo-talk'),
+  review: () => import('./sprites/ceo-review'),
 };
 export function crewActionClip(action: CrewActionId, facing: CrewView): CrewActionClip {
   return CREW_ACTION_CLIPS.find(clip => clip.clip === action && clip.facing === facing)!;

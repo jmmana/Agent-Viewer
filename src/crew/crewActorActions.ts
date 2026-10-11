@@ -3,7 +3,7 @@ import type { CrewRoomDefinition } from './crewModel';
 import type { CrewPresenceMarker } from './crewPresence';
 import { crewRoomForWorkspace } from './crewEvents';
 
-export type CrewActionId = 'turn' | 'sit' | 'stand' | 'typing';
+export type CrewActionId = 'turn' | 'sit' | 'stand' | 'typing' | 'think' | 'talk' | 'review';
 export type CrewObservedAgent = Pick<Agent, 'id' | 'workspace' | 'role' | 'status' | 'x' | 'y' | 'targetX' | 'targetY' | 'isWalking' | 'facing'>;
 export interface CrewWorkstation { actorId?: string; deskId: string; chairId: string; x: number; y: number; facing: Agent['facing'] }
 export interface CrewActorAction {
@@ -55,6 +55,15 @@ export function crewReportsTyping(agent: CrewObservedAgent): boolean {
   return !agent.isWalking && (agent.status === 'CODING' || agent.status === 'WRITING');
 }
 
+/** Gestos explícitos del snapshot; no inferir conversación ni razonamiento privado. */
+export function crewReportedGesture(agent: CrewObservedAgent): CrewActionId | null {
+  if (agent.isWalking) return null;
+  if (agent.status === 'THINKING') return 'think';
+  if (agent.status === 'CHATTING') return 'talk';
+  if (agent.status === 'REVIEWING') return 'review';
+  return null;
+}
+
 /** Reductor puro de presentación: el snapshot y su cámara permanecen intactos. */
 export function updateCrewActorActions(agents: readonly CrewObservedAgent[], room: CrewRoomDefinition,
   previous: readonly CrewActorAction[], now: number): CrewActorAction[] {
@@ -78,6 +87,10 @@ export function updateCrewActorActions(agents: readonly CrewObservedAgent[], roo
     else if (!before && seated) { clip = 'sit'; startedAt = now; }
     if (clip === 'sit' && now - startedAt >= CREW_ACTION_DURATION_MS) { clip = 'typing'; startedAt += CREW_ACTION_DURATION_MS; }
     if ((clip === 'stand' || clip === 'turn') && now - startedAt >= CREW_ACTION_DURATION_MS) clip = null;
+    if (!seated && clip !== 'stand' && clip !== 'turn') {
+      const gesture = crewReportedGesture(agent);
+      if (clip !== gesture) { clip = gesture; startedAt = now; }
+    }
     if (agent.isWalking) { clip = null; turnFrom = undefined; }
     if (!seated && clip !== 'stand') workstation = undefined;
     if (workstation) used.add(workstation.chairId);

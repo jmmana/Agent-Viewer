@@ -53,3 +53,7 @@ Validated on main `5560b2c`: 1,051 Node tests passed (one skipped), 740 Vitest, 
 ## Desktop extension (Refs #118)
 
 `actions.v1.json` registers 16 prototype clips / 64 original frames for turn, sit, stand and typing. It preserves the walk metadata pattern without changing the walk-only importer. Actual atlas sizes, prompts and rejected turn v1 are documented in `assets/crew/origins/desktop-118/README.md`. Per-frame `referenceHeight` preserves common body scale when sitting; actual crop height remains independent. `crew-desktop-assets.test.mjs` verifies source/frame/prompt hashes, dimensions and alpha. See [runtime evidence and limitations](evidence/desktop-118/README.md).
+
+## Gesture extension (Refs #118)
+
+`gestures.v1.json` adds 12 prototype clips / 48 original frames for think, talk and review, using the existing action registry. Actual PNG dimensions are 1254 x 1254; logical presentation remains 256 x 352. See [provenance](../../assets/crew/origins/gestures-118/README.md) and [runtime evidence](evidence/gestures-280/README.md).

@@ -1,0 +1,1025 @@
+{
+  "schemaVersion": 1,
+  "clips": [
+    {
+      "id": "ceo.think.front.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "think",
+      "facing": "front",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-think-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 190.0,
+            "y": 319
+          },
+          "durationMs": 300,
+          "referenceHeight": 304,
+          "sha256": "2150b92f9bb2f9523f5dbddd35ad20e3878eada71e0e03bdfd66b8b562a03f1d"
+        },
+        {
+          "x": 314,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 171.0,
+            "y": 319
+          },
+          "durationMs": 300,
+          "referenceHeight": 304,
+          "sha256": "c9c4f2f566a580240439895a28494f018270f48652fb51302eea27231fa290a2"
+        },
+        {
+          "x": 627,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 150.0,
+            "y": 319
+          },
+          "durationMs": 300,
+          "referenceHeight": 304,
+          "sha256": "fe5d1a13d45ab5542551fccab635b38467dc47212cc1247a6534680e658ef3eb"
+        },
+        {
+          "x": 940,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 146.5,
+            "y": 319
+          },
+          "durationMs": 300,
+          "referenceHeight": 304,
+          "sha256": "3f3c3f4be304d049687007cdc20743c17f8194da469effaf7083e6f6cd177010"
+        }
+      ],
+      "sha256": "7d48900d3d99f9cd26302dfd72ad821baf3a9a0ccf3d7d273ccf4d6143e6e586",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/think-v1.prompt.txt",
+        "promptSha256": "1ee137c528eeb2f5908bddb53f6247c58bd09880d40efdf8db65b1fba5f837fd",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.think.right.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "think",
+      "facing": "right",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-think-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 322,
+          "width": 314,
+          "height": 315,
+          "anchor": {
+            "x": 197.5,
+            "y": 313
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "6fdc298e7e27521b3dd1c5beea61dcb6b427ea6f7cec0ea3bd99cfa9db54d9a8"
+        },
+        {
+          "x": 314,
+          "y": 322,
+          "width": 313,
+          "height": 315,
+          "anchor": {
+            "x": 186.0,
+            "y": 313
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "703c6b620957c969a9cb27d07a201557a3dc3617a9bfc113bfc222b19ad24ede"
+        },
+        {
+          "x": 627,
+          "y": 322,
+          "width": 313,
+          "height": 315,
+          "anchor": {
+            "x": 168.5,
+            "y": 313
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "5bd33dfe6efc173f98afc3d30cd30bd53c55830c2c5b76b2747c4b6079aa68b5"
+        },
+        {
+          "x": 940,
+          "y": 322,
+          "width": 314,
+          "height": 317,
+          "anchor": {
+            "x": 158.0,
+            "y": 313
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "9b6f946d19b4196e68d9eaf6a48b6d883e61fa25f114a514fe5fb0abd8d769a1"
+        }
+      ],
+      "sha256": "7d48900d3d99f9cd26302dfd72ad821baf3a9a0ccf3d7d273ccf4d6143e6e586",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/think-v1.prompt.txt",
+        "promptSha256": "1ee137c528eeb2f5908bddb53f6247c58bd09880d40efdf8db65b1fba5f837fd",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.think.back.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "think",
+      "facing": "back",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-think-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 637,
+          "width": 314,
+          "height": 289,
+          "anchor": {
+            "x": 186.5,
+            "y": 288
+          },
+          "durationMs": 300,
+          "referenceHeight": 287,
+          "sha256": "e5fdda709ffb3469af70e6d3c14c611896d4128389361e8b6b75762d09fce31c"
+        },
+        {
+          "x": 314,
+          "y": 637,
+          "width": 313,
+          "height": 289,
+          "anchor": {
+            "x": 173.5,
+            "y": 288
+          },
+          "durationMs": 300,
+          "referenceHeight": 287,
+          "sha256": "b0a06e064661c35affbd5dbfc8ba44ca16705c550358607f5ebf6f34f58bab89"
+        },
+        {
+          "x": 627,
+          "y": 637,
+          "width": 313,
+          "height": 289,
+          "anchor": {
+            "x": 149.5,
+            "y": 288
+          },
+          "durationMs": 300,
+          "referenceHeight": 287,
+          "sha256": "94258d79eea1e47537c24895975a001236eb5c8041b4654148f924395531f323"
+        },
+        {
+          "x": 940,
+          "y": 639,
+          "width": 314,
+          "height": 287,
+          "anchor": {
+            "x": 146.0,
+            "y": 286
+          },
+          "durationMs": 300,
+          "referenceHeight": 287,
+          "sha256": "3f57c58a5c84d95d61bc34e2baa746c4e9c17fa0726b6a307edcf87b7fbc08d2"
+        }
+      ],
+      "sha256": "7d48900d3d99f9cd26302dfd72ad821baf3a9a0ccf3d7d273ccf4d6143e6e586",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/think-v1.prompt.txt",
+        "promptSha256": "1ee137c528eeb2f5908bddb53f6247c58bd09880d40efdf8db65b1fba5f837fd",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.think.left.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "think",
+      "facing": "left",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-think-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 926,
+          "width": 314,
+          "height": 328,
+          "anchor": {
+            "x": 166.5,
+            "y": 312
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "738d33adca9d971ef06f15029deefac1a5c8b429f5844d50b4ed16dbb8b69ad5"
+        },
+        {
+          "x": 314,
+          "y": 926,
+          "width": 313,
+          "height": 328,
+          "anchor": {
+            "x": 163.0,
+            "y": 311
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "be5d981b72b87782df102f44412dcfb4eaff1b3959b192111aba23f383c2958c"
+        },
+        {
+          "x": 627,
+          "y": 926,
+          "width": 313,
+          "height": 328,
+          "anchor": {
+            "x": 144.0,
+            "y": 312
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "c6a8e055c79ee09ba193e67467902cf1f8da1dae236e31b442eb24b7bce9d9ab"
+        },
+        {
+          "x": 940,
+          "y": 926,
+          "width": 314,
+          "height": 328,
+          "anchor": {
+            "x": 139.0,
+            "y": 312
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "03dfe94f42c6d4cb5d5d841ba2994f5c1f418b34af13b04190bd7dbe586ff24e"
+        }
+      ],
+      "sha256": "7d48900d3d99f9cd26302dfd72ad821baf3a9a0ccf3d7d273ccf4d6143e6e586",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/think-v1.prompt.txt",
+        "promptSha256": "1ee137c528eeb2f5908bddb53f6247c58bd09880d40efdf8db65b1fba5f837fd",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.talk.front.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "talk",
+      "facing": "front",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-talk-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 314,
+          "height": 324,
+          "anchor": {
+            "x": 173.5,
+            "y": 315
+          },
+          "durationMs": 300,
+          "referenceHeight": 301,
+          "sha256": "a06bfb77a482a6cb6e78da04abea138f67716d2154ccb56b49670bdbea1c9fd6"
+        },
+        {
+          "x": 314,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 172.0,
+            "y": 315
+          },
+          "durationMs": 300,
+          "referenceHeight": 301,
+          "sha256": "0deaf58e2602bef5b5d9821f998dabd7cd3a54fabc5ea14ea46f051d48275605"
+        },
+        {
+          "x": 627,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 161.5,
+            "y": 315
+          },
+          "durationMs": 300,
+          "referenceHeight": 301,
+          "sha256": "b994d9ec5ef77544e9662e98972040c98f5412837092fff664f1cd929d59f927"
+        },
+        {
+          "x": 940,
+          "y": 0,
+          "width": 314,
+          "height": 324,
+          "anchor": {
+            "x": 163.5,
+            "y": 315
+          },
+          "durationMs": 300,
+          "referenceHeight": 301,
+          "sha256": "de5c9c2658cacac05876565ba8097add6e46f76683ce1d6826eec4855eaa62cd"
+        }
+      ],
+      "sha256": "ac9a1adb158828b7f8eea293ef58a652cb3547130bdbc0ff4b2c659be7136d7c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/talk-v1.prompt.txt",
+        "promptSha256": "33654d826f2b0f045475e60ac00aaf6f3381c7d0a1690ca8cf362ffb3e8cd593",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.talk.right.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "talk",
+      "facing": "right",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-talk-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 324,
+          "width": 314,
+          "height": 308,
+          "anchor": {
+            "x": 185.0,
+            "y": 307
+          },
+          "durationMs": 300,
+          "referenceHeight": 303,
+          "sha256": "aa8064b2f3ad11cfbecde6ec1e1e83260154b8e7172d2d02922023acc55f2ae8"
+        },
+        {
+          "x": 314,
+          "y": 322,
+          "width": 313,
+          "height": 310,
+          "anchor": {
+            "x": 183.0,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 303,
+          "sha256": "5f0b86d5fbd1c17c62e76f018781e63238c4e5e37a013dd56d9de6f4137fb46e"
+        },
+        {
+          "x": 627,
+          "y": 322,
+          "width": 313,
+          "height": 310,
+          "anchor": {
+            "x": 172.0,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 303,
+          "sha256": "64869f2618ee0af1330ea494cb559595df5850609f9876beaa11322ba95b0eba"
+        },
+        {
+          "x": 940,
+          "y": 324,
+          "width": 314,
+          "height": 308,
+          "anchor": {
+            "x": 171.5,
+            "y": 307
+          },
+          "durationMs": 300,
+          "referenceHeight": 303,
+          "sha256": "6c1141b805d55691eb58a07e3db419d4ef79722476f7354c24b23cf46e97901a"
+        }
+      ],
+      "sha256": "ac9a1adb158828b7f8eea293ef58a652cb3547130bdbc0ff4b2c659be7136d7c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/talk-v1.prompt.txt",
+        "promptSha256": "33654d826f2b0f045475e60ac00aaf6f3381c7d0a1690ca8cf362ffb3e8cd593",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.talk.back.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "talk",
+      "facing": "back",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-talk-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 632,
+          "width": 314,
+          "height": 293,
+          "anchor": {
+            "x": 176.0,
+            "y": 293
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "25bdefa19e796e9d6ba3369ea0afc5104280f97d7c7e662f1c32a7dc56052e9d"
+        },
+        {
+          "x": 314,
+          "y": 632,
+          "width": 313,
+          "height": 293,
+          "anchor": {
+            "x": 171.0,
+            "y": 292
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "3d6d1e01146321d2ba8244f74664ffaf6c9ddeb16c76036b145ac4d80bc1c84b"
+        },
+        {
+          "x": 627,
+          "y": 632,
+          "width": 313,
+          "height": 293,
+          "anchor": {
+            "x": 158.0,
+            "y": 292
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "9a4044d8c0341f2b99fa189edc3582f910a72d41ef85f6665f6a56e842b9f8f9"
+        },
+        {
+          "x": 940,
+          "y": 632,
+          "width": 314,
+          "height": 293,
+          "anchor": {
+            "x": 158.0,
+            "y": 292
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "3ee7fd7c1220df62130fcf81e7f93cf2f94348fc197fafb82ce10e682eb65883"
+        }
+      ],
+      "sha256": "ac9a1adb158828b7f8eea293ef58a652cb3547130bdbc0ff4b2c659be7136d7c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/talk-v1.prompt.txt",
+        "promptSha256": "33654d826f2b0f045475e60ac00aaf6f3381c7d0a1690ca8cf362ffb3e8cd593",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.talk.left.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "talk",
+      "facing": "left",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-talk-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 925,
+          "width": 314,
+          "height": 329,
+          "anchor": {
+            "x": 172.0,
+            "y": 311
+          },
+          "durationMs": 300,
+          "referenceHeight": 305,
+          "sha256": "1edf3d6b8fd48f7ec146be8e186f1c99bba72b8cbdd4503b10c4fa64896a3d8f"
+        },
+        {
+          "x": 314,
+          "y": 925,
+          "width": 313,
+          "height": 329,
+          "anchor": {
+            "x": 160.5,
+            "y": 311
+          },
+          "durationMs": 300,
+          "referenceHeight": 305,
+          "sha256": "f55e66bb7986c8940251a3043083175eeee5b5354aae75a6da7bf932697544c4"
+        },
+        {
+          "x": 627,
+          "y": 925,
+          "width": 313,
+          "height": 329,
+          "anchor": {
+            "x": 157.0,
+            "y": 311
+          },
+          "durationMs": 300,
+          "referenceHeight": 305,
+          "sha256": "92eceba545825dcee6a04095e0e3941d9d3b9992cde3b6bbff82f29e4b2a20d9"
+        },
+        {
+          "x": 940,
+          "y": 925,
+          "width": 314,
+          "height": 329,
+          "anchor": {
+            "x": 152.5,
+            "y": 311
+          },
+          "durationMs": 300,
+          "referenceHeight": 305,
+          "sha256": "20c60e474722fc431b7c3c45c00bdaf95371c77f55431b0357b8c5e0fbd3ed61"
+        }
+      ],
+      "sha256": "ac9a1adb158828b7f8eea293ef58a652cb3547130bdbc0ff4b2c659be7136d7c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/talk-v1.prompt.txt",
+        "promptSha256": "33654d826f2b0f045475e60ac00aaf6f3381c7d0a1690ca8cf362ffb3e8cd593",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.review.front.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "review",
+      "facing": "front",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-review-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 177.0,
+            "y": 318
+          },
+          "durationMs": 300,
+          "referenceHeight": 307,
+          "sha256": "e363d18d2a81adec77b2e88247b1405cc98285563be7d3f0972175412c7d2339"
+        },
+        {
+          "x": 314,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 168.0,
+            "y": 318
+          },
+          "durationMs": 300,
+          "referenceHeight": 307,
+          "sha256": "9a89a46bd8910ee100ce30eb95aea5619f7ce2291d3965e147ab42768dd9f740"
+        },
+        {
+          "x": 627,
+          "y": 0,
+          "width": 313,
+          "height": 321,
+          "anchor": {
+            "x": 148.0,
+            "y": 318
+          },
+          "durationMs": 300,
+          "referenceHeight": 307,
+          "sha256": "0a7b69ecf4bb32eb93cbfc34c6d6afc3b8abd2f15a2d026ae680a3bce3537fb8"
+        },
+        {
+          "x": 940,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 145.0,
+            "y": 318
+          },
+          "durationMs": 300,
+          "referenceHeight": 307,
+          "sha256": "36dd0e977e1b33b4316e352ce087f600420090b652d9cf9dbdca196e9e8229b0"
+        }
+      ],
+      "sha256": "59108a5af18cdfe6991b9cdd45c95c223add3f6e11dbbd23731eba93ee91083c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/review-v1.prompt.txt",
+        "promptSha256": "bd975bfdef39598a4f815d15875f4b3e95db88f561efcfba513ab426386b8dfb",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.review.right.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "review",
+      "facing": "right",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-review-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 322,
+          "width": 314,
+          "height": 311,
+          "anchor": {
+            "x": 176.0,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "8064993c72c819c0845dd8a47fa9e5989177ee31f9a4cddcd1903a0211189471"
+        },
+        {
+          "x": 314,
+          "y": 322,
+          "width": 313,
+          "height": 311,
+          "anchor": {
+            "x": 162.5,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "8b47c509cdcced9b1d0ee6fcd02164f6fd1eb76ee2513af2dcebd1aaa84b7bfa"
+        },
+        {
+          "x": 627,
+          "y": 321,
+          "width": 313,
+          "height": 312,
+          "anchor": {
+            "x": 146.5,
+            "y": 310
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "192d8f23160e98404babb0c3b66fc71c50765f0a2b88126fdab5f788d51a6630"
+        },
+        {
+          "x": 940,
+          "y": 322,
+          "width": 314,
+          "height": 311,
+          "anchor": {
+            "x": 145.5,
+            "y": 308
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "d29517ebb7d5d06a4380cf3105ce093cd1ff5f6d14acf9950ceb915fa0a63a1a"
+        }
+      ],
+      "sha256": "59108a5af18cdfe6991b9cdd45c95c223add3f6e11dbbd23731eba93ee91083c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/review-v1.prompt.txt",
+        "promptSha256": "bd975bfdef39598a4f815d15875f4b3e95db88f561efcfba513ab426386b8dfb",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.review.back.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "review",
+      "facing": "back",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-review-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 633,
+          "width": 314,
+          "height": 299,
+          "anchor": {
+            "x": 170.5,
+            "y": 295
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "c15d4f801b5d93a85514cd3cd998a0a576c04f9304bae086352c7fa22cb6ff2c"
+        },
+        {
+          "x": 314,
+          "y": 633,
+          "width": 313,
+          "height": 299,
+          "anchor": {
+            "x": 168.0,
+            "y": 296
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "613a65e9cffffdbee72bfc7ea3c69d538bfcf39f48990876b1b4a80fc84836a2"
+        },
+        {
+          "x": 627,
+          "y": 633,
+          "width": 313,
+          "height": 296,
+          "anchor": {
+            "x": 150.0,
+            "y": 296
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "804ce5c51c635df6e3b58ae0acf3add85037f7d77f38adfb4109ee962414d703"
+        },
+        {
+          "x": 940,
+          "y": 633,
+          "width": 314,
+          "height": 296,
+          "anchor": {
+            "x": 146.5,
+            "y": 296
+          },
+          "durationMs": 300,
+          "referenceHeight": 292,
+          "sha256": "64f4bc5e38784e8ff50e98c08ea25540bf9c484333126caffe600a55469d900b"
+        }
+      ],
+      "sha256": "59108a5af18cdfe6991b9cdd45c95c223add3f6e11dbbd23731eba93ee91083c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/review-v1.prompt.txt",
+        "promptSha256": "bd975bfdef39598a4f815d15875f4b3e95db88f561efcfba513ab426386b8dfb",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    },
+    {
+      "id": "ceo.review.left.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "review",
+      "facing": "left",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-review-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 932,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 179.0,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "aeaf9ef44dfddd730e307578e484ac1078e6fad7e02db2aff3af7af17b5556bd"
+        },
+        {
+          "x": 314,
+          "y": 932,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 171.5,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "c210194bbfe0c7c4ad6f8e89feef4a044773095748e11cc52dd364733c90b00f"
+        },
+        {
+          "x": 627,
+          "y": 929,
+          "width": 313,
+          "height": 325,
+          "anchor": {
+            "x": 161.5,
+            "y": 312
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "175f7552110e5f15273997b46b91780caa3a0b666800fb6e04158e58264bc770"
+        },
+        {
+          "x": 940,
+          "y": 929,
+          "width": 314,
+          "height": 325,
+          "anchor": {
+            "x": 150.5,
+            "y": 312
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "9babd24141f2a89271e1b8e532296fef2a95d5811f91e6a08befd0a849e7a813"
+        }
+      ],
+      "sha256": "59108a5af18cdfe6991b9cdd45c95c223add3f6e11dbbd23731eba93ee91083c",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/gestures-118/review-v1.prompt.txt",
+        "promptSha256": "bd975bfdef39598a4f815d15875f4b3e95db88f561efcfba513ab426386b8dfb",
+        "reference": "assets/crew/clips/ceo-typing-v1.png",
+        "sourceCommit": "2a0d86012ece08e7a35c6c290c33c29df50be169"
+      }
+    }
+  ]
+}

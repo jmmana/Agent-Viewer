@@ -31,7 +31,7 @@ describe('acciones CEO desde snapshots', () => {
     expect(base.status).toBe('IDLE'); expect(coding.status).toBe('CODING');
   });
   it('no inventa typing para otros estados/roles/salas ni comparte silla', () => {
-    expect(updateCrewActorActions([{ ...base, status: 'THINKING' }], room, [], 0)[0].clip).toBe(null);
+    expect(updateCrewActorActions([{ ...base, status: 'THINKING' }], room, [], 0)[0].clip).toBe('think');
     expect(updateCrewActorActions([{ ...base, workspace: 'development' }], room, [], 0)).toEqual([]);
     expect(updateCrewActorActions([{ ...base, role: 'backend_engineer' }], room, [], 0)).toEqual([]);
     const actors = updateCrewActorActions([{ ...base, status: 'CODING' }, { ...base, id: 'other', status: 'WRITING' }], room, [], 0);
@@ -46,11 +46,11 @@ describe('acciones CEO desde snapshots', () => {
   });
 });
 describe('atlas originales de escritorio', () => {
-  it('declara 16 clips y 64 cuadros RGBA medidos con cuatro orientaciones', () => {
-    expect(CREW_ACTION_CLIPS).toHaveLength(16);
+  it('declara 28 clips y 112 cuadros RGBA medidos con cuatro orientaciones', () => {
+    expect(CREW_ACTION_CLIPS).toHaveLength(28);
     for (const clip of CREW_ACTION_CLIPS) {
       expect(validateCrewClip(clip)).toBe(true); expect(clip.frames).toHaveLength(4);
-      expect(clip.loop).toBe(clip.clip === 'typing'); expect(clip.status).toBe('prototype');
+      expect(clip.loop).toBe(['typing', 'think', 'talk', 'review'].includes(clip.clip)); expect(clip.status).toBe('prototype');
       expect(crewClipSample(clip, 250, true)).toEqual({ index: 0, nextInMs: null });
     }
   });

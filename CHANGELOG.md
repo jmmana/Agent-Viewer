@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Crew CEO think, talk and review: 48 original RGBA frames across four orientations, driven only by reported states with transition/cancellation, reduced-motion and localized fallback support. Preserved originals, measured metadata and runtime video/camera evidence (#280, Refs #118).
+
 ## [0.5.0] - 2026-10-10
 
 "Spend in the office": per-agent usage badges and a per-call detail panel on the canvas, fed only by host props (#76, #77); the portal reading those same figures from the real usage ledger for canvas badges, the agent inspector and the call-detail modal (#78); cost per meeting and per tool computed on the server and shown in the Meetings panel and tool tooltips (#80, #81); Model Ops's Matrix, Agents and Feed tabs reconciling call by call against the ledger instead of local counters (#79); and the library guide's four privacy rules written out in one place for integrators: the host computes, the component only displays; usage UI stays hidden until the host opts in; a missing figure is always "unknown", never `0`; and the call detail panel is metadata only, never prompt, completion or tool-argument text. Full reference: [the usage chapter of the library guide](docs/library.md#usage-figures) ([español](docs/library.es.md#cifras-de-consumo)).

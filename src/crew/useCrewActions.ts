@@ -42,7 +42,7 @@ export function useCrewActions(agents: readonly Agent[], room: CrewRoomDefinitio
   const current = useMemo(() => state.roomId === room.id ? state.actions : [], [state, room.id]);
   const active = !reduced && !reducedMotion;
   const key = active ? [...new Set(current.flatMap(action => action.clip
-    ? action.clip === 'turn' ? ['turn'] : ['sit', 'stand', 'typing'] : []))].sort().join(',') : '';
+    ? ['sit', 'stand', 'typing'].includes(action.clip) ? ['sit', 'stand', 'typing'] : [action.clip] : []))].sort().join(',') : '';
   useEffect(() => {
     setImages({}); setFailed(false);
     if (!key) return;

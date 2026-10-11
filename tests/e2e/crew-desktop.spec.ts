@@ -43,9 +43,9 @@ test('cuatro cámaras y clips reales en sala CEO, sin alterar el snapshot', asyn
 test('movimiento reducido, fallback bilingüe y cancelación al salir', async ({ page }) => {
   await page.route('**/ceo-typing-v1.png', route => route.abort());
   await page.goto(url); await page.evaluate(() => window.__crewDesktopFixture({ status: 'CODING' }));
-  await expect(page.getByTestId('crew-action-fallback')).toContainText('Desk animation unavailable');
+  await expect(page.getByTestId('crew-action-fallback')).toContainText('Actor animation unavailable');
   await page.evaluate(() => window.__crewDesktopFixture({ locale: 'es' }));
-  await expect(page.getByTestId('crew-action-fallback')).toContainText('Animación de escritorio no disponible');
+  await expect(page.getByTestId('crew-action-fallback')).toContainText('Animación del personaje no disponible');
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.waitForTimeout(100);
   const count = await page.evaluate(() => window.__deskDraws.length); await page.waitForTimeout(300);
   expect(await page.evaluate(() => window.__deskDraws.length)).toBe(count);

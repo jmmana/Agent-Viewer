@@ -34,6 +34,18 @@ import {
 } from './usageLedger';
 import { estimateLedgerRow, type EstimatePricingSnapshot } from './pricing/estimate';
 import { getPricingStore } from './pricing/store';
+import {
+  getCallEstimates as getCallEstimatesImpl,
+  getRecomputeRun as getRecomputeRunImpl,
+  listRecomputeRuns as listRecomputeRunsImpl,
+  runPricingRecompute,
+  type CallEstimatesResult,
+  type ParsedRecomputeRequest,
+  type RecomputeOutcome,
+  type RecomputeRunRecord,
+  type RecomputeRunsPage,
+  type RecomputeTestHooks,
+} from './pricing/recompute';
 import { buildListCallsQuery, listCallsInMemory, sqliteRowToCallRecord, type CallsPage, type CallsQuery } from './usage/calls';
 import { type UsageSummary } from './usageAggregates';
 import { buildWhere, computeMemoryRollup, computeSqliteRollup, rowMatchesFilters } from './usage/rollup';
@@ -538,6 +550,23 @@ export interface EventStore {
    * the streamed rows all describe the same snapshot). */
   iterateExportRows(filters: UsageFilters, asOfSeq: number, chunkSize?: number): AsyncIterable<UsageLedgerRow>;
 
+  /**
+   * Pricing recompute (issue #296): re-runs `estimateCall`/`estimateLedgerRow` against a corrected or pinned
+   * price-table version, atomically, writing a new revision only for rows whose result changed. Optional on
+   * `EventStore`, the same way `getSchemaInfo` is: only `SQLiteEventStore` implements it. `server/index.ts`
+   * answers `501 { "error": "ledger_unavailable" }` for a store that does not, the same documented fallback the
+   * issue licenses for every ledger-backed endpoint, rather than replaying a durable, revision-numbered audit
+   * trail against a volatile in-memory array.
+   */
+  recomputePricing?(input: ParsedRecomputeRequest, testHooks?: RecomputeTestHooks): Promise<RecomputeOutcome>;
+  /** `GET /api/v1/pricing/recompute-runs`. See `recomputePricing` for why this is optional. */
+  listRecomputeRuns?(options: { limit: number; before: number | null }): Promise<RecomputeRunsPage>;
+  /** `GET /api/v1/pricing/recompute-runs/:runId`. `null` when no run has that id (404 `run_not_found`). */
+  getRecomputeRun?(runId: string): Promise<RecomputeRunRecord | null>;
+  /** `GET /api/v1/usage/calls/:id/estimates`. `null` when the ledger has no row for `eventId` (404
+   * `call_not_found`). */
+  getCallEstimates?(eventId: string): Promise<CallEstimatesResult | null>;
+
   /** The original event id already stored under this `(provider, requestId)` key, normalizing both arguments. */
   findByRequest(provider: string, requestId: string): Promise<{ id: string } | null>;
   /** Duplicate references only (never originals), newest `receivedAt` first, ties newest-inserted first. */
@@ -640,6 +669,13 @@ export interface SQLiteStoreOptions {
   logger?: { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
   /** Issue #84. See `MemoryEventStoreOptions.getPricingSnapshot`: same contract, same default. */
   getPricingSnapshot?: () => EstimatePricingSnapshot;
+  /** Issue #296: resolves one historical/pinned pricing-table version by number, for `POST /api/v1/pricing/
+   * recompute`'s explicit `pricingVersion` and for deriving a past revision's component breakdown on read.
+   * Defaults to a function that always returns `null` (no pinned-version support), so a caller that does not
+   * wire up the real pricing store still gets a well-defined `pricing_version_not_found` instead of a crash. */
+  getPricingVersionSnapshot?: (version: number) => EstimatePricingSnapshot | null;
+  /** Issue #296: hard cap on matched rows for one recompute run. Defaults to `DEFAULT_RECOMPUTE_MAX_ROWS`. */
+  recomputeMaxRows?: number;
 }
 
 // -------------------------------------------------------------
@@ -1709,6 +1745,10 @@ export class SQLiteEventStore implements EventStore {
   private migrations: readonly Migration[];
   /** Issue #84. See `MemoryEventStoreOptions.getPricingSnapshot`: same contract, same default. */
   private getPricingSnapshot: () => EstimatePricingSnapshot;
+  /** Issue #296. See `SQLiteStoreOptions.getPricingVersionSnapshot`. */
+  private getPricingVersionSnapshot: (version: number) => EstimatePricingSnapshot | null;
+  /** Issue #296. See `SQLiteStoreOptions.recomputeMaxRows`. */
+  private recomputeMaxRows: number;
 
   /** All derived state (agents, runtimes, sessions, tasks, meetings, usage). Owned directly: issue #52 removed
    * the `MemoryEventStore` fallback this store used to forward every accepted event to. */
@@ -1752,6 +1792,8 @@ export class SQLiteEventStore implements EventStore {
   constructor(filePath = './data/agent-viewer.db', options: SQLiteStoreOptions = {}) {
     const backup = sqliteBackupMode(options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP);
     this.getPricingSnapshot = options.getPricingSnapshot ?? (() => NO_PRICING_SNAPSHOT);
+    this.getPricingVersionSnapshot = options.getPricingVersionSnapshot ?? (() => null);
+    this.recomputeMaxRows = options.recomputeMaxRows ?? DEFAULT_RECOMPUTE_MAX_ROWS;
 
     const dir = path.dirname(filePath);
     if (dir && dir !== '.' && !fs.existsSync(dir)) {
@@ -2374,6 +2416,29 @@ export class SQLiteEventStore implements EventStore {
 
   async rollup(query: RollupQuery): Promise<UsageRollupResponse> {
     return computeSqliteRollup(this.db, query);
+  }
+
+  /** `POST /api/v1/pricing/recompute` (issue #296). `testHooks` is never set by production code: see
+   * `RecomputeTestHooks`'s own doc comment. */
+  async recomputePricing(input: ParsedRecomputeRequest, testHooks?: RecomputeTestHooks): Promise<RecomputeOutcome> {
+    return runPricingRecompute(this.db, input, {
+      getCurrentPricingSnapshot: () => this.getPricingSnapshot(),
+      getPricingVersionSnapshot: (version) => this.getPricingVersionSnapshot(version),
+      maxRows: this.recomputeMaxRows,
+      ...testHooks,
+    });
+  }
+
+  async listRecomputeRuns(options: { limit: number; before: number | null }): Promise<RecomputeRunsPage> {
+    return listRecomputeRunsImpl(this.db, options);
+  }
+
+  async getRecomputeRun(runId: string): Promise<RecomputeRunRecord | null> {
+    return getRecomputeRunImpl(this.db, runId);
+  }
+
+  async getCallEstimates(eventId: string): Promise<CallEstimatesResult | null> {
+    return getCallEstimatesImpl(this.db, eventId, { getPricingVersionSnapshot: (version) => this.getPricingVersionSnapshot(version) });
   }
 
   /** Keyset pagination on `seq`, `chunkSize` rows per `SELECT` (issue #69): the 1,000,000-row export streams
@@ -3293,6 +3358,20 @@ export function parseUsageLedgerMaxRows(raw: string | undefined): number {
   return Number.isInteger(value) && value >= 1 ? value : DEFAULT_USAGE_LEDGER_MAX_ROWS;
 }
 
+/** Hard cap on how many `usage_ledger` rows one `POST /api/v1/pricing/recompute` run may match (issue #296):
+ * above it, the request is refused with 413 `filter_too_broad` before anything is written. `node:sqlite` is
+ * synchronous, so a run blocks the event loop for its whole duration; this default is chosen so a run at the
+ * cap finishes in a few seconds on the reference machine (see `tests/pricing-recompute.test.mjs`, which uses a
+ * much lower cap to measure and extrapolate quickly). Same leniency as the other `AGENT_VIEWER_*_MAX_*` knobs
+ * above: unset, empty or invalid falls back to the default instead of stopping the server. */
+export const DEFAULT_RECOMPUTE_MAX_ROWS = 200_000;
+
+export function parseRecomputeMaxRows(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_RECOMPUTE_MAX_ROWS;
+  const value = Number(raw.trim());
+  return Number.isInteger(value) && value >= 1 ? value : DEFAULT_RECOMPUTE_MAX_ROWS;
+}
+
 export function createEventStore(): EventStore {
   const storageType = (process.env.AGENT_VIEWER_STORAGE || 'memory').toLowerCase();
   const rawMaxEvents = process.env.AGENT_VIEWER_MAX_EVENTS;
@@ -3311,10 +3390,21 @@ export function createEventStore(): EventStore {
     }
     const dbPath = process.env.AGENT_VIEWER_SQLITE_PATH || './data/agent-viewer.db';
     const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
+    const recomputeMaxRows = parseRecomputeMaxRows(process.env.AGENT_VIEWER_RECOMPUTE_MAX_ROWS);
     // Issue #84: the production wiring between the pricing store (issue #83) and the event store. Injected as a
     // thunk, never resolved here eagerly, so `getPricingStore()`'s first disk read still only happens on first
-    // use (its own module doc comment), not merely because an `EventStore` was constructed.
-    return new SQLiteEventStore(dbPath, { backup, getPricingSnapshot: () => getPricingStore().getSnapshot() });
+    // use (its own module doc comment), not merely because an `EventStore` was constructed. Issue #296 adds
+    // `getPricingVersionSnapshot`, the same thunk pattern, for recompute's own pinned-version resolution and for
+    // deriving a past revision's component breakdown on read.
+    return new SQLiteEventStore(dbPath, {
+      backup,
+      getPricingSnapshot: () => getPricingStore().getSnapshot(),
+      getPricingVersionSnapshot: (version) => {
+        const found = getPricingStore().getVersion(version);
+        return found ? { pricingVersion: found.pricingVersion, entries: found.entries } : null;
+      },
+      recomputeMaxRows,
+    });
   }
   return new MemoryEventStore({
     maxEvents,

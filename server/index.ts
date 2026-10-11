@@ -32,6 +32,12 @@ import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeA
 import { createStreamTicketStore } from './stream-tickets';
 import { getPricingStore } from './pricing/store';
 import { registerPricingRoutes } from './pricing/api';
+import {
+  parseRecomputeRequest,
+  PricingVersionNotFoundError,
+  RecomputeInProgressError,
+  RecomputeTooBroadError,
+} from './pricing/recompute';
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
 import {
   decodeExportLogsServiceRequest,
@@ -1357,6 +1363,26 @@ app.get('/api/v1/usage/calls', async (req, res) => {
   });
 });
 
+// -------------------------------------------------------------
+// Per-call revision history (issue #296, sub-issue of #84): every pricing-estimate revision of one ledger row,
+// revision 0 (ingestion time) first, each with a component breakdown derived on read. SQLite-only, same as the
+// recompute endpoints below: a store that does not implement it (memory mode) answers 501, never a silently
+// different shape.
+// -------------------------------------------------------------
+app.get('/api/v1/usage/calls/:id/estimates', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (typeof store.getCallEstimates !== 'function') {
+    res.status(501).json({ error: 'ledger_unavailable', message: 'The usage ledger is not available in this storage mode.' });
+    return;
+  }
+  const result = await store.getCallEstimates(req.params.id);
+  if (!result) {
+    res.status(404).json({ error: 'call_not_found', message: `No call with id "${req.params.id}" exists.` });
+    return;
+  }
+  res.json({ schemaVersion: '1.0', eventId: result.eventId, revisions: result.revisions });
+});
+
 /** `limit` for GET /api/v1/admin/retention: an integer from 1 to 200, default 20. Unlike `clampedLimit` above,
  * an invalid value is a 400, not a silent fallback: this is an audit endpoint, and a typo here should be visible
  * rather than quietly answering with the wrong amount of history. */
@@ -2580,6 +2606,96 @@ registerPricingRoutes(app, {
   getStore: getPricingStore,
   hasAdminToken: () => currentAuthMode() === 'token',
   usageRollup: (query) => store.rollup(query),
+});
+
+// -------------------------------------------------------------
+// Pricing recompute (issue #296, sub-issue of #84): re-runs the ingestion-time estimator (`server/pricing/
+// estimate.ts`) against a corrected or explicitly pinned price-table version. A write operation: it shares the
+// same Bearer-token auth and rate limit as every other `/api/v1` route above (there are no scoped keys yet,
+// issue #108), and is therefore just as open as the rest of the API when `AGENT_VIEWER_API_TOKEN` is unset
+// (README.md's existing "open API" note covers this; see the README/docs updates in this same change).
+// SQLite-only: `store.recomputePricing` is `undefined` in memory mode (see `EventStore`'s own doc comment), so
+// every route below answers 501 `ledger_unavailable` rather than silently behaving differently.
+// -------------------------------------------------------------
+app.post('/api/v1/pricing/recompute', async (req, res) => {
+  if (typeof store.recomputePricing !== 'function') {
+    res.status(501).json({ error: 'ledger_unavailable', message: 'The usage ledger is not available in this storage mode.' });
+    return;
+  }
+  const parsed = parseRecomputeRequest(req.body);
+  if (!parsed.ok) {
+    res.status(parsed.status).json({ error: parsed.code, message: parsed.message, issues: parsed.issues });
+    return;
+  }
+  try {
+    const outcome = await store.recomputePricing(parsed.value);
+    res.status(outcome.dryRun ? 200 : 201).json(outcome);
+  } catch (error) {
+    if (error instanceof PricingVersionNotFoundError) {
+      res.status(404).json({ error: 'pricing_version_not_found', message: error.message });
+      return;
+    }
+    if (error instanceof RecomputeTooBroadError) {
+      res.status(413).json({ error: 'filter_too_broad', message: error.message, matched: error.matched, maxRows: error.maxRows });
+      return;
+    }
+    if (error instanceof RecomputeInProgressError) {
+      res.status(409).json({ error: 'recompute_in_progress', message: error.message });
+      return;
+    }
+    throw error;
+  }
+});
+
+/** `limit`/`before` for GET /api/v1/pricing/recompute-runs: `limit` is 1..200, default 20 (same range as
+ * `parseRetentionLimit`, another small audit listing); `before` is a positive integer revision cursor. An
+ * invalid value of either is a 400, never a silent fallback. */
+function parseRecomputeRunsQuery(query: {
+  limit?: unknown;
+  before?: unknown;
+}): { limit: number; before: number | null } | 'invalid' {
+  let limit = 20;
+  if (query.limit !== undefined) {
+    if (typeof query.limit !== 'string' || !/^[0-9]+$/.test(query.limit)) return 'invalid';
+    const value = Number(query.limit);
+    if (value < 1 || value > 200) return 'invalid';
+    limit = value;
+  }
+  let before: number | null = null;
+  if (query.before !== undefined) {
+    if (typeof query.before !== 'string' || !/^[0-9]+$/.test(query.before)) return 'invalid';
+    const value = Number(query.before);
+    if (value < 1) return 'invalid';
+    before = value;
+  }
+  return { limit, before };
+}
+
+app.get('/api/v1/pricing/recompute-runs', async (req, res) => {
+  if (typeof store.listRecomputeRuns !== 'function') {
+    res.status(501).json({ error: 'ledger_unavailable', message: 'The usage ledger is not available in this storage mode.' });
+    return;
+  }
+  const parsed = parseRecomputeRunsQuery(req.query as { limit?: unknown; before?: unknown });
+  if (parsed === 'invalid') {
+    res.status(400).json({ error: 'invalid_request', message: 'limit must be 1..200 and before must be a positive integer revision.' });
+    return;
+  }
+  const page = await store.listRecomputeRuns(parsed);
+  res.json({ schemaVersion: '1.0', data: page.runs, page: { limit: parsed.limit, hasMore: page.hasMore } });
+});
+
+app.get('/api/v1/pricing/recompute-runs/:runId', async (req, res) => {
+  if (typeof store.getRecomputeRun !== 'function') {
+    res.status(501).json({ error: 'ledger_unavailable', message: 'The usage ledger is not available in this storage mode.' });
+    return;
+  }
+  const run = await store.getRecomputeRun(req.params.runId);
+  if (!run) {
+    res.status(404).json({ error: 'run_not_found', message: `No recompute run with id "${req.params.runId}" exists.` });
+    return;
+  }
+  res.json({ schemaVersion: '1.0', ...run });
 });
 
 // Safe global error handler returning JSON without stack traces or absolute paths.

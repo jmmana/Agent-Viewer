@@ -85,10 +85,10 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.equal(ready.storage, 'sqlite');
     assert.deepEqual(ready.database, {
       // Migration 7 (usage-calls-indexes, issue #67), 8 (retention, issue #70), 9 (usage-rollup, issue #66),
-      // 10 (usage-ledger-summary, issue #69), 11 (rollup-attribution, issue #80) and 12 (usage-ledger-estimates,
-      // issue #84): the latest, adding the ingestion-time cost-estimate columns.
-      schemaVersion: 12,
-      latestKnownSchemaVersion: 12,
+      // 10 (usage-ledger-summary, issue #69), 11 (rollup-attribution, issue #80), 12 (usage-ledger-estimates,
+      // issue #84) and 13 (pricing-recompute, issue #296): the latest, adding the recompute run history tables.
+      schemaVersion: 13,
+      latestKnownSchemaVersion: 13,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');

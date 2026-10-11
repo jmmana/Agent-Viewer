@@ -434,7 +434,7 @@ Every value must be a non-empty string; an unknown parameter, an array where a s
 
 **Never returned:** `summary`, `payload`, `event_json`, message text, tool input or output, or a provider error message. The serializer (`toCallRecord`) is an explicit allow-list over the already-typed ledger row, never "event minus some keys": every field above is the full set, and a new ledger column is never exposed until it is added here and to the key-set test. `errorCode` is the stored value only when it matches a short machine-code shape (`^[A-Za-z0-9_.:-]{1,64}$`); the ledger today only ever stores `errorKind` there, never the provider's own free-text error code. Unlike the issue's original proposal (`trace.spanId`), issue #65 never added a `spanId` column (it stores `meetingId` from issue #64 instead), so `trace.meetingId` takes that place; `source` (the envelope's `source` identifier) is also not in the ledger and is therefore not in a `CallRecord` either.
 
-**The ledger's cost estimate (`estimatedCost*`/`pricingVersion`/`estimateStatus*`/`estimatedAt`, issue #295).** A separate fact from `cost`/`currency`/`costSource` above: it is what this server computed from a versioned price table (issue #83) at ingestion time, never what the provider billed, and it is never merged into the reported figure. `estimatedCostSource` is the constant `"estimated"` when `estimatedCost` is not `null`, and `null` otherwise, so a client can never confuse it with the reported `costSource`. When the row is not estimable, every `estimated*` field is `null` and `estimateStatus` names why: `no_price_for_model`, `no_price_in_force`, `no_price_for_component`, `missing_usage`, `inconsistent_usage`, `failed`, or the virtual `not_estimated` for a row written before this feature. `estimateRevision` is always `0` and `estimateBasis.revisionsUsed` is always `[0]` until the pricing recompute endpoint (a later issue) ships real revision history; the `estimates`/`estimateRevision` request parameters above are accepted and validated now anyway, so this contract does not change shape once it does.
+**The ledger's cost estimate (`estimatedCost*`/`pricingVersion`/`estimateStatus*`/`estimatedAt`, issue #295).** A separate fact from `cost`/`currency`/`costSource` above: it is what this server computed from a versioned price table (issue #83) at ingestion time, never what the provider billed, and it is never merged into the reported figure. `estimatedCostSource` is the constant `"estimated"` when `estimatedCost` is not `null`, and `null` otherwise, so a client can never confuse it with the reported `costSource`. When the row is not estimable, every `estimated*` field is `null` and `estimateStatus` names why: `no_price_for_model`, `no_price_in_force`, `no_price_for_component`, `missing_usage`, `inconsistent_usage`, `failed`, or the virtual `not_estimated` for a row written before this feature. `estimateRevision` is `0` and `estimateBasis.revisionsUsed` is `[0]` for a row that was never recomputed; once an operator runs `POST /api/v1/pricing/recompute` (issue #296, see "Usage ledger cost estimation and recompute" below) for that row, a later revision can appear here too, with no change to this response's shape.
 
 **Backfilled rows:** a row created by issue #65's one-time backfill over events stored before 0.4.0 carries `backfilled: true` and is returned exactly as the ledger stored it, with no reinterpretation. Such a row may carry a schema default (for example `cacheRead: 0`) that was never actually reported; the flag lets an auditor exclude or discount these rows. A live row is always `backfilled: false`.
 
@@ -1116,6 +1116,62 @@ GET /api/v1/usage/rollup?groupBy=model&include=latency,failures
 - With `include=latency` alone, `failedCalls`/`attempts`/`failureRate`/`failures` are absent; with `include=failures` alone, `latency` is absent.
 
 **Feeding the embedded library.** The TypeScript SDK's `usageRollup()` calls this endpoint (same `buildHeaders()`, token in the `Authorization` header, array filters sent as repeated params), and its `toUsageFigures(group, { costSource })` helper maps one group (or `totals`) to the library's own `UsageFigures` shape, returning `cost: null` whenever there is more than one cost entry, an entry of a different source than requested, or any unknown cost. See [Feeding `usage` from the server](library.md#feeding-usage-from-the-server-issue-66) in the library guide. The Python SDK's `usage_rollup()` calls the same endpoint with snake_case keyword filters. The library itself is unchanged: it still never sums, prices or estimates anything, and `showUsage` stays off until the host passes a `usage` prop.
+
+---
+
+### Usage ledger cost estimation and recompute (issues #84, #296)
+
+Every `usage_ledger` row (issue #65) also carries a **list-price estimate**, computed server-side from the versioned pricing table (issue #83, [docs/pricing.md](pricing.md)) and kept entirely separate from the reported `cost`/`currency`/`costSource` above: the two are never added together, and an estimate never overwrites or fills in a reported cost. An estimate is a list-price approximation (no batch discounts, no negotiated rates), never called "billed" or "actual".
+
+At ingestion time, the server resolves the price in force at the event's own `occurred_at` against the pricing table version active at that moment, and stores the result directly on the ledger row as **revision 0**: `estimatedCostNano` (1e-9 of the currency unit, `null` means "could not estimate", never `0`), `estimatedCurrency`, `pricingVersion` (the table version resolved, even when it had no entry for the model), `estimateStatus` (`estimated`, `no_price_in_force`, `no_price_for_model`, `no_price_for_component`, `missing_usage`, `inconsistent_usage`, `failed`, or the virtual `not_estimated` for a row that predates 0.6.0), and `estimatedAt`. Revision 0 and the canonical event are never rewritten afterward; `usage_ledger`'s own append-only trigger enforces that at the database level.
+
+**`POST /api/v1/pricing/recompute` (issue #296).** Re-runs the same estimator against a corrected or explicitly pinned price-table version, for an operator who fixed a mistake in the table and wants history corrected without touching the original ledger rows or events. A write operation: it uses the same `Authorization: Bearer <token>` as ingestion (there are no scoped keys yet, issue #108), so it is just as open as the rest of the API when `AGENT_VIEWER_API_TOKEN` is unset: set a token before using recompute on a shared server. SQLite-only: in memory mode every endpoint in this section answers `501 { "error": "ledger_unavailable" }`.
+
+```http
+POST /api/v1/pricing/recompute
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "reason": "Corrected gpt-4o cache read price", "pricingVersion": 7, "filter": { "model": "gpt-4o", "onlyUnestimated": false }, "dryRun": false }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `reason` | yes | Non-empty string, at most 500 characters; stored on the run for the audit trail. `400 reason_required` otherwise. |
+| `pricingVersion` | no | A specific price-table version number (from `GET /api/v1/pricing/versions`). Omitted: each row is resolved against the table version active at its own `occurred_at` (same rule ingestion uses). Given: that exact version is applied to **every** matched row regardless of its own date, recorded as the run's `pricingVersionSelector`; `404 pricing_version_not_found` if it does not exist. |
+| `filter.from` / `filter.to` | no | Half-open window `[from, to)` on `occurred_at`, epoch ms. |
+| `filter.model` / `filter.provider` / `filter.agentId` | no | Exact match (provider is normalized the same way ingestion normalizes it). |
+| `filter.onlyUnestimated` | no | `true` matches a row whose latest known estimate (revision 0 if never recomputed) has any status other than `estimated`, including `not_estimated`. |
+| `dryRun` | no, default `false` | `true` computes and returns counts plus up to 20 before/after samples, writes nothing, and allocates no revision. |
+
+An unknown `filter` field is `400 invalid_filter`. A run is one SQLite transaction (all or nothing) and writes a `usage_estimates` row for a matched row only when the recomputed result (cost, currency, version or status) actually differs from that row's latest known estimate; rows with no change are counted but not rewritten. A run that matches more rows than `AGENT_VIEWER_RECOMPUTE_MAX_ROWS` (default 200,000) is rejected with `413 filter_too_broad` before anything is written (checked with a row count first). Only one run can be in flight at a time; a request that arrives while one is running gets `409 recompute_in_progress`, never queued.
+
+Response (`201`, or `200` for `dryRun`):
+
+```json
+{ "runId": "run_...", "revision": 3, "createdAt": 1730500000000, "pricingVersion": 7, "rows": { "matched": 4210, "written": 380, "unchanged": 3830, "estimated": 4100, "unestimable": 110 } }
+```
+
+`revision` is the next integer after the highest one any run has ever committed (starting at 1; revision 0 is the ledger row itself). `written + unchanged === matched` and `estimated + unestimable === matched` always hold. A run that matches and changes nothing is still recorded (it documents that an operator checked).
+
+`GET /api/v1/pricing/recompute-runs` (optional `limit`, default 20 max 200, and a `before` revision cursor) lists past runs newest first; `GET /api/v1/pricing/recompute-runs/:runId` returns one (`404 run_not_found` otherwise).
+
+**`GET /api/v1/usage/calls/:id/estimates` (issue #296).** Every revision of one call's estimate, in order, revision 0 first:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "eventId": "evt_...",
+  "revisions": [
+    { "revision": 0, "cost": 0.007, "costNano": 7000000, "currency": "USD", "pricingVersion": 1, "status": "estimated", "estimatedAt": 1728345604900, "run": null, "components": [ { "component": "input", "tokens": 1200, "ratePerMillion": 2.5, "costNano": 3000000 }, { "component": "output", "tokens": 400, "ratePerMillion": 10, "costNano": 4000000 } ] },
+    { "revision": 1, "cost": 0.0084, "costNano": 8400000, "currency": "USD", "pricingVersion": 7, "status": "estimated", "estimatedAt": 1730500000000, "run": { "runId": "run_...", "reason": "Corrected gpt-4o cache read price" }, "components": [ "..." ] }
+  ]
+}
+```
+
+`components` (`component`, `tokens`, `ratePerMillion`, `costNano`) is derived on read from whichever pricing version produced that revision, never stored; its `costNano` values always sum exactly to the revision's own `costNano`. `404 call_not_found` for an unknown `eventId`.
+
+**Together with #295.** The `estimates=latest|original`/`estimateRevision=N` query parameters on `GET /api/v1/usage/calls`, the rollup and the export (documented above, in their own sections) were added by the other #84 sub-issue, #295, which could land before or after this one; this item is what actually makes a revision other than 0 exist to select. Role-based access and caller identity for recompute are future issues (#107, #108); it uses the plain API token for now.
 
 ---
 

@@ -96,6 +96,11 @@ function ratePerMillionToNano(rate: number): bigint {
   return BigInt(Math.round(rate * 1_000_000_000));
 }
 
+/** `ratePerMillionToNano`, exported for `server/pricing/recompute.ts` (issue #296), which needs the exact same
+ * rate-scaling step to price one named component on read (`GET /api/v1/usage/calls/:id/estimates`), without
+ * duplicating the conversion itself. */
+export const rateNanoPerMillion = ratePerMillionToNano;
+
 /** Integer division of two non-negative `bigint`s, rounded half-even (banker's rounding), so a run of exact
  * `.5` boundaries does not all round the same direction and quietly bias a large sum. */
 function divRoundHalfEven(numerator: bigint, denominator: bigint): bigint {
@@ -106,6 +111,9 @@ function divRoundHalfEven(numerator: bigint, denominator: bigint): bigint {
   if (twiceRemainder > denominator) return quotient + 1n;
   return quotient % 2n === 0n ? quotient : quotient + 1n;
 }
+
+/** `divRoundHalfEven`, exported for the same reason as `rateNanoPerMillion` above. */
+export const roundHalfEvenNano = divRoundHalfEven;
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
@@ -241,4 +249,49 @@ export function estimateLedgerRow(
     estimateStatus: result.status,
     estimatedAt: now(),
   };
+}
+
+/** One named, priced component of a call's cost, as shown by the per-call revision history endpoint (issue
+ * #296, `GET /api/v1/usage/calls/:id/estimates`). `ratePerMillion` is `null` only when `tokens` is `0` (a
+ * component that needed no rate to contribute `0`); `estimateCall` itself would have returned
+ * `no_price_for_component` for any other `null` rate, so a breakdown is only ever produced for a call that
+ * actually reached `status: 'estimated'`. */
+export interface PriceComponentBreakdown {
+  component: 'input' | 'output' | 'cache_read' | 'cache_write' | 'reasoning';
+  tokens: number;
+  ratePerMillion: number | null;
+}
+
+/**
+ * Lists the named components `estimateCall` would price for `row` against the single resolved `entry`, without
+ * summing or rounding them: the read side of the same semantics (issue #296's per-call history endpoint needs
+ * the breakdown `estimateCall` only ever reduces to one number). Mirrors `estimateCall`'s own component
+ * construction (component set, "uncached input" derivation, the `reasoningBilling` gate) exactly, by design:
+ * recomputed at read time from whichever pricing version the caller resolves `entry` from (never stored), so an
+ * auditor can see how a past figure was built. Returns `null` for the same reasons `estimateCall` would stop
+ * before pricing a component: a needed token count missing on the row, or cache tokens exceeding input tokens
+ * (`inconsistent_usage`). Does not itself check for a missing rate (`no_price_for_component`): the caller
+ * compares `ratePerMillion` against `tokens` the same way `estimateCall` does, since only the caller knows
+ * whether the stored result for this revision was actually `'estimated'`.
+ */
+export function buildPriceComponents(row: EstimateCallInput, entry: PriceEntry): PriceComponentBreakdown[] | null {
+  if (row.inputTokens === null || row.outputTokens === null || row.cacheReadTokens === null || row.cacheWriteTokens === null) {
+    return null;
+  }
+  const reasoningNeeded = entry.reasoningBilling === 'separate';
+  if (reasoningNeeded && row.reasoningTokens === null) return null;
+
+  const uncachedInput = row.inputTokens - row.cacheReadTokens - row.cacheWriteTokens;
+  if (uncachedInput < 0) return null;
+
+  const components: PriceComponentBreakdown[] = [
+    { component: 'input', tokens: uncachedInput, ratePerMillion: entry.inputPerMillion },
+    { component: 'output', tokens: row.outputTokens, ratePerMillion: entry.outputPerMillion },
+    { component: 'cache_read', tokens: row.cacheReadTokens, ratePerMillion: entry.cacheReadPerMillion },
+    { component: 'cache_write', tokens: row.cacheWriteTokens, ratePerMillion: entry.cacheWritePerMillion },
+  ];
+  if (reasoningNeeded) {
+    components.push({ component: 'reasoning', tokens: row.reasoningTokens as number, ratePerMillion: entry.reasoningPerMillion });
+  }
+  return components;
 }

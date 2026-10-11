@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -17,6 +17,11 @@ test('CLI start: the office trades a launch code for the token once, and a blank
     assert.match(viewer.token, /^av_/, 'a blank AGENT_VIEWER_API_TOKEN is treated as unset');
     assert.equal(JSON.parse(readFileSync(path.join(home, 'session.json'), 'utf8')).token, viewer.token);
     assert.equal((await fetch(`${viewer.url}/api/v1/snapshot`)).status, 401);
+    // Issue #271: with no AGENT_VIEWER_PRICING_FILE set, the CLI defaults it under AGENT_VIEWER_HOME, so the
+    // pricing table never lands in the current working directory.
+    assert.equal(process.env.AGENT_VIEWER_PRICING_FILE, path.join(home, 'pricing.json'));
+    assert.ok(existsSync(path.join(home, 'pricing.json')), 'pricing.json is seeded under AGENT_VIEWER_HOME at boot');
+    assert.ok(existsSync(path.join(home, 'pricing-history.jsonl')));
 
     const code = viewer.issueLaunchCode();
     const redeem = () => fetch(`${viewer.url}/api/cli/launch`, {

@@ -30,6 +30,7 @@ import type { RollupQuery, UsageFilters } from './usage/types';
 import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from '../src/integrations/otlp/claudeCodeLogs';
 import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
 import { createStreamTicketStore } from './stream-tickets';
+import { getPricingStore } from './pricing/store';
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
 import {
   decodeExportLogsServiceRequest,
@@ -2581,6 +2582,13 @@ function boundUrl(address: AddressInfo): string {
  */
 export function startServer(portToListen = port, host: string = envHost()): Server {
   assertSafeBind(host, portToListen, { hasToken: Boolean(getApiToken()) });
+  // Issue #271: loads or seeds the pricing table now, so a bad data directory shows up in the log at boot
+  // instead of on the first pricing request (the HTTP endpoints that read it land in the next sub-issue).
+  try {
+    getPricingStore().getSnapshot();
+  } catch (error) {
+    console.error(`[agent-viewer] pricing store failed to initialize: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const server = app.listen(portToListen, host);
   server.once('listening', () => warnIfApiOpen((server.address() as AddressInfo).port, host));
   return server;

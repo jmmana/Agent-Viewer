@@ -9,6 +9,12 @@ import { spawn } from 'node:child_process';
 import { isLoopbackAddress, isLoopbackHost, OpenApiRefusedError, assertSafeBind } from '../server/network.ts';
 import { app, startServer } from '../server/index.ts';
 
+// Issue #271: startServer() now loads the pricing store at boot. Point it at a throwaway temp directory so
+// this file's direct startServer() calls never create ./data/pricing* in the repo during a test run.
+const pricingHome = mkdtempSync(path.join(os.tmpdir(), 'av-pricing-bind-'));
+process.env.AGENT_VIEWER_PRICING_FILE = path.join(pricingHome, 'pricing.json');
+process.env.AGENT_VIEWER_PRICING_HISTORY_FILE = path.join(pricingHome, 'pricing-history.jsonl');
+
 /** Runs `fn` with the given env vars set, restoring the previous values afterwards. */
 async function withEnv(vars, fn) {
   const previous = {};

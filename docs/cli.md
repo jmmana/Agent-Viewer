@@ -73,6 +73,8 @@ npx @warlockcode/agent-viewer send --agent demo --status coding --message "Writi
 
 `send` and `claude-hook` find a running `agent-viewer` through a small session file it writes on start and removes on exit: `~/.agent-viewer/session.json` (owner-only permissions; change the folder with `AGENT_VIEWER_HOME`). `AGENT_VIEWER_URL` and `AGENT_VIEWER_API_TOKEN` override it.
 
+The pricing table (see `docs/pricing.md`) lives next to it: `pricing.json` and `pricing-history.jsonl` under the same `AGENT_VIEWER_HOME` folder by default, so `npx agent-viewer` never writes them into the current directory. Override either path with `AGENT_VIEWER_PRICING_FILE` / `AGENT_VIEWER_PRICING_HISTORY_FILE`.
+
 ## Claude Code
 
 ```bash
@@ -102,7 +104,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
   ghcr.io/jmmana/agent-viewer
 ```
 
-Open the office URL the container prints. The published port binds to this machine only; drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. The server listens on every interface inside the container (`AGENT_VIEWER_HOST=0.0.0.0`). The example sets a token and keeps the SQLite database in a named volume.
+Open the office URL the container prints. The published port binds to this machine only; drop `127.0.0.1:` only to reach it from other machines, and put it behind TLS. The server listens on every interface inside the container (`AGENT_VIEWER_HOST=0.0.0.0`). The example sets a token and keeps the SQLite database in a named volume. The pricing table lands in the same volume (`/app/data/pricing.json`, `/app/data/pricing-history.jsonl`), so it survives container restarts and upgrades along with the database.
 
 Flags after the image name are added to the image defaults, not swapped for them: `docker run --rm -p 127.0.0.1:8787:8787 ghcr.io/jmmana/agent-viewer --token my-token --demo` still listens on every interface inside the container and never tries to open a browser. Change the port with `-e PORT=9000 -p 127.0.0.1:9000:9000` (or `--port 9000`; the health check follows the port the server really uses). Other commands run as given, for example `docker run --rm ghcr.io/jmmana/agent-viewer --version`.
 

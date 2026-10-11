@@ -4,7 +4,7 @@ import { createWriteStream, existsSync, mkdirSync, openSync, type WriteStream } 
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type { StartCommand } from './args.ts';
-import { removeSessionFile, writeSessionFile } from './connection.ts';
+import { removeSessionFile, stateDir, writeSessionFile } from './connection.ts';
 import { packageInfo } from './packageInfo.ts';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -139,6 +139,12 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
   process.env.AGENT_VIEWER_EMBEDDED = '1';
   process.env.AGENT_VIEWER_API_TOKEN = token;
   delete process.env.AGENT_VIEWER_API_KEY;
+  // Issue #271: without this, the pricing store would default to `./data/pricing.json` relative to wherever
+  // `npx agent-viewer` was run. Keep it under the same state folder as the session file and, in the Docker app
+  // image, the same `/app/data` volume as the SQLite database.
+  if (!process.env.AGENT_VIEWER_PRICING_FILE || process.env.AGENT_VIEWER_PRICING_FILE.trim() === '') {
+    process.env.AGENT_VIEWER_PRICING_FILE = path.join(stateDir(), 'pricing.json');
+  }
 
   const [{ app, onEventAccepted, startServer, shutdown }, { default: express }] = await Promise.all([
     import('../server/index.ts'),

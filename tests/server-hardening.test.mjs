@@ -2,8 +2,18 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import crypto from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+// Issue #271: startServer() now loads the pricing store at boot. Point it at a throwaway temp directory so
+// this file's direct startServer() calls never create ./data/pricing* in the repo during a test run.
+const pricingHome = mkdtempSync(path.join(os.tmpdir(), 'av-pricing-hardening-'));
+process.env.AGENT_VIEWER_PRICING_FILE = path.join(pricingHome, 'pricing.json');
+process.env.AGENT_VIEWER_PRICING_HISTORY_FILE = path.join(pricingHome, 'pricing-history.jsonl');
+
 import {
   app,
   currentAuthMode,

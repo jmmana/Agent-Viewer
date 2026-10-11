@@ -12,6 +12,11 @@ process.env.AGENT_VIEWER_EMBEDDED = '1';
 process.env.AGENT_VIEWER_API_TOKEN = 'embedded-token';
 delete process.env.AGENT_VIEWER_API_KEY;
 delete process.env.AGENT_VIEWER_WEBHOOK_SECRET;
+// Issue #271: startServer() now loads the pricing store at boot. Point it at a throwaway temp directory so
+// this file's direct startServer() calls never create ./data/pricing* in the repo during a test run.
+const pricingHome = mkdtempSync(path.join(os.tmpdir(), 'av-pricing-embedded-'));
+process.env.AGENT_VIEWER_PRICING_FILE = path.join(pricingHome, 'pricing.json');
+process.env.AGENT_VIEWER_PRICING_HISTORY_FILE = path.join(pricingHome, 'pricing-history.jsonl');
 const { onEventAccepted, startServer } = await import('../server/index.ts');
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));

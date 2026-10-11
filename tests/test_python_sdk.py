@@ -587,6 +587,52 @@ class TestPythonSDK(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_budgets_without_filter_hits_the_plain_endpoint(self):
+        """``budgets()`` with no filter calls ``GET /api/v1/budgets`` with no query string, forwards the
+        token only in the Authorization header, and returns the response body unmodified (issue #85, sub-issue
+        #306: read only, same pattern as ``snapshot()``)."""
+        payload = {
+            "schemaVersion": "1.0",
+            "generatedAt": 1768003200000,
+            "count": 1,
+            "budgets": [{"id": "bud_1", "name": "Builder monthly", "status": {"state": "ok"}}],
+        }
+        httpd, thread, base_url = _run_scripted_server([(200, payload)])
+        try:
+            viewer = AgentViewer(url=base_url, token="secret-token", max_retries=1, timeout=5.0)
+            result = viewer.budgets()
+            self.assertEqual(result, payload)
+
+            request = _ScriptedGetHandler.requests[-1]
+            parsed = urllib.parse.urlparse(request["path"])
+            self.assertEqual(parsed.path, "/api/v1/budgets")
+            self.assertEqual(parsed.query, "")
+            self.assertEqual(request["headers"].get("Authorization"), "Bearer secret-token")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_budgets_with_state_filter_adds_the_query_param(self):
+        """``budgets(state=...)`` adds the filter as a single ``?state=`` query parameter, never in the body
+        or the URL as a token (issue #85, sub-issue #306)."""
+        payload = {"schemaVersion": "1.0", "generatedAt": 1, "count": 0, "budgets": []}
+        httpd, thread, base_url = _run_scripted_server([(200, payload)])
+        try:
+            viewer = AgentViewer(url=base_url, max_retries=1, timeout=5.0)
+            result = viewer.budgets(state="warning")
+            self.assertEqual(result, payload)
+
+            request = _ScriptedGetHandler.requests[-1]
+            parsed = urllib.parse.urlparse(request["path"])
+            query = urllib.parse.parse_qs(parsed.query)
+            self.assertEqual(parsed.path, "/api/v1/budgets")
+            self.assertEqual(query["state"], ["warning"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_iter_calls_raises_if_the_server_returns_the_same_cursor_twice(self):
         page = {
             "schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 1}],

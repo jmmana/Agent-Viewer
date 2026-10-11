@@ -761,6 +761,73 @@ test('TypeScript SDK: usageRollup() against a live server returns the real respo
   }
 });
 
+// -------------------------------------------------------------
+// budgets() (issue #85, sub-issue #306: SDK read helper only, no write helper)
+// -------------------------------------------------------------
+
+test('TypeScript SDK: budgets() with no filter sends no query string, and with a state filter adds exactly one ?state=', async (t) => {
+  let capturedUrl;
+  let capturedHeaders;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    capturedUrl = url;
+    capturedHeaders = init?.headers;
+    return new Response(JSON.stringify({ schemaVersion: '1.0', generatedAt: 1, count: 0, budgets: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  const viewer = new AgentViewer({ url: 'http://sdk.test', token: 'secret-token' });
+
+  await viewer.budgets();
+  let parsed = new URL(String(capturedUrl));
+  assert.equal(parsed.pathname, '/api/v1/budgets');
+  assert.equal(parsed.search, '');
+  assert.equal(capturedHeaders.authorization, 'Bearer secret-token');
+
+  await viewer.budgets({ state: 'warning' });
+  parsed = new URL(String(capturedUrl));
+  assert.equal(parsed.pathname, '/api/v1/budgets');
+  assert.equal(parsed.searchParams.get('state'), 'warning');
+  assert.equal(parsed.searchParams.has('token'), false);
+});
+
+test('TypeScript SDK: budgets() against a live server returns the real BudgetView shape and honors the state filter', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const created = await fetch(`${baseUrl}/api/v1/budgets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'SDK budget test',
+        scope: { type: 'agent', value: 'sdk-budget-agent' },
+        period: 'day',
+        currency: 'USD',
+        basis: 'reported',
+        limit: 100,
+      }),
+    }).then((r) => r.json());
+    assert.equal(created.status.state, 'ok');
+
+    const viewer = new AgentViewer({ url: baseUrl });
+    const page = await viewer.budgets();
+    assert.equal(page.schemaVersion, '1.0');
+    const view = page.budgets.find((b) => b.id === created.id);
+    assert.ok(view, 'Expected the created budget in budgets()');
+    assert.equal(view.scope.type, 'agent');
+    assert.equal(view.scope.value, 'sdk-budget-agent');
+    assert.equal(view.status?.state, 'ok');
+    assert.equal(view.status?.spent, 0);
+
+    const okOnly = await viewer.budgets({ state: 'ok' });
+    assert.ok(okOnly.budgets.some((b) => b.id === created.id));
+    const exceededOnly = await viewer.budgets({ state: 'exceeded' });
+    assert.ok(!exceededOnly.budgets.some((b) => b.id === created.id));
+  } finally {
+    server.close();
+  }
+});
+
 test('toUsageFigures: a single matching entry with no unknown cost maps to a number and its currency', () => {
   const group = {
     key: { agent: 'a' },

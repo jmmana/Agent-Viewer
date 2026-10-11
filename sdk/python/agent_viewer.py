@@ -641,6 +641,23 @@ class AgentViewer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def budgets(self, state: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch budgets from ``GET /api/v1/budgets`` (issue #85).
+
+        Each budget comes back with a ``status`` evaluated fresh against the usage ledger: ``ok``,
+        ``warning``, ``exceeded`` or ``unknown`` (never a guess when the figure is incomplete). A disabled
+        budget's ``status`` is ``None``. Pass ``state`` to filter to one of the four states server side; the
+        server answers ``400`` for anything else. Read only: there is no helper here to create, update or
+        delete a budget, since that is an operator action, not something an agent should be able to do to
+        itself.
+        """
+        endpoint = f"{self.url}/api/v1/budgets"
+        if state is not None:
+            endpoint += f"?{urllib.parse.urlencode({'state': state})}"
+        req = urllib.request.Request(endpoint, headers=self._build_headers(), method="GET")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
     def usage_summary(self) -> Dict[str, Any]:
         """Fetch the usage aggregates from ``GET /api/v1/usage``.
 

@@ -19,6 +19,19 @@ import type {
   UsageRollupTotals,
 } from '../../server/usage/types';
 import type { UsageFigures } from '../../src/lib/usage';
+import type {
+  Budget,
+  BudgetView,
+  BudgetStatus,
+  BudgetScope,
+  BudgetScopeType,
+  BudgetPeriod,
+  BudgetBasis,
+  BudgetState,
+  BudgetUnknownReason,
+  BudgetWindow,
+  BudgetCallCounts,
+} from '../../server/budgets';
 
 export type { ViewerSnapshot } from '../../server/store';
 export type { CallRecord, CallTokenFigures, CallTrace, CallStatus } from '../../server/usage/types';
@@ -44,6 +57,23 @@ export type {
   UsageRollupCoverage,
   UsageRollupResponse,
 } from '../../server/usage/types';
+/** Budgets (issue #85): a `Budget` is operator-written configuration, a `BudgetStatus` is computed fresh on
+ * every read from the usage ledger and is never itself stored as the source of truth. The SDK only reads
+ * these through `AgentViewer.budgets()`; creating, updating or deleting a budget is an operator action with
+ * no SDK helper (#85 section 6). */
+export type {
+  Budget,
+  BudgetView,
+  BudgetStatus,
+  BudgetScope,
+  BudgetScopeType,
+  BudgetPeriod,
+  BudgetBasis,
+  BudgetState,
+  BudgetUnknownReason,
+  BudgetWindow,
+  BudgetCallCounts,
+} from '../../server/budgets';
 
 /** Where a reported cost comes from. The SDK never chooses it for the caller. */
 export type CostSource = 'provider-reported' | 'estimated' | 'unknown';
@@ -356,6 +386,25 @@ export interface EmitBatchResult {
 /** 128 random bits from the platform CSPRNG (`crypto.randomUUID`), never the clock. */
 function defaultEventId(): string {
   return `evt_${globalThis.crypto.randomUUID()}`;
+}
+
+// -------------------------------------------------------------
+// Budgets (issue #85, sub-issue #306: read only)
+// -------------------------------------------------------------
+
+/** Options for `AgentViewer.budgets()`. `state` filters to one of the four computed states server side; an
+ * invalid value rejects with `AgentViewerError` (`status` 400). */
+export interface BudgetsOptions {
+  state?: BudgetState;
+}
+
+/** `GET /api/v1/budgets` response body: every matching budget with its `status` evaluated fresh against the
+ * usage ledger (`status: null` for a disabled budget). `schemaVersion` stays `'1.0'`, additive field. */
+export interface BudgetsResponse {
+  schemaVersion: string;
+  generatedAt: number;
+  count: number;
+  budgets: BudgetView[];
 }
 
 // -------------------------------------------------------------
@@ -812,6 +861,21 @@ export class AgentViewer {
       throw new AgentViewerError(`Failed to fetch snapshot: ${response.status}`, response.status);
     }
     return (await response.json()) as ViewerSnapshot;
+  }
+
+  /**
+   * `GET /api/v1/budgets` (issue #85, sub-issue #306): every configured budget with its `status` evaluated
+   * fresh against the usage ledger (`ok`, `warning`, `exceeded` or `unknown`; `status: null` for a disabled
+   * budget). `options.state` filters server side to one of the four states. Uses the same `getWithRetry` as
+   * `listCalls()`/`usageRollup()`: 400/401/410 fail immediately, 429 and 5xx retry with backoff. Read only,
+   * like the rest of the SDK: there is no helper here to create, update or delete a budget, since that is an
+   * operator action, not something an agent should be able to do to itself.
+   */
+  async budgets(options?: BudgetsOptions): Promise<BudgetsResponse> {
+    const search = new URLSearchParams();
+    if (options?.state !== undefined) search.set('state', options.state);
+    const query = search.toString();
+    return this.getWithRetry(`/api/v1/budgets${query ? `?${query}` : ''}`) as Promise<BudgetsResponse>;
   }
 
   /**

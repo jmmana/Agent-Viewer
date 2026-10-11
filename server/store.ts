@@ -22,14 +22,18 @@ import {
   dbRowToLedgerRowInput,
   LEDGER_COLUMNS,
   ledgerRequestKey,
+  NO_PRICING_SNAPSHOT,
   runUsageLedgerBackfill,
   sameCall,
   toLedgerRow,
   type IngestChannel,
   type LedgerOrigin,
+  type LedgerRowInput,
   type LedgerSkipReason,
   type UsageLedgerRow,
 } from './usageLedger';
+import { estimateLedgerRow, type EstimatePricingSnapshot } from './pricing/estimate';
+import { getPricingStore } from './pricing/store';
 import { buildListCallsQuery, listCallsInMemory, sqliteRowToCallRecord, type CallsPage, type CallsQuery } from './usage/calls';
 import { type UsageSummary } from './usageAggregates';
 import { buildWhere, computeMemoryRollup, computeSqliteRollup, rowMatchesFilters } from './usage/rollup';
@@ -634,6 +638,8 @@ export interface SQLiteStoreOptions {
   /** Test hook: awaited after each page, after `rebuildPageDelayMs`. */
   yieldBetweenPages?: (progress: { processedEvents: number; totalEvents: number }) => Promise<void> | void;
   logger?: { info(msg: string): void; warn(msg: string): void; error(msg: string): void };
+  /** Issue #84. See `MemoryEventStoreOptions.getPricingSnapshot`: same contract, same default. */
+  getPricingSnapshot?: () => EstimatePricingSnapshot;
 }
 
 // -------------------------------------------------------------
@@ -755,6 +761,12 @@ export interface MemoryEventStoreOptions {
    * `false` for the life of the process.
    */
   usageLedgerMaxRows?: number;
+  /** Issue #84: the pricing snapshot every newly inserted ledger row's estimate is computed against. Injected
+   * (never read from `getPricingStore()` singleton directly, mirroring `deps.getStore` in `server/pricing/api.ts`)
+   * so tests can pin a fixed table and `server/index.ts` is the only place that wires the two stores together.
+   * Default: `NO_PRICING_SNAPSHOT` (no version ever committed), so every row gets `estimate_status:
+   * 'no_price_in_force'` until something actually supplies a snapshot. */
+  getPricingSnapshot?: () => EstimatePricingSnapshot;
 }
 
 const DEFAULT_MAX_EVENTS = 10000;
@@ -856,6 +868,9 @@ export class MemoryEventStore implements EventStore {
   private maxEvents: number;
   private rememberEvictedIds: boolean;
   private now: () => number;
+  /** Issue #84. Default: no version ever committed, so every row estimates `no_price_in_force` until
+   * `server/index.ts` wires in the real pricing store. */
+  private getPricingSnapshot: () => EstimatePricingSnapshot;
   /** Server time (ms) when the store was created. Totals cover events from here (issue #53). */
   private startedAt: number;
   private readonly createdAt = Date.now();
@@ -890,6 +905,7 @@ export class MemoryEventStore implements EventStore {
     this.maxEvents = maxEvents;
     this.rememberEvictedIds = opts.rememberEvictedIds ?? true;
     this.now = opts.now ?? Date.now;
+    this.getPricingSnapshot = opts.getPricingSnapshot ?? (() => NO_PRICING_SNAPSHOT);
     this.startedAt = this.now();
     this.window = new RetainedWindow(maxEvents);
     const telemetryMaxPoints = opts.telemetryMaxPoints ?? DEFAULT_TELEMETRY_MAX_POINTS;
@@ -1037,21 +1053,21 @@ export class MemoryEventStore implements EventStore {
     event: CanonicalEvent,
     ctx: { receivedAt: number; origin: LedgerOrigin; channel: IngestChannel; legacyContract: boolean }
   ): boolean {
-    const ledgerRow = toLedgerRow(event, ctx);
-    if (ledgerRow === null) return false;
+    const ledgerRowBase = toLedgerRow(event, ctx);
+    if (ledgerRowBase === null) return false;
 
     // Defensive, same as the SQLite half's `ON CONFLICT(event_id) DO NOTHING` check: a resent event id whose
     // *event* was purged independently of the ledger (issue #70) but whose ledger row was kept must never insert
     // a second row by id, even without a request key to match on.
-    if (this.ledgerByEventId.has(ledgerRow.eventId)) return true;
+    if (this.ledgerByEventId.has(ledgerRowBase.eventId)) return true;
 
-    const key = ledgerRequestKey(ledgerRow);
+    const key = ledgerRequestKey(ledgerRowBase);
     if (key !== null) {
       const existingIndex = this.ledgerByRequestKey.get(key);
       if (existingIndex !== undefined) {
         const existing = this.ledger[existingIndex];
-        const reason: LedgerSkipReason = sameCall(existing, ledgerRow) ? 'duplicate' : 'conflict';
-        this.recordLedgerSkip(ledgerRow.eventId, reason, existing.eventId, ctx.receivedAt);
+        const reason: LedgerSkipReason = sameCall(existing, ledgerRowBase) ? 'duplicate' : 'conflict';
+        this.recordLedgerSkip(ledgerRowBase.eventId, reason, existing.eventId, ctx.receivedAt);
         return true;
       }
     }
@@ -1061,6 +1077,12 @@ export class MemoryEventStore implements EventStore {
       this.ledgerDroppedRows++;
       return false;
     }
+    // Issue #84: a deduplicated event never reaches here (both checks above return early), so exactly one
+    // ingestion-time estimate is computed per genuinely new row, against the snapshot active right now.
+    const ledgerRow: LedgerRowInput = {
+      ...ledgerRowBase,
+      ...estimateLedgerRow(ledgerRowBase, this.getPricingSnapshot(), this.now),
+    };
     const row: UsageLedgerRow = { ...ledgerRow, seq: this.ledgerSeq++ };
     const index = this.ledger.length;
     this.ledger.push(row);
@@ -1685,6 +1707,8 @@ export class SQLiteEventStore implements EventStore {
   private counters: IngestionCounters = { conflicts: 0, legacyUnverifiedDuplicates: 0 };
   readonly migration: MigrationResult;
   private migrations: readonly Migration[];
+  /** Issue #84. See `MemoryEventStoreOptions.getPricingSnapshot`: same contract, same default. */
+  private getPricingSnapshot: () => EstimatePricingSnapshot;
 
   /** All derived state (agents, runtimes, sessions, tasks, meetings, usage). Owned directly: issue #52 removed
    * the `MemoryEventStore` fallback this store used to forward every accepted event to. */
@@ -1727,6 +1751,7 @@ export class SQLiteEventStore implements EventStore {
 
   constructor(filePath = './data/agent-viewer.db', options: SQLiteStoreOptions = {}) {
     const backup = sqliteBackupMode(options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP);
+    this.getPricingSnapshot = options.getPricingSnapshot ?? (() => NO_PRICING_SNAPSHOT);
 
     const dir = path.dirname(filePath);
     if (dir && dir !== '.' && !fs.existsSync(dir)) {
@@ -1793,7 +1818,7 @@ export class SQLiteEventStore implements EventStore {
     runUsageLedgerBackfill(
       this.db,
       { origin: 'backfill', legacyContractCutoff: baselineRow ? Number(baselineRow.applied_at) : null },
-      { log: (message) => this.rebuildOptions.logger.info(message) }
+      { log: (message) => this.rebuildOptions.logger.info(message), pricing: this.getPricingSnapshot() }
     );
 
     // Rollup-attribution startup catch-up (issue #80): same shape as the usage ledger catch-up just above, run on
@@ -2186,25 +2211,33 @@ export class SQLiteEventStore implements EventStore {
     event: CanonicalEvent,
     ctx: { receivedAt: number; origin: LedgerOrigin; channel: IngestChannel; legacyContract: boolean }
   ): boolean {
-    const ledgerRow = toLedgerRow(event, ctx);
-    if (ledgerRow === null) return false;
+    const ledgerRowBase = toLedgerRow(event, ctx);
+    if (ledgerRowBase === null) return false;
 
-    const key = ledgerRequestKey(ledgerRow);
+    const key = ledgerRequestKey(ledgerRowBase);
     if (key !== null) {
       const existingRaw = this.db
         .prepare('SELECT * FROM usage_ledger WHERE provider = ? AND request_id = ? LIMIT 1')
-        .get(ledgerRow.provider, ledgerRow.requestId);
+        .get(ledgerRowBase.provider, ledgerRowBase.requestId);
       if (existingRaw) {
         const existing = dbRowToLedgerRowInput(existingRaw);
-        const reason: LedgerSkipReason = sameCall(existing, ledgerRow) ? 'duplicate' : 'conflict';
+        const reason: LedgerSkipReason = sameCall(existing, ledgerRowBase) ? 'duplicate' : 'conflict';
         this.db
           .prepare(
             'INSERT INTO usage_ledger_skips (event_id, reason, kept_event_id, detected_at, origin) VALUES (?, ?, ?, ?, ?) ON CONFLICT(event_id) DO NOTHING'
           )
-          .run(ledgerRow.eventId, reason, existing.eventId, ctx.receivedAt, ctx.origin);
+          .run(ledgerRowBase.eventId, reason, existing.eventId, ctx.receivedAt, ctx.origin);
         return true;
       }
     }
+
+    // Issue #84: computed once, right before the insert, from the in-memory pricing snapshot (no extra query):
+    // a deduplicated event never reaches this line (both branches above return early), so exactly one
+    // ingestion-time estimate is written per genuinely new row.
+    const ledgerRow: LedgerRowInput = {
+      ...ledgerRowBase,
+      ...estimateLedgerRow(ledgerRowBase, this.getPricingSnapshot()),
+    };
 
     // No request key (or one that found nothing above): the only remaining way this could already hold a row is
     // a resent event id whose *event* row was purged independently of the ledger (issue #70) while its ledger
@@ -2216,8 +2249,9 @@ export class SQLiteEventStore implements EventStore {
           event_id, event_type, request_id, received_at, occurred_at, origin, legacy_contract, ingest_channel,
           runtime_id, session_id, agent_id, task_id, provider, model, input_tokens, output_tokens,
           cache_read_tokens, cache_write_tokens, reasoning_tokens, cost, currency, cost_source, latency_ms,
-          status, error_kind, trace_id, parent_id, tool_call_id, meeting_id, user_id, tags, summary
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status, error_kind, trace_id, parent_id, tool_call_id, meeting_id, user_id, tags, summary,
+          estimated_cost_nano, estimated_currency, pricing_version, estimate_status, estimated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(event_id) DO NOTHING`
       )
       .run(
@@ -2252,7 +2286,12 @@ export class SQLiteEventStore implements EventStore {
         ledgerRow.meetingId,
         ledgerRow.userId,
         JSON.stringify(ledgerRow.tags),
-        ledgerRow.summary
+        ledgerRow.summary,
+        ledgerRow.estimatedCostNano,
+        ledgerRow.estimatedCurrency,
+        ledgerRow.pricingVersion,
+        ledgerRow.estimateStatus,
+        ledgerRow.estimatedAt
       );
 
     const inserted = Number((insertResult as { changes?: number | bigint }).changes ?? 0) > 0;
@@ -3272,7 +3311,15 @@ export function createEventStore(): EventStore {
     }
     const dbPath = process.env.AGENT_VIEWER_SQLITE_PATH || './data/agent-viewer.db';
     const backup = sqliteBackupMode(process.env.AGENT_VIEWER_SQLITE_BACKUP);
-    return new SQLiteEventStore(dbPath, { backup });
+    // Issue #84: the production wiring between the pricing store (issue #83) and the event store. Injected as a
+    // thunk, never resolved here eagerly, so `getPricingStore()`'s first disk read still only happens on first
+    // use (its own module doc comment), not merely because an `EventStore` was constructed.
+    return new SQLiteEventStore(dbPath, { backup, getPricingSnapshot: () => getPricingStore().getSnapshot() });
   }
-  return new MemoryEventStore({ maxEvents, telemetryMaxPoints, usageLedgerMaxRows });
+  return new MemoryEventStore({
+    maxEvents,
+    telemetryMaxPoints,
+    usageLedgerMaxRows,
+    getPricingSnapshot: () => getPricingStore().getSnapshot(),
+  });
 }

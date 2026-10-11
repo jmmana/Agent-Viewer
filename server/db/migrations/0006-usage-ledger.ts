@@ -19,6 +19,13 @@ import { runUsageLedgerBackfill } from '../../usageLedger';
  * `legacy_contract = 1` when its `created_at` is strictly before the baseline migration's own `applied_at`: that
  * timestamp is recorded (within this same migration run, by migration 1) the first time this server's versioned
  * migration runner ever touches the file, so any row older than it was written by a pre-0.4.0 server.
+ *
+ * Also added retroactively, the same way `summary` was (issue #69, migration `usage-ledger-summary`, version
+ * 10): the five ingestion-time estimate columns from issue #84 (`estimated_cost_nano`, `estimated_currency`,
+ * `pricing_version`, `estimate_status`, `estimated_at`). This migration's own backfill call above needs them to
+ * exist in the same transaction on a brand-new database (every row it inserts gets an estimate, same as any
+ * live row); migration `usage-ledger-estimates` (version 12) adds them via `ALTER TABLE` for a database that
+ * already applied this migration before #84 landed.
  */
 export const usageLedger: Migration = {
   version: 6,
@@ -64,6 +71,16 @@ export const usageLedger: Migration = {
         -- An existing database that already applied this migration before #69 gets the column from migration 10
         -- instead, via ALTER TABLE (this CREATE TABLE body never re-runs once version 6 is recorded).
         summary             TEXT,
+        -- Issue #84, added retroactively here for the same reason summary was (see the module doc comment):
+        -- a brand-new database must have these columns before this migration's own backfill call below runs.
+        estimated_cost_nano INTEGER CHECK (estimated_cost_nano >= 0),
+        estimated_currency  TEXT    CHECK (estimated_currency IS NULL OR length(estimated_currency) = 3),
+        pricing_version     INTEGER CHECK (pricing_version >= 1),
+        estimate_status     TEXT    CHECK (estimate_status IS NULL OR estimate_status IN (
+          'estimated', 'no_price_in_force', 'no_price_for_model', 'no_price_for_component', 'missing_usage',
+          'inconsistent_usage', 'failed'
+        )),
+        estimated_at        INTEGER,
         CHECK (cost IS NOT NULL OR (currency IS NULL AND cost_source = 'unknown'))
       );
 

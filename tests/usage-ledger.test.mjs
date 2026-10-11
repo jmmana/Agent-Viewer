@@ -267,6 +267,13 @@ test('Store parity: a mixed live sequence produces the same ledger rows in both 
     const memoryRows = sortByEventId(memoryLedgerRows(memory));
     const sqliteRows = sortByEventId(sqliteLedgerRows(sqlite));
     assert.equal(memoryRows.length, 3);
+    // Issue #84: `estimatedAt` is each store's own `Date.now()` at insert time (unlike `receivedAt` above, the
+    // two independent calls are not pinned to one shared clock), so a real-clock tick between them can legitimately
+    // differ by a millisecond; every other field, including every other new estimate column, must match exactly.
+    for (const row of [...memoryRows, ...sqliteRows]) {
+      assert.equal(typeof row.estimatedAt, 'number');
+      delete row.estimatedAt;
+    }
     assert.deepEqual(memoryRows, sqliteRows);
 
     const memoryStatus = await memory.usageLedgerStatus();

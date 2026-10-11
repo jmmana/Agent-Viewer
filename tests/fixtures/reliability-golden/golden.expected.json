@@ -1,0 +1,61 @@
+{
+  "ingestion": {
+    "L1": "accepted",
+    "L2": "accepted",
+    "L3": "accepted",
+    "L4": "accepted",
+    "L5": "accepted",
+    "L6": "accepted",
+    "L7": "accepted",
+    "L8": "accepted",
+    "L9": "accepted",
+    "L10": "accepted",
+    "L11": "accepted",
+    "L12": "accepted",
+    "L13": "accepted",
+    "L14": "accepted",
+    "L15": "accepted",
+    "L16": "accepted",
+    "L17": "duplicate",
+    "L18": "request-duplicate"
+  },
+  "rollup": {
+    "groups": [
+      {
+        "model": "model-fast",
+        "calls": { "total": 8, "succeeded": 7, "failed": 1 },
+        "failedCalls": 1,
+        "attempts": 8,
+        "failureRate": 0.125,
+        "failures": { "byErrorKind": { "timeout": 1 }, "rateLimitCount": 0 },
+        "latency": { "p50Ms": 110, "p95Ms": 1000, "samples": 6, "missing": 1, "method": "nearest-rank" }
+      },
+      {
+        "model": "model-steady",
+        "calls": { "total": 7, "succeeded": 5, "failed": 2 },
+        "failedCalls": 2,
+        "attempts": 7,
+        "failureRate": 0.2857142857142857,
+        "failures": { "byErrorKind": { "rate_limited": 1, "unspecified": 1 }, "rateLimitCount": 1 },
+        "latency": { "p50Ms": 200, "p95Ms": 200, "samples": 5, "missing": 0, "method": "nearest-rank" }
+      },
+      {
+        "model": null,
+        "calls": { "total": 1, "succeeded": 0, "failed": 1 },
+        "failedCalls": 1,
+        "attempts": 1,
+        "failureRate": 1,
+        "failures": { "byErrorKind": { "rate_limited": 1 }, "rateLimitCount": 1 },
+        "latency": { "p50Ms": null, "p95Ms": null, "samples": 0, "missing": 0, "method": "nearest-rank" }
+      }
+    ],
+    "totals": {
+      "calls": { "total": 16, "succeeded": 12, "failed": 4 },
+      "failedCalls": 4,
+      "attempts": 16,
+      "failureRate": 0.25,
+      "failures": { "byErrorKind": { "timeout": 1, "rate_limited": 2, "unspecified": 1 }, "rateLimitCount": 2 },
+      "latency": { "p50Ms": 200, "p95Ms": 1000, "samples": 11, "missing": 1, "method": "nearest-rank" }
+    }
+  }
+}

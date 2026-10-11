@@ -58,6 +58,24 @@ describe('ModelOpsModal', () => {
     expect(within(row).getAllByText('Unknown').length).toBeGreaterThanOrEqual(3);
   });
 
+  it('relabels the static demo-catalog latency chip as an unmeasured catalog reference (issue #286)', () => {
+    render(<ModelOpsModal {...baseProps()} />);
+    // `gpt-4o` is both in INITIAL_AGENTS and MODEL_CATALOG, so its simulated-mode card shows the chip.
+    expect(screen.getByText(/Catalog reference \(not measured\): ~650ms/)).toBeTruthy();
+    // The old, unqualified wording must be gone: nothing should read "Latency: ~...ms" anymore.
+    expect(screen.queryByText(/^Latency: ~/)).toBeNull();
+  });
+
+  it('firing a simulated call never changes the Matrix tab reliability figures: the simulator never feeds the rollup', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ModelOpsModal {...baseProps()} />);
+    openTab(/LLM traffic simulator/);
+    fireEvent.click(screen.getByRole('button', { name: /Fire live inference/ }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it('the simulator model selector offers only demo-catalog models, never a model only observed on the office (issue #79)', () => {
     render(<ModelOpsModal {...baseProps()} />);
     openTab(/LLM traffic simulator/);

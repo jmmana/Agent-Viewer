@@ -112,6 +112,64 @@ describe('fetchRollup', () => {
     await fetchRollup('https://server.example/', undefined, { groupBy: ['provider', 'model'] }, fetchMock as unknown as typeof fetch);
   });
 
+  it('sends include as a single comma-joined parameter, and omits it entirely when not given (issue #286)', async () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      return jsonResponse(200, VALID_ROLLUP);
+    });
+    await fetchRollup('https://server.example', undefined, { groupBy: ['provider', 'model'], include: ['latency', 'failures'] }, fetchMock as unknown as typeof fetch);
+    await fetchRollup('https://server.example', undefined, { groupBy: ['provider', 'model'] }, fetchMock as unknown as typeof fetch);
+    expect(urls[0]).toContain('include=latency%2Cfailures');
+    expect(new URL(urls[1]).searchParams.has('include')).toBe(false);
+  });
+
+  it('parses latency and failures fields on both a group and totals when the server includes them', async () => {
+    const withReliability = {
+      ...VALID_ROLLUP,
+      groups: [
+        {
+          ...VALID_ROLLUP.groups[0],
+          failedCalls: 1,
+          attempts: 10,
+          failureRate: 0.1,
+          failures: { byErrorKind: { rate_limited: 1 }, rateLimitCount: 1 },
+          latency: { p50Ms: 820, p95Ms: 2310, samples: 9, missing: 1, method: 'nearest-rank' },
+        },
+      ],
+      totals: {
+        ...VALID_ROLLUP.totals,
+        failedCalls: 1,
+        attempts: 10,
+        failureRate: 0.1,
+        failures: { byErrorKind: { rate_limited: 1 }, rateLimitCount: 1 },
+        latency: { p50Ms: 820, p95Ms: 2310, samples: 9, missing: 1, method: 'nearest-rank' },
+      },
+    };
+    const fetchImpl = async () => jsonResponse(200, withReliability);
+    const result = await fetchRollup(
+      'https://server.example',
+      undefined,
+      { groupBy: ['provider', 'model'], include: ['latency', 'failures'] },
+      fetchImpl as unknown as typeof fetch
+    );
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.data.groups[0].latency).toEqual({ p50Ms: 820, p95Ms: 2310, samples: 9, missing: 1, method: 'nearest-rank' });
+    expect(result.data.groups[0].failureRate).toBe(0.1);
+    expect(result.data.groups[0].failures?.rateLimitCount).toBe(1);
+    expect(result.data.totals.latency?.samples).toBe(9);
+  });
+
+  it('parses a response with no latency/failures fields at all (include omitted) just as before', async () => {
+    const fetchImpl = async () => jsonResponse(200, VALID_ROLLUP);
+    const result = await fetchRollup('https://server.example', undefined, { groupBy: ['provider', 'model'] }, fetchImpl as unknown as typeof fetch);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.data.groups[0].latency).toBeUndefined();
+    expect(result.data.groups[0].failureRate).toBeUndefined();
+  });
+
   it('maps 404 and 501 to "unavailable" (server predates the ledger)', async () => {
     const fetchImpl = async () => jsonResponse(404, { error: 'not_found' });
     const result = await fetchRollup('https://server.example', undefined, { groupBy: ['provider'] }, fetchImpl as unknown as typeof fetch);

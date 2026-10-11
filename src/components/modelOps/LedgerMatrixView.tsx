@@ -13,6 +13,7 @@ import type { QueryState, TimeRangeOption } from './useModelOpsLedger';
 import type { RollupGroup, RollupResponse } from '../../integrations/ledgerClient';
 import { UsageEmptyState } from './UsageEmptyState';
 import { distinctCostKeys, formatCostEntries, formatTokenMetric, tokenSortKey, unknownCostLabel } from './usageFormat';
+import { errorKindBreakdown, formatFailureRate, formatLatencySummary } from './reliabilityFormat';
 import { ArrowUpRight, Filter, Search, Users } from 'lucide-react';
 
 type MessageParams = Record<string, string | number>;
@@ -229,6 +230,14 @@ export const LedgerMatrixView: React.FC<LedgerMatrixViewProps> = ({
         </p>
       )}
 
+      {/* Issue #286: the server's own `coverage.complete` (memory-mode cap or a retention purge reaching the
+          query range), distinct from `truncated` above (top-N groups by sort, not a missing time window). */}
+      {!modelData.coverage.complete && (
+        <p className="text-[11px] text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded-lg px-3 py-2">
+          {tr('ops.reliability.coverageIncomplete')}
+        </p>
+      )}
+
       {/* PROVIDER CARDS */}
       <div className="space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -349,6 +358,54 @@ export const LedgerMatrixView: React.FC<LedgerMatrixViewProps> = ({
                       );
                     })}
                   </div>
+
+                  {(group.latency || group.failureRate !== undefined) && (
+                    <div className="space-y-1.5 text-[11px] bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/60">
+                      {group.latency && (() => {
+                        const formatted = formatLatencySummary(group.latency, locale);
+                        return (
+                          <div className="flex items-center gap-2 flex-wrap font-mono">
+                            <span className={formatted.lowConfidence ? 'text-amber-200/80' : 'text-slate-300'}>{formatted.text}</span>
+                            {formatted.lowConfidence && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-sans font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                {tr('ops.reliability.lowConfidence')}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {group.failureRate !== undefined && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-slate-400">{tr('ops.reliability.failureRate.label')}:</span>
+                          <span className="font-mono font-bold text-white">{formatFailureRate(group.failureRate, locale)}</span>
+                          {group.failures && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold border bg-orange-500/10 border-orange-500/30 text-orange-300">
+                              {tr('ops.reliability.rateLimited', { count: group.failures.rateLimitCount })}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {group.failures && errorKindBreakdown(group.failures).length > 0 && (
+                        <div
+                          role="list"
+                          aria-label={tr('ops.reliability.errorBreakdown.label')}
+                          className="flex flex-wrap items-center gap-1.5 font-mono"
+                        >
+                          {errorKindBreakdown(group.failures).map((entry) => (
+                            <span
+                              role="listitem"
+                              key={entry.kind}
+                              className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300"
+                            >
+                              {tr('ops.reliability.errorBreakdown.item', { kind: entry.kind, count: entry.count })}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between gap-2 flex-wrap text-[11px]">
                     <div className="flex items-center gap-2 flex-wrap font-mono">

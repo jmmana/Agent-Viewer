@@ -206,4 +206,137 @@ describe('LedgerMatrixView', () => {
     expect(screen.getByText('No model calls have been recorded yet')).toBeTruthy();
     expect(screen.getByText(/https:\/\/server\.example\/api\/v1\/events/)).toBeTruthy();
   });
+
+  // ---- Latency percentiles and failure rate (issue #286) ----
+
+  it('shows real p50/p95 with sample size and missing-latency count for a model card', () => {
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        calls: { total: 1180, succeeded: 1180, failed: 0 },
+        latency: { p50Ms: 820, p95Ms: 2310, samples: 1102, missing: 78, method: 'nearest-rank' },
+      }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.getByText('p50 820 ms · p95 2,310 ms (n = 1,102, 78 without latency)')).toBeTruthy();
+  });
+
+  it('shows "No latency reported" (never "0 ms") when the model has zero latency samples', () => {
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        latency: { p50Ms: null, p95Ms: null, samples: 0, missing: 4, method: 'nearest-rank' },
+      }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.getByText('No latency reported')).toBeTruthy();
+    expect(screen.queryByText(/0 ms/)).toBeNull();
+  });
+
+  it('shows "No data" (never "0 %") when the model has zero attempts (failureRate null)', () => {
+    // Two model groups: the office overall has calls (so this is not the empty-ledger state), but this
+    // particular model was observed with zero attempts.
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        calls: { total: 0, succeeded: 0, failed: 0 },
+        failedCalls: 0,
+        attempts: 0,
+        failureRate: null,
+        failures: { byErrorKind: {}, rateLimitCount: 0 },
+      }),
+      group({ key: { provider: 'anthropic', model: 'claude-haiku-4-5' }, calls: { total: 10, succeeded: 10, failed: 0 } }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.queryByText('0.0 %')).toBeNull();
+  });
+
+  it('shows a legitimate 0.0 % failure rate (attempts happened, none failed) distinctly from "No data"', () => {
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        calls: { total: 50, succeeded: 50, failed: 0 },
+        failedCalls: 0,
+        attempts: 50,
+        failureRate: 0,
+        failures: { byErrorKind: {}, rateLimitCount: 0 },
+      }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.getByText('0.0 %')).toBeTruthy();
+  });
+
+  it('flags a low-confidence percentile (samples < LOW_SAMPLE_THRESHOLD) with visible accessible text, not only color', () => {
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        latency: { p50Ms: 500, p95Ms: 900, samples: 5, missing: 0, method: 'nearest-rank' },
+      }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.getByText(/Few samples: take this figure as indicative only\./)).toBeTruthy();
+  });
+
+  it('does not show the low-confidence flag at or above the threshold', () => {
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        latency: { p50Ms: 500, p95Ms: 900, samples: 20, missing: 0, method: 'nearest-rank' },
+      }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.queryByText(/Few samples/)).toBeNull();
+  });
+
+  it('shows the error-kind breakdown and the rate-limited badge count', () => {
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        calls: { total: 20, succeeded: 15, failed: 5 },
+        failedCalls: 5,
+        attempts: 20,
+        failureRate: 0.25,
+        failures: { byErrorKind: { rate_limited: 3, timeout: 2 }, rateLimitCount: 3 },
+      }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.getByText('Rate limited: 3')).toBeTruthy();
+    expect(screen.getByText('rate_limited: 3')).toBeTruthy();
+    expect(screen.getByText('timeout: 2')).toBeTruthy();
+  });
+
+  it('shows a model card for an uncatalogued model (model: null) with its own reliability figures, no catalog fallback', () => {
+    const models = [
+      group({
+        key: { provider: 'anthropic', model: null },
+        latency: { p50Ms: 300, p95Ms: 600, samples: 40, missing: 0, method: 'nearest-rank' },
+        failedCalls: 0,
+        attempts: 10,
+        failureRate: 0,
+        failures: { byErrorKind: {}, rateLimitCount: 0 },
+      }),
+    ];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.getByText(/p50 300 ms/)).toBeTruthy();
+    expect(screen.queryByText(/Catalog reference/)).toBeNull();
+  });
+
+  it('shows a visible warning when the rollup coverage is incomplete (retained window only)', () => {
+    const models = [group({ key: { provider: 'anthropic', model: 'a' } })];
+    const props = baseProps(models, [group({ key: { provider: 'anthropic' } })]);
+    props.modelRollup = rollupResponse(models, {
+      coverage: { storage: 'memory', complete: false, droppedRows: 12, purgedThrough: null, backfilledRows: 0, legacyContractRows: 0 },
+    });
+    render(<LedgerMatrixView {...props} />);
+    expect(screen.getByText(/only cover the retained window/)).toBeTruthy();
+  });
+
+  it('renders nothing reliability-related when the rollup was fetched without include=latency,failures', () => {
+    const models = [group({ key: { provider: 'anthropic', model: 'a' } })];
+    render(<LedgerMatrixView {...baseProps(models, [group({ key: { provider: 'anthropic' } })])} />);
+    expect(screen.queryByText(/p50/)).toBeNull();
+    expect(screen.queryByText('No data')).toBeNull();
+    expect(screen.queryByText('No latency reported')).toBeNull();
+  });
 });

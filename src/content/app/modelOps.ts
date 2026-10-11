@@ -74,7 +74,7 @@ const EN = {
   'ops.models.showing': 'Showing {count} model(s)',
   'ops.models.empty': 'No models match the current filter.',
   'ops.models.context': 'Context: {value}',
-  'ops.models.latency': 'Latency: ~{ms}ms',
+  'ops.models.latency': 'Catalog reference (not measured): ~{ms}ms',
   'ops.models.configure': 'Configure simulation',
   'ops.models.simulate': 'Simulate inference',
   'ops.models.relativeVolume': 'Relative office volume:',
@@ -193,6 +193,19 @@ const EN = {
   'ops.matrix.col.cacheWrite': 'CACHE WRITE',
   'ops.matrix.col.reasoning': 'REASONING',
   'ops.matrix.col.cost': 'COST',
+
+  // Matrix tab, ledger mode: per-model latency percentiles and failure rate (issue #286)
+  'ops.reliability.latencySummary': 'p50 {p50} ms · p95 {p95} ms (n = {samples}, {missing} without latency)',
+  'ops.reliability.noLatency': 'No latency reported',
+  'ops.reliability.noData': 'No data',
+  'ops.reliability.lowConfidence': 'Few samples: take this figure as indicative only.',
+  'ops.reliability.failureRate.label': 'Failure rate',
+  'ops.reliability.failureRatePercent': '{value} %',
+  'ops.reliability.failureRateTiny': '< 0.1 %',
+  'ops.reliability.rateLimited': 'Rate limited: {count}',
+  'ops.reliability.errorBreakdown.label': 'Failures by error kind',
+  'ops.reliability.errorBreakdown.item': '{kind}: {count}',
+  'ops.reliability.coverageIncomplete': 'These figures only cover the retained window: older rows may be missing.',
 
   // Agents tab, ledger mode
   'ops.agents.ledger.heading': 'Usage by agent and model',
@@ -313,7 +326,7 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.models.showing': 'Mostrando {count} modelo(s)',
   'ops.models.empty': 'Ningún modelo coincide con el filtro actual.',
   'ops.models.context': 'Contexto: {value}',
-  'ops.models.latency': 'Latencia: ~{ms}ms',
+  'ops.models.latency': 'Referencia de catálogo (no medido): ~{ms}ms',
   'ops.models.configure': 'Configurar simulación',
   'ops.models.simulate': 'Simular inferencia',
   'ops.models.relativeVolume': 'Volumen relativo en la oficina:',
@@ -432,6 +445,19 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.matrix.col.cacheWrite': 'ESCRITURA DE CACHÉ',
   'ops.matrix.col.reasoning': 'RAZONAMIENTO',
   'ops.matrix.col.cost': 'COSTO',
+
+  // Pestaña Matriz, modo ledger: percentiles de latencia y tasa de fallos por modelo (issue #286)
+  'ops.reliability.latencySummary': 'p50 {p50} ms · p95 {p95} ms (n = {samples}, {missing} sin latencia)',
+  'ops.reliability.noLatency': 'Sin latencia reportada',
+  'ops.reliability.noData': 'Sin datos',
+  'ops.reliability.lowConfidence': 'Pocas muestras: tómalo solo como indicativo.',
+  'ops.reliability.failureRate.label': 'Tasa de fallos',
+  'ops.reliability.failureRatePercent': '{value} %',
+  'ops.reliability.failureRateTiny': '< 0,1 %',
+  'ops.reliability.rateLimited': 'Limitadas por tasa: {count}',
+  'ops.reliability.errorBreakdown.label': 'Fallos por tipo de error',
+  'ops.reliability.errorBreakdown.item': '{kind}: {count}',
+  'ops.reliability.coverageIncomplete': 'Estas cifras solo cubren la ventana retenida: pueden faltar filas más antiguas.',
 
   // Pestaña Agentes, modo ledger
   'ops.agents.ledger.heading': 'Consumo por agente y modelo',

@@ -22,6 +22,7 @@ import {
   type CallRecord,
   type LedgerResult,
   type RollupDimension,
+  type RollupInclude,
   type RollupResponse,
 } from '../../integrations/ledgerClient';
 
@@ -176,13 +177,20 @@ export function useModelOpsLedger(options: UseModelOpsLedgerOptions): UseModelOp
     setProviderRollup({ status: 'loading' });
     setAgentRollup({ status: 'loading' });
 
-    const run = async (groupBy: RollupDimension[], setState: (state: QueryState<RollupResponse>) => void) => {
-      const result = await fetchRollup(ledgerBase, ledgerToken, { groupBy, from, to });
+    const run = async (
+      groupBy: RollupDimension[],
+      setState: (state: QueryState<RollupResponse>) => void,
+      include?: RollupInclude[]
+    ) => {
+      const result = await fetchRollup(ledgerBase, ledgerToken, { groupBy, from, to, include });
       if (cancelled || rollupRequestId.current !== requestId) return;
       setState(toQueryState(result));
     };
 
-    void run(['provider', 'model'], setModelRollup);
+    // Only the model rollup (the Matrix tab's per-model cards, issue #286) asks for latency/failure-rate
+    // figures: the provider and agent rollups never did and still don't, keeping their requests byte-for-byte
+    // unchanged from before #286.
+    void run(['provider', 'model'], setModelRollup, ['latency', 'failures']);
     void run(['provider'], setProviderRollup);
     void run(['agent', 'model'], setAgentRollup);
 

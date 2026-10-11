@@ -93,6 +93,28 @@ describe('useModelOpsLedger', () => {
     vi.unstubAllGlobals();
   });
 
+  it('requests include=latency,failures only on the model rollup (groupBy=provider,model), issue #286', async () => {
+    const urls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      urls.push(String(url));
+      return jsonResponse(200, rollupBody());
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderHook(() => useModelOpsLedger({ ledger: READY_LEDGER, isOpen: true, events: [], now: () => 5_000_000 }));
+    await waitFor(() => expect(urls.filter((u) => u.includes('/usage/rollup')).length).toBe(3));
+
+    const byGroupBy = new Map(urls.filter((u) => u.includes('/usage/rollup')).map((u) => {
+      const parsed = new URL(u);
+      return [parsed.searchParams.get('groupBy'), parsed.searchParams.get('include')];
+    }));
+    expect(byGroupBy.get('provider,model')).toBe('latency,failures');
+    expect(byGroupBy.get('provider')).toBeNull();
+    expect(byGroupBy.get('agent,model')).toBeNull();
+
+    vi.unstubAllGlobals();
+  });
+
   it('drops a stale response: a slow first fetch never overwrites a newer retry', async () => {
     let resolveFirst!: (value: Response) => void;
     const first = new Promise<Response>((resolve) => {

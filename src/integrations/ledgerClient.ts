@@ -36,6 +36,17 @@ export type RollupDimension =
   | 'meeting'
   | 'tool';
 
+/** Issue #89's opt-in extension to the rollup response, consumed by issue #286 (the Matrix tab's per-model
+ * latency/failure-rate figures): `latency` (p50/p95/samples/missing) and/or `failures`
+ * (failedCalls/attempts/failureRate/byErrorKind/rateLimitCount), mirroring `server/usage/types.ts`'s
+ * `RollupInclude`. Omitting `include` entirely reproduces the pre-#89 response byte-for-byte. */
+export type RollupInclude = 'latency' | 'failures';
+
+/** The one `errorKind` (`LLM_ERROR_KINDS`) the server's `failures.byErrorKind` ever calls a provider rate limit
+ * (`server/usage/reliability.ts`'s `RATE_LIMIT_ERROR_KIND`), kept here only for callers that want to recognize
+ * that one bucket by name; `failures.rateLimitCount` is the field the UI actually reads for the badge. */
+export const RATE_LIMIT_ERROR_KIND = 'rate_limited';
+
 /** `tool` dimension attribution states (issue #80). */
 export type ToolAttributionState = 'attributed' | 'unattributed' | 'unresolved' | 'ambiguous';
 /** `meeting` dimension attribution states: never ambiguous or unresolved (a `meetingId` link either exists or not). */
@@ -69,6 +80,23 @@ const CostEntrySchema = z.object({
 
 export type CostEntry = z.infer<typeof CostEntrySchema>;
 
+const ReliabilityLatencySchema = z.object({
+  p50Ms: z.number().nullable(),
+  p95Ms: z.number().nullable(),
+  samples: z.number(),
+  missing: z.number(),
+  method: z.literal('nearest-rank'),
+});
+
+export type ReliabilityLatency = z.infer<typeof ReliabilityLatencySchema>;
+
+const ReliabilityFailuresSchema = z.object({
+  byErrorKind: z.record(z.string(), z.number()),
+  rateLimitCount: z.number(),
+});
+
+export type ReliabilityFailures = z.infer<typeof ReliabilityFailuresSchema>;
+
 const RollupTotalsSchema = z.object({
   calls: z.object({ total: z.number(), succeeded: z.number(), failed: z.number() }),
   tokens: z.object({
@@ -81,6 +109,15 @@ const RollupTotalsSchema = z.object({
   cost: z.object({ entries: z.array(CostEntrySchema), unknownCostCalls: z.number() }),
   firstAt: z.number().nullable(),
   lastAt: z.number().nullable(),
+  /** Issue #89/#286: present only when the request's `include` contained `failures`. `failedCalls` duplicates
+   * `calls.failed`; `attempts` is `calls.succeeded + failedCalls`; `failureRate` is unrounded and `null` only
+   * when `attempts` is `0` (never a false `0`). */
+  failedCalls: z.number().optional(),
+  attempts: z.number().optional(),
+  failureRate: z.number().nullable().optional(),
+  failures: ReliabilityFailuresSchema.optional(),
+  /** Present only when `include` contained `latency`. */
+  latency: ReliabilityLatencySchema.optional(),
 });
 
 export type RollupTotals = z.infer<typeof RollupTotalsSchema>;
@@ -265,6 +302,9 @@ export interface RollupQueryParams {
   toolAttribution?: ToolAttributionState[];
   sort?: 'key' | 'calls';
   limit?: number;
+  /** Issue #286: `['latency', 'failures']` to get per-group `latency`/`failures`/`failedCalls`/`attempts`/
+   * `failureRate` on every row and on `totals`. Omitted (the default) asks for neither. */
+  include?: RollupInclude[];
 }
 
 export function fetchRollup(
@@ -289,6 +329,7 @@ export function fetchRollup(
   appendQuery(search, 'toolAttribution', params.toolAttribution);
   appendQuery(search, 'sort', params.sort);
   appendQuery(search, 'limit', params.limit);
+  appendQuery(search, 'include', params.include?.join(','));
   return request(`${trimBase(base)}/api/v1/usage/rollup?${search.toString()}`, token, RollupResponseSchema, fetchImpl);
 }
 

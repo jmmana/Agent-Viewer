@@ -33,6 +33,7 @@ export interface CrewRenderInput {
   blink?: CrewSpriteBlink;
   /** Tema de alto contraste de la preferencia de accesibilidad Crew (#157). */
   highContrast?: boolean;
+  actions?: Readonly<Record<string, CrewSpriteBlink | undefined>>;
   walks?: Readonly<Record<string, CrewSpriteBlink | undefined>>;
 }
 export const CREW_TILE_X = 34;
@@ -70,7 +71,7 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, walks = {} }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, walks = {}, actions = {} }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
@@ -98,7 +99,7 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
       return {x:p.x,y:p.y,draw:()=>{
         const point = crewIsoPoint(p.x,p.y);
         const direction = crewSpriteView(marker, view);
-        const spriteDrawn = drawCrewSprite(ctx, point, direction, sprites, blink, walks[marker.id]);
+        const spriteDrawn = drawCrewSprite(ctx, point, direction, sprites, blink, walks[marker.id], actions[marker.id]);
         drawCrewPresenceBadge(ctx, point, marker, spriteDrawn);
       }};
     }),

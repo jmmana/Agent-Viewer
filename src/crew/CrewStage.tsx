@@ -7,6 +7,8 @@ import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
 import { useCrewBlink } from './useCrewBlink';
+import { useCrewActions } from './useCrewActions';
+import { crewActionMarkers } from './crewActorActions';
 import { useCrewWalk } from './useCrewWalk';
 import { preloadCrewWalk } from './crewWalkRegistry';
 import { builtInMessages } from '../content/officeMessages';
@@ -170,8 +172,12 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
   }, [cameraByRoom, persistCamera]);
   const isEs = locale.startsWith('es');
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
-  const visibleAgents = crewAgentsInRoom(agents, roomId);
-  const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
+  const visibleAgents = useMemo(() => crewAgentsInRoom(agents, roomId), [agents, roomId]);
+  const action = useCrewActions(visibleAgents, room, view, visualPreferences.reducedMotion);
+  const presence = useMemo(() => {
+    const projected = projectCrewPresence(agents, room);
+    return { ...projected, markers: crewActionMarkers(projected.markers, action.actions) };
+  }, [agents, room, action.actions]);
 
   const directions = presence.markers.map(marker => crewSpriteView(marker, view)).filter((direction): direction is CrewView => direction !== null);
   const sprite = useCrewSprites(directions);
@@ -198,8 +204,8 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, locale, highContrast: visualPreferences.highContrast });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, visualPreferences.highContrast]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, locale, highContrast: visualPreferences.highContrast });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, visualPreferences.highContrast]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -392,6 +398,7 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
       {isEs ? `Ilustraciones: ${illustratedAgents}.` : `Illustrations: ${illustratedAgents}.`}
       {!sprite.failed && directions.some(direction => !sprite.images[direction]) && (isEs ? ' Cargando ilustraciones…' : ' Loading illustrations…')}
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
+      {action.failed && <span data-testid="crew-action-fallback"> {messages['crew.actionFallback']}</span>}
       {walk.failed && <span data-testid="crew-walk-fallback"> {messages['crew.walkFallback']}</span>}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>

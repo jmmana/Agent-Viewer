@@ -7,7 +7,8 @@
  */
 
 const EN = {
-  'crew.walkFallback': 'Walk atlas unavailable; the original pose remains visible.',
+  'crew.actionFallback': 'Desk animation unavailable; the original pose remains visible.',
+    'crew.walkFallback': 'Walk atlas unavailable; the original pose remains visible.',
   'crew.walkDemo': 'DEMO: synthetic read-only CEO transit snapshot.',
   'crew.walkPrototype': '2.5D PROTOTYPE: CEO walk frames follow reported transit in four directions; final art and physical paths are pending.',
   // Rooms
@@ -175,7 +176,8 @@ export type OfficeMessageKey = keyof typeof EN;
 export type OfficeMessages = Record<OfficeMessageKey, string>;
 
 const ES: OfficeMessages = {
-  'crew.walkFallback': 'Atlas de caminar no disponible; se conserva la pose original.',
+  'crew.actionFallback': 'Animación de escritorio no disponible; se conserva la pose original.',
+    'crew.walkFallback': 'Atlas de caminar no disponible; se conserva la pose original.',
   'crew.walkDemo': 'DEMO: snapshot sintético de tránsito del CEO, de solo lectura.',
   'crew.walkPrototype': 'PROTOTIPO 2.5D: los cuadros de caminar del CEO siguen el tránsito reportado en cuatro direcciones; arte final y trayectorias físicas pendientes.',
   'rooms.boss_office': 'DIRECCIÓN',

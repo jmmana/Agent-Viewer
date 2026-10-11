@@ -11,16 +11,16 @@ export interface CrewSpriteBlink { image: HTMLImageElement; frame: CrewAnimation
 
 /** Dibuja el sprite de un actor si hay imagen para su orientación; indica si dibujó algo. */
 export function drawCrewSprite(ctx: CanvasRenderingContext2D, point: { x: number; y: number },
-  direction: CrewView | null, sprites: CrewSpriteImages, blink?: CrewSpriteBlink, walk?: CrewSpriteBlink): boolean {
+  direction: CrewView | null, sprites: CrewSpriteImages, blink?: CrewSpriteBlink, walk?: CrewSpriteBlink, action?: CrewSpriteBlink): boolean {
   const sprite = direction ? sprites[direction] : undefined;
   if (!sprite) return false;
   const spec = CREW_CEO_SPRITE;
   const height = spec.displayHeight, width = height * spec.width / spec.height;
-  const animation = walk ?? (direction === 'front' ? blink : undefined);
+  const animation = walk ?? action ?? (direction === 'front' ? blink : undefined);
   if (animation) {
-    const frame = animation.frame, scale = height / frame.height;
+    const frame = animation.frame, scale = height / (frame.referenceHeight ?? frame.height);
     ctx.drawImage(animation.image, frame.x, frame.y, frame.width, frame.height,
-      point.x - frame.anchor.x * scale, point.y - frame.anchor.y * scale, frame.width * scale, height);
+      point.x - frame.anchor.x * scale, point.y - frame.anchor.y * scale, frame.width * scale, frame.height * scale);
   } else {
     ctx.drawImage(sprite, point.x - width * spec.anchor.x, point.y - height * spec.anchor.y, width, height);
   }

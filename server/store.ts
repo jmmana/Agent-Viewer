@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import type { DatabaseSync } from 'node:sqlite';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
 import { eventFingerprint } from './eventFingerprint';
@@ -528,6 +529,11 @@ export interface EventStore {
   /** Retention and completeness state (issue #53), without building a full snapshot. */
   retention(): Promise<SnapshotRetention>;
   getSchemaInfo?(): { schemaVersion: number; latestKnownSchemaVersion: number; appliedAt: number | null } | undefined;
+  /** The raw SQLite handle backing this store, for modules that need it directly (issue #85's budgets registry,
+   * `server/budgets.ts`). Optional, the same way `getSchemaInfo` is: only `SQLiteEventStore` implements it;
+   * memory mode has no handle, so `server/index.ts` falls back to `createMemoryBudgetRegistry()` when this is
+   * `undefined`. */
+  getDatabaseHandle?(): DatabaseSync | undefined;
   /** Usage aggregates of every accepted `llm.usage` and `llm.failed` event. */
   usageSummary(): Promise<UsageSummary>;
   /** Counts and time bounds of the usage ledger (issue #65), never a sum of tokens or cost. */
@@ -2026,6 +2032,16 @@ export class SQLiteEventStore implements EventStore {
       latestKnownSchemaVersion: this.migrations.at(-1)?.version ?? 0,
       appliedAt: row?.applied_at ?? null,
     };
+  }
+
+  /** The raw `DatabaseSync` handle backing this store (issue #85, sub-issue #304): `server/budgets.ts`'s
+   * `createSqliteBudgetRegistry` needs it to read and write the `budgets`/`budget_revisions`/`budget_state`
+   * tables migration 0014 already created on this same connection. Optional on `EventStore`, the same way
+   * `getSchemaInfo` is: only this class implements it, so `server/index.ts` falls back to
+   * `createMemoryBudgetRegistry()` when it is undefined. Safe to call any time after construction: migrations
+   * run synchronously in the constructor (`runMigrations` above), before this instance is ever returned. */
+  getDatabaseHandle(): DatabaseSync | undefined {
+    return this.db as DatabaseSync;
   }
 
   /** Inserts the row and returns the `seq` it was given (issue #54): the same durable counter #52 already uses

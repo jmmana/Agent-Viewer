@@ -19,8 +19,11 @@
  */
 import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import express from 'express';
+import { z } from 'zod';
 import type { UsageLedgerRow, CostSource } from './usageLedger';
 import { nanoToDecimalCost } from './pricing/estimate';
+import { emptyUsageFilters, type RollupQuery, type UsageFilters, type UsageRollupResponse } from './usage/types';
 
 // -------------------------------------------------------------
 // 1. Configuration types (issue #85, section 1)
@@ -1121,4 +1124,364 @@ export function createSqliteBudgetRegistry(db: DatabaseSync, options: SqliteBudg
   }
 
   return { create, update, delete: del, get, list, listRevisions, getCachedStatus, setCachedStatus };
+}
+
+// -------------------------------------------------------------
+// 6. HTTP routes (issue #85, sub-issue #304): `GET/POST/PUT/DELETE /api/v1/budgets[/:id][/revisions]`, plus the
+//    read-model helper `listBudgetViews` the snapshot route (`server/index.ts`) calls to fill `budgets:
+//    BudgetView[]` (issue #85 section 5). This section only wires HTTP and the per-request evaluation (window,
+//    ledger read, `aggregateBudgetCalls`, `evaluateBudget`); the configuration CRUD itself is section 5 above
+//    (#303) and the pure engine is sections 2-4 (#302). Live SSE transitions and the `onBudgetTransition` hook
+//    are sub-issue #305, not built here: every status below is computed fresh, from the ledger, on every request,
+//    and the registry's own evaluation cache (`getCachedStatus`/`setCachedStatus`) is left for a later
+//    performance pass rather than wired up speculatively in this sub-issue.
+// -------------------------------------------------------------
+
+/** What the HTTP layer needs from the running server to evaluate and serve budgets: the registry (memory or
+ * SQLite, already selected by `server/index.ts` from its own storage mode), one rollup call for a cheap,
+ * read-consistent `asOfSeq` and coverage signal (the same pattern `resolveExportScope` already uses in
+ * `server/index.ts` for the export route), and a row stream for the matching ledger rows. `currentAuthMode`
+ * mirrors `server/index.ts`'s own function of the same name, read per request (never cached), so a token
+ * rotation is reflected in `auth` immediately, same as the rest of `/api/v1`. */
+export interface BudgetHttpDeps {
+  getRegistry: () => BudgetRegistry;
+  currentAuthMode: () => BudgetRevisionAuth;
+  rollup: (query: RollupQuery) => Promise<UsageRollupResponse>;
+  iterateLedgerRows: (filters: UsageFilters, asOfSeq: number) => AsyncIterable<UsageLedgerRow>;
+  now?: () => number;
+}
+
+/** Grouped by a throwaway single dimension whose groups are never read, exactly like `server/index.ts`'s own
+ * `EXPORT_SCOPE_GROUP_BY`: only `asOf`/`coverage` from the response are used below. */
+const BUDGET_SCOPE_GROUP_BY: RollupQuery['groupBy'] = ['agent'];
+
+/** The `UsageFilters` that select exactly the ledger rows a budget's scope and window cover (issue #85 section 2
+ * rules 1-2): `timeBasis: 'received'` so a client-supplied `timestamp` can never move a call into or out of a
+ * window (rule 1), and one of the five scope axes set to a single-value array (or none, for `'all'`). The ledger
+ * query and `aggregateBudgetCalls`'s own `scopeMatches` therefore apply the same exact, case-sensitive match
+ * twice (once in the query, once in the pure engine); that is deliberate redundancy, not a divergence risk: both
+ * compare the identical stored string with no trim and no case fold. */
+function filtersForBudget(budget: Pick<Budget, 'scope'>, window: BudgetWindow): UsageFilters {
+  const filters = emptyUsageFilters();
+  filters.from = window.start;
+  filters.to = window.end;
+  filters.timeBasis = 'received';
+  switch (budget.scope.type) {
+    case 'agent':
+      filters.agentId = [budget.scope.value as string];
+      break;
+    case 'model':
+      filters.model = [budget.scope.value as string];
+      break;
+    case 'session':
+      filters.sessionId = [budget.scope.value as string];
+      break;
+    case 'user':
+      filters.userId = [budget.scope.value as string];
+      break;
+    case 'tag':
+      filters.tag = [budget.scope.value as string];
+      break;
+    case 'all':
+      break;
+  }
+  return filters;
+}
+
+/**
+ * Evaluates one budget into the `BudgetView` the API returns (issue #85 section 4): `status: null` for a
+ * disabled budget (never evaluated, per section 1's own rule), otherwise the window, the matching ledger rows
+ * (read through `deps.iterateLedgerRows`, scoped and windowed by `filtersForBudget`) and the pure engine
+ * (`aggregateBudgetCalls`/`evaluateBudget`). `deps.rollup` first resolves a read-consistent `asOfSeq` and the
+ * store's coverage signal; `historyTruncated` (rule 7) is exactly `!coverage.complete`, since that flag is
+ * already `false` whenever rows that could belong to this query may be gone, whether from the memory-mode cap or
+ * a retention purge reaching the window (`server/usage/types.ts`'s own `UsageRollupCoverage.complete` doc
+ * comment already describes precisely this case). A failure anywhere in this (the rollup call, the row stream,
+ * or the pure engine itself) is rule 8: the budget is still returned, `unknown` with `evaluation_error`, logged
+ * server side with the budget id, never thrown up to the route handler.
+ */
+export async function evaluateBudgetView(budget: Budget, deps: BudgetHttpDeps): Promise<BudgetView> {
+  const now = (deps.now ?? Date.now)();
+  if (!budget.enabled) return { ...budget, status: null };
+
+  const window = computeBudgetWindow(budget.period, budget.timezone, now);
+  try {
+    const filters = filtersForBudget(budget, window);
+    const scope = await deps.rollup({ groupBy: BUDGET_SCOPE_GROUP_BY, filters, sort: 'key', limit: 1, include: [] });
+    const asOfSeq = scope.asOf.ledgerSeq ?? 0;
+    const rows: UsageLedgerRow[] = [];
+    for await (const row of deps.iterateLedgerRows(filters, asOfSeq)) rows.push(row);
+    const aggregates: BudgetAggregates = { ...aggregateBudgetCalls(rows, budget, window), historyTruncated: !scope.coverage.complete };
+    const status = evaluateBudget(budget, aggregates, now, window);
+    return { ...budget, status };
+  } catch (error) {
+    console.error(
+      `[agent-viewer] budget evaluation failed for ${budget.id}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return { ...budget, status: evaluationErrorStatus(window, now) };
+  }
+}
+
+/** Every non-deleted budget, evaluated (issue #85 section 5): what `GET /api/v1/snapshot`'s `budgets` field and
+ * the unfiltered `GET /api/v1/budgets` both need. Sequential, not `Promise.all`, so one slow ledger read never
+ * starves the others of the event loop under load. */
+export async function listBudgetViews(deps: BudgetHttpDeps): Promise<BudgetView[]> {
+  const budgets = deps.getRegistry().list();
+  const views: BudgetView[] = [];
+  for (const budget of budgets) views.push(await evaluateBudgetView(budget, deps));
+  return views;
+}
+
+// ---- Validation (zod) for the write routes ---------------------------------
+
+const BudgetScopeBodySchema = z
+  .object({
+    type: z.enum(BUDGET_SCOPE_TYPES as [BudgetScopeType, ...BudgetScopeType[]]),
+    value: z.string().nullable(),
+  })
+  .strict();
+
+/** Structural/type validation only (required fields, unknown-field rejection, per issue #85 section 4: "Unknown
+ * fields are rejected, not stored"). The business rules on each field's value (ranges, the currency/timezone
+ * patterns, `scope.value` required unless `type` is `'all'`) are the registry's own `validateBudgetFields`
+ * (section 5 above): this schema deliberately does not duplicate them, so the two can never silently drift
+ * apart. Shared by `POST` and `PUT`, since issue #85 section 4 states `PUT` takes "the same body as POST". */
+const BudgetWriteBodySchema = z
+  .object({
+    id: z.string().min(1).max(64).optional(),
+    name: z.string(),
+    scope: BudgetScopeBodySchema,
+    period: z.enum(BUDGET_PERIODS as [BudgetPeriod, ...BudgetPeriod[]]),
+    timezone: z.string().optional(),
+    currency: z.string(),
+    basis: z.enum(BUDGET_BASES as [BudgetBasis, ...BudgetBasis[]]),
+    limit: z.number(),
+    warningRatio: z.number().optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+function zodIssuesToValidation(error: z.ZodError): BudgetValidationIssue[] {
+  return error.issues.map((issue) => ({ path: issue.path.length > 0 ? issue.path.join('.') : '(body)', message: issue.message }));
+}
+
+/** At most 500 non-deleted budgets (issue #85 section 4). The registry itself has no such cap (it is an API
+ * limit, not a storage invariant), so it is enforced here, before `registry.create` is ever called. */
+const MAX_ACTIVE_BUDGETS = 500;
+
+function actorFromHeader(req: express.Request): string | null {
+  const raw = req.header('x-agent-viewer-actor');
+  return raw === undefined || raw === null || raw === '' ? null : raw;
+}
+
+function metaFromRequest(req: express.Request, deps: BudgetHttpDeps): BudgetChangeMeta {
+  return { actor: actorFromHeader(req), auth: deps.currentAuthMode() };
+}
+
+/**
+ * Registers the six `/api/v1/budgets*` routes (issue #85 section 4) on `app`. Called once from `server/index.ts`,
+ * after its existing `/api/v1` middleware chain (rate limiter, query-token rejection, open-mode guard, Bearer
+ * auth) is already registered, exactly the same way `registerPricingRoutes` is, so every route here gets the
+ * same protection as every other `/api/v1` route with zero extra wiring.
+ */
+export function registerBudgetsRoutes(app: express.Express, deps: BudgetHttpDeps): void {
+  function sendValidationError(res: express.Response, issues: readonly BudgetValidationIssue[]): void {
+    res.status(400).json({ error: 'validation_failed', issues });
+  }
+
+  /** `true` once a response was sent for a `BudgetValidationError` (400, or 409 for a repeated id); `false` (and
+   * no response sent) for anything else, so the caller can re-throw and let it surface like any other bug. */
+  function sendBudgetError(res: express.Response, error: unknown): boolean {
+    if (error instanceof BudgetValidationError) {
+      // Issue #85 section 4: a repeated id (including a soft-deleted one, ids are never reused) is
+      // `409 budget_exists`; every other validation failure is `400 validation_failed`. The registry reports
+      // both through the same error type, distinguished only by which field it names.
+      if (error.issues.some((issue) => issue.path === 'id')) {
+        res.status(409).json({ error: 'budget_exists' });
+        return true;
+      }
+      sendValidationError(res, error.issues);
+      return true;
+    }
+    return false;
+  }
+
+  // ---------------------------------------------------------------
+  // GET /api/v1/budgets
+  // ---------------------------------------------------------------
+  app.get('/api/v1/budgets', async (req, res) => {
+    const { state, scopeType, scopeValue } = req.query;
+
+    let stateFilter: BudgetState | undefined;
+    if (state !== undefined) {
+      if (typeof state !== 'string' || !isBudgetState(state)) {
+        sendValidationError(res, [{ path: 'state', message: `must be one of ${BUDGET_STATES.join(', ')}` }]);
+        return;
+      }
+      stateFilter = state;
+    }
+
+    let scopeTypeFilter: BudgetScopeType | undefined;
+    if (scopeType !== undefined) {
+      if (typeof scopeType !== 'string' || !isBudgetScopeType(scopeType)) {
+        sendValidationError(res, [{ path: 'scopeType', message: `must be one of ${BUDGET_SCOPE_TYPES.join(', ')}` }]);
+        return;
+      }
+      scopeTypeFilter = scopeType;
+    }
+
+    if (scopeValue !== undefined && typeof scopeValue !== 'string') {
+      sendValidationError(res, [{ path: 'scopeValue', message: 'must be a single string value' }]);
+      return;
+    }
+
+    const candidates = deps.getRegistry().list().filter((budget) => {
+      if (scopeTypeFilter !== undefined && budget.scope.type !== scopeTypeFilter) return false;
+      if (scopeValue !== undefined && budget.scope.value !== scopeValue) return false;
+      return true;
+    });
+
+    const views: BudgetView[] = [];
+    for (const budget of candidates) views.push(await evaluateBudgetView(budget, deps));
+    // A disabled budget has no state (`status: null`), so a `state` filter always excludes it (issue #85
+    // section 4's own rule).
+    const filtered = stateFilter === undefined ? views : views.filter((view) => view.status !== null && view.status.state === stateFilter);
+
+    res.json({ schemaVersion: '1.0', generatedAt: (deps.now ?? Date.now)(), count: filtered.length, budgets: filtered });
+  });
+
+  // ---------------------------------------------------------------
+  // GET /api/v1/budgets/:id
+  // ---------------------------------------------------------------
+  app.get('/api/v1/budgets/:id', async (req, res) => {
+    const budget = deps.getRegistry().get(req.params.id);
+    if (!budget) {
+      res.status(404).json({ error: 'budget_not_found' });
+      return;
+    }
+    res.json(await evaluateBudgetView(budget, deps));
+  });
+
+  // ---------------------------------------------------------------
+  // POST /api/v1/budgets
+  // ---------------------------------------------------------------
+  app.post('/api/v1/budgets', async (req, res) => {
+    const parsed = BudgetWriteBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendValidationError(res, zodIssuesToValidation(parsed.error));
+      return;
+    }
+
+    const registry = deps.getRegistry();
+    if (registry.list().length >= MAX_ACTIVE_BUDGETS) {
+      sendValidationError(res, [{ path: 'budgets', message: `at most ${MAX_ACTIVE_BUDGETS} budgets are allowed` }]);
+      return;
+    }
+
+    try {
+      const budget = registry.create(parsed.data, metaFromRequest(req, deps));
+      res.status(201).json(await evaluateBudgetView(budget, deps));
+    } catch (error) {
+      if (!sendBudgetError(res, error)) throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // PUT /api/v1/budgets/:id
+  // ---------------------------------------------------------------
+  app.put('/api/v1/budgets/:id', async (req, res) => {
+    const parsed = BudgetWriteBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendValidationError(res, zodIssuesToValidation(parsed.error));
+      return;
+    }
+    if (parsed.data.id !== undefined && parsed.data.id !== req.params.id) {
+      sendValidationError(res, [{ path: 'id', message: 'must be absent or equal to the URL id' }]);
+      return;
+    }
+
+    const registry = deps.getRegistry();
+    const current = registry.get(req.params.id);
+    if (!current) {
+      res.status(404).json({ error: 'budget_not_found' });
+      return;
+    }
+
+    // Issue #85 section 4: "replace the whole configuration", with the same defaults `POST` uses for an absent
+    // optional field, never "leave at the current value" (that is what would distinguish a PATCH, which this API
+    // does not expose).
+    const timezone = parsed.data.timezone ?? 'UTC';
+    const warningRatio = parsed.data.warningRatio ?? 0.8;
+    const enabled = parsed.data.enabled ?? true;
+    const isNoOp =
+      current.name === parsed.data.name
+      && current.scope.type === parsed.data.scope.type
+      && current.scope.value === parsed.data.scope.value
+      && current.period === parsed.data.period
+      && current.timezone === timezone
+      && current.currency === parsed.data.currency
+      && current.basis === parsed.data.basis
+      && current.limit === parsed.data.limit
+      && current.warningRatio === warningRatio
+      && current.enabled === enabled;
+    // Issue #85 section 4: "An identical configuration is a no-op: 200, no new revision." The registry's own
+    // `update` always bumps `revision` and writes a revision row unconditionally, so the no-op check is this
+    // route's own responsibility, done before ever calling it.
+    if (isNoOp) {
+      res.json(await evaluateBudgetView(current, deps));
+      return;
+    }
+
+    try {
+      const next = registry.update(
+        req.params.id,
+        { name: parsed.data.name, scope: parsed.data.scope, period: parsed.data.period, timezone, currency: parsed.data.currency, basis: parsed.data.basis, limit: parsed.data.limit, warningRatio, enabled },
+        metaFromRequest(req, deps)
+      );
+      if (!next) {
+        res.status(404).json({ error: 'budget_not_found' });
+        return;
+      }
+      res.json(await evaluateBudgetView(next, deps));
+    } catch (error) {
+      if (!sendBudgetError(res, error)) throw error;
+    }
+  });
+
+  // ---------------------------------------------------------------
+  // DELETE /api/v1/budgets/:id
+  // ---------------------------------------------------------------
+  app.delete('/api/v1/budgets/:id', (req, res) => {
+    const deleted = deps.getRegistry().delete(req.params.id, metaFromRequest(req, deps));
+    if (!deleted) {
+      res.status(404).json({ error: 'budget_not_found' });
+      return;
+    }
+    res.status(204).end();
+  });
+
+  // ---------------------------------------------------------------
+  // GET /api/v1/budgets/:id/revisions
+  // ---------------------------------------------------------------
+  app.get('/api/v1/budgets/:id/revisions', (req, res) => {
+    // Issue #85 section 4: "works for deleted budgets too; 404 only for an id that never existed." Every
+    // create/update/delete writes a revision, so a budget that ever existed always has at least one; an id that
+    // never existed has none. `registry.get` cannot distinguish "never existed" from "deleted" (both are
+    // `null`), so this checks revisions directly instead.
+    const revisions = deps.getRegistry().listRevisions(req.params.id);
+    if (revisions.length === 0) {
+      res.status(404).json({ error: 'budget_not_found' });
+      return;
+    }
+    res.json(
+      revisions.map((revision) => ({
+        revision: revision.revision,
+        action: revision.action,
+        changedAt: revision.createdAt,
+        actor: revision.actor,
+        auth: revision.auth,
+        config: revision.snapshot,
+      }))
+    );
+  });
 }

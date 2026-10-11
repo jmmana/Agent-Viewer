@@ -33,6 +33,14 @@ import { createStreamTicketStore } from './stream-tickets';
 import { getPricingStore } from './pricing/store';
 import { registerPricingRoutes } from './pricing/api';
 import {
+  createMemoryBudgetRegistry,
+  createSqliteBudgetRegistry,
+  registerBudgetsRoutes,
+  listBudgetViews,
+  type BudgetRegistry,
+  type BudgetHttpDeps,
+} from './budgets';
+import {
   parseRecomputeRequest,
   PricingVersionNotFoundError,
   RecomputeInProgressError,
@@ -169,6 +177,22 @@ try {
 // resolves at once. `init()` is safe to call more than once: `SQLiteEventStore` already started it from its own
 // constructor, so this just lets callers await the same promise if they need to.
 void store.init();
+
+// Budgets (issue #85, sub-issue #304): the registry picks SQLite when the running store exposes a raw database
+// handle (migrations, including the `budgets` migration version 14, already ran synchronously in
+// `SQLiteEventStore`'s own constructor, before `createEventStore()` above ever returns), and falls back to the
+// in-memory registry otherwise, same storage-mode split as every other feature here.
+const budgetRegistry: BudgetRegistry = (() => {
+  const handle = store.getDatabaseHandle?.();
+  return handle ? createSqliteBudgetRegistry(handle) : createMemoryBudgetRegistry();
+})();
+
+const budgetDeps: BudgetHttpDeps = {
+  getRegistry: () => budgetRegistry,
+  currentAuthMode: () => currentAuthMode(),
+  rollup: (query) => store.rollup(query),
+  iterateLedgerRows: (filters, asOfSeq) => store.iterateExportRows(filters, asOfSeq),
+};
 
 if (retentionConfig.ledgerDays !== null) {
   console.log(usageRetentionWarning(retentionConfig.ledgerDays));
@@ -1282,7 +1306,10 @@ app.get('/api/v1/events', async (req, res) => {
 // -------------------------------------------------------------
 app.get('/api/v1/snapshot', requireReady, async (_req, res) => {
   const snapshot = await store.snapshot();
-  res.json(snapshot);
+  // Issue #85 section 5: additive field, `[]` with no budgets configured, built here (not inside `EventStore`)
+  // so neither `snapshot()` implementation needs to know about budgets at all.
+  const budgets = await listBudgetViews(budgetDeps);
+  res.json({ ...snapshot, budgets });
 });
 
 // Usage aggregates only (the snapshot's `usage` block), without the event list.
@@ -2607,6 +2634,14 @@ registerPricingRoutes(app, {
   hasAdminToken: () => currentAuthMode() === 'token',
   usageRollup: (query) => store.rollup(query),
 });
+
+// -------------------------------------------------------------
+// Budgets API (issue #85, sub-issue #304): the 6 `/api/v1/budgets*` endpoints, built on the pure engine and
+// registry of sub-issues #302/#303 (`server/budgets.ts`). Sits under `/api/v1` like every route above, so it
+// already has the rate limiter, the query-token rejection, the open-mode guard and the Bearer auth registered
+// earlier in this file.
+// -------------------------------------------------------------
+registerBudgetsRoutes(app, budgetDeps);
 
 // -------------------------------------------------------------
 // Pricing recompute (issue #296, sub-issue of #84): re-runs the ingestion-time estimator (`server/pricing/

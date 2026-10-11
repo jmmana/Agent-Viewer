@@ -39,6 +39,7 @@ import {
   listBudgetViews,
   evaluateBudgetLive,
   emitBudgetTransition,
+  onBudgetTransition,
   startBudgetRolloverWatcher,
   type Budget,
   type BudgetRegistry,
@@ -47,6 +48,7 @@ import {
   type BudgetTransitionTrigger,
   type BudgetRolloverWatcherHandle,
 } from './budgets';
+import { buildBudgetAlert } from './budgetAlerts';
 import {
   parseRecomputeRequest,
   PricingVersionNotFoundError,
@@ -1081,6 +1083,22 @@ function conflictMessage(id: string): string {
 }
 
 /**
+ * Issue #86 (sub-issue #319): `budget.alert` is emitted by the server only (`server/budgetAlerts.ts`); a client
+ * must never be able to forge one, or squat its reserved id prefix ahead of time. Checked on both ingest endpoints
+ * against the resolved `type`/`id` (after `Idempotency-Key` merging on the single endpoint), before validation.
+ * Returns the matching `{ path, message }`, used as-is both for the single endpoint's top-level `message` and for
+ * a batch item's own `issues` entry.
+ */
+function reservedBudgetAlertIssue(body: unknown): { path: 'type' | 'id'; message: string } | null {
+  if (!body || typeof body !== 'object') return null;
+  const candidate = body as { type?: unknown; id?: unknown };
+  const message = 'reserved_event_type: budget.alert is emitted by the server only';
+  if (candidate.type === 'budget.alert') return { path: 'type', message };
+  if (typeof candidate.id === 'string' && candidate.id.startsWith('evt_budget_')) return { path: 'id', message };
+  return null;
+}
+
+/**
  * Stores an event the server built itself and broadcasts it only when the store accepted it. Any other outcome
  * means a server-generated id was reused, which is a server bug: it is logged at error and answered with
  * `500 internal_id_collision` instead of being hidden. Returns false when the response was already sent.
@@ -1175,6 +1193,29 @@ budgetRolloverWatcher = startBudgetRolloverWatcher({
 });
 
 // -------------------------------------------------------------
+// Budget alerts (issue #86, sub-issue #319): the durable, deduplicated `budget.alert` canonical event. Registered
+// once at process bootstrap, on top of #85's own `onBudgetTransition` subscription point, exactly as that hook's
+// own doc comment in `server/budgets.ts` anticipates. `buildBudgetAlert` ignores every transition that does not
+// land on `warning`/`exceeded` (a drop back to `ok`, or into `unknown`, is never an alert); `store.recordBudgetAlert`
+// is the actual dedup (a real crossing can reach this listener more than once, the same race `onBudgetTransition`
+// documents), so only a genuinely new row is broadcast. A failing listener must never break the live-transition
+// broadcast (`checkBudgetLive`) or any other `onBudgetTransition` subscriber: errors are caught, logged and
+// swallowed here, the same policy `broadcastEvent`'s own listeners and `emitBudgetTransition` already follow.
+// -------------------------------------------------------------
+onBudgetTransition(async (transition) => {
+  const built = buildBudgetAlert(transition);
+  if (!built) return;
+  try {
+    const result = await store.recordBudgetAlert(built);
+    if (result.inserted) broadcastEvent(result.event, result.seq);
+  } catch (error) {
+    console.error(
+      `[agent-viewer] failed to record budget alert for ${transition.budgetId} (${transition.to}): ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+});
+
+// -------------------------------------------------------------
 // Event Ingestion (Single)
 // -------------------------------------------------------------
 app.post('/api/v1/events', async (req, res) => {
@@ -1195,6 +1236,15 @@ app.post('/api/v1/events', async (req, res) => {
     if (!body.id) {
       body = { ...body, id: idempotencyKey };
     }
+  }
+
+  const reserved = reservedBudgetAlertIssue(body);
+  if (reserved) {
+    res.status(400).json({
+      error: 'reserved_event_type',
+      message: 'budget.alert is emitted by the server only',
+    });
+    return;
   }
 
   const validation = validateCanonicalEvent(body);
@@ -1283,6 +1333,11 @@ app.post('/api/v1/events/batch', async (req, res) => {
   const errors: Array<{ index: number; issues: ValidationIssue[] }> = [];
 
   rawEvents.forEach((item, index) => {
+    const reserved = reservedBudgetAlertIssue(item);
+    if (reserved) {
+      errors.push({ index, issues: [reserved] });
+      return;
+    }
     const val = validateCanonicalEvent(item);
     if (val.success && val.data) {
       validatedEvents.push(val.data);

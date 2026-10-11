@@ -159,11 +159,89 @@ test('canonical contract: includes all required canonical types', () => {
     'runtime.connected',
     'runtime.disconnected',
     'runtime.heartbeat',
+    'budget.alert',
   ];
 
   for (const t of required) {
     assert.ok(CANONICAL_EVENT_TYPES.includes(t), `Missing canonical type: ${t}`);
   }
+});
+
+// -------------------------------------------------------------
+// budget.alert (issue #86, sub-issue #319): server-emitted only, see server/budgetAlerts.ts for how it is built.
+// -------------------------------------------------------------
+
+function budgetAlertEvent(payload) {
+  nextId += 1;
+  return {
+    id: `evt_budget_${'a'.repeat(32)}`,
+    type: 'budget.alert',
+    timestamp: 1791190800000,
+    source: 'server:budgets',
+    severity: 'high',
+    summary: 'Budget "Team monthly" reached 80% of 500.00 USD',
+    payload: {
+      alertId: `evt_budget_${'a'.repeat(32)}`,
+      budgetId: 'bud_team',
+      budgetName: 'Team monthly',
+      scope: { type: 'all', value: null },
+      period: { type: 'month', start: 1788220800000, end: 1790899200000 },
+      state: 'warning',
+      threshold: 0.8,
+      limit: 500,
+      currency: 'USD',
+      knownSpent: 401.27,
+      spendIsLowerBound: true,
+      calls: { total: 12, withCost: 11, unknownCost: 1, otherCurrency: 0, missingCurrency: 0 },
+      containsEstimates: false,
+      pricingVersions: [],
+      backfill: false,
+      detectedAt: 1790000000000,
+      ...payload,
+    },
+  };
+}
+
+test('budget.alert: a valid payload validates and keeps every field', () => {
+  const result = validateCanonicalEvent(budgetAlertEvent({}));
+  assert.equal(result.success, true);
+  assert.equal(result.data.payload.state, 'warning');
+  assert.equal(result.data.payload.spendIsLowerBound, true);
+  assert.deepEqual(result.data.payload.calls, { total: 12, withCost: 11, unknownCost: 1, otherCurrency: 0, missingCurrency: 0 });
+});
+
+test('budget.alert: "exceeded" with no unknown calls validates with spendIsLowerBound false', () => {
+  const result = validateCanonicalEvent(
+    budgetAlertEvent({
+      state: 'exceeded',
+      threshold: 1,
+      spendIsLowerBound: false,
+      calls: { total: 3, withCost: 3, unknownCost: 0, otherCurrency: 0, missingCurrency: 0 },
+    })
+  );
+  assert.equal(result.success, true);
+  assert.equal(result.data.payload.state, 'exceeded');
+});
+
+test('budget.alert: rejects an unlisted state', () => {
+  const result = validateCanonicalEvent(budgetAlertEvent({ state: 'ok' }));
+  assert.equal(result.success, false);
+  assert.ok(issueAt(result, 'payload.state'));
+});
+
+test('budget.alert: rejects a non-ISO-4217 currency and a non-positive threshold', () => {
+  const badCurrency = validateCanonicalEvent(budgetAlertEvent({ currency: 'usd' }));
+  assert.equal(badCurrency.success, false);
+  assert.ok(issueAt(badCurrency, 'payload.currency'));
+
+  const badThreshold = validateCanonicalEvent(budgetAlertEvent({ threshold: 0 }));
+  assert.equal(badThreshold.success, false);
+  assert.ok(issueAt(badThreshold, 'payload.threshold'));
+});
+
+test('budget.alert: rejects a missing calls breakdown', () => {
+  const result = validateCanonicalEvent(budgetAlertEvent({ calls: undefined }));
+  assert.equal(result.success, false);
 });
 
 // -------------------------------------------------------------

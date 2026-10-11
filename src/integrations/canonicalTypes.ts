@@ -31,6 +31,10 @@ export const CANONICAL_EVENT_TYPES = [
   'runtime.connected',
   'runtime.disconnected',
   'runtime.heartbeat',
+  /** Server-generated only (issue #86): a budget (#85) crossed into `warning` or `exceeded`. `POST /api/v1/events`
+   * and `/events/batch` reject a client-submitted event of this type, or whose id starts with `evt_budget_`
+   * (`server/budgetAlerts.ts`). */
+  'budget.alert',
 ] as const;
 
 export type CanonicalEventType = (typeof CANONICAL_EVENT_TYPES)[number];

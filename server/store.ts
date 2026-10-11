@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
+import type { BudgetAlertStoreInput } from './budgetAlerts';
 import { eventFingerprint } from './eventFingerprint';
 import { rowToEvent } from './eventRow';
 import { readPackageVersion } from './version';
@@ -375,6 +376,14 @@ export interface AppendBatchResult {
   receivedAtById: Map<string, number>;
 }
 
+/** Result of `EventStore.recordBudgetAlert` (issue #86, sub-issue #319). `inserted: false` means the
+ * `(budgetId, periodStart, state)` dedup key was already recorded: nothing was written and nothing should be
+ * broadcast. `inserted: true` always carries the event that was actually stored (the same `CanonicalEvent` passed
+ * in) and its seq, for the caller to pass straight to `broadcastEvent`. */
+export type RecordBudgetAlertResult =
+  | { inserted: false }
+  | { inserted: true; event: CanonicalEvent; seq: EventSeq | null };
+
 /** Per-process ingestion counters, reset on restart. Exposed by `GET /ready`. */
 export interface IngestionCounters {
   /** Conflicting duplicates rejected since process start. */
@@ -472,6 +481,14 @@ function summarizeBatch(results: AppendResult[], events: CanonicalEvent[]): Appe
   return { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs, receivedAtById };
 }
 
+/** Issue #86 (sub-issue #319): the entire deduplication key for a budget alert, shared by both store
+ * implementations (SQLite expresses the same triple as a `UNIQUE` constraint instead of a string). `\u0000` can
+ * never appear in `budgetId` or `state` (an id is `"bud_" + UUID`, a state is `'warning'`/`'exceeded'`), so the
+ * three parts can never collide across a boundary. */
+function budgetAlertDedupKey(alert: { budgetId: string; state: string; periodStart: number }): string {
+  return `${alert.budgetId}\u0000${alert.state}\u0000${alert.periodStart}`;
+}
+
 /** Result of one `appendTelemetryPoints` call (issue #73). Never includes a point's value or any raw attribute. */
 export interface TelemetryAppendOutcome {
   accepted: number;
@@ -505,6 +522,17 @@ export interface EventStore {
     events: CanonicalEvent[],
     options?: { atomic?: boolean; ignoreTimestamp?: boolean } & AppendOptions
   ): Promise<AppendBatchResult>;
+  /**
+   * Issue #86 (sub-issue #319): records a newly detected `warning`/`exceeded` budget crossing exactly once. Writes
+   * the `budget_alerts` row and the `budget.alert` canonical event row atomically (SQLite: one transaction; memory:
+   * no `await` between the dedup check and the reservation, see `MemoryEventStore`'s implementation) and returns
+   * `inserted: false` with no side effect at all when `(input.alert.budgetId, input.alert.periodStart,
+   * input.alert.state)` was already recorded, which is the entire deduplication mechanism: a real-world crossing
+   * can be offered here any number of times (a concurrent race between two live checks, a re-imported history, a
+   * restart) and is only ever stored and broadcast once. Never broadcasts anything itself; the caller
+   * (`server/index.ts`) only calls `broadcastEvent` when `inserted` is `true`.
+   */
+  recordBudgetAlert(input: BudgetAlertStoreInput): Promise<RecordBudgetAlertResult>;
   /** Conflicts rejected and legacy rows matched by id only, since process start. */
   ingestionCounters(): IngestionCounters;
   /** True for an original event id and for a duplicate reference's own id. */
@@ -937,6 +965,11 @@ export class MemoryEventStore implements EventStore {
     events: { purgedBefore: null, deletedTotal: 0 },
     usageLedger: { purgedBefore: null, deletedTotal: 0 },
   };
+  /** Issue #86 (sub-issue #319): every `(budgetId, state, periodStart)` already recorded, forever (never evicted
+   * with the retained event window, the same choice `eventHashes` already makes for ordinary dedup): a budget
+   * alert's dedup must survive its own event being evicted from the ring, just like a resent event id's dedup
+   * does. Reset only by a fresh process (memory mode's documented restart limitation, see `recordBudgetAlert`). */
+  private budgetAlertDedupKeys = new Set<string>();
 
   constructor(options?: number | MemoryEventStoreOptions) {
     const opts: MemoryEventStoreOptions = typeof options === 'number' ? { maxEvents: options } : (options ?? {});
@@ -1289,6 +1322,30 @@ export class MemoryEventStore implements EventStore {
       const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp, receivedAt, channel));
       return summarizeBatch(results, events);
     }
+  }
+
+  /**
+   * Issue #86 (sub-issue #319). The dedup reservation (`this.budgetAlertDedupKeys.add`) happens synchronously,
+   * before the only `await` in this method: a concurrent caller for the exact same key can only run after that
+   * point (JavaScript runs this method's synchronous prefix to completion before yielding), so it always observes
+   * the key already present and returns `{ inserted: false }` with no further side effect, exactly like the SQLite
+   * `UNIQUE` constraint does for the other store. Memory mode's documented limitation: this `Set` (like the rest of
+   * `MemoryEventStore`) does not survive a restart, so a re-imported history after one can alert again.
+   */
+  async recordBudgetAlert(input: BudgetAlertStoreInput): Promise<RecordBudgetAlertResult> {
+    const dedupKey = budgetAlertDedupKey(input.alert);
+    if (this.budgetAlertDedupKeys.has(dedupKey)) return { inserted: false };
+    this.budgetAlertDedupKeys.add(dedupKey);
+    // `channel` only classifies a usage-ledger row; `budget.alert` is never a ledger event (`toLedgerRow` returns
+    // `null` for any type other than `llm.usage`/`llm.failed`), so the exact value here has no observable effect.
+    const result = await this.append(input.event, { channel: 'unknown', receivedAt: input.alert.detectedAt });
+    if (result.outcome !== 'accepted') {
+      // A deterministic id reused by something else (should be unreachable: the id is a hash of the dedup key
+      // itself). Undo the reservation rather than silently accept the mismatch.
+      this.budgetAlertDedupKeys.delete(dedupKey);
+      return { inserted: false };
+    }
+    return { inserted: true, event: input.event, seq: result.seq };
   }
 
   ingestionCounters(): IngestionCounters {
@@ -1719,6 +1776,14 @@ function isUniqueIdViolation(error: unknown): boolean {
 function isUniqueRequestKeyViolation(error: unknown): boolean {
   const err = error as { errcode?: number; message?: string } | null;
   return err?.errcode === 2067 && /UNIQUE constraint failed: events\.request_provider, events\.request_id/.test(err?.message ?? '');
+}
+
+/** True for a violation of `budget_alerts`'s own `UNIQUE (budget_id, period_start, state)` (issue #86, sub-issue
+ * #319, migration 15): the dedup key was already recorded, so `recordBudgetAlert` must report `inserted: false`
+ * instead of surfacing an error. */
+function isBudgetAlertDedupViolation(error: unknown): boolean {
+  const err = error as { errcode?: number; message?: string } | null;
+  return err?.errcode === 2067 && /UNIQUE constraint failed: budget_alerts\./.test(err?.message ?? '');
 }
 
 /** What a SQLite classification decided, before the side effects (counters, logs) that wait for the commit. */
@@ -2621,6 +2686,84 @@ export class SQLiteEventStore implements EventStore {
       }
     }
     return summary;
+  }
+
+  /**
+   * Issue #86 (sub-issue #319). One transaction: the `budget_alerts` row is inserted first (its `UNIQUE (budget_id,
+   * period_start, state)` constraint, migration 15, is the entire dedup mechanism), and only when that succeeds is
+   * the canonical `budget.alert` event inserted through the same `classifyAndInsert` path `append`/`appendBatch`
+   * already use. A constraint violation on `budget_alerts` means this exact crossing was already recorded: the
+   * transaction rolls back and `{ inserted: false }` is returned with no further side effect, no event row and no
+   * broadcast, which is what makes two concurrent live checks racing on the same transition, a re-imported
+   * history, or a restart all safe. Any other failure (including the event insert itself failing, which should be
+   * unreachable since the id is a deterministic hash of the same dedup key) rolls back the alert row too, so an
+   * alert can never exist without its event, never the reverse.
+   */
+  async recordBudgetAlert(input: BudgetAlertStoreInput): Promise<RecordBudgetAlertResult> {
+    const { alert, event } = input;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO budget_alerts (
+            id, budget_id, budget_name, scope_type, scope_value, period_type, period_start, period_end,
+            state, threshold, limit_amount, currency, known_spent, spend_is_lower_bound, backfill, detected_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          alert.id,
+          alert.budgetId,
+          alert.budgetName,
+          alert.scopeType,
+          alert.scopeValue,
+          alert.periodType,
+          alert.periodStart,
+          alert.periodEnd,
+          alert.state,
+          alert.threshold,
+          alert.limit,
+          alert.currency,
+          alert.knownSpent,
+          alert.spendIsLowerBound ? 1 : 0,
+          alert.backfill ? 1 : 0,
+          alert.detectedAt
+        );
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // The transaction may already have been rolled back by SQLite.
+      }
+      if (isBudgetAlertDedupViolation(error)) return { inserted: false };
+      throw error;
+    }
+
+    let pending: PendingOutcome;
+    try {
+      // `channel` only classifies a usage-ledger row; `budget.alert` is never a ledger event (`toLedgerRow`
+      // returns `null` for any type other than `llm.usage`/`llm.failed`), so the exact value has no observable
+      // effect here.
+      pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event, false, alert.detectedAt, 'unknown');
+      if (pending.result.outcome !== 'accepted') {
+        throw new Error(
+          `Deterministic budget alert event id ${JSON.stringify(event.id)} was already stored with different content; the alert was not recorded.`
+        );
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // The transaction may already have been rolled back by SQLite.
+      }
+      throw error;
+    }
+
+    this.recordOutcome(pending);
+    this.eventsCountCache++;
+    this.ensureTotalsSinceCache();
+    if (this.rebuild.state === 'done') applyEvent(this.state, event, { skipUsage: pending.ledgerSkipped ?? false });
+    return { inserted: true, event, seq: pending.result.outcome === 'accepted' ? pending.result.seq : null };
   }
 
   ingestionCounters(): IngestionCounters {

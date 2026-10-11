@@ -149,15 +149,22 @@ test('SSE: the "budget" frame is never replayed on reconnect and never affects t
     const lastEventId = firstEventIdMatch[1];
 
     const secondRes = await postUsageEvent(baseUrl, agentId, 4); // crosses into warning: a "budget" frame is broadcast live
-    const secondAfter = await readUntil(firstReader, decoder, (buf) => buf.includes('event: budget'));
+    // Issue #86 (sub-issue #319): the same transition also feeds a `budget.alert` canonical event through
+    // `onBudgetTransition`, stored and broadcast like any other accepted event (unlike the live "event: budget"
+    // frame below, which is never stored). Waited for in the same `readUntil` call (not two sequential calls on
+    // the same reader): `readUntil` starts a fresh local buffer each call, so if both frames land in the same
+    // underlying chunk, a first call matching only "event: budget" would consume and discard the rest of that
+    // chunk, including the "budget.alert" bytes, before a second call ever got to read them.
+    const secondAfter = await readUntil(firstReader, decoder, (buf) => buf.includes('event: budget') && buf.includes('"budget.alert"'));
     const secondEventIdMatch = secondAfter.match(/id: (evt_\S+)/);
     assert.ok(secondEventIdMatch, 'expected the second llm.usage event id to stream alongside the budget frame');
     const secondEventId = secondEventIdMatch[1];
     void secondRes;
     await firstReader.cancel();
 
-    // A third, real canonical event after the transition (still "warning", no new crossing): two canonical events
-    // (this one and the one above) are now missed since `lastEventId`, and the reconnect below must replay both.
+    // A third, real canonical event after the transition (still "warning", no new crossing): three canonical
+    // events (this one, the `budget.alert` just confirmed above, and the cost=4 usage event) are now missed since
+    // `lastEventId`, and the reconnect below must replay all three.
     const thirdRes = await postUsageEvent(baseUrl, agentId, 0.1);
     void thirdRes;
 
@@ -166,14 +173,15 @@ test('SSE: the "budget" frame is never replayed on reconnect and never affects t
     const reconnectReader = reconnect.body.getReader();
     const replay = await readUntil(reconnectReader, decoder, (buf) => buf.includes('connected'));
 
-    // The replay must contain only the two real canonical events missed since `lastEventId` (no resync, since the
-    // gap is small): never a "budget" frame, which was broadcast live and is not stored at all, so it was never a
-    // candidate for replay and never counted toward the gap the reconnect logic computed.
-    assert.ok(!replay.includes('event: budget'), `reconnect replay must never include a "budget" frame:\n${replay}`);
-    assert.ok(!replay.includes('event: resync'), `a two-event gap must replay in full, not resync:\n${replay}`);
+    // The live "event: budget" transition frame is still never stored and never replayed: only the real canonical
+    // events missed since `lastEventId` come back (no resync, since the gap is small), and that now includes the
+    // `budget.alert` event issue #319 added, which is a stored canonical event like any other.
+    assert.ok(!replay.includes('event: budget'), `reconnect replay must never include a live "budget" transition frame:\n${replay}`);
+    assert.ok(!replay.includes('event: resync'), `a three-event gap must replay in full, not resync:\n${replay}`);
     const replayedIds = [...replay.matchAll(/id: (evt_\S+)/g)].map((m) => m[1]);
-    assert.equal(replayedIds.length, 2, `expected exactly two replayed canonical event ids:\n${replay}`);
+    assert.equal(replayedIds.length, 3, `expected exactly three replayed canonical event ids:\n${replay}`);
     assert.equal(replayedIds[0], secondEventId, 'the cost=4 event (the one that triggered the budget transition) replays first');
+    assert.match(replayedIds[1], /^evt_budget_[0-9a-f]{32}$/, 'the budget.alert event replays second, right after the crossing it reports');
 
     await reconnectReader.cancel();
   } finally {

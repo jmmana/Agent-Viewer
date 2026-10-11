@@ -403,6 +403,52 @@ export const RuntimeHeartbeatPayloadSchema = z.object({
   activeAgentsCount: z.number().int().nonnegative().optional(),
 });
 
+/**
+ * Issue #86 (sub-issue #319), server-emitted only: a budget (#85) crossed into `warning` or `exceeded`. Field
+ * names follow the real `BudgetTransition`/`BudgetStatus` shape of `server/budgets.ts` (`BudgetScope.type`/
+ * `value`, `BudgetStatus.knownSpent`, the full `BudgetCallCounts`, a `pricingVersions` array), not the
+ * `BudgetEvaluation` guessed in #86's original draft (written before #85 shipped), which does not exist.
+ */
+export const BudgetAlertPayloadSchema = z.object({
+  /** Equals the event id. */
+  alertId: z.string().min(1),
+  budgetId: z.string().min(1),
+  budgetName: z.string().min(1),
+  scope: z.object({
+    type: z.string().min(1),
+    value: z.string().nullable(),
+  }),
+  period: z.object({
+    type: z.string().min(1),
+    start: z.number().int(),
+    end: z.number().int(),
+  }),
+  state: z.enum(['warning', 'exceeded']),
+  /** Ratio of `limit` crossed: the budget's own `warningRatio` for `'warning'`, `1` for `'exceeded'`. */
+  threshold: z.number().gt(0),
+  limit: z.number().nonnegative(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  /** Sum of every in-scope, in-window call with a usable cost in `currency`. Never a stand-in for an unknown
+   * figure: see `spendIsLowerBound`. */
+  knownSpent: z.number().nonnegative(),
+  /** `true` when some in-scope, in-window call could not be counted toward `knownSpent` (unknown cost, another
+   * currency, or no currency at all): `knownSpent` is then a lower bound, never the true total. */
+  spendIsLowerBound: z.boolean(),
+  calls: z.object({
+    total: z.number().int().nonnegative(),
+    withCost: z.number().int().nonnegative(),
+    unknownCost: z.number().int().nonnegative(),
+    otherCurrency: z.number().int().nonnegative(),
+    missingCurrency: z.number().int().nonnegative(),
+  }),
+  containsEstimates: z.boolean(),
+  pricingVersions: z.array(z.number()).default([]),
+  /** `true` when the crossing was found in a period that had already closed (for example while importing old
+   * history): the outbound webhook (issue #321) never attempts delivery for these. */
+  backfill: z.boolean().default(false),
+  detectedAt: z.number().int(),
+});
+
 // Map of type to schema validator
 const PAYLOAD_SCHEMAS: Record<CanonicalEventType, z.ZodTypeAny> = {
   'agent.registered': AgentRegisteredPayloadSchema,
@@ -428,6 +474,7 @@ const PAYLOAD_SCHEMAS: Record<CanonicalEventType, z.ZodTypeAny> = {
   'runtime.connected': RuntimeConnectedPayloadSchema,
   'runtime.disconnected': RuntimeDisconnectedPayloadSchema,
   'runtime.heartbeat': RuntimeHeartbeatPayloadSchema,
+  'budget.alert': BudgetAlertPayloadSchema,
 };
 
 // -------------------------------------------------------------

@@ -108,6 +108,24 @@ const PAYLOADS = {
   'runtime.connected': { runtimeId: 'rt', framework: 'custom', metadata: { b: { d: 1, c: 2 }, a: [3, 2, 1] } },
   'runtime.disconnected': { runtimeId: 'rt', reason: 'bye' },
   'runtime.heartbeat': { runtimeId: 'rt', activeAgentsCount: 2 },
+  'budget.alert': {
+    alertId: 'evt_budget_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    budgetId: 'bud_team',
+    budgetName: 'Team monthly',
+    scope: { type: 'all', value: null },
+    period: { type: 'month', start: 1_788_220_800_000, end: 1_790_899_200_000 },
+    state: 'warning',
+    threshold: 0.8,
+    limit: 500,
+    currency: 'USD',
+    knownSpent: 401.27,
+    spendIsLowerBound: true,
+    calls: { total: 12, withCost: 11, unknownCost: 1, otherCurrency: 0, missingCurrency: 0 },
+    containsEstimates: false,
+    pricingVersions: [],
+    backfill: false,
+    detectedAt: 1_790_000_000_000,
+  },
 };
 
 test('canonicalJson survives the JSON round trip for validated events of every canonical type', () => {

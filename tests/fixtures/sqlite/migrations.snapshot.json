@@ -12,5 +12,6 @@
   [11, "rollup-attribution"],
   [12, "usage-ledger-estimates"],
   [13, "pricing-recompute"],
-  [14, "budgets"]
+  [14, "budgets"],
+  [15, "budget-alerts"]
 ]

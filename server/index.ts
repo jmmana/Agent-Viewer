@@ -31,6 +31,7 @@ import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from '.
 import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
 import { createStreamTicketStore } from './stream-tickets';
 import { getPricingStore } from './pricing/store';
+import { registerPricingRoutes } from './pricing/api';
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
 import {
   decodeExportLogsServiceRequest,
@@ -2548,6 +2549,19 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
       results: formattedResults,
     });
   }
+});
+
+// -------------------------------------------------------------
+// Pricing admin API (issue #83 section 5, sub-issue #272): the 8 `/api/v1/pricing*` endpoints, built on the
+// contract/resolver (issue #270) and the file store (issue #271). Sits under `/api/v1` like every route above,
+// so it already has the rate limiter, the query-token rejection, the open-mode guard and the Bearer auth
+// registered earlier in this file. `getStore` is passed as a thunk (never called here at import time) so that
+// importing this module alone still creates no file (issue #83's own acceptance criterion).
+// -------------------------------------------------------------
+registerPricingRoutes(app, {
+  getStore: getPricingStore,
+  hasAdminToken: () => currentAuthMode() === 'token',
+  usageRollup: (query) => store.rollup(query),
 });
 
 // Safe global error handler returning JSON without stack traces or absolute paths.

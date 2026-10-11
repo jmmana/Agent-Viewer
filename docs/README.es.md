@@ -594,7 +594,7 @@ Los alias como `message.sent`, `meeting.decision` o `approval.requested` se trad
 
 </details>
 
-**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los SDK nunca suponen `provider-reported`: un costo enviado sin `costSource` declarado sale como `unknown`. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés).
+**Regla de consumo:** reporta `cost` cuando el proveedor lo entrega (`costSource: "provider-reported"`). Si no lo sabes, envía `null` con `costSource: "unknown"`: seguirá siendo desconocido hasta la pantalla. Los SDK nunca suponen `provider-reported`: un costo enviado sin `costSource` declarado sale como `unknown`. Los logs usan el mismo sobre, un evento por línea: mira [event-log.md](event-log.md) (en inglés). Un costo estimado por el servidor (`costSource: "estimated"`) sale de la tabla de precios versionada (ver más abajo), siempre se etiqueta `estimated` y nunca se mezcla en una misma suma con un costo reportado por el proveedor.
 
 ---
 
@@ -647,6 +647,26 @@ flowchart LR
 | `POST` / `GET` | `/api/v1/runtimes` | Registra un runtime (latido) / lista los runtimes. |
 | `GET` | `/api/v1/sessions`, `/api/v1/sessions/:sessionId` | Lista las sesiones / muestra una con sus eventos. |
 | `POST` | `/api/v1/webhooks/generic` | Webhook plano: `agent`, `status`, `message`, `tool`, `usage`. |
+| `GET` | `/api/v1/pricing` | Tabla de precios versionada actual: estado, metadatos del starter y cada entrada de precio. |
+| `POST` | `/api/v1/pricing/changes` | Aplica un cambio atómico (altas/bajas) a la tabla de precios y crea la siguiente versión. Exige token de API; deshabilitado por `AGENT_VIEWER_PRICING_READONLY`. |
+| `GET` | `/api/v1/pricing/versions` | Lista las versiones de la tabla de precios, más nueva primero. |
+| `GET` | `/api/v1/pricing/versions/:version` | Una foto histórica completa de la tabla de precios. |
+| `GET` | `/api/v1/pricing/versions/:version/diff` | Entradas agregadas, eliminadas y cambiadas entre dos versiones. |
+| `GET` | `/api/v1/pricing/resolve` | Resuelve el precio de `provider`/`model` en un instante, respetando overrides; nunca un precio de reemplazo. |
+| `GET` | `/api/v1/pricing/coverage` | Modelos del libro mayor sin precio resoluble en la tabla actual (necesita el libro mayor de consumo). |
+| `POST` | `/api/v1/pricing/reload` | Relee `pricing.json` del disco. Exige token de API; funciona incluso en modo solo lectura. |
+
+### Tabla de precios del servidor (issue #83)
+
+El servidor mantiene una tabla de precios versionada, persistida en archivos (`pricing.json` más un historial
+append-only), nunca en la biblioteca embebible. Cada cambio aceptado crea una versión inmutable
+(`pricingVersion`), así que una estimación de costo (issue #84, todavía no implementada) siempre se puede
+reproducir: "¿qué precios produjeron este número?". No hay precio de reemplazo: un modelo sin precio en la tabla
+queda sin precio, nunca se trata como cero ni toma el precio de otro modelo. Al arrancar sin archivos, el servidor
+siembra una tabla starter incluida (OpenAI, Anthropic y Google) como versión 1; una versión más nueva del starter
+nunca se aplica sola, hay que copiar las entradas a mano y recargar. El detalle completo (formato de archivo,
+overrides, reglas de resolución y alias, política de "nunca un precio de reemplazo", actualización manual del
+starter, respaldo y la nota de seguridad) está en [pricing.md](pricing.md) (en inglés).
 
 **Campos PATCH del agente:** `name`, `roleTitle`, `provider` y `model` emiten `agent.updated`. `status` emite `agent.status.changed`; `statusText` y `workspace` acompañan ese evento cuando se incluye `status`, y en caso contrario emiten `agent.updated`. Los valores deben ser cadenas: los campos del perfil y `workspace` se recortan y deben tener entre 1 y 200 caracteres; `statusText`, entre 0 y 1000; y `status` debe ser un estado conocido. Se rechazan los demás campos. No se pueden modificar campos de uso como `tokensInput`, `inputTokens`, `cachedTokens`, `cost`, `currency` y `latencyMs`. Reporta el uso con un evento `llm.usage` en `POST /api/v1/events` o con la función auxiliar `usage()` del SDK.
 
@@ -832,6 +852,9 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | `AGENT_VIEWER_RETENTION_INTERVAL_MINUTES` | `60` | Cada cuánto corre el trabajo de purga, una vez definida cualquiera de las dos ventanas. Entero de `1` a `1440`. |
 | `AGENT_VIEWER_EXPORT_MAX_ROWS` | `1000000` | Por encima de esta cantidad de filas coincidentes, `GET /api/v1/usage/export` responde `422 export_too_large` (con el conteo real y este límite) antes de transmitir nada, en vez de truncar en silencio. Acota los filtros o usa ventanas `afterSeq`/`asOfSeq`. Ver [usage-export.md](usage-export.md). |
 | `AGENT_VIEWER_EXPORT_CONCURRENCY` | `2` | Exportaciones concurrentes (`GET /api/v1/usage/export`) que este proceso atiende a la vez; por encima, `429 export_busy` con `Retry-After: 5`. No aplica a `GET /api/v1/usage/export/totals` (una sola lectura, no un flujo largo). |
+| `AGENT_VIEWER_PRICING_FILE` | `pricing.json` junto a `AGENT_VIEWER_SQLITE_PATH` | Tabla de precios versionada, editable por el operador. Ver [pricing.md](pricing.md) (en inglés). |
+| `AGENT_VIEWER_PRICING_HISTORY_FILE` | `pricing-history.jsonl` junto al archivo de precios | Historial append-only de cada versión de precios. Nunca lo edites a mano. |
+| `AGENT_VIEWER_PRICING_READONLY` | sin definir | `1` deshabilita `POST /api/v1/pricing/changes` (gestión de precios solo por archivo); `POST /api/v1/pricing/reload` sigue funcionando. |
 | `VITE_AGENT_VIEWER_API_URL` | ninguno | App de demostración: servidor del que recibe el flujo. Sin ella, solo el modo en vivo se conecta (a `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | ninguno | App de demostración: `live` arranca en modo en vivo, igual que `?mode=live`. `npm run dev:full` la define por ti. |
 | `VITE_AGENT_VIEWER_HISTORY_LIMIT` | `1000` | App de demostración, modo en vivo: límite (1 a 5000) de eventos que el portal carga al abrir, más allá de los 100 más recientes del snapshot, mediante `GET /api/v1/events?beforeId=...`. Solo la cronología de actividad llega a esa profundidad; las cifras de tokens y costo siempre vienen de los totales propios del snapshot. Un valor inválido usa el valor por defecto. |

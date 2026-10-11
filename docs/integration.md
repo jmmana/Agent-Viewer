@@ -469,6 +469,26 @@ Report token usage and cost as `llm.usage` events through `POST /api/v1/events`,
 ### Webhook
 - `POST /api/v1/webhooks/generic`: Simplified webhook intake.
 
+### Pricing admin API (issue #83, `/api/v1/pricing*`)
+
+A versioned, file-backed pricing table the server alone can read and write (the embeddable library never prices
+usage). Full format, lifecycle and resolution rules: [docs/pricing.md](pricing.md).
+
+- `GET /api/v1/pricing`: current table (`status`, `pricingVersion`, `contentHash`, `starter` metadata, every
+  entry). Reads need the normal `/api/v1` token, like every other route here.
+- `POST /api/v1/pricing/changes`: one atomic change (`upserts`/`removals`), guarded by `expectedVersion` so two
+  concurrent writers cannot overwrite each other (`409 version_conflict`). Requires an API token to be configured
+  at all (`403 admin_requires_token` on an open server) and is disabled by `AGENT_VIEWER_PRICING_READONLY=1`
+  (`403 pricing_readonly`).
+- `GET /api/v1/pricing/versions` / `GET /api/v1/pricing/versions/:version` / `.../:version/diff?against=:other`:
+  list, inspect and diff any past version. A version is never edited or deleted.
+- `GET /api/v1/pricing/resolve?provider=&model=&at=[&version=]`: the exact price (or `404 price_not_found`) that
+  would apply, honoring overrides; never a fallback price.
+- `GET /api/v1/pricing/coverage?since=&limit=`: which `(provider, model)` pairs the usage ledger has seen but the
+  current table cannot price (needs the usage ledger, issue #65).
+- `POST /api/v1/pricing/reload`: re-reads `pricing.json` after a hand edit. Requires an API token; works even in
+  read-only mode.
+
 ---
 
 ## 📦 4. Batch Ingestion
@@ -856,6 +876,7 @@ The list is exported as `LLM_ERROR_KINDS` (with the `isLlmErrorKind` guard) from
 - `cachedTokens: 0` and `reasoningTokens: 0` in events stored by 0.2.x may mean "not reported": the 0.2.x validator wrote `0` when the field was missing. Stored rows are not rewritten.
 - Mixed versions: a 0.3.0 SDK needs a 0.3.0 server. A 0.2.x server rejects `llm.failed` with HTTP 400 and silently drops `cacheReadTokens` and `cacheWriteTokens`.
 - The loose normalizer used by the embedded library and the generic webhook no longer writes `0` for a missing `inputTokens` or `outputTokens`. A webhook `usage` object without them is stored as an `llm.usage` event without those keys, which means unknown.
+- `costSource: "estimated"` is produced by the server, not sent by a client: it comes from resolving a ledger row against the versioned pricing table (issue #83, [docs/pricing.md](pricing.md)), which records exactly which `pricingVersion` produced the number. That resolution step itself is issue #84, not yet implemented; this item only ships the table and its admin API.
 
 ### Usage aggregates (`GET /api/v1/usage`)
 

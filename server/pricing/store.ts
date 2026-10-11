@@ -84,6 +84,12 @@ export class PricingStoreUnwritableError extends Error {
   }
 }
 
+/** Result of `PricingStore.applyApiChange` (issue #83 section 5, sub-issue #272, `POST /pricing/changes`). */
+export interface PricingChangeResult {
+  changed: boolean;
+  snapshot: PricingStoreSnapshot;
+}
+
 export interface PricingStore {
   /** The current snapshot, loading (seeding or ingesting `pricing.json`) on the very first call. */
   getSnapshot(): PricingStoreSnapshot;
@@ -93,6 +99,14 @@ export interface PricingStore {
   getVersion(version: number): PricingVersion | null;
   /** Every version recorded so far, oldest first. */
   listVersions(): readonly PricingVersion[];
+  /**
+   * Commits `entries` (already validated as a whole collection by the caller) as a brand-new version with
+   * `origin: 'api'` (issue #83 section 5, `POST /pricing/changes`): a no-op (`changed: false`, no new version)
+   * when the resulting content hash is unchanged from the active version. Throws `PricingStoreUnwritableError` on
+   * a write failure, exactly like `reload()`. The route is responsible for every HTTP-shaped decision before
+   * calling this (admin token, `readonly`, `status`, `expectedVersion`): this method only knows how to commit.
+   */
+  applyApiChange(entries: PriceEntry[], meta: { reason: string; actor: string | null }): PricingChangeResult;
 }
 
 function describeError(error: unknown): string {
@@ -579,7 +593,18 @@ export function createPricingStore(options: PricingStoreOptions): PricingStore {
     return versions;
   }
 
-  return { getSnapshot, reload, getVersion, listVersions };
+  function applyApiChange(entries: PriceEntry[], meta: { reason: string; actor: string | null }): PricingChangeResult {
+    ensureLoaded();
+    const current = activeVersion();
+    const candidateHash = computeContentHash(entries);
+    if (current && candidateHash === current.contentHash) {
+      return { changed: false, snapshot: getSnapshot() };
+    }
+    commitVersion(entries, { origin: 'api', reason: meta.reason, actor: meta.actor, starterAsOf: current?.starterAsOf ?? null });
+    return { changed: true, snapshot: getSnapshot() };
+  }
+
+  return { getSnapshot, reload, getVersion, listVersions, applyApiChange };
 }
 
 /** Same default as `server/store.ts`'s SQLite path, so the pricing file lands next to the database by default. */

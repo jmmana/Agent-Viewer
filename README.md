@@ -602,7 +602,7 @@ Aliases such as `message.sent`, `meeting.decision` or `approval.requested` are m
 
 </details>
 
-**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. The SDKs never assume `provider-reported`: a cost sent without a stated `costSource` goes out as `unknown`. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md).
+**Usage rule:** report `cost` when the provider gives it (`costSource: "provider-reported"`). When you do not know it, send `null` with `costSource: "unknown"`: it stays unknown all the way to the screen. The SDKs never assume `provider-reported`: a cost sent without a stated `costSource` goes out as `unknown`. Logs use the same envelope, one event per line: see [event-log.md](docs/event-log.md). A server-side estimate (`costSource: "estimated"`) comes from the versioned pricing table below, is always labeled `estimated`, and is never mixed with a provider-reported cost in one sum.
 
 ---
 
@@ -655,6 +655,14 @@ flowchart LR
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |
 | `GET` | `/api/v1/sessions`, `/api/v1/sessions/:sessionId` | List sessions / inspect one with its events. |
 | `POST` | `/api/v1/webhooks/generic` | Flat webhook: `agent`, `status`, `message`, `tool`, `usage`. |
+| `GET` | `/api/v1/pricing` | Current versioned pricing table: status, starter metadata, and every price entry. |
+| `POST` | `/api/v1/pricing/changes` | Apply one atomic change (upserts/removals) to the pricing table, creating the next version. Requires an API token; disabled by `AGENT_VIEWER_PRICING_READONLY`. |
+| `GET` | `/api/v1/pricing/versions` | List pricing table versions, newest first. |
+| `GET` | `/api/v1/pricing/versions/:version` | One full historical pricing snapshot. |
+| `GET` | `/api/v1/pricing/versions/:version/diff` | Entries added, removed and changed between two versions. |
+| `GET` | `/api/v1/pricing/resolve` | Resolve the price for `provider`/`model` at an instant, honoring overrides; never a fallback price. |
+| `GET` | `/api/v1/pricing/coverage` | Ledger models with no resolvable price in the current table (needs the usage ledger). |
+| `POST` | `/api/v1/pricing/reload` | Re-read `pricing.json` from disk. Requires an API token; works even in read-only mode. |
 
 **PATCH agent fields:** `name`, `roleTitle`, `provider`, and `model` emit `agent.updated`. `status` emits `agent.status.changed`; `statusText` and `workspace` accompany that event when `status` is present, and otherwise emit `agent.updated`. Values must be strings: profile fields and `workspace` are trimmed and limited to 1-200 characters, `statusText` to 0-1000 characters, and `status` must be a known status. All other fields are rejected. Usage fields such as `tokensInput`, `inputTokens`, `cachedTokens`, `cost`, `currency`, and `latencyMs` cannot be patched. Report usage through `POST /api/v1/events` with an `llm.usage` event or the SDK `usage()` helper.
 
@@ -840,6 +848,9 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_RETENTION_INTERVAL_MINUTES` | `60` | How often the purge job runs, once either window above is set. Integer `1` to `1440`. |
 | `AGENT_VIEWER_EXPORT_MAX_ROWS` | `1000000` | Above this many matching rows, `GET /api/v1/usage/export` answers `422 export_too_large` (with the actual row count and this limit) before streaming anything, rather than truncating silently. Narrow the filters or use `afterSeq`/`asOfSeq` windows. See [docs/usage-export.md](docs/usage-export.md). |
 | `AGENT_VIEWER_EXPORT_CONCURRENCY` | `2` | Concurrent `GET /api/v1/usage/export` requests this process serves at once; above it, `429 export_busy` with `Retry-After: 5`. Does not apply to `GET /api/v1/usage/export/totals` (a single read, not a long-running stream). |
+| `AGENT_VIEWER_PRICING_FILE` | `pricing.json` next to `AGENT_VIEWER_SQLITE_PATH` | Operator-editable, versioned pricing table. See [docs/pricing.md](docs/pricing.md). |
+| `AGENT_VIEWER_PRICING_HISTORY_FILE` | `pricing-history.jsonl` next to the pricing file | Append-only history of every pricing version. Never edit by hand. |
+| `AGENT_VIEWER_PRICING_READONLY` | unset | `1` disables `POST /api/v1/pricing/changes` (file-only pricing management); `POST /api/v1/pricing/reload` still works. |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
 | `VITE_AGENT_VIEWER_MODE` | none | Demo app: `live` boots in live mode, like `?mode=live`. `npm run dev:full` sets it for you. |
 | `VITE_AGENT_VIEWER_HISTORY_LIMIT` | `1000` | Demo app, live mode: upper bound (1 to 5000) of events the portal loads on open, beyond the snapshot's own newest 100, through `GET /api/v1/events?beforeId=...`. Only the activity timeline goes this deep; the token and cost figures always come from the snapshot's own totals. An invalid value falls back to the default. |

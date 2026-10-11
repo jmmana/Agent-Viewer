@@ -614,7 +614,7 @@ Notes:
 
 These four rules hold for every usage-related prop (`showUsage`, `showUsageBadges`, `showCallDetails`, `meetingUsage` and the usage option of `recordReplay` alike). This is the one place that states them together; the rest of this chapter only explains the mechanics.
 
-1. **The host computes, the component displays.** Figures arrive through props. The component never sums, prices, converts currency or compares against a limit: there is no prop that makes the office add events up itself.
+1. **The host computes, the component displays.** Figures arrive through props. The component never sums, prices, converts currency or compares against a limit: there is no prop that makes the office add events up itself. The server's versioned pricing table (issue #83, [docs/pricing.md](pricing.md)) is server-only too: the library never receives, stores or applies a price, and has no pricing prop.
 2. **Hidden by default.** `showUsage`, `showUsageBadges` and `showCallDetails` are each `false` until the host opts in. Nothing about usage renders before then, whatever `usage`, `meetingUsage` or `agentCallDetails` carry.
 3. **Unknown is never zero.** A missing or `null` figure is shown as "unknown" (`usage.unknown`), never as `0`. A real reported `0` still shows `0`.
 4. **Metadata only.** The call detail panel shows model, provider, tokens, `requestId`, latency, status and cost. `AgentCallDetail` has no field for a prompt, a completion or tool arguments, and the panel reads only its named fields, never the whole object, so an extra key can never leak through.

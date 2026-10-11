@@ -102,6 +102,17 @@ function zonedInstantSchema(label: string) {
     .transform((value) => new Date(value).toISOString());
 }
 
+/**
+ * Validates and normalizes a value the same way `effectiveFrom` is (issue #83 section 2): an ISO 8601 instant
+ * with an explicit zone, normalized to UTC milliseconds. Exported for `GET /pricing/resolve`'s `at` parameter
+ * (issue #83 section 5, sub-issue #272), which follows the identical rule ("a missing or unparseable `at`, or an
+ * `at` without zone, is `400 validation_failed`") but is not itself a `PriceEntry` field.
+ */
+export function parseZonedInstant(value: unknown): string | null {
+  if (typeof value !== 'string' || !ZONED_INSTANT_PATTERN.test(value) || Number.isNaN(Date.parse(value))) return null;
+  return new Date(value).toISOString();
+}
+
 /** A finite price `>= 0` and `<= 1,000,000`, or `null` for "unknown" (never a default, never 0 for "not found"). */
 const priceFieldSchema = z
   .number()
@@ -305,6 +316,29 @@ export const PricingVersionSchema = z.strictObject({
 function naturalKey(entry: Pick<PriceEntry, 'provider' | 'model' | 'kind' | 'effectiveFrom'>): string {
   return `${entry.provider}\u0000${entry.model}\u0000${entry.kind}\u0000${entry.effectiveFrom}`;
 }
+
+/**
+ * Public name for `naturalKey`, exported for `POST /pricing/changes` (issue #83 section 5, sub-issue #272): the
+ * route needs the exact same identity function to match a removal or upsert against the current version's
+ * entries, rather than re-deriving the separator convention on its own.
+ */
+export function priceEntryNaturalKey(entry: Pick<PriceEntry, 'provider' | 'model' | 'kind' | 'effectiveFrom'>): string {
+  return naturalKey(entry);
+}
+
+/**
+ * The natural key fields alone (`provider`, `model`, `kind`, `effectiveFrom`), normalized exactly like a full
+ * entry. Used by `POST /pricing/changes`'s `removals` (issue #83 section 5): a removal identifies an existing
+ * entry without repeating its prices.
+ */
+export const PriceEntryKeySchema = z.strictObject({
+  provider: priceEntryFields.provider,
+  model: priceEntryFields.model,
+  kind: priceEntryFields.kind,
+  effectiveFrom: priceEntryFields.effectiveFrom,
+});
+
+export type PriceEntryKey = z.infer<typeof PriceEntryKeySchema>;
 
 /** Sorts entries by `(provider, model, kind, effectiveFrom)`, per issue #83 section 2. Does not mutate the input. */
 export function sortPriceEntries(entries: readonly PriceEntry[]): PriceEntry[] {

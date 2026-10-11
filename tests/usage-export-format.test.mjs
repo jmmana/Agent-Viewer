@@ -341,7 +341,7 @@ test('shapeExportTotals: memory-mode eviction reports complete=false, incomplete
     }
     const filters = emptyUsageFilters();
     filters.agentId = ['agent-cap'];
-    const rollup = await store.rollup({ groupBy: ['agent'], filters, sort: 'key', limit: 1 });
+    const rollup = await store.rollup({ groupBy: ['agent'], filters, sort: 'key', limit: 1, include: [] });
     const totals = shapeExportTotals(rollup, filters);
     assert.equal(totals.complete, false);
     assert.equal(totals.incompleteReason, 'evicted');
@@ -357,7 +357,7 @@ test('shapeExportTotals: a fresh store under its cap reports complete=true with 
     await store.append(usageEvent('evt_fresh', 'agent-fresh'));
     const filters = emptyUsageFilters();
     filters.agentId = ['agent-fresh'];
-    const rollup = await store.rollup({ groupBy: ['agent'], filters, sort: 'key', limit: 1 });
+    const rollup = await store.rollup({ groupBy: ['agent'], filters, sort: 'key', limit: 1, include: [] });
     const totals = shapeExportTotals(rollup, filters);
     assert.equal(totals.complete, true);
     assert.equal('incompleteReason' in totals, false);

@@ -1016,6 +1016,7 @@ Authorization: Bearer <token>
 | `asOfSeq` | integer >= 1 | current end of ledger | Only rows with ledger `seq <= asOfSeq`, so a figure can be reproduced later (barring retention or memory-mode eviction; see `coverage` below). |
 | `sort` | `key` \| `calls` | `key` | `key` is ascending by each group key (UTF-8 byte order, `null` last); `calls` is `calls.total` descending, tied by key ascending. Cost is never a sort key: it is not comparable across currencies. |
 | `limit` | 1..10000 | 1000 | Maximum groups returned; `truncated` and `groupCount` say when there were more. |
+| `include` | comma-separated, `latency` and/or `failures` | none | Issue #89. Opt-in; omitting it reproduces the exact response below, unchanged. An unknown value is `400 invalid_filter`. See **Latency and failure rates** below. |
 
 Example response:
 
@@ -1071,6 +1072,25 @@ Example response:
 **`coverage`** says when the answer may be incomplete instead of returning a partial figure as if it were whole: `storage` is which store answered, `complete` is `false` when rows that could match the query may be gone (memory mode once its ledger cap drops rows, future retention purges reaching the query range), `droppedRows` is memory mode's own upper bound on rows it could not keep, `purgedThrough` is `null` until retention (issue #70) lands, and `backfilledRows`/`legacyContractRows` count matching rows that came from a pre-0.4.0 database (whose receive time is the original insert time).
 
 **Errors.** `400 { "error": "invalid_filter", "issues": [{ "path", "message" }] }` for an unknown dimension, more than 3 dimensions, a duplicate dimension, an unknown query parameter, `from >= to`, an unparsable or offset-less date, `limit`/`asOfSeq`/`utcOffsetMinutes` out of range, more than 100 values in one filter, an empty `meetingId`/`toolCallId`/`tool` value, or an unknown `meetingAttribution`/`toolAttribution` value. `401` comes from the usual token middleware.
+
+**Latency and failure rates (`include=latency,failures`, issue #89).** Opt-in extension to the same groups and `totals`; the fields below are absent entirely (not `null`, not `0`) unless requested, so omitting `include` reproduces the response above byte-for-byte.
+
+```http
+GET /api/v1/usage/rollup?groupBy=model&include=latency,failures
+```
+
+```json
+{
+  "failedCalls": 37, "attempts": 1217, "failureRate": 0.030402630,
+  "failures": { "byErrorKind": { "rate_limited": 21, "timeout": 9, "unspecified": 2 }, "rateLimitCount": 21 },
+  "latency": { "p50Ms": 820, "p95Ms": 2310, "samples": 1102, "missing": 78, "method": "nearest-rank" }
+}
+```
+
+- **`latency`.** A sample is a succeeded (`llm.usage`) row whose `latencyMs` is a finite integer >= 0; a reported `0` is a real sample, an absent or `null` value is not and is never coerced to `0`. Rows without one are excluded from the percentile and counted in `missing`; `samples + missing` always equals that group's `calls.succeeded`. `p50Ms`/`p95Ms` use nearest-rank on the sorted samples (`value = sorted[ceil(p * n) - 1]`, `p` in `{0.5, 0.95}`), always an observed value, never interpolated, stated as `method: "nearest-rank"`. Zero samples means `p50Ms`/`p95Ms: null`, never `0`. A failed (`llm.failed`) row's own `latencyMs`, if it has one, never enters this percentile. `totals.latency` is computed from the raw set of every row matching the query's filters, never by combining the groups' own percentiles: a `totals` figure can differ from every individual group's own `p95Ms` and from their average.
+- **`failures`.** `failedCalls` counts `llm.failed` rows (same number as `calls.failed`); `attempts = calls.succeeded + failedCalls`; `failureRate = failedCalls / attempts`, unrounded, `null` only when `attempts` is `0` (a real `0` means there were attempts and none failed). `byErrorKind` groups failed rows by the ledger's `errorKind`; a row with no recognized `errorKind` (including the ledger's own `'unknown'` sentinel for "never reported one") is bucketed as `unspecified`, never dropped. `rateLimitCount` counts only `errorKind: "rate_limited"`. Agent Viewer's own ingest-rate-limiter `429 rate_limit_exceeded` responses never reach the ledger (the request is rejected before any event is stored) and so can never be counted here, under any `errorKind`.
+- **Dedup.** Deduplication by `(provider, requestId)` (issue #48) already happened when the row was written to the ledger, so every row this endpoint reads is already one distinct attempt; nothing here recomputes or loosens that.
+- With `include=latency` alone, `failedCalls`/`attempts`/`failureRate`/`failures` are absent; with `include=failures` alone, `latency` is absent.
 
 **Feeding the embedded library.** The TypeScript SDK's `usageRollup()` calls this endpoint (same `buildHeaders()`, token in the `Authorization` header, array filters sent as repeated params), and its `toUsageFigures(group, { costSource })` helper maps one group (or `totals`) to the library's own `UsageFigures` shape, returning `cost: null` whenever there is more than one cost entry, an entry of a different source than requested, or any unknown cost. See [Feeding `usage` from the server](library.md#feeding-usage-from-the-server-issue-66) in the library guide. The Python SDK's `usage_rollup()` calls the same endpoint with snake_case keyword filters. The library itself is unchanged: it still never sums, prices or estimates anything, and `showUsage` stays off until the host passes a `usage` prop.
 

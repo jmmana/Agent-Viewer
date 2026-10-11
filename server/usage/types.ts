@@ -35,6 +35,7 @@
 import type { LedgerEventType, CostSource } from '../usageLedger';
 import { LLM_ERROR_KINDS, type LlmErrorKind } from '../../src/integrations/canonicalTypes';
 import type { MeetingAttributionState, ToolAttributionState } from './attribution';
+import type { ReliabilityFailures, ReliabilityLatency } from './reliability';
 
 export type { CostSource } from '../usageLedger';
 
@@ -284,6 +285,19 @@ export interface UsageRollupTotals {
   /** On the selected time basis. */
   firstAt: number | null;
   lastAt: number | null;
+  /** Issue #89: present only when the request's `include` contains `failures`. Omitting `include` (or omitting
+   * just `failures` from it) must reproduce byte-for-byte the response this endpoint returned before this issue,
+   * so these fields are optional and simply absent, never `null`, when not requested. `failedCalls` duplicates
+   * `calls.failed` (kept as its own top-level field because that is the literal shape the issue's API asks for). */
+  failedCalls?: number;
+  /** `calls.succeeded + failedCalls`. */
+  attempts?: number;
+  /** Unrounded; `null` only when `attempts` is `0` (never a false `0`). */
+  failureRate?: number | null;
+  failures?: ReliabilityFailures;
+  /** Issue #89: present only when `include` contains `latency`. See `failedCalls` above for the same
+   * byte-for-byte-unchanged-when-absent rule. */
+  latency?: ReliabilityLatency;
 }
 
 /**
@@ -362,12 +376,26 @@ export interface UsageRollupResponse {
   totals: UsageRollupTotals;
 }
 
-/** A fully parsed, validated rollup request: `UsageFilters` plus the rollup-only `groupBy`/`sort`/`limit` (kept
- * out of the shared `UsageFilters`/`parseUsageFilters` on purpose: `limit` already means something different,
- * and with a different valid range, for the calls endpoint's pagination). */
+/** Issue #89's opt-in extension to the rollup response: `latency` (p50/p95/samples/missing) and/or `failures`
+ * (failedCalls/attempts/failureRate/byErrorKind/rateLimitCount). */
+export type RollupInclude = 'latency' | 'failures';
+
+export const ROLLUP_INCLUDE_VALUES: readonly RollupInclude[] = ['latency', 'failures'];
+
+export function isRollupInclude(value: unknown): value is RollupInclude {
+  return typeof value === 'string' && (ROLLUP_INCLUDE_VALUES as readonly string[]).includes(value);
+}
+
+/** A fully parsed, validated rollup request: `UsageFilters` plus the rollup-only `groupBy`/`sort`/`limit`/`include`
+ * (kept out of the shared `UsageFilters`/`parseUsageFilters` on purpose: `limit` already means something
+ * different, and with a different valid range, for the calls endpoint's pagination; `include` is rollup-only by
+ * definition). */
 export interface RollupQuery {
   groupBy: RollupDimension[];
   filters: UsageFilters;
   sort: RollupSort;
   limit: number;
+  /** Issue #89. Empty (the default, when the `include` parameter is absent) means the response this endpoint
+   * returned before this issue, byte-for-byte unchanged. */
+  include: RollupInclude[];
 }

@@ -1461,7 +1461,9 @@ function exportQueryErrorResponse(res: express.Response, error: ExportQueryError
 const EXPORT_SCOPE_GROUP_BY: RollupQuery['groupBy'] = ['agent'];
 
 async function resolveExportScope(filters: UsageFilters) {
-  return store.rollup({ groupBy: EXPORT_SCOPE_GROUP_BY, filters, sort: 'key', limit: 1 });
+  // Issue #89: the export route never needs `latency`/`failures` (it reads only `asOf`/`totals.calls`/
+  // `coverage`), so `include` stays empty here, same as every other caller that predates that issue.
+  return store.rollup({ groupBy: EXPORT_SCOPE_GROUP_BY, filters, sort: 'key', limit: 1, include: [] });
 }
 
 let activeExports = 0;

@@ -21,11 +21,13 @@ import type { CostSource, UsageLedgerRow } from '../usageLedger';
 import { parseUsageFilters, type UsageFilterIssue } from './filters';
 import {
   ROLLUP_DIMENSIONS,
+  ROLLUP_INCLUDE_VALUES,
   TOKEN_KINDS,
   filtersToEcho,
   isAttributionDimension,
   type RollupDimension,
   type RollupGroupKey,
+  type RollupInclude,
   type RollupQuery,
   type RollupSort,
   type TokenKind,
@@ -44,6 +46,7 @@ import {
   truncateFreeText,
   type AttributionState,
 } from './attribution';
+import { computeFailureRate, failureErrorKindKey, summarizeFailures, summarizeLatency } from './reliability';
 
 // -------------------------------------------------------------
 // 1. Request parsing (`groupBy`, `sort`, `limit`, plus the shared filters, plus the full unknown-parameter check)
@@ -76,9 +79,10 @@ function expandBareDateParam(value: unknown): unknown {
 export function parseRollupQuery(query: Record<string, unknown>): RollupQuery {
   const issues: UsageFilterIssue[] = [];
 
-  // groupBy/sort/limit are rollup-only, parsed here rather than by the shared parser: rollup's own `limit`
-  // means something different, with a different valid range, from the calls endpoint's pagination `limit`.
-  const { groupBy: groupByRaw, sort: sortRaw, limit: limitRaw, ...coreQuery } = query;
+  // groupBy/sort/limit/include are rollup-only, parsed here rather than by the shared parser: rollup's own
+  // `limit` means something different, with a different valid range, from the calls endpoint's pagination
+  // `limit`, and `include` (issue #89) exists only on this endpoint.
+  const { groupBy: groupByRaw, sort: sortRaw, limit: limitRaw, include: includeRaw, ...coreQuery } = query;
   if ('from' in coreQuery) coreQuery.from = expandBareDateParam(coreQuery.from);
   if ('to' in coreQuery) coreQuery.to = expandBareDateParam(coreQuery.to);
 
@@ -137,13 +141,44 @@ export function parseRollupQuery(query: Record<string, unknown>): RollupQuery {
     }
   }
 
+  // Issue #89: comma-separated subset of `latency`/`failures`, same splitting style as `groupBy` above. Absent
+  // means `[]`, which reproduces the response this endpoint returned before this issue, byte-for-byte unchanged
+  // (see `shapeTotals`/`shapeGroup`, the only two places that ever read `include`).
+  const includeValues: string[] = [];
+  if (includeRaw !== undefined) {
+    const items = Array.isArray(includeRaw) ? includeRaw : [includeRaw];
+    for (const item of items) {
+      if (typeof item !== 'string') {
+        issues.push({ path: 'include', message: 'must be a string' });
+        continue;
+      }
+      for (const part of item.split(',')) {
+        const trimmed = part.trim();
+        if (trimmed.length > 0) includeValues.push(trimmed);
+      }
+    }
+  }
+  const includeSeen = new Set<RollupInclude>();
+  const include: RollupInclude[] = [];
+  for (const value of includeValues) {
+    if (!(ROLLUP_INCLUDE_VALUES as readonly string[]).includes(value)) {
+      issues.push({ path: 'include', message: `unknown value "${value}" (expected "latency" and/or "failures")` });
+      continue;
+    }
+    const typed = value as RollupInclude;
+    if (!includeSeen.has(typed)) {
+      includeSeen.add(typed);
+      include.push(typed);
+    }
+  }
+
   const parsed = parseUsageFilters(coreQuery, { allowCallsOnly: false, allowRollupOnly: true });
   if (!parsed.ok) issues.push(...parsed.issues);
 
   if (issues.length > 0) throw new UsageFilterError(issues);
   if (!parsed.ok) throw new UsageFilterError(parsed.issues); // unreachable: covered by the check above
 
-  return { groupBy, filters: parsed.value.filters, sort, limit };
+  return { groupBy, filters: parsed.value.filters, sort, limit, include };
 }
 
 // -------------------------------------------------------------
@@ -176,6 +211,16 @@ interface RawAggregate {
   unknownCostCalls: number;
   firstAt: number | null;
   lastAt: number | null;
+  /** Issue #89. Only ever pushed to from a succeeded (`llm.usage`) row's reported `latencyMs`; a failed row's
+   * latency, if any, is never read (rule 3: failure latency never enters the success percentiles). Always
+   * accumulated (memory mode's `accumulateRow` is cheap either way); only ever read by `shapeTotals`/`shapeGroup`
+   * when `include` contains `latency`. */
+  latencySamples: number[];
+  /** Count of succeeded calls with no reported `latencyMs` (`samples + missing === calls.succeeded`). */
+  latencyMissing: number;
+  /** Issue #89. Keyed by `failureErrorKindKey` output (so `'unspecified'` is the only bucket a missing/
+   * unrecognized `errorKind` can land in); only ever incremented by a `llm.failed` row. */
+  failuresByErrorKind: Record<string, number>;
 }
 
 function newRawAggregate(
@@ -195,6 +240,9 @@ function newRawAggregate(
     unknownCostCalls: 0,
     firstAt: null,
     lastAt: null,
+    latencySamples: [],
+    latencyMissing: 0,
+    failuresByErrorKind: {},
   };
 }
 
@@ -238,7 +286,7 @@ function compareCostEntries(a: RawCostEntry, b: RawCostEntry): number {
   return COST_SOURCE_ORDER[a.costSource] - COST_SOURCE_ORDER[b.costSource];
 }
 
-function shapeTotals(raw: RawAggregate): UsageRollupTotals {
+function shapeTotals(raw: RawAggregate, include: readonly RollupInclude[]): UsageRollupTotals {
   const tokens = {} as UsageRollupTotals['tokens'];
   for (const kind of TOKEN_KINDS) {
     const reportedCalls = raw.tokenReported[kind];
@@ -251,17 +299,36 @@ function shapeTotals(raw: RawAggregate): UsageRollupTotals {
   const entries = [...raw.costEntries.values()]
     .map((entry) => ({ ...entry, sum: round9(entry.sum) }))
     .sort(compareCostEntries);
-  return {
+  const totals: UsageRollupTotals = {
     calls: { total: raw.callsTotal, succeeded: raw.callsSucceeded, failed: raw.callsFailed },
     tokens,
     cost: { entries, unknownCostCalls: raw.unknownCostCalls },
     firstAt: raw.firstAt,
     lastAt: raw.lastAt,
   };
+  // Issue #89: both fields are left entirely absent (not `null`, not `0`) when not requested, so omitting
+  // `include` reproduces the pre-#89 response byte-for-byte.
+  if (include.includes('latency')) {
+    totals.latency = summarizeLatency(raw.latencySamples, raw.latencyMissing);
+  }
+  if (include.includes('failures')) {
+    // `attempts = calls + failedCalls` (rule 5); `calls` here means succeeded calls, so this is `callsTotal`,
+    // which already equals `callsSucceeded + callsFailed` (every ledger row is exactly one or the other).
+    totals.failedCalls = raw.callsFailed;
+    totals.attempts = raw.callsTotal;
+    totals.failureRate = computeFailureRate(raw.callsFailed, raw.callsTotal);
+    totals.failures = summarizeFailures(raw.failuresByErrorKind);
+  }
+  return totals;
 }
 
-function shapeGroup(raw: RawAggregate, groupBy: readonly RollupDimension[], utcOffsetMinutes: number): UsageRollupGroup {
-  const group: UsageRollupGroup = { ...shapeTotals(raw), key: raw.key };
+function shapeGroup(
+  raw: RawAggregate,
+  groupBy: readonly RollupDimension[],
+  utcOffsetMinutes: number,
+  include: readonly RollupInclude[]
+): UsageRollupGroup {
+  const group: UsageRollupGroup = { ...shapeTotals(raw, include), key: raw.key };
   if (groupBy.includes('day')) {
     const dayKey = raw.key.day;
     if (typeof dayKey === 'string') {
@@ -343,6 +410,11 @@ function mergeRawInto(target: RawAggregate, source: RawAggregate): void {
     target.tokenReported[kind] += source.tokenReported[kind];
   }
   target.unknownCostCalls += source.unknownCostCalls;
+  target.latencySamples.push(...source.latencySamples);
+  target.latencyMissing += source.latencyMissing;
+  for (const [kind, count] of Object.entries(source.failuresByErrorKind)) {
+    target.failuresByErrorKind[kind] = (target.failuresByErrorKind[kind] ?? 0) + count;
+  }
   for (const [costKey, entry] of source.costEntries) {
     const existing = target.costEntries.get(costKey);
     if (existing) {
@@ -377,6 +449,10 @@ function mergeAfterTruncation(groups: readonly RawAggregate[], groupBy: readonly
         costEntries: new Map(raw.costEntries),
         tokenSums: { ...raw.tokenSums },
         tokenReported: { ...raw.tokenReported },
+        // Issue #89: these must be copied, not aliased, same as every other mutable field above; `mergeRawInto`
+        // below pushes/increments into them for every later collision on this same identity.
+        latencySamples: [...raw.latencySamples],
+        failuresByErrorKind: { ...raw.failuresByErrorKind },
       });
       continue;
     }
@@ -431,8 +507,8 @@ function shapeRollupResponse(args: {
     groupsAreAdditive: !query.groupBy.includes('tag'),
     groupCount,
     truncated,
-    groups: page.map((raw) => shapeGroup(raw, query.groupBy, query.filters.utcOffsetMinutes)),
-    totals: shapeTotals(totals),
+    groups: page.map((raw) => shapeGroup(raw, query.groupBy, query.filters.utcOffsetMinutes, query.include)),
+    totals: shapeTotals(totals, query.include),
   };
 }
 
@@ -568,8 +644,18 @@ function buildGroupKey(
 function accumulateRow(agg: RawAggregate, row: UsageLedgerRow, tsValue: number, trackSessionId: boolean): void {
   if (trackSessionId && row.sessionId !== null) agg.sessionIds.add(row.sessionId);
   agg.callsTotal++;
-  if (row.eventType === 'llm.usage') agg.callsSucceeded++;
-  else agg.callsFailed++;
+  if (row.eventType === 'llm.usage') {
+    agg.callsSucceeded++;
+    // Issue #89, rule 1/3: a sample is only ever a succeeded row's `latencyMs`, already guaranteed finite-int
+    // >= 0 by the ledger; a failed row's own `latencyMs` (if any) is never read here, so failure latency can
+    // never enter the success percentiles.
+    if (row.latencyMs !== null) agg.latencySamples.push(row.latencyMs);
+    else agg.latencyMissing++;
+  } else {
+    agg.callsFailed++;
+    const key = failureErrorKindKey(row.errorKind);
+    agg.failuresByErrorKind[key] = (agg.failuresByErrorKind[key] ?? 0) + 1;
+  }
 
   const tokenValues: Array<[TokenKind, number | null]> = [
     ['input', row.inputTokens],
@@ -990,6 +1076,61 @@ function buildTotalsCostSql(whereSql: string, toolJoin: boolean): string {
   `;
 }
 
+// -------------------------------------------------------------
+// Issue #89: `include=latency,failures` sidecar queries. SQLite has no percentile function (section 3 of the
+// issue), so the latency queries fetch one raw `latency_ms` row per matching call (group key columns duplicated,
+// same as `buildGroupCostSql`/`buildGroupSessionsSql` above), unsorted and ungrouped, and `nearestRankPercentile`
+// (`server/usage/reliability.ts`) sorts and picks the rank in TypeScript once all of a group's (or the totals')
+// values are collected. The failure queries, by contrast, only ever need a count per `(group key, error_kind)`
+// pair, so those stay a plain SQL `GROUP BY`, same as every other count in this module.
+// -------------------------------------------------------------
+
+function buildGroupLatencySql(groupBy: readonly RollupDimension[], tsCol: string, whereSql: string, tagJoin: boolean, toolJoin: boolean): string {
+  const keyCols = groupKeyCols(groupBy, tsCol);
+  return `
+    SELECT
+      ${keyCols},
+      latency_ms
+    FROM usage_ledger
+    ${joinsFor(tagJoin, toolJoin)}
+    WHERE ${whereSql} AND event_type = 'llm.usage' AND latency_ms IS NOT NULL
+  `;
+}
+
+function buildGroupFailuresSql(groupBy: readonly RollupDimension[], tsCol: string, whereSql: string, tagJoin: boolean, toolJoin: boolean): string {
+  const keyCols = groupKeyCols(groupBy, tsCol);
+  const groupByCols = [...groupBy.map((_, i) => `k${i}`), 'error_kind'].join(', ');
+  return `
+    SELECT
+      ${keyCols},
+      error_kind,
+      COUNT(*) AS cnt
+    FROM usage_ledger
+    ${joinsFor(tagJoin, toolJoin)}
+    WHERE ${whereSql} AND event_type = 'llm.failed'
+    GROUP BY ${groupByCols}
+  `;
+}
+
+function buildTotalsLatencySql(whereSql: string, toolJoin: boolean): string {
+  return `
+    SELECT latency_ms
+    FROM usage_ledger
+    ${toolResolutionJoin(toolJoin)}
+    WHERE ${whereSql} AND event_type = 'llm.usage' AND latency_ms IS NOT NULL
+  `;
+}
+
+function buildTotalsFailuresSql(whereSql: string, toolJoin: boolean): string {
+  return `
+    SELECT error_kind, COUNT(*) AS cnt
+    FROM usage_ledger
+    ${toolResolutionJoin(toolJoin)}
+    WHERE ${whereSql} AND event_type = 'llm.failed'
+    GROUP BY error_kind
+  `;
+}
+
 /** Decodes the `k{i}` columns of one SQLite group/cost/sessions row back into a display key plus attribution
  * state, mirroring `buildGroupKey` (memory mode) exactly so both backends produce the identical `RawAggregate`
  * shape for the same logical row set. */
@@ -1112,6 +1253,38 @@ export function computeSqliteRollup(db: DatabaseSync, query: RollupQuery, now: (
       }
     }
 
+    // Issue #89: opt-in sidecar queries, only ever run when the caller asked for `include=latency`/`failures`
+    // (every query that never passes `include` keeps the exact query plan it had before this issue).
+    if (query.include.includes('latency')) {
+      const latencyRows = db
+        .prepare(buildGroupLatencySql(query.groupBy, tsCol, whereSql, tagJoin, toolJoin))
+        .all(groupParams) as Array<Record<string, unknown>>;
+      for (const row of latencyRows) {
+        const { key, attribution } = keyFromRow(row, query.groupBy);
+        const agg = groupsMap.get(keyToString(key, attribution, query.groupBy));
+        if (agg) agg.latencySamples.push(Number(row.latency_ms));
+      }
+      // `missing` is derived once, after every sample row is collected (rather than incrementally, as memory
+      // mode does), since this flat query has no natural "row with no latency" to count: `calls_succeeded`
+      // (from `buildGroupsSql`, already fetched above) already is that count minus the samples found here.
+      for (const agg of groupsMap.values()) {
+        agg.latencyMissing = agg.callsSucceeded - agg.latencySamples.length;
+      }
+    }
+    if (query.include.includes('failures')) {
+      const failureRows = db
+        .prepare(buildGroupFailuresSql(query.groupBy, tsCol, whereSql, tagJoin, toolJoin))
+        .all(groupParams) as Array<Record<string, unknown>>;
+      for (const row of failureRows) {
+        const { key, attribution } = keyFromRow(row, query.groupBy);
+        const agg = groupsMap.get(keyToString(key, attribution, query.groupBy));
+        if (!agg) continue;
+        const errorKindRaw = row.error_kind;
+        const kind = failureErrorKindKey(typeof errorKindRaw === 'string' ? errorKindRaw : null);
+        agg.failuresByErrorKind[kind] = (agg.failuresByErrorKind[kind] ?? 0) + Number(row.cnt);
+      }
+    }
+
     const totalsRow = db.prepare(buildTotalsSql(tsCol, whereSql, toolJoin)).get(whereParams) as Record<string, unknown>;
     const totalsCostRows = db
       .prepare(buildTotalsCostSql(whereSql, toolJoin))
@@ -1138,6 +1311,26 @@ export function computeSqliteRollup(db: DatabaseSync, query: RollupQuery, now: (
         sum: Number(row.cost_sum),
         calls: Number(row.cost_calls),
       });
+    }
+
+    // Issue #89, rule 7: the totals percentiles/failure counts come from this independent, ungrouped scan of
+    // every matching row, never from combining the per-group figures computed above.
+    if (query.include.includes('latency')) {
+      const totalsLatencyRows = db.prepare(buildTotalsLatencySql(whereSql, toolJoin)).all(whereParams) as Array<{
+        latency_ms: unknown;
+      }>;
+      for (const row of totalsLatencyRows) totals.latencySamples.push(Number(row.latency_ms));
+      totals.latencyMissing = totals.callsSucceeded - totals.latencySamples.length;
+    }
+    if (query.include.includes('failures')) {
+      const totalsFailureRows = db
+        .prepare(buildTotalsFailuresSql(whereSql, toolJoin))
+        .all(whereParams) as Array<Record<string, unknown>>;
+      for (const row of totalsFailureRows) {
+        const errorKindRaw = row.error_kind;
+        const kind = failureErrorKindKey(typeof errorKindRaw === 'string' ? errorKindRaw : null);
+        totals.failuresByErrorKind[kind] = (totals.failuresByErrorKind[kind] ?? 0) + Number(row.cnt);
+      }
     }
 
     const backfilledRows = Number(totalsRow.backfilled_rows ?? 0);

@@ -1696,6 +1696,92 @@ test('REST API: GET /api/v1/usage/rollup returns 400 invalid_filter with a per-f
   }
 });
 
+// -------------------------------------------------------------
+// Usage rollup: `include=latency,failures` (issue #89)
+// -------------------------------------------------------------
+
+test('REST API: GET /api/v1/usage/rollup with no include is byte-for-byte unchanged (no latency/failures keys)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, integrityEvent('evt_reliability_http_noinclude', { provider: 'reliability-http-noinclude', requestId: 'req-reliability-noinclude', latencyMs: 123 }));
+    const res = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=provider&provider=reliability-http-noinclude`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal('latency' in json.totals, false);
+    assert.equal('failures' in json.totals, false);
+    assert.equal('failedCalls' in json.totals, false);
+    assert.equal('attempts' in json.totals, false);
+    assert.equal('failureRate' in json.totals, false);
+    for (const group of json.groups) {
+      assert.equal('latency' in group, false);
+      assert.equal('failures' in group, false);
+    }
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup?include=latency,failures returns both blocks with real figures', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, integrityEvent('evt_reliability_http_1', { provider: 'reliability-http-combo', requestId: 'req-reliability-1', latencyMs: 820 }));
+    await postEvent(
+      baseUrl,
+      integrityEvent(
+        'evt_reliability_http_2',
+        { provider: 'reliability-http-combo', requestId: 'req-reliability-2', errorKind: 'rate_limited', cost: null, currency: null },
+        { type: 'llm.failed' }
+      )
+    );
+
+    const res = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=provider&provider=reliability-http-combo&include=latency,failures`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.totals.calls.succeeded, 1);
+    assert.equal(json.totals.failedCalls, 1);
+    assert.equal(json.totals.attempts, 2);
+    assert.equal(json.totals.failureRate, 0.5);
+    assert.deepEqual(json.totals.failures.byErrorKind, { rate_limited: 1 });
+    assert.equal(json.totals.failures.rateLimitCount, 1);
+    assert.deepEqual(json.totals.latency, { p50Ms: 820, p95Ms: 820, samples: 1, missing: 0, method: 'nearest-rank' });
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup?include=latency alone omits every failures field, and vice versa', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    await postEvent(baseUrl, integrityEvent('evt_reliability_http_solo', { provider: 'reliability-http-solo', requestId: 'req-reliability-solo', latencyMs: 50 }));
+
+    const latencyOnly = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=provider&provider=reliability-http-solo&include=latency`);
+    const latencyJson = await latencyOnly.json();
+    assert.ok(latencyJson.totals.latency);
+    assert.equal('failures' in latencyJson.totals, false);
+    assert.equal('failedCalls' in latencyJson.totals, false);
+
+    const failuresOnly = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=provider&provider=reliability-http-solo&include=failures`);
+    const failuresJson = await failuresOnly.json();
+    assert.ok(failuresJson.totals.failures);
+    assert.equal('latency' in failuresJson.totals, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API: GET /api/v1/usage/rollup?include=bogus returns 400 invalid_filter', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/usage/rollup?groupBy=agent&include=latency,bogus`);
+    assert.equal(res.status, 400);
+    const json = await res.json();
+    assert.equal(json.error, 'invalid_filter');
+    assert.ok(json.issues.some((i) => i.path === 'include'));
+  } finally {
+    server.close();
+  }
+});
+
 test('REST API: GET /api/v1/usage/rollup requires the API token when one is configured, but tolerates ?token= per issue #71', async () => {
   process.env.AGENT_VIEWER_API_TOKEN = 'rollup-endpoint-secret';
   const { server, baseUrl } = await startTestServer();

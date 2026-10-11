@@ -1,4 +1,5 @@
 import { crewProject, type CrewRoomDefinition, type CrewView } from './crewModel';
+import type { CrewWorkstation } from './crewActorActions';
 import type { CrewPresenceMarker } from './crewPresence';
 import type { CrewCamera } from './crewCamera';
 import { crewSpriteView, type CrewSpriteImages } from './crewSprites';
@@ -34,6 +35,7 @@ export interface CrewRenderInput {
   blink?: CrewSpriteBlink;
   /** Tema de alto contraste de la preferencia de accesibilidad Crew (#157). */
   highContrast?: boolean;
+  seats?: readonly CrewWorkstation[];
   actions?: Readonly<Record<string, CrewSpriteBlink | undefined>>;
   walks?: Readonly<Record<string, CrewSpriteBlink | undefined>>;
   /** Imágenes reales del banco Crew por mueble, alcance acotado de #115 (ver `CREW_ROOM_PROP_IMAGES`). */
@@ -82,7 +84,7 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, walks = {}, actions = {}, propImages }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, walks = {}, actions = {}, propImages, seats = [] }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
@@ -102,7 +104,8 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
   // sorted by rotated depth so props and actors interleave correctly in 2.5D.
   const visible = [
     ...room.furniture.map(item => {
-      const p = crewProject(item.x,item.y,room,view);
+      const seat = seats.find(station => station.chairId === item.id);
+      const p = crewProject(seat?.x ?? item.x,seat?.y ?? item.y,room,view);
       return {x:p.x,y:p.y,draw:()=>drawCrewProp(ctx, item, p.x, p.y, view, crewIsoPoint, highContrast,
         resolveCrewPropImage(item.id, propImages))};
     }),

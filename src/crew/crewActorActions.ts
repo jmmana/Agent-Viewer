@@ -44,7 +44,8 @@ export function crewWorkstations(room: CrewRoomDefinition): CrewWorkstation[] {
       Math.hypot(a.x - desk.x, a.y - desk.y) - Math.hypot(b.x - desk.x, b.y - desk.y))[0];
     if (!chair) return [];
     used.add(chair.id);
-    return [{ deskId: desk.id, chairId: chair.id, x: chair.x, y: chair.y,
+    return [{ deskId: desk.id, chairId: chair.id, x: desk.x + (chair.x - desk.x) / Math.max(.001, Math.hypot(chair.x - desk.x, chair.y - desk.y)) * .85,
+      y: desk.y + (chair.y - desk.y) / Math.max(.001, Math.hypot(chair.x - desk.x, chair.y - desk.y)) * .85,
       facing: crewFacingFromDelta(desk.x - chair.x, desk.y - chair.y) ?? 'NE' }];
   });
 }

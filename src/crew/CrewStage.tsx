@@ -33,6 +33,8 @@ import { crewAgentActivity, crewActivityLine, crewViewerModeLabel, type CrewView
 import type { Agent, Meeting, Task } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
+const EMPTY_CREW_AGENTS: readonly Agent[] = [];
+
 /** Oculta visualmente un texto sin quitarlo de la lectura por lector de pantalla. */
 const srOnlyStyle: React.CSSProperties = {
   position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
@@ -43,7 +45,7 @@ const srOnlyStyle: React.CSSProperties = {
  * Escena Crew independiente con arte incremental y geometría provisional.
  * Consume presencia del dominio sin importar el renderer ni la cuadrícula Caricatura.
  */
-export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [], viewerMode, visibility = 'full',
+export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [], meetings = [], viewerMode, visibility = 'full',
   selectedRoomId, onRoomChange, missingRoom = false,
   cameraState, onCameraStateChange, preferences, onPreferencesChange, persistCamera = true, showRoomLink = true, idPrefix = 'crew' }: {
   locale?: string;
@@ -229,8 +231,8 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, visualPreferences.highContrast, propImages.images]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, seats: action.actions.flatMap(actor => actor.workstation ? [actor.workstation] : []), locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, action.actions, visualPreferences.highContrast, propImages.images]);
 
   useEffect(() => {
     const el = canvasRef.current;

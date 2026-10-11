@@ -49,3 +49,7 @@ Las vistas PNG y el [MP4 runtime](evidence/walk-117/runtime.mp4) viven en `evide
 ## Validación final
 
 Validado sobre main `5560b2c`: 1.051 Node aprobados (uno omitido), 740 Vitest, 29 Python y 29 E2E Chrome aprobados. Typecheck, auditoría de producción, builds app/lib/CLI, paquete y reconciliación aprobados. Se ejecutó la suite completa una vez; se corrigió un valor de enum del fixture y solo se repitió typecheck antes de ejecutar el navegador. Pasaron las suites existentes de SSE, replay de logs y regresión Caricatura; la nueva prueba pura del renderer conserva eventos y consumo de snapshots completos y de prefijos de replay. No se usan datos privados de proveedores.
+
+## Extensión de escritorio (Refs #118)
+
+`actions.v1.json` registra 16 clips prototype / 64 cuadros originales para girar, sentarse, levantarse y teclear. Conserva el patrón de metadatos de caminar sin cambiar su importador específico. Tamaños reales, prompts y giro v1 descartado en `assets/crew/origins/desktop-118/README.md`. `referenceHeight` por cuadro conserva la escala corporal al sentarse; la altura real del recorte es independiente. `crew-desktop-assets.test.mjs` verifica hashes de origen/cuadros/prompts, dimensiones y alfa. Ver [evidencia y límites](evidence/desktop-118/README.es.md).

@@ -77,11 +77,11 @@
         }
       ],
       "sha256": "f78121e2400311d5a1e736fd3e1f108f595b668c48090801df560189df2805bc",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/sit-v1.prompt.txt",
-        "promptSha256": "01d530c554d40386d8563afafaf127052474d302e35428f00dc5e6bddbe71284",
+        "promptSha256": "83e37a5847945d886966c9bd9cb49ae8d925618d24ef34ac213c1caf81f34458",
         "reference": "assets/crew/references/ceo-approved-concept.png",
         "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
       }
@@ -162,11 +162,11 @@
         }
       ],
       "sha256": "f78121e2400311d5a1e736fd3e1f108f595b668c48090801df560189df2805bc",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/sit-v1.prompt.txt",
-        "promptSha256": "01d530c554d40386d8563afafaf127052474d302e35428f00dc5e6bddbe71284",
+        "promptSha256": "83e37a5847945d886966c9bd9cb49ae8d925618d24ef34ac213c1caf81f34458",
         "reference": "assets/crew/references/ceo-approved-concept.png",
         "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
       }
@@ -247,11 +247,11 @@
         }
       ],
       "sha256": "f78121e2400311d5a1e736fd3e1f108f595b668c48090801df560189df2805bc",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/sit-v1.prompt.txt",
-        "promptSha256": "01d530c554d40386d8563afafaf127052474d302e35428f00dc5e6bddbe71284",
+        "promptSha256": "83e37a5847945d886966c9bd9cb49ae8d925618d24ef34ac213c1caf81f34458",
         "reference": "assets/crew/references/ceo-approved-concept.png",
         "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
       }
@@ -332,11 +332,11 @@
         }
       ],
       "sha256": "f78121e2400311d5a1e736fd3e1f108f595b668c48090801df560189df2805bc",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/sit-v1.prompt.txt",
-        "promptSha256": "01d530c554d40386d8563afafaf127052474d302e35428f00dc5e6bddbe71284",
+        "promptSha256": "83e37a5847945d886966c9bd9cb49ae8d925618d24ef34ac213c1caf81f34458",
         "reference": "assets/crew/references/ceo-approved-concept.png",
         "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
       }
@@ -417,7 +417,7 @@
         }
       ],
       "sha256": "0c40dc2b7f3edc2cfda106e3d416c9428cba52a9b2e8bcde8430a27e62e6cc43",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/stand-v1.prompt.txt",
@@ -502,7 +502,7 @@
         }
       ],
       "sha256": "0c40dc2b7f3edc2cfda106e3d416c9428cba52a9b2e8bcde8430a27e62e6cc43",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/stand-v1.prompt.txt",
@@ -587,7 +587,7 @@
         }
       ],
       "sha256": "0c40dc2b7f3edc2cfda106e3d416c9428cba52a9b2e8bcde8430a27e62e6cc43",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/stand-v1.prompt.txt",
@@ -672,7 +672,7 @@
         }
       ],
       "sha256": "0c40dc2b7f3edc2cfda106e3d416c9428cba52a9b2e8bcde8430a27e62e6cc43",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/stand-v1.prompt.txt",
@@ -757,13 +757,14 @@
         }
       ],
       "sha256": "8b7a42504ac56cbaf8f30d3995cf80bb46789bd3f13e65dddb7cf0b8870b32db",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/typing-v1.prompt.txt",
         "promptSha256": "88797c197be79c90ce21294c918c2ece3309f22ae228782e396ad2a9a734f185",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "supportingReference": "assets/crew/clips/ceo-sit-v1.png"
       }
     },
     {
@@ -842,13 +843,14 @@
         }
       ],
       "sha256": "8b7a42504ac56cbaf8f30d3995cf80bb46789bd3f13e65dddb7cf0b8870b32db",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/typing-v1.prompt.txt",
         "promptSha256": "88797c197be79c90ce21294c918c2ece3309f22ae228782e396ad2a9a734f185",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "supportingReference": "assets/crew/clips/ceo-sit-v1.png"
       }
     },
     {
@@ -927,13 +929,14 @@
         }
       ],
       "sha256": "8b7a42504ac56cbaf8f30d3995cf80bb46789bd3f13e65dddb7cf0b8870b32db",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/typing-v1.prompt.txt",
         "promptSha256": "88797c197be79c90ce21294c918c2ece3309f22ae228782e396ad2a9a734f185",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "supportingReference": "assets/crew/clips/ceo-sit-v1.png"
       }
     },
     {
@@ -1012,13 +1015,14 @@
         }
       ],
       "sha256": "8b7a42504ac56cbaf8f30d3995cf80bb46789bd3f13e65dddb7cf0b8870b32db",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/typing-v1.prompt.txt",
         "promptSha256": "88797c197be79c90ce21294c918c2ece3309f22ae228782e396ad2a9a734f185",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "supportingReference": "assets/crew/clips/ceo-sit-v1.png"
       }
     },
     {
@@ -1097,13 +1101,14 @@
         }
       ],
       "sha256": "2e07a8193ca06c53eccf2ff577238353e1b76d756b0e0e5f6e1f90bed018911d",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/turn-v2.prompt.txt",
         "promptSha256": "87f6032f20623f310eb3d0eb243ddd2c71dcbd2549f948498c83f5f9b247c8bf",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "editTarget": "assets/crew/origins/desktop-118/ceo-turn-v1-rejected.png"
       }
     },
     {
@@ -1182,13 +1187,14 @@
         }
       ],
       "sha256": "2e07a8193ca06c53eccf2ff577238353e1b76d756b0e0e5f6e1f90bed018911d",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/turn-v2.prompt.txt",
         "promptSha256": "87f6032f20623f310eb3d0eb243ddd2c71dcbd2549f948498c83f5f9b247c8bf",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "editTarget": "assets/crew/origins/desktop-118/ceo-turn-v1-rejected.png"
       }
     },
     {
@@ -1267,13 +1273,14 @@
         }
       ],
       "sha256": "2e07a8193ca06c53eccf2ff577238353e1b76d756b0e0e5f6e1f90bed018911d",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/turn-v2.prompt.txt",
         "promptSha256": "87f6032f20623f310eb3d0eb243ddd2c71dcbd2549f948498c83f5f9b247c8bf",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "editTarget": "assets/crew/origins/desktop-118/ceo-turn-v1-rejected.png"
       }
     },
     {
@@ -1352,13 +1359,14 @@
         }
       ],
       "sha256": "2e07a8193ca06c53eccf2ff577238353e1b76d756b0e0e5f6e1f90bed018911d",
-      "license": "Repository license; generated artwork",
+      "license": "MIT (repository artwork)",
       "provenance": {
         "tool": "built-in image_gen",
         "prompt": "assets/crew/origins/desktop-118/turn-v2.prompt.txt",
         "promptSha256": "87f6032f20623f310eb3d0eb243ddd2c71dcbd2549f948498c83f5f9b247c8bf",
         "reference": "assets/crew/references/ceo-approved-concept.png",
-        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db"
+        "sourceCommit": "6bd3b66ee309b410ed6f1fb17b85fc42bb0a28db",
+        "editTarget": "assets/crew/origins/desktop-118/ceo-turn-v1-rejected.png"
       }
     }
   ]

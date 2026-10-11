@@ -1,1 +1,1 @@
-export { default } from '../../../assets/crew/clips/ceo-turn-v2.png';
+export default new URL('../../../assets/crew/clips/ceo-turn-v2.png', import.meta.url).href;

@@ -669,6 +669,13 @@ export interface BudgetRegistry {
   getCachedStatus(budgetId: string, key: BudgetEvalCacheKey): BudgetStatus | null;
   /** Upserts the single cached entry for `budgetId`, replacing whatever was cached before. */
   setCachedStatus(budgetId: string, key: BudgetEvalCacheKey, status: BudgetStatus): void;
+  /** Whatever status was last written for `budgetId` through `setCachedStatus`, ignoring the cache key entirely
+   * (issue #85 section 6, sub-issue #305's live transitions). `null` only when nothing was ever written for this
+   * budget. Unlike `getCachedStatus`, a stale key (a different window, ledger position or revision than the one
+   * stored) still returns the status: a stale entry is exactly what "the previous state" must mean for detecting
+   * a live transition, where `getCachedStatus`'s exact-match miss would be the wrong answer. Both methods read
+   * the same `budget_state` row; this one just skips the key comparison. */
+  getLastStatus(budgetId: string): BudgetStatus | null;
 }
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
@@ -888,7 +895,12 @@ export function createMemoryBudgetRegistry(options: MemoryBudgetRegistryOptions 
     cacheByBudget.set(budgetId, { key: { ...key }, status: { ...status } });
   }
 
-  return { create, update, delete: del, get, list, listRevisions, getCachedStatus, setCachedStatus };
+  function getLastStatus(budgetId: string): BudgetStatus | null {
+    const entry = cacheByBudget.get(budgetId);
+    return entry ? { ...entry.status } : null;
+  }
+
+  return { create, update, delete: del, get, list, listRevisions, getCachedStatus, setCachedStatus, getLastStatus };
 }
 
 // ---- SQLite implementation -------------------------------------------------
@@ -1123,7 +1135,12 @@ export function createSqliteBudgetRegistry(db: DatabaseSync, options: SqliteBudg
     ).run(budgetId, key.ledgerSeq, key.windowStart, key.revision, JSON.stringify(status), now());
   }
 
-  return { create, update, delete: del, get, list, listRevisions, getCachedStatus, setCachedStatus };
+  function getLastStatus(budgetId: string): BudgetStatus | null {
+    const row = db.prepare('SELECT status_json FROM budget_state WHERE budget_id = ?').get(budgetId) as { status_json: string } | undefined;
+    return row ? (JSON.parse(row.status_json) as BudgetStatus) : null;
+  }
+
+  return { create, update, delete: del, get, list, listRevisions, getCachedStatus, setCachedStatus, getLastStatus };
 }
 
 // -------------------------------------------------------------
@@ -1484,4 +1501,289 @@ export function registerBudgetsRoutes(app: express.Express, deps: BudgetHttpDeps
       }))
     );
   });
+}
+
+// -------------------------------------------------------------
+// 7. Live transitions (issue #85, sub-issue #305): a pure `BudgetTransition` builder, an `onBudgetTransition`
+//    subscription point with no HTTP/SSE dependency, `evaluateBudgetLive` (the single-budget check that diffs
+//    against `BudgetRegistry.getLastStatus` and persists the fresh result), and `startBudgetRolloverWatcher` (an
+//    unref'd timer, same shape as `server/retention.ts`'s `startRetention`, that re-checks a budget once its
+//    window has rolled over even with no new ledger activity). `server/index.ts` is the only caller: it supplies
+//    the `check` callback (which writes the `event: budget` SSE frame and calls `emitBudgetTransition`) so this
+//    module stays free of Express and the SSE client set, exactly like section 6's `BudgetHttpDeps` keeps the
+//    HTTP layer's own wiring out of here.
+// -------------------------------------------------------------
+
+/** What caused a live check: a matching `llm.usage`/`llm.failed` event was just accepted, or the window-rollover
+ * watcher found this budget's window had moved on since its last recorded status. Carried on `BudgetTransition`
+ * only for observability (logs, the SSE frame, a webhook payload); it never changes how a transition is detected
+ * or built. */
+export type BudgetTransitionTrigger = 'ledger_event' | 'window_rollover';
+
+/** `'up'` when the new state is at least as severe as the old one on `BUDGET_STATE_SEVERITY`'s ladder, `'down'`
+ * otherwise. Meaningful on its own only among `'ok'`/`'warning'`/`'exceeded'` (increasing spend vs. falling back,
+ * including a window rollover's reset to `'ok'`); a transition into or out of `'unknown'` still gets a
+ * deterministic `'up'`/`'down'` from the same rule (see `BUDGET_STATE_SEVERITY`'s own comment), but #86 (budget
+ * alerts) should match `from`/`to` directly whenever either one is `'unknown'` rather than read `direction` as
+ * "spend got worse/better" in that case. */
+export type BudgetTransitionDirection = 'up' | 'down';
+
+/** Severity rank used only to compute `direction`, never to compare a `BudgetStatus` for any other purpose.
+ * `'unknown'` ranks below `'ok'`: it reports a data-quality gap (an uncountable call, a truncated history), not a
+ * spend level, so it has no natural place on the `ok` < `warning` < `exceeded` severity ladder; ranking it lowest
+ * is a deliberate, documented choice to keep `direction` total and deterministic, not a claim that "unknown" is
+ * truly the safest state. */
+const BUDGET_STATE_SEVERITY: Record<BudgetState, number> = { unknown: -1, ok: 0, warning: 1, exceeded: 2 };
+
+/** The limit ratio a budget crossed to land in `state`: `1` for `'exceeded'` (100% of `limit`), `warningRatio` for
+ * `'warning'`, `null` for `'ok'`/`'unknown'` (neither is reached by crossing a ratio threshold: `'ok'` is simply
+ * under both thresholds, and `'unknown'` is a data-quality outcome, not a ratio outcome). */
+function thresholdForState(state: BudgetState, warningRatio: number): number | null {
+  if (state === 'exceeded') return 1;
+  if (state === 'warning') return warningRatio;
+  return null;
+}
+
+/** A detected, concrete state change for one budget (issue #85 section 6, sub-issue #305): everything #86 (budget
+ * alert delivery) needs to identify what happened and build a message from it, without a second lookup against
+ * the budget or the registry. `status`/`previousStatus` are the full, already-evaluated `BudgetStatus` values (so
+ * `spent`, `limitRemaining`, `ratio`, `calls`, etc. are all here too); `window` is simply `status.window`, kept as
+ * its own field only for convenience. */
+export interface BudgetTransition {
+  schemaVersion: '1.0';
+  budgetId: string;
+  budgetName: string;
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  timezone: string;
+  currency: string;
+  limit: number;
+  warningRatio: number;
+  from: BudgetState;
+  to: BudgetState;
+  direction: BudgetTransitionDirection;
+  threshold: number | null;
+  window: BudgetWindow;
+  status: BudgetStatus;
+  previousStatus: BudgetStatus;
+  trigger: BudgetTransitionTrigger;
+  detectedAt: number;
+}
+
+/**
+ * Builds the `BudgetTransition` for `budget` going from `previousStatus` to `status`, or `null` when the state did
+ * not actually change (`previousStatus.state === status.state`): a budget can be re-evaluated far more often than
+ * its state changes (every matching ledger event, every rollover-watcher tick), and most of those checks produce
+ * no transition at all. Pure and synchronous; `evaluateBudgetLive` below is the only caller in this module, but it
+ * is exported directly so a test can check the direction/threshold rules against hand-built fixtures without
+ * going through a full evaluation.
+ */
+export function buildBudgetTransition(
+  budget: Pick<Budget, 'id' | 'name' | 'scope' | 'period' | 'timezone' | 'currency' | 'limit' | 'warningRatio'>,
+  previousStatus: BudgetStatus,
+  status: BudgetStatus,
+  trigger: BudgetTransitionTrigger,
+  now: number
+): BudgetTransition | null {
+  if (previousStatus.state === status.state) return null;
+  const direction: BudgetTransitionDirection =
+    BUDGET_STATE_SEVERITY[status.state] >= BUDGET_STATE_SEVERITY[previousStatus.state] ? 'up' : 'down';
+  return {
+    schemaVersion: '1.0',
+    budgetId: budget.id,
+    budgetName: budget.name,
+    scope: { ...budget.scope },
+    period: budget.period,
+    timezone: budget.timezone,
+    currency: budget.currency,
+    limit: budget.limit,
+    warningRatio: budget.warningRatio,
+    from: previousStatus.state,
+    to: status.state,
+    direction,
+    threshold: thresholdForState(status.state, budget.warningRatio),
+    window: status.window,
+    status,
+    previousStatus,
+    trigger,
+    detectedAt: now,
+  };
+}
+
+export type BudgetTransitionListener = (transition: BudgetTransition) => void | Promise<void>;
+
+const budgetTransitionListeners = new Set<BudgetTransitionListener>();
+
+/**
+ * Registers `listener` to be called with every detected `BudgetTransition` (issue #85 section 6, sub-issue #305),
+ * in the order `emitBudgetTransition` is given them. This is the integration point #86 (budget alert delivery)
+ * subscribes through to fire its own deduplicated webhooks: call it once at process bootstrap, wherever the
+ * server wires up its other long-lived listeners (not per-request), on a plain import of this module, with no
+ * Express, no SSE client and no HTTP server required. Same "a failing listener never breaks the caller" guarantee
+ * as `server/index.ts`'s own `onEventAccepted`: a listener that throws, or returns a rejected promise, is caught
+ * and ignored so one broken subscriber can never stop another, or stop the SSE broadcast `server/index.ts` does
+ * alongside this same transition. A transition can be delivered more than once for the same real-world crossing
+ * (two concurrent live checks for the same budget racing on `getLastStatus`/`setCachedStatus` can each see the
+ * same `previousStatus` and both emit), so a listener that cares about exactly-once delivery (#86 does, by its
+ * own issue text) is the one responsible for deduplicating, by whatever key fits it (for example
+ * `budgetId + to + window.start`). Returns a function that removes the listener.
+ */
+export function onBudgetTransition(listener: BudgetTransitionListener): () => void {
+  budgetTransitionListeners.add(listener);
+  return () => {
+    budgetTransitionListeners.delete(listener);
+  };
+}
+
+/**
+ * Calls every listener registered through `onBudgetTransition` with `transition`, in registration order. Exported
+ * so `server/index.ts` can emit right after `evaluateBudgetLive` reports a non-null transition, alongside writing
+ * the `event: budget` SSE frame; never called from elsewhere in this module, so `evaluateBudgetLive` itself stays
+ * free of this side effect and easy to test on its own.
+ */
+export function emitBudgetTransition(transition: BudgetTransition): void {
+  for (const listener of budgetTransitionListeners) {
+    try {
+      const result = listener(transition);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch(() => {});
+      }
+    } catch {
+      // A failing listener must never break budget evaluation or the SSE broadcast, same rule
+      // `onEventAccepted`'s own listeners already follow in `server/index.ts`.
+    }
+  }
+}
+
+export interface BudgetLiveCheckResult {
+  view: BudgetView;
+  transition: BudgetTransition | null;
+}
+
+/**
+ * Evaluates one budget "live" (issue #85 section 6, sub-issue #305): the same fresh, from-the-ledger evaluation
+ * `evaluateBudgetView` already does, plus diffing the result against `registry.getLastStatus` (whatever this
+ * function itself persisted on a previous call, regardless of what triggered it) and persisting the fresh result
+ * before returning, so the next call always diffs against a correct baseline. `transition` is `null` when the
+ * budget is disabled (never evaluated, same rule as `evaluateBudgetView`), when it has never been live-checked
+ * before (nothing to diff against; the very first live check only establishes a baseline, it is never itself a
+ * transition), or when the state did not change.
+ *
+ * The persisted key passed to `setCachedStatus` uses a synthetic `ledgerSeq: -1`: a real ledger sequence is always
+ * `>= 0` (`server/store.ts`'s monotonic counter), so `-1` can never collide with one, which guarantees this write
+ * can never produce a false hit for a future `getCachedStatus` exact-key lookup (the read-path performance cache
+ * `server/budgets.ts`'s section 6 already left unwired; wiring it is #307's job). `windowStart`/`revision` are
+ * still the real, current values, so a coincidental future hit (once something does start calling `getCachedStatus`
+ * with a real `ledgerSeq`) would still be correct, never stale data served as fresh.
+ *
+ * `server/index.ts` is the only caller: once from its `onEventAccepted` listener (`trigger: 'ledger_event'`, for
+ * every accepted `llm.usage`/`llm.failed` event, against every enabled budget) and once from
+ * `startBudgetRolloverWatcher`'s own `check` callback (`trigger: 'window_rollover'`).
+ */
+export async function evaluateBudgetLive(
+  budget: Budget,
+  deps: BudgetHttpDeps,
+  trigger: BudgetTransitionTrigger
+): Promise<BudgetLiveCheckResult> {
+  const now = (deps.now ?? Date.now)();
+  if (!budget.enabled) return { view: { ...budget, status: null }, transition: null };
+
+  const registry = deps.getRegistry();
+  const previousStatus = registry.getLastStatus(budget.id);
+  const view = await evaluateBudgetView(budget, deps);
+  const status = view.status as BudgetStatus;
+
+  registry.setCachedStatus(budget.id, { ledgerSeq: -1, windowStart: status.window.start, revision: budget.revision }, status);
+
+  const transition = previousStatus ? buildBudgetTransition(budget, previousStatus, status, trigger, now) : null;
+  return { view, transition };
+}
+
+/** `true` when `currentWindow` is not the same window `lastStatus` (if any) was last evaluated for, which is
+ * exactly when the window-rollover watcher should re-check the budget: either it has never been live-checked at
+ * all (`lastStatus` is `null`), or its window has moved on (a new day/week/month started) since the last check,
+ * possibly with zero new ledger activity in between (the one case a purely ledger-event-triggered check could
+ * miss indefinitely: a budget sitting at `'exceeded'` all day must still be observed falling back to `'ok'` at
+ * midnight even if nothing was logged against it right then). Pure and exported so the rollover decision itself
+ * is unit-testable without a timer. */
+export function budgetWindowRolledOver(lastStatus: BudgetStatus | null, currentWindow: BudgetWindow): boolean {
+  return lastStatus === null || lastStatus.window.start !== currentWindow.start;
+}
+
+/** Default sweep interval for `startBudgetRolloverWatcher`: frequent enough that a day-boundary rollover (the
+ * shortest period a budget can have) is observed within half a minute of actually happening, infrequent enough
+ * that it is a negligible, bounded (at most `MAX_ACTIVE_BUDGETS` window computations) cost even with the server's
+ * busiest realistic budget count. */
+export const DEFAULT_BUDGET_ROLLOVER_INTERVAL_MS = 30_000;
+
+export interface BudgetRolloverWatcherOptions {
+  getRegistry: () => BudgetRegistry;
+  /** Called once per budget whose window rolled over since its last recorded status. The caller (`server/index.ts`)
+   * is the one that actually runs `evaluateBudgetLive` and reacts to its `transition` (the SSE frame and
+   * `emitBudgetTransition`); this module never does either itself, so it stays free of Express and the SSE client
+   * set, the same split `BudgetHttpDeps` already keeps for the HTTP routes above. */
+  check: (budget: Budget, trigger: 'window_rollover') => Promise<void>;
+  now?: () => number;
+  /** Default `DEFAULT_BUDGET_ROLLOVER_INTERVAL_MS`; tests override it to sweep far more often than any real
+   * budget period rolls over. */
+  intervalMs?: number;
+}
+
+export interface BudgetRolloverWatcherHandle {
+  /** Clears the timer. Safe to call more than once. */
+  stop(): void;
+  /** Runs one sweep now, independent of the timer's own schedule. Exposed mainly for tests, and for a caller that
+   * wants one check forced right after startup. */
+  runOnce(): Promise<void>;
+}
+
+/**
+ * Starts the window-rollover watcher (issue #85 section 6, sub-issue #305): every `intervalMs` (default
+ * `DEFAULT_BUDGET_ROLLOVER_INTERVAL_MS`), sweeps every enabled budget and calls `opts.check` for each one whose
+ * window has rolled over since its last recorded status (`budgetWindowRolledOver`), so a state that only changes
+ * because the window itself reset (most commonly a drop back to `'ok'` at midnight) is still observed and still
+ * produces a live transition, even with zero matching ledger events near the boundary.
+ *
+ * Through `setInterval(...).unref()`, the same pattern `server/retention.ts`'s `startRetention` already uses for
+ * its own scheduled job: the timer never holds the process open by itself, so importing this module (or running
+ * it in a short-lived test process) is never blocked waiting on it. One sweep failing for one budget is logged and
+ * skipped, same policy as `evaluateBudgetView`'s own per-budget error handling; it never stops the sweep for the
+ * remaining budgets or cancels the timer.
+ */
+export function startBudgetRolloverWatcher(opts: BudgetRolloverWatcherOptions): BudgetRolloverWatcherHandle {
+  const { getRegistry, check } = opts;
+  const now = opts.now ?? Date.now;
+  const intervalMs = opts.intervalMs ?? DEFAULT_BUDGET_ROLLOVER_INTERVAL_MS;
+
+  async function runOnce(): Promise<void> {
+    const registry = getRegistry();
+    for (const budget of registry.list()) {
+      if (!budget.enabled) continue;
+      const lastStatus = registry.getLastStatus(budget.id);
+      const currentWindow = computeBudgetWindow(budget.period, budget.timezone, now());
+      if (!budgetWindowRolledOver(lastStatus, currentWindow)) continue;
+      try {
+        await check(budget, 'window_rollover');
+      } catch (error) {
+        console.error(
+          `[agent-viewer] budget rollover check failed for ${budget.id}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  }
+
+  const timer = setInterval(() => {
+    runOnce().catch(() => {
+      // Each budget's own failure is already caught and logged inside runOnce; this guards only against a bug in
+      // the sweep loop itself, so one bad tick can never throw into the event loop as an unhandled rejection.
+    });
+  }, intervalMs);
+  timer.unref();
+
+  return {
+    stop() {
+      clearInterval(timer);
+    },
+    runOnce,
+  };
 }

@@ -221,6 +221,32 @@ for (const backend of BACKENDS) {
       assert.deepEqual(registry.getCachedStatus('bud_c', newerKey), newer);
     });
   });
+
+  // Issue #305: `getLastStatus` reads the same row as `getCachedStatus`/`setCachedStatus`, but ignores the key
+  // entirely, so a stale key (one that would be a `getCachedStatus` miss) still comes back.
+  test(`${backend.name}: getLastStatus ignores the cache key and returns null only when nothing was ever written`, () => {
+    backend.withRegistry(() => 1000, (registry) => {
+      registry.create(budgetInput({ id: 'bud_last' }), OPEN);
+      assert.equal(registry.getLastStatus('bud_last'), null, 'nothing written yet');
+      assert.equal(registry.getLastStatus('bud_never_existed'), null, 'unknown id');
+
+      const key = { ledgerSeq: 1, windowStart: 100, revision: 1 };
+      const status = { state: 'ok', evaluatedAt: 1000 };
+      registry.setCachedStatus('bud_last', key, status);
+      assert.deepEqual(registry.getLastStatus('bud_last'), status);
+
+      // A key that would be a `getCachedStatus` miss (a different window, as a real rollover would produce) still
+      // comes back from `getLastStatus`: that staleness is exactly what "the previous state" must mean for #305's
+      // live-transition diffing.
+      const staleKey = { ...key, windowStart: 200 };
+      assert.equal(registry.getCachedStatus('bud_last', staleKey), null);
+      assert.deepEqual(registry.getLastStatus('bud_last'), status);
+
+      const newerStatus = { state: 'warning', evaluatedAt: 2000 };
+      registry.setCachedStatus('bud_last', staleKey, newerStatus);
+      assert.deepEqual(registry.getLastStatus('bud_last'), newerStatus, 'the most recent write wins, same as getCachedStatus');
+    });
+  });
 }
 
 test('sqlite: data, revisions and the evaluation cache survive closing and reopening the database file', () => {

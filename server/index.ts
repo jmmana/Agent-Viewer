@@ -37,8 +37,15 @@ import {
   createSqliteBudgetRegistry,
   registerBudgetsRoutes,
   listBudgetViews,
+  evaluateBudgetLive,
+  emitBudgetTransition,
+  startBudgetRolloverWatcher,
+  type Budget,
   type BudgetRegistry,
   type BudgetHttpDeps,
+  type BudgetTransition,
+  type BudgetTransitionTrigger,
+  type BudgetRolloverWatcherHandle,
 } from './budgets';
 import {
   parseRecomputeRequest,
@@ -194,6 +201,11 @@ const budgetDeps: BudgetHttpDeps = {
   iterateLedgerRows: (filters, asOfSeq) => store.iterateExportRows(filters, asOfSeq),
 };
 
+// Started further below, once `broadcastBudgetTransition` and `onEventAccepted` exist (issue #85 section 6,
+// sub-issue #305): forward-declared here, next to `budgetRegistry`/`budgetDeps`, so `shutdown()` (right below) can
+// stop it without the whole live-transitions wiring having to live above `shutdown()`'s own definition.
+let budgetRolloverWatcher: BudgetRolloverWatcherHandle | null = null;
+
 if (retentionConfig.ledgerDays !== null) {
   console.log(usageRetentionWarning(retentionConfig.ledgerDays));
 }
@@ -208,6 +220,7 @@ const retentionJob: RetentionJobHandle = startRetention({ store, config: retenti
  * HTTP server (issue #70). Safe to call more than once: both steps it calls already are.
  */
 export async function shutdown(): Promise<void> {
+  budgetRolloverWatcher?.stop();
   await retentionJob.stop();
   await store.close();
 }
@@ -1087,6 +1100,79 @@ async function appendServerEvent(event: CanonicalEvent, res: express.Response): 
   });
   return false;
 }
+
+// -------------------------------------------------------------
+// Budgets: live transitions (issue #85 section 6, sub-issue #305)
+// -------------------------------------------------------------
+
+/**
+ * Writes the `event: budget` SSE frame for a detected live transition. Deliberately has no `id:` line, unlike
+ * `broadcastEvent`'s canonical-event frames: a transition is a live, derived signal about currently-computed
+ * state, never stored, never replayed on reconnect, and never counted toward `CANONICAL_EVENT_TYPES` or any
+ * `Last-Event-ID` cursor. A client that misses one (not yet connected, or disconnected at the time) can always
+ * recover the current truth with a plain `GET /api/v1/budgets/:id`; there is nothing to "replay" for a value
+ * computed fresh on every read. Broadcast to every open `/api/v1/events/stream` connection, bypassing
+ * `replayBuffers` entirely: a connection mid-reconnect-replay simply never sees this one broadcast, the same way
+ * it never sees a mid-replay heartbeat, because both are regenerable from scratch, unlike a canonical event, which
+ * `replayBuffers` exists specifically to never lose.
+ */
+function broadcastBudgetTransition(transition: BudgetTransition): void {
+  const frame = `event: budget\ndata: ${JSON.stringify(transition)}\n\n`;
+  for (const client of clients) {
+    try {
+      client.write(frame);
+    } catch {
+      clients.delete(client);
+    }
+  }
+}
+
+/**
+ * Runs one live check for `budget` and reacts to its result: a detected transition is broadcast as the `event:
+ * budget` SSE frame and handed to every `onBudgetTransition` listener (#86's own integration point). A failure
+ * (a ledger read error, for example) is logged and swallowed, exactly like `evaluateBudgetView`'s own per-budget
+ * error handling: one budget's live check failing must never stop ingestion, the SSE broadcast loop, or the
+ * rollover sweep for every other budget.
+ */
+async function checkBudgetLive(budget: Budget, trigger: BudgetTransitionTrigger): Promise<void> {
+  try {
+    const { transition } = await evaluateBudgetLive(budget, budgetDeps, trigger);
+    if (transition) {
+      broadcastBudgetTransition(transition);
+      emitBudgetTransition(transition);
+    }
+  } catch (error) {
+    console.error(
+      `[agent-viewer] budget live check failed for ${budget.id}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+// Re-checks every enabled budget on every accepted `llm.usage`/`llm.failed` event (issue #85 section 2 rule 3: only
+// these two event types can ever move a budget's spend). Checking every enabled budget, not a scope-matched
+// subset, is the simple, correct v1 behavior: a scope-based pre-filter to skip budgets the event cannot possibly
+// affect is a performance optimization left for #307, the same place #304 already deferred the registry's own
+// exact-key evaluation cache. Fire-and-forget, like every other `onEventAccepted` listener (`broadcastEvent`
+// never awaits one either): a slow or failing budget check must never delay the event-ingestion response.
+onEventAccepted((event) => {
+  if (event.type !== 'llm.usage' && event.type !== 'llm.failed') return;
+  for (const budget of budgetRegistry.list()) {
+    if (!budget.enabled) continue;
+    checkBudgetLive(budget, 'ledger_event').catch(() => {
+      // checkBudgetLive already logs and swallows its own failure; this guards only against a bug in that
+      // function itself, so it can never surface as an unhandled rejection.
+    });
+  }
+});
+
+// The window-rollover watcher (issue #85 section 6, sub-issue #305): an unref'd `setInterval`, same pattern as
+// `server/retention.ts`'s `startRetention`, so a budget whose window rolls over (most commonly back to `'ok'` at
+// midnight) is still observed and still produces a transition even with zero matching ledger events near the
+// boundary. `shutdown()` above already stops it.
+budgetRolloverWatcher = startBudgetRolloverWatcher({
+  getRegistry: () => budgetRegistry,
+  check: (budget, trigger) => checkBudgetLive(budget, trigger),
+});
 
 // -------------------------------------------------------------
 // Event Ingestion (Single)

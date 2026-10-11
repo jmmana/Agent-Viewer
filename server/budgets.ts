@@ -17,6 +17,8 @@
  * exists is that those counters already report `0` for an unknown cost, the "never show an unknown figure as
  * zero" rule this engine must not repeat, README.md:719).
  */
+import crypto from 'node:crypto';
+import type { DatabaseSync } from 'node:sqlite';
 import type { UsageLedgerRow, CostSource } from './usageLedger';
 import { nanoToDecimalCost } from './pricing/estimate';
 
@@ -559,4 +561,564 @@ export function evaluationErrorStatus(window: BudgetWindow, now: number): Budget
     pricingVersions: [],
     evaluatedAt: now,
   };
+}
+
+// -------------------------------------------------------------
+// 5. Storage (issue #85, sub-issue #303): `BudgetRegistry`, a memory and a SQLite implementation sharing one
+//    validation path, append-only revisions with `actor`/`auth`, soft delete, and the evaluation cache the issue
+//    asks for. No new "coverage start" table: issue #70's `retention_state.purged_before` (SQLite) and
+//    `MemoryEventStore`'s own `ledgerDroppedRows`/`ledgerComplete`/`retentionState.usageLedger.purgedBefore`
+//    (memory, see migration 0014's own comment for the full citation) already give a `historyTruncated` caller
+//    everything #85's rule 7 needs; this module never reads the ledger itself; that stays the caller's job
+//    (#304's API layer, which already holds a live store reference).
+// -------------------------------------------------------------
+
+export interface BudgetValidationIssue {
+  path: string;
+  message: string;
+}
+
+/** Thrown by every `BudgetRegistry` write method when the input fails validation, before anything is persisted
+ * (memory) or inside the still-open transaction, which is then rolled back (SQLite). */
+export class BudgetValidationError extends Error {
+  readonly code = 'budget_validation' as const;
+  constructor(readonly issues: readonly BudgetValidationIssue[]) {
+    super(`Invalid budget input: ${issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ')}`);
+    this.name = 'BudgetValidationError';
+  }
+}
+
+/** What `BudgetRegistry.create` accepts. `id` is normally omitted (minted as `"bud_" + UUID`); accepting it lets
+ * a test or a seed script pin a deterministic id. Every optional field here has the same default `Budget`'s own
+ * field comments document (`timezone: "UTC"`, `warningRatio: 0.8`, `enabled: true`). */
+export interface BudgetInput {
+  id?: string;
+  name: string;
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  timezone?: string;
+  currency: string;
+  basis: BudgetBasis;
+  limit: number;
+  warningRatio?: number;
+  enabled?: boolean;
+}
+
+/** What `BudgetRegistry.update` accepts: every field optional, and replaced as a whole when present (`scope` is
+ * never merged field by field: supplying it means supplying both `type` and `value` together, never just one). */
+export type BudgetPatch = Partial<Omit<BudgetInput, 'id'>>;
+
+export type BudgetRevisionAction = 'create' | 'update' | 'delete';
+
+/** `'token'` when the request carried a valid admin/API token, `'open'` when the server has none configured,
+ * mirroring `server/index.ts`'s own `AuthMode`. Duplicated here as a plain union instead of imported so this
+ * storage module keeps zero dependency on the route layer; the caller (#304's API) passes whichever one it
+ * already computed from `currentAuthMode()`. */
+export type BudgetRevisionAuth = 'token' | 'open';
+
+export interface BudgetChangeMeta {
+  /** Free text, 1 to 100 characters when provided (same bound `server/pricing/api.ts` already uses for its own
+   * `actor` field); `null` when the caller does not supply one. */
+  actor: string | null;
+  auth: BudgetRevisionAuth;
+}
+
+/** One append-only row per `create`/`update`/`delete` (issue #85 section 3). `snapshot` is the full `Budget` as
+ * it stood immediately after this change (for `delete`, its config fields right before the row was marked
+ * deleted; `Budget` itself carries no `deletedAt` field, the registry tracks that separately). */
+export interface BudgetRevision {
+  id: string;
+  budgetId: string;
+  revision: number;
+  action: BudgetRevisionAction;
+  snapshot: Budget;
+  actor: string | null;
+  auth: BudgetRevisionAuth;
+  createdAt: number;
+}
+
+/** The evaluation cache key the issue names: a result computed for one ledger write sequence, one window start
+ * and one budget revision is valid forever, since the ledger never rewrites history and a past window never
+ * changes. `getCachedStatus` only ever returns a hit on an exact match of all three fields. */
+export interface BudgetEvalCacheKey {
+  ledgerSeq: number;
+  windowStart: number;
+  revision: number;
+}
+
+export interface BudgetRegistry {
+  /** Throws `BudgetValidationError` on invalid input, including an explicitly supplied `id` that already exists
+   * (active or soft-deleted: an id is never reused, issue #85 section 3). */
+  create(input: BudgetInput, meta: BudgetChangeMeta): Budget;
+  /** `null` when `id` does not exist or is soft-deleted. Throws `BudgetValidationError` on invalid input. */
+  update(id: string, patch: BudgetPatch, meta: BudgetChangeMeta): Budget | null;
+  /** Soft delete: `false` when `id` does not exist or is already deleted. The row, its revisions and any cached
+   * status are kept, just excluded from `get`/`list` from here on. */
+  delete(id: string, meta: BudgetChangeMeta): boolean;
+  /** `null` when `id` does not exist or is soft-deleted. */
+  get(id: string): Budget | null;
+  /** Every non-deleted budget, oldest `createdAt` first (ties broken by `id`). */
+  list(): Budget[];
+  /** Every revision for `budgetId`, oldest first. Empty for an unknown id. */
+  listRevisions(budgetId: string): BudgetRevision[];
+  /** `null` on a miss (no cached entry, or one whose key does not match exactly). Never throws for an unknown
+   * `budgetId`: the caller already resolved the budget before asking for its cached status. */
+  getCachedStatus(budgetId: string, key: BudgetEvalCacheKey): BudgetStatus | null;
+  /** Upserts the single cached entry for `budgetId`, replacing whatever was cached before. */
+  setCachedStatus(budgetId: string, key: BudgetEvalCacheKey, status: BudgetStatus): void;
+}
+
+const CURRENCY_PATTERN = /^[A-Z]{3}$/;
+
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    // eslint-disable-next-line no-new -- constructed only to validate; `Intl` throws `RangeError` on a bad name.
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validateActor(actor: string | null): void {
+  if (actor === null) return;
+  if (typeof actor !== 'string' || actor.length < 1 || actor.length > 100) {
+    throw new BudgetValidationError([{ path: 'actor', message: 'must be 1 to 100 characters when provided' }]);
+  }
+}
+
+/**
+ * Validates whichever fields are present in `candidate`, shared by `create` (every `BudgetInput` field present)
+ * and `update` (only the fields a `BudgetPatch` actually supplies): a field absent from `candidate` is simply
+ * not checked, since `update` leaves it at its current, already-valid stored value.
+ */
+function validateBudgetFields(candidate: {
+  name?: string;
+  scope?: BudgetScope;
+  period?: BudgetPeriod;
+  timezone?: string;
+  currency?: string;
+  basis?: BudgetBasis;
+  limit?: number;
+  warningRatio?: number;
+}): BudgetValidationIssue[] {
+  const issues: BudgetValidationIssue[] = [];
+
+  if (candidate.name !== undefined) {
+    if (typeof candidate.name !== 'string' || candidate.name.length < 1 || candidate.name.length > 120) {
+      issues.push({ path: 'name', message: 'must be 1 to 120 characters' });
+    }
+  }
+  if (candidate.scope !== undefined) {
+    const { scope } = candidate;
+    if (!isBudgetScopeType(scope.type)) {
+      issues.push({ path: 'scope.type', message: `must be one of ${BUDGET_SCOPE_TYPES.join(', ')}` });
+    } else if (scope.type === 'all') {
+      if (scope.value !== null) issues.push({ path: 'scope.value', message: 'must be null when scope.type is "all"' });
+    } else if (typeof scope.value !== 'string' || scope.value.length < 1 || scope.value.length > 200) {
+      issues.push({ path: 'scope.value', message: 'must be 1 to 200 characters when scope.type is not "all"' });
+    }
+  }
+  if (candidate.period !== undefined && !isBudgetPeriod(candidate.period)) {
+    issues.push({ path: 'period', message: `must be one of ${BUDGET_PERIODS.join(', ')}` });
+  }
+  if (candidate.timezone !== undefined) {
+    if (typeof candidate.timezone !== 'string' || candidate.timezone.length < 1 || !isValidTimeZone(candidate.timezone)) {
+      issues.push({ path: 'timezone', message: 'must be a valid IANA time zone name' });
+    }
+  }
+  if (candidate.currency !== undefined) {
+    if (typeof candidate.currency !== 'string' || !CURRENCY_PATTERN.test(candidate.currency)) {
+      issues.push({ path: 'currency', message: 'must be a 3 letter uppercase ISO 4217 code' });
+    }
+  }
+  if (candidate.basis !== undefined && !isBudgetBasis(candidate.basis)) {
+    issues.push({ path: 'basis', message: `must be one of ${BUDGET_BASES.join(', ')}` });
+  }
+  if (candidate.limit !== undefined) {
+    if (typeof candidate.limit !== 'number' || !Number.isFinite(candidate.limit) || candidate.limit <= 0 || candidate.limit > 1e12) {
+      issues.push({ path: 'limit', message: 'must be finite, greater than 0 and at most 1e12' });
+    }
+  }
+  if (candidate.warningRatio !== undefined) {
+    if (
+      typeof candidate.warningRatio !== 'number'
+      || !Number.isFinite(candidate.warningRatio)
+      || candidate.warningRatio <= 0
+      || candidate.warningRatio >= 1
+    ) {
+      issues.push({ path: 'warningRatio', message: 'must be greater than 0 and less than 1' });
+    }
+  }
+  return issues;
+}
+
+function sortBudgets(list: Budget[]): Budget[] {
+  return [...list].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+// ---- Memory implementation ------------------------------------------------
+
+export interface MemoryBudgetRegistryOptions {
+  now?: () => number;
+}
+
+/**
+ * In-process `BudgetRegistry`: nothing survives a restart (the memory store never does, issue #85 section 5
+ * assumes this of every memory-mode feature), but the same validation, revision and cache semantics as the
+ * SQLite implementation below, checked against it directly by `tests/budgets-registry.test.mjs`'s parity suite.
+ */
+export function createMemoryBudgetRegistry(options: MemoryBudgetRegistryOptions = {}): BudgetRegistry {
+  const now = options.now ?? Date.now;
+  const budgetsById = new Map<string, Budget>();
+  const deletedIds = new Set<string>();
+  const revisionsByBudget = new Map<string, BudgetRevision[]>();
+  const cacheByBudget = new Map<string, { key: BudgetEvalCacheKey; status: BudgetStatus }>();
+
+  function recordRevision(budget: Budget, action: BudgetRevisionAction, meta: BudgetChangeMeta): void {
+    const list = revisionsByBudget.get(budget.id) ?? [];
+    list.push({
+      id: `budrev_${crypto.randomUUID()}`,
+      budgetId: budget.id,
+      revision: budget.revision,
+      action,
+      snapshot: { ...budget, scope: { ...budget.scope } },
+      actor: meta.actor,
+      auth: meta.auth,
+      createdAt: now(),
+    });
+    revisionsByBudget.set(budget.id, list);
+  }
+
+  function create(input: BudgetInput, meta: BudgetChangeMeta): Budget {
+    validateActor(meta.actor);
+    const issues = validateBudgetFields(input);
+    if (issues.length > 0) throw new BudgetValidationError(issues);
+    const id = input.id ?? `bud_${crypto.randomUUID()}`;
+    if (budgetsById.has(id)) {
+      throw new BudgetValidationError([{ path: 'id', message: `a budget with id "${id}" already exists` }]);
+    }
+    const timestamp = now();
+    const budget: Budget = {
+      id,
+      name: input.name,
+      scope: { ...input.scope },
+      period: input.period,
+      timezone: input.timezone ?? 'UTC',
+      currency: input.currency,
+      basis: input.basis,
+      limit: input.limit,
+      warningRatio: input.warningRatio ?? 0.8,
+      enabled: input.enabled ?? true,
+      revision: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    budgetsById.set(id, budget);
+    recordRevision(budget, 'create', meta);
+    return { ...budget, scope: { ...budget.scope } };
+  }
+
+  function update(id: string, patch: BudgetPatch, meta: BudgetChangeMeta): Budget | null {
+    validateActor(meta.actor);
+    const current = budgetsById.get(id);
+    if (!current || deletedIds.has(id)) return null;
+    const issues = validateBudgetFields(patch);
+    if (issues.length > 0) throw new BudgetValidationError(issues);
+    const timestamp = now();
+    const next: Budget = {
+      ...current,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.scope !== undefined ? { scope: { ...patch.scope } } : {}),
+      ...(patch.period !== undefined ? { period: patch.period } : {}),
+      ...(patch.timezone !== undefined ? { timezone: patch.timezone } : {}),
+      ...(patch.currency !== undefined ? { currency: patch.currency } : {}),
+      ...(patch.basis !== undefined ? { basis: patch.basis } : {}),
+      ...(patch.limit !== undefined ? { limit: patch.limit } : {}),
+      ...(patch.warningRatio !== undefined ? { warningRatio: patch.warningRatio } : {}),
+      ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+      revision: current.revision + 1,
+      updatedAt: timestamp,
+    };
+    budgetsById.set(id, next);
+    recordRevision(next, 'update', meta);
+    return { ...next, scope: { ...next.scope } };
+  }
+
+  function del(id: string, meta: BudgetChangeMeta): boolean {
+    validateActor(meta.actor);
+    const current = budgetsById.get(id);
+    if (!current || deletedIds.has(id)) return false;
+    const timestamp = now();
+    const next: Budget = { ...current, revision: current.revision + 1, updatedAt: timestamp };
+    budgetsById.set(id, next);
+    deletedIds.add(id);
+    recordRevision(next, 'delete', meta);
+    return true;
+  }
+
+  function get(id: string): Budget | null {
+    if (deletedIds.has(id)) return null;
+    const budget = budgetsById.get(id);
+    return budget ? { ...budget, scope: { ...budget.scope } } : null;
+  }
+
+  function list(): Budget[] {
+    const active = [...budgetsById.values()].filter((budget) => !deletedIds.has(budget.id));
+    return sortBudgets(active).map((budget) => ({ ...budget, scope: { ...budget.scope } }));
+  }
+
+  function listRevisions(budgetId: string): BudgetRevision[] {
+    return (revisionsByBudget.get(budgetId) ?? []).map((revision) => ({ ...revision, snapshot: { ...revision.snapshot, scope: { ...revision.snapshot.scope } } }));
+  }
+
+  function getCachedStatus(budgetId: string, key: BudgetEvalCacheKey): BudgetStatus | null {
+    const entry = cacheByBudget.get(budgetId);
+    if (!entry) return null;
+    if (entry.key.ledgerSeq !== key.ledgerSeq || entry.key.windowStart !== key.windowStart || entry.key.revision !== key.revision) {
+      return null;
+    }
+    return { ...entry.status };
+  }
+
+  function setCachedStatus(budgetId: string, key: BudgetEvalCacheKey, status: BudgetStatus): void {
+    cacheByBudget.set(budgetId, { key: { ...key }, status: { ...status } });
+  }
+
+  return { create, update, delete: del, get, list, listRevisions, getCachedStatus, setCachedStatus };
+}
+
+// ---- SQLite implementation -------------------------------------------------
+
+interface BudgetRow {
+  id: string;
+  name: string;
+  scope_type: string;
+  scope_value: string | null;
+  period: string;
+  timezone: string;
+  currency: string;
+  basis: string;
+  limit_amount: number;
+  warning_ratio: number;
+  enabled: number;
+  revision: number;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+}
+
+function rowToBudget(row: BudgetRow): Budget {
+  return {
+    id: row.id,
+    name: row.name,
+    scope: { type: row.scope_type as BudgetScopeType, value: row.scope_value },
+    period: row.period as BudgetPeriod,
+    timezone: row.timezone,
+    currency: row.currency,
+    basis: row.basis as BudgetBasis,
+    limit: row.limit_amount,
+    warningRatio: row.warning_ratio,
+    enabled: row.enabled === 1,
+    revision: row.revision,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export interface SqliteBudgetRegistryOptions {
+  now?: () => number;
+}
+
+/**
+ * SQLite `BudgetRegistry`, backed by the `budgets`/`budget_revisions`/`budget_state` tables migration 0014
+ * creates. `db` must already have those tables (the caller runs migrations first, exactly like every other
+ * SQLite-backed module in this codebase); this constructor never runs a migration itself. Each write method is
+ * its own transaction, so a budget row and its revision row are always written, or neither is.
+ */
+export function createSqliteBudgetRegistry(db: DatabaseSync, options: SqliteBudgetRegistryOptions = {}): BudgetRegistry {
+  const now = options.now ?? Date.now;
+
+  function insertRevision(budget: Budget, action: BudgetRevisionAction, meta: BudgetChangeMeta): void {
+    db.prepare(
+      `INSERT INTO budget_revisions (id, budget_id, revision, action, snapshot_json, actor, auth, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(`budrev_${crypto.randomUUID()}`, budget.id, budget.revision, action, JSON.stringify(budget), meta.actor, meta.auth, now());
+  }
+
+  function runInTransaction<T>(fn: () => T): T {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = fn();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // The transaction may already have been rolled back by a prior statement failure.
+      }
+      throw error;
+    }
+  }
+
+  function create(input: BudgetInput, meta: BudgetChangeMeta): Budget {
+    validateActor(meta.actor);
+    const issues = validateBudgetFields(input);
+    if (issues.length > 0) throw new BudgetValidationError(issues);
+    const id = input.id ?? `bud_${crypto.randomUUID()}`;
+    return runInTransaction(() => {
+      const existing = db.prepare('SELECT id FROM budgets WHERE id = ?').get(id);
+      if (existing) throw new BudgetValidationError([{ path: 'id', message: `a budget with id "${id}" already exists` }]);
+      const timestamp = now();
+      const timezone = input.timezone ?? 'UTC';
+      const warningRatio = input.warningRatio ?? 0.8;
+      const enabled = input.enabled ?? true;
+      db.prepare(
+        `INSERT INTO budgets
+           (id, name, scope_type, scope_value, period, timezone, currency, basis, limit_amount, warning_ratio, enabled, revision, created_at, updated_at, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)`
+      ).run(id, input.name, input.scope.type, input.scope.value, input.period, timezone, input.currency, input.basis, input.limit, warningRatio, enabled ? 1 : 0, timestamp, timestamp);
+      const budget: Budget = {
+        id,
+        name: input.name,
+        scope: { ...input.scope },
+        period: input.period,
+        timezone,
+        currency: input.currency,
+        basis: input.basis,
+        limit: input.limit,
+        warningRatio,
+        enabled,
+        revision: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      insertRevision(budget, 'create', meta);
+      return budget;
+    });
+  }
+
+  function update(id: string, patch: BudgetPatch, meta: BudgetChangeMeta): Budget | null {
+    validateActor(meta.actor);
+    const issues = validateBudgetFields(patch);
+    if (issues.length > 0) throw new BudgetValidationError(issues);
+    return runInTransaction(() => {
+      const row = db.prepare('SELECT * FROM budgets WHERE id = ? AND deleted_at IS NULL').get(id) as BudgetRow | undefined;
+      if (!row) return null;
+      const current = rowToBudget(row);
+      const timestamp = now();
+      const next: Budget = {
+        ...current,
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(patch.scope !== undefined ? { scope: { ...patch.scope } } : {}),
+        ...(patch.period !== undefined ? { period: patch.period } : {}),
+        ...(patch.timezone !== undefined ? { timezone: patch.timezone } : {}),
+        ...(patch.currency !== undefined ? { currency: patch.currency } : {}),
+        ...(patch.basis !== undefined ? { basis: patch.basis } : {}),
+        ...(patch.limit !== undefined ? { limit: patch.limit } : {}),
+        ...(patch.warningRatio !== undefined ? { warningRatio: patch.warningRatio } : {}),
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        revision: current.revision + 1,
+        updatedAt: timestamp,
+      };
+      db.prepare(
+        `UPDATE budgets
+         SET name = ?, scope_type = ?, scope_value = ?, period = ?, timezone = ?, currency = ?, basis = ?,
+             limit_amount = ?, warning_ratio = ?, enabled = ?, revision = ?, updated_at = ?
+         WHERE id = ?`
+      ).run(
+        next.name,
+        next.scope.type,
+        next.scope.value,
+        next.period,
+        next.timezone,
+        next.currency,
+        next.basis,
+        next.limit,
+        next.warningRatio,
+        next.enabled ? 1 : 0,
+        next.revision,
+        next.updatedAt,
+        id
+      );
+      insertRevision(next, 'update', meta);
+      return next;
+    });
+  }
+
+  function del(id: string, meta: BudgetChangeMeta): boolean {
+    validateActor(meta.actor);
+    return runInTransaction(() => {
+      const row = db.prepare('SELECT * FROM budgets WHERE id = ? AND deleted_at IS NULL').get(id) as BudgetRow | undefined;
+      if (!row) return false;
+      const current = rowToBudget(row);
+      const timestamp = now();
+      const next: Budget = { ...current, revision: current.revision + 1, updatedAt: timestamp };
+      db.prepare('UPDATE budgets SET revision = ?, updated_at = ?, deleted_at = ? WHERE id = ?').run(next.revision, next.updatedAt, timestamp, id);
+      insertRevision(next, 'delete', meta);
+      return true;
+    });
+  }
+
+  function get(id: string): Budget | null {
+    const row = db.prepare('SELECT * FROM budgets WHERE id = ? AND deleted_at IS NULL').get(id) as BudgetRow | undefined;
+    return row ? rowToBudget(row) : null;
+  }
+
+  function list(): Budget[] {
+    const rows = db.prepare('SELECT * FROM budgets WHERE deleted_at IS NULL ORDER BY created_at, id').all() as unknown as BudgetRow[];
+    return rows.map(rowToBudget);
+  }
+
+  function listRevisions(budgetId: string): BudgetRevision[] {
+    const rows = db
+      .prepare('SELECT * FROM budget_revisions WHERE budget_id = ? ORDER BY revision')
+      .all(budgetId) as Array<{
+        id: string;
+        budget_id: string;
+        revision: number;
+        action: BudgetRevisionAction;
+        snapshot_json: string;
+        actor: string | null;
+        auth: BudgetRevisionAuth;
+        created_at: number;
+      }>;
+    return rows.map((row) => ({
+      id: row.id,
+      budgetId: row.budget_id,
+      revision: row.revision,
+      action: row.action,
+      snapshot: JSON.parse(row.snapshot_json) as Budget,
+      actor: row.actor,
+      auth: row.auth,
+      createdAt: row.created_at,
+    }));
+  }
+
+  function getCachedStatus(budgetId: string, key: BudgetEvalCacheKey): BudgetStatus | null {
+    const row = db
+      .prepare('SELECT ledger_seq, window_start, budget_revision, status_json FROM budget_state WHERE budget_id = ?')
+      .get(budgetId) as { ledger_seq: number; window_start: number; budget_revision: number; status_json: string } | undefined;
+    if (!row) return null;
+    if (row.ledger_seq !== key.ledgerSeq || row.window_start !== key.windowStart || row.budget_revision !== key.revision) {
+      return null;
+    }
+    return JSON.parse(row.status_json) as BudgetStatus;
+  }
+
+  function setCachedStatus(budgetId: string, key: BudgetEvalCacheKey, status: BudgetStatus): void {
+    db.prepare(
+      `INSERT INTO budget_state (budget_id, ledger_seq, window_start, budget_revision, status_json, evaluated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(budget_id) DO UPDATE SET
+         ledger_seq = excluded.ledger_seq,
+         window_start = excluded.window_start,
+         budget_revision = excluded.budget_revision,
+         status_json = excluded.status_json,
+         evaluated_at = excluded.evaluated_at`
+    ).run(budgetId, key.ledgerSeq, key.windowStart, key.revision, JSON.stringify(status), now());
+  }
+
+  return { create, update, delete: del, get, list, listRevisions, getCachedStatus, setCachedStatus };
 }

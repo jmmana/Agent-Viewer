@@ -13,6 +13,7 @@ import { usageLedgerSummary } from './migrations/0010-usage-ledger-summary';
 import { rollupAttribution } from './migrations/0011-rollup-attribution';
 import { usageLedgerEstimates } from './migrations/0012-usage-ledger-estimates';
 import { pricingRecompute } from './migrations/0013-pricing-recompute';
+import { budgets } from './migrations/0014-budgets';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -37,6 +38,7 @@ export const MIGRATIONS: readonly Migration[] = [
   rollupAttribution,
   usageLedgerEstimates,
   pricingRecompute,
+  budgets,
 ];
 
 export interface MigrationOptions {

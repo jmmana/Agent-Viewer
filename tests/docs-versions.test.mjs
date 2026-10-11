@@ -91,7 +91,7 @@ for (const [relativePath, coversPattern] of [
   });
 }
 
-test('CHANGELOG.md has an empty [Unreleased] section and its first dated section matches package.json', () => {
+test('CHANGELOG.md has an [Unreleased] section and its first dated section matches package.json', () => {
   const lines = read(CHANGELOG).split('\n');
   const unreleasedIndex = lines.findIndex((line) => line.trim() === '## [Unreleased]');
   assert.ok(unreleasedIndex >= 0, `${CHANGELOG} must have an "## [Unreleased]" heading`);
@@ -115,5 +115,9 @@ test('CHANGELOG.md has an empty [Unreleased] section and its first dated section
   );
 
   const unreleasedBody = lines.slice(unreleasedIndex + 1, firstDatedIndex).join('\n').trim();
-  assert.equal(unreleasedBody, '', `${CHANGELOG}'s [Unreleased] section must be empty right after a version release, found: "${unreleasedBody.slice(0, 80)}"`);
+  // Nuevas entregas se registran aquí antes del siguiente release.
+  if (unreleasedBody) {
+    assert.match(unreleasedBody, /^### (Added|Changed|Fixed|Removed|Breaking changes)\n/,
+      `${CHANGELOG}'s pending entries must begin with a supported change group`);
+  }
 });

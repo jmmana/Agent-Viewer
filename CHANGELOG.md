@@ -123,6 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CEO desk animation fit (#276, Refs #118):** eight original desk/chair views align the existing sit/stand/typing frames with stable keyboard and seat contacts in all four cameras. Layered occlusion replaces duplicate occupied props; fallback and other rooms preserve their existing rendering.
+
 - **Release pipeline hardening**, a direct follow-up to the 0.3.0 release gate (#63): `.github/workflows/release.yml` no longer lets a tag "succeed" with nothing published.
   - The npm publish step now fails the job (instead of a silent `exit 0`) when `NPM_TOKEN` (or trusted publishing) is missing on a real release tag.
   - A new `pypi` job builds the sdist and wheel from `sdk/python/` with `python -m build`, checks them with `twine check`, installs the wheel in a clean venv and publishes to PyPI with `pypa/gh-action-pypi-publish` (trusted publishing, `pypi` environment).

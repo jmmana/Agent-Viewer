@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "status": "prototype",
+  "file": "assets/crew/props/ceo-workstation-v2.png",
+  "width": 1024,
+  "height": 1536,
+  "sha256": "53ae885c19f95b6f2d5ae1f6458467753dc45df0c3828d86b848ad424da1d856",
+  "license": "MIT",
+  "tool": "built-in image_gen",
+  "prompt": "assets/crew/origins/workstation-276/workstation-v2.prompt.txt",
+  "promptSha256": "eea9a214c67b757a2ae4ca1f9424ede414bad05db3429fd1fbcef808c8e4b468",
+  "reference": "assets/crew/clips/ceo-typing-v1.png",
+  "editTarget": "assets/crew/origins/workstation-276/workstation-v1-rejected.png",
+  "parts": [
+    {
+      "id": "ceo.workstation.desk.front.v2",
+      "facing": "front",
+      "kind": "desk",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 405
+      },
+      "contact": {
+        "x": 329,
+        "y": 114
+      },
+      "rgbaSha256": "200838f02580730be43033049d82fd2b50600135fb147744901b1577c5cc9921"
+    },
+    {
+      "id": "ceo.workstation.chair.front.v2",
+      "facing": "front",
+      "kind": "chair",
+      "rect": {
+        "x": 640,
+        "y": 0,
+        "width": 384,
+        "height": 405
+      },
+      "contact": {
+        "x": 177,
+        "y": 240
+      },
+      "rgbaSha256": "84b41cef0bb7e18484c1400b73afda48d8633fb9f5ef86457b5ec419fa03d9eb"
+    },
+    {
+      "id": "ceo.workstation.desk.right.v2",
+      "facing": "right",
+      "kind": "desk",
+      "rect": {
+        "x": 0,
+        "y": 405,
+        "width": 640,
+        "height": 356
+      },
+      "contact": {
+        "x": 224,
+        "y": 74
+      },
+      "rgbaSha256": "c4b927a7f85fcff5e5ec1699f575f7ea6d6e68bad1ac008aea9906bf71024dcf"
+    },
+    {
+      "id": "ceo.workstation.chair.right.v2",
+      "facing": "right",
+      "kind": "chair",
+      "rect": {
+        "x": 640,
+        "y": 405,
+        "width": 384,
+        "height": 356
+      },
+      "contact": {
+        "x": 203,
+        "y": 190
+      },
+      "rgbaSha256": "15801be8a2fea219ff5d3a086422957ff681e8b080ecdbf0d5dd03834559a039"
+    },
+    {
+      "id": "ceo.workstation.desk.back.v2",
+      "facing": "back",
+      "kind": "desk",
+      "rect": {
+        "x": 0,
+        "y": 761,
+        "width": 640,
+        "height": 354
+      },
+      "contact": {
+        "x": 321,
+        "y": 86
+      },
+      "rgbaSha256": "ca1c9bece8b7320f1bf2deab4196c741de25a61754fc47988c8405bab3c9d367"
+    },
+    {
+      "id": "ceo.workstation.chair.back.v2",
+      "facing": "back",
+      "kind": "chair",
+      "rect": {
+        "x": 640,
+        "y": 761,
+        "width": 384,
+        "height": 354
+      },
+      "contact": {
+        "x": 181,
+        "y": 205
+      },
+      "rgbaSha256": "b9333af09fdb54320a7ea507e48e1996b6fbc460b0c5a047a7a308cc169c3357"
+    },
+    {
+      "id": "ceo.workstation.desk.left.v2",
+      "facing": "left",
+      "kind": "desk",
+      "rect": {
+        "x": 0,
+        "y": 1115,
+        "width": 640,
+        "height": 421
+      },
+      "contact": {
+        "x": 473,
+        "y": 75
+      },
+      "rgbaSha256": "e04d2901babbe6a14f7934ed85abc5cfb5a7e23784b14d81cec34de71e2d3c90"
+    },
+    {
+      "id": "ceo.workstation.chair.left.v2",
+      "facing": "left",
+      "kind": "chair",
+      "rect": {
+        "x": 640,
+        "y": 1115,
+        "width": 384,
+        "height": 421
+      },
+      "contact": {
+        "x": 146,
+        "y": 192
+      },
+      "rgbaSha256": "8af15c538d2240ba652600f13ec0c2cc12a609b714e72a61671ea910535accb1"
+    }
+  ]
+}

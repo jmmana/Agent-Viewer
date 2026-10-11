@@ -5,7 +5,7 @@ import { crewRoomForWorkspace } from './crewEvents';
 
 export type CrewActionId = 'turn' | 'sit' | 'stand' | 'typing';
 export type CrewObservedAgent = Pick<Agent, 'id' | 'workspace' | 'role' | 'status' | 'x' | 'y' | 'targetX' | 'targetY' | 'isWalking' | 'facing'>;
-export interface CrewWorkstation { deskId: string; chairId: string; x: number; y: number; facing: Agent['facing'] }
+export interface CrewWorkstation { actorId?: string; deskId: string; chairId: string; x: number; y: number; facing: Agent['facing'] }
 export interface CrewActorAction {
   id: string;
   observed: CrewObservedAgent;

@@ -9,6 +9,7 @@ import { crewSpriteView } from './crewSprites';
 import { useCrewPropImages } from './useCrewPropImages';
 import { CREW_ROOM_PROP_IMAGES, type CrewPropImageId } from './crewPropImages';
 import { useCrewBlink } from './useCrewBlink';
+import { useCrewWorkstation } from './useCrewWorkstation';
 import { useCrewActions } from './useCrewActions';
 import { crewActionMarkers } from './crewActorActions';
 import { useCrewWalk } from './useCrewWalk';
@@ -193,6 +194,7 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
   const visibleAgents = useMemo(() => crewAgentsInRoom(agents, roomId), [agents, roomId]);
   const action = useCrewActions(visibleAgents, room, view, visualPreferences.reducedMotion);
+  const workstationImage = useCrewWorkstation(roomId === 'ceo' && action.actions.some(actor => !!actor.workstation), roomId);
   const presence = useMemo(() => {
     const projected = projectCrewPresence(agents, room);
     return { ...projected, markers: crewActionMarkers(projected.markers, action.actions) };
@@ -231,8 +233,8 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, seats: action.actions.flatMap(actor => actor.workstation ? [actor.workstation] : []), locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, action.actions, visualPreferences.highContrast, propImages.images]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, workstationImage, seats: action.actions.flatMap(actor => actor.workstation ? [{ ...actor.workstation, actorId: actor.id }] : []), locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, action.actions, workstationImage, visualPreferences.highContrast, propImages.images]);
 
   useEffect(() => {
     const el = canvasRef.current;

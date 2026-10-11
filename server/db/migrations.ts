@@ -11,6 +11,7 @@ import { retention } from './migrations/0008-retention';
 import { usageRollup } from './migrations/0009-usage-rollup';
 import { usageLedgerSummary } from './migrations/0010-usage-ledger-summary';
 import { rollupAttribution } from './migrations/0011-rollup-attribution';
+import { usageLedgerEstimates } from './migrations/0012-usage-ledger-estimates';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -33,6 +34,7 @@ export const MIGRATIONS: readonly Migration[] = [
   usageRollup,
   usageLedgerSummary,
   rollupAttribution,
+  usageLedgerEstimates,
 ];
 
 export interface MigrationOptions {

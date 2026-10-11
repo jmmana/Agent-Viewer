@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Ingestion-time cost estimate on the usage ledger (#84): every new `llm.usage`/`llm.failed` row gets a list-price
+  approximation computed from the #83 pricing table, in the same step as the ledger write, kept entirely separate
+  from the reported `cost`/`currency`/`costSource` (never summed, never overwritten). Five new nullable columns
+  (`estimated_cost_nano`, `estimated_currency`, `pricing_version`, `estimate_status`, `estimated_at`), a pure
+  estimator (`server/pricing/estimate.ts`) with no fallback price, and the "unknown is never zero" rule applied to
+  a missing price, a missing token count or a contradictory token count alike.
+
+### Notes
+- The estimate is not yet exposed on any API response (calls, rollup, export) or recompute endpoint; that follows
+  in a later issue. A pre-0.6.0 ledger row keeps every new column `NULL` (`estimate_status` reads as the virtual
+  `not_estimated`); there is no automatic backfill.
+
 ## [0.5.0] - 2026-10-10
 
 "Spend in the office": per-agent usage badges and a per-call detail panel on the canvas, fed only by host props (#76, #77); the portal reading those same figures from the real usage ledger for canvas badges, the agent inspector and the call-detail modal (#78); cost per meeting and per tool computed on the server and shown in the Meetings panel and tool tooltips (#80, #81); Model Ops's Matrix, Agents and Feed tabs reconciling call by call against the ledger instead of local counters (#79); and the library guide's four privacy rules written out in one place for integrators: the host computes, the component only displays; usage UI stays hidden until the host opts in; a missing figure is always "unknown", never `0`; and the call detail panel is metadata only, never prompt, completion or tool-argument text. Full reference: [the usage chapter of the library guide](docs/library.md#usage-figures) ([español](docs/library.es.md#cifras-de-consumo)).

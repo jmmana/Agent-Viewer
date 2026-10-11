@@ -34,6 +34,20 @@ import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { isLlmErrorKind } from '../src/integrations/canonicalTypes';
 import { normalizeProvider, normalizeRequestId } from './requestKey';
 import { rowToEvent } from './eventRow';
+import {
+  estimateLedgerRow,
+  isEstimateStatus,
+  type EstimatePricingSnapshot,
+  type EstimateStatus,
+  type LedgerEstimateFields,
+} from './pricing/estimate';
+
+export type { EstimateStatus, EstimatePricingSnapshot } from './pricing/estimate';
+
+/** A pricing snapshot that resolves nothing (no version ever committed): every row estimated against it gets
+ * `estimate_status = 'no_price_in_force'`. The default for any caller (tests, a store constructed without the
+ * option) that does not wire up the real pricing store (issue #83's `getPricingStore()`). */
+export const NO_PRICING_SNAPSHOT: EstimatePricingSnapshot = { pricingVersion: null, entries: [] };
 
 export type LedgerEventType = 'llm.usage' | 'llm.failed';
 export type IngestChannel = 'events' | 'events-batch' | 'webhook' | 'otlp' | 'unknown';
@@ -80,9 +94,30 @@ export interface UsageLedgerRow {
   /** `event.summary` (issue #69, migration `usage-ledger-summary`). `null` for a row written before that
    * migration: `usage_ledger` is append-only (`usage_ledger_no_update`), so an old row can never be backfilled. */
   summary: string | null;
+  /**
+   * The ingestion-time cost estimate (issue #84, migration `usage-ledger-estimates`), never the reported `cost`
+   * above: these five fields are computed by `estimateLedgerRow` (`server/pricing/estimate.ts`) from the issue
+   * #83 pricing table, kept entirely separate from `cost`/`currency`/`costSource`, and never written into or
+   * read back from the canonical event. `estimateStatus: null` means this row predates 0.6.0 (the migration's
+   * `ALTER TABLE` leaves existing rows `NULL`; `usage_ledger_no_update` forbids backfilling them in place) and
+   * is exposed as the virtual status `not_estimated`; every row inserted from here on always gets one of
+   * `EstimateStatus`'s real values, never `null`.
+   */
+  estimatedCostNano: number | null;
+  estimatedCurrency: string | null;
+  pricingVersion: number | null;
+  estimateStatus: EstimateStatus | null;
+  estimatedAt: number | null;
 }
 
 export type LedgerRowInput = Omit<UsageLedgerRow, 'seq'>;
+
+/** What `toLedgerRow` itself can know: everything but the five estimate columns above, which need a pricing
+ * snapshot `toLedgerRow` deliberately never receives (it stays a pure payload-to-row mapper, no I/O, no pricing
+ * dependency). A caller completes this into a full `LedgerRowInput` by spreading `estimateLedgerRow`'s result
+ * on top, right before the row is inserted (`server/store.ts`'s two `applyLedgerDecision` methods, and
+ * `runUsageLedgerBackfill` below). */
+export type LedgerRowInputBase = Omit<LedgerRowInput, keyof LedgerEstimateFields>;
 
 export interface ToLedgerRowContext {
   /** Server clock, taken once when the request arrived (or `events.created_at` during a backfill). */
@@ -141,7 +176,7 @@ function tagsOf(value: unknown): string[] {
  * data; live routes validate the payload shape before this is ever called). Never throws: every numeric field
  * that is not a finite, non-negative value of the right kind is stored as `NULL` (unknown), never invented as 0.
  */
-export function toLedgerRow(event: CanonicalEvent, ctx: ToLedgerRowContext): LedgerRowInput | null {
+export function toLedgerRow(event: CanonicalEvent, ctx: ToLedgerRowContext): LedgerRowInputBase | null {
   if (event.type !== 'llm.usage' && event.type !== 'llm.failed') return null;
   const payloadRaw = (event as { payload?: unknown }).payload;
   if (payloadRaw === null || typeof payloadRaw !== 'object' || Array.isArray(payloadRaw)) return null;
@@ -258,7 +293,7 @@ const COMPARED_SCALAR_FIELDS = [
  * ingest channel and the legacy flag (the issue's own exclusion list), so a row that reached the ledger live and
  * its later backfilled twin (or vice versa) still compare as the same call.
  */
-export function sameCall(a: LedgerRowInput, b: LedgerRowInput): boolean {
+export function sameCall(a: LedgerRowInputBase, b: LedgerRowInputBase): boolean {
   for (const field of COMPARED_SCALAR_FIELDS) {
     if (a[field] !== b[field]) return false;
   }
@@ -282,6 +317,8 @@ export const LEDGER_COLUMNS = [
   'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens', 'cost', 'currency',
   'cost_source', 'latency_ms', 'status', 'error_kind', 'trace_id', 'parent_id', 'tool_call_id', 'meeting_id',
   'user_id', 'tags', 'summary',
+  // Issue #84, appended (existing column order and names never change): the ingestion-time estimate.
+  'estimated_cost_nano', 'estimated_currency', 'pricing_version', 'estimate_status', 'estimated_at',
 ] as const;
 
 function ledgerInsertSql(): string {
@@ -322,6 +359,11 @@ function ledgerRowParams(row: LedgerRowInput): unknown[] {
     row.userId,
     JSON.stringify(row.tags),
     row.summary,
+    row.estimatedCostNano,
+    row.estimatedCurrency,
+    row.pricingVersion,
+    row.estimateStatus,
+    row.estimatedAt,
   ];
 }
 
@@ -367,6 +409,11 @@ export function dbRowToLedgerRowInput(r: any): LedgerRowInput {
     userId: r.user_id,
     tags,
     summary: r.summary ?? null,
+    estimatedCostNano: r.estimated_cost_nano === null || r.estimated_cost_nano === undefined ? null : Number(r.estimated_cost_nano),
+    estimatedCurrency: r.estimated_currency ?? null,
+    pricingVersion: r.pricing_version === null || r.pricing_version === undefined ? null : Number(r.pricing_version),
+    estimateStatus: isEstimateStatus(r.estimate_status) ? r.estimate_status : null,
+    estimatedAt: r.estimated_at === null || r.estimated_at === undefined ? null : Number(r.estimated_at),
   };
 }
 
@@ -430,6 +477,11 @@ export interface BackfillOptions {
   now?: () => number;
   /** One line per page plus a final summary line (the issue's required log shape), defaults to `console.log`. */
   log?: (message: string) => void;
+  /** Pricing snapshot every newly inserted row's estimate (issue #84) is computed against, fetched once before
+   * the scan starts (never re-fetched per row or per page: the whole point is one in-memory snapshot, no extra
+   * query). Defaults to `NO_PRICING_SNAPSHOT`, so a caller that does not wire up the real pricing store still
+   * gets a well-defined, honestly-unestimated `no_price_in_force` row rather than a crash. */
+  pricing?: EstimatePricingSnapshot;
 }
 
 /**
@@ -447,6 +499,7 @@ export function runUsageLedgerBackfill(
   const pageSize = options.pageSize && options.pageSize > 0 ? Math.trunc(options.pageSize) : 50_000;
   const now = options.now ?? Date.now;
   const log = options.log ?? ((message: string) => console.log(message));
+  const pricing = options.pricing ?? NO_PRICING_SNAPSHOT;
 
   const stats: BackfillStats = { scanned: 0, inserted: 0, duplicate: 0, conflict: 0, unparseable: 0, pages: 0 };
 
@@ -499,12 +552,16 @@ export function runUsageLedgerBackfill(
       const channel: IngestChannel =
         typeof row.id === 'string' && row.id.startsWith('evt_wh_usage_') ? 'webhook' : 'unknown';
 
-      const ledgerRow = toLedgerRow(event, { receivedAt, origin: args.origin, channel, legacyContract });
-      if (ledgerRow === null) {
+      const ledgerRowBase = toLedgerRow(event, { receivedAt, origin: args.origin, channel, legacyContract });
+      if (ledgerRowBase === null) {
         stmts.insertSkip.run(row.id, 'unparseable', null, now(), args.origin);
         pageUnparseable++;
         continue;
       }
+      // Issue #84: a row this scan inserts is a brand-new `usage_ledger` row (one that never existed before,
+      // regardless of how old the source `events` row is), so it gets the same ingestion-time estimate any
+      // live row would, computed once here, never re-run later except by an explicit recompute.
+      const ledgerRow: LedgerRowInput = { ...ledgerRowBase, ...estimateLedgerRow(ledgerRowBase, pricing, now) };
 
       const decision = insertLedgerDecision(db, stmts, ledgerRow, now());
       if (decision === 'inserted') pageInserted++;

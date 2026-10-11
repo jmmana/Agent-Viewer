@@ -322,7 +322,9 @@ test('runUsageLedgerBackfill: paging over several small pages matches a single-p
           cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER, cost REAL, currency TEXT,
           cost_source TEXT NOT NULL, latency_ms INTEGER, status TEXT NOT NULL, error_kind TEXT, trace_id TEXT,
           parent_id TEXT, tool_call_id TEXT, meeting_id TEXT, user_id TEXT, tags TEXT NOT NULL DEFAULT '[]',
-          summary TEXT
+          summary TEXT,
+          estimated_cost_nano INTEGER, estimated_currency TEXT, pricing_version INTEGER, estimate_status TEXT,
+          estimated_at INTEGER
         );
         CREATE UNIQUE INDEX ux_usage_ledger_request ON usage_ledger(provider, request_id) WHERE request_id IS NOT NULL;
         CREATE TABLE usage_ledger_skips (

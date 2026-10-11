@@ -17,7 +17,7 @@
 /** Pistas de música de fondo (loop). Hoy solo existe una, para la sala de descanso. */
 export type CrewAudioTrackId = 'lounge-ambient';
 /** Efectos cortos de un solo disparo (feedback visual-sonoro). */
-export type CrewAudioCueId = 'ui-notification';
+export type CrewAudioCueId = 'ui-notification' | 'phone-ring';
 
 export interface CrewAudioAssetInfo {
   id: CrewAudioTrackId | CrewAudioCueId;
@@ -49,6 +49,17 @@ export const CREW_AUDIO_MANIFEST: readonly CrewAudioAssetInfo[] = [
     notes: {
       en: 'Generic visual+sound feedback cue, reusable by any room through the engine. The phone ring (#145) and the coffee sound (#146) are separate issues; neither is wired to a room yet.',
       es: 'Aviso genérico de retroalimentación visual y sonora, reutilizable por cualquier sala a través del motor. La señal de teléfono (#145) y el sonido de café (#146) son issues aparte; ninguno está conectado a una sala todavía.',
+    },
+  },
+  {
+    id: 'phone-ring',
+    kind: 'cue',
+    label: { en: 'Phone ring', es: 'Timbre de teléfono' },
+    origin: 'Sintetizado por el motor de Crew: dos ráfagas de oscilador senoidal en tonos distintos, un patrón de timbre de dos golpes (sin muestra grabada ni archivo de audio).',
+    license: 'CC0 / dominio público: código propio del repositorio, sin IP de terceros.',
+    notes: {
+      en: 'Local ring cue for the phone/call overlay (#145): it reuses this same engine from #150, never a new one. Opt-in only, like every Crew sound: it never plays unless Crew audio is unmuted, and only once per call Crew newly detects while visible in the active room. It is not a proof of a real ring event from a telephony provider, only a local notification sound tied to the real `PHONE_CALL` status.',
+      es: 'Aviso local de timbre para la superposición de teléfono/llamada (#145): reutiliza este mismo motor de #150, nunca uno nuevo. Solo con opt-in, igual que todo sonido de Crew: nunca suena si el audio de Crew está silenciado, y solo una vez por cada llamada que Crew detecta de nuevo mientras es visible en la sala activa. No es una prueba de un timbrado real del proveedor de telefonía, solo un sonido local de aviso ligado al status real `PHONE_CALL`.',
     },
   },
 ] as const;

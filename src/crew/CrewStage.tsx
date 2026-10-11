@@ -27,7 +27,13 @@ import { crewTheme } from './crewContrast';
 import { useCrewAudio } from './useCrewAudio';
 import type { CrewAudioState } from './crewAudioEngine';
 import { CrewGestures } from './crewGestures';
-import { crewAgentActivity, crewActivityLine, crewViewerModeLabel, type CrewViewerMode, type CrewVisibility } from './crewEventBridge';
+import { crewAgentActivity, crewActivityLine, crewInPhoneCall, crewViewerModeLabel, type CrewViewerMode, type CrewVisibility } from './crewEventBridge';
+import {
+  advanceCrewCallTimeline, crewCallElapsedMs, crewCallOpacity, crewCallPhase, dismissCrewCall,
+  formatCrewCallElapsed, type CrewCallTimelineState,
+} from './crewCallTimeline';
+import { crewCallPulseValue, type CrewCallOverlayStyle } from './crewCallLayer';
+import { useCrewCallIcon } from './useCrewCallIcon';
 import type { Agent, Meeting, Task } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
@@ -191,7 +197,12 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
   const presence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
 
   const directions = presence.markers.map(marker => crewSpriteView(marker, view)).filter((direction): direction is CrewView => direction !== null);
-  const sprite = useCrewSprites(directions);
+  // Pose del CEO sosteniendo el teléfono (#145): solo afecta la vista 'front', ligada al
+  // status real PHONE_CALL del propio agente, nunca a la sala ni a otra señal.
+  const frontPhoneCall = useMemo(() => presence.markers.some(marker =>
+    crewSpriteView(marker, view) === 'front' && agents.some(agent => agent.id === marker.id && crewInPhoneCall(agent))),
+    [presence.markers, view, agents]);
+  const sprite = useCrewSprites(directions, frontPhoneCall);
   const illustratedAgents = directions.filter(direction => !!sprite.images[direction]).length;
   const walkingMarkers = useMemo(()=>presence.markers.filter(marker=>agents.some(agent=>agent.id===marker.id && agent.isWalking)),[presence.markers,agents]);
   const blink = useCrewBlink(presence.markers.some(marker=>crewSpriteView(marker,view)==='front'
@@ -212,6 +223,57 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
   const illustratedProps = roomPropImageIds.filter(id => !!propImages.images[id]).length;
   const messages = builtInMessages(locale);
 
+  // Línea de tiempo local de llamada (#145): deriva siempre del snapshot COMPLETO de
+  // agentes (no solo de `visibleAgents`), para que cambiar de sala nunca borre una
+  // llamada real en curso; solo deja de dibujarla mientras el agente no se ve.
+  const [callTimeline, setCallTimeline] = useState<CrewCallTimelineState>({});
+  const [callNow, setCallNow] = useState(() => Date.now());
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
+  useEffect(() => {
+    const now = Date.now();
+    setCallNow(now);
+    setCallTimeline(prev => advanceCrewCallTimeline(prev, agents, now));
+  }, [agents]);
+  const hasCallRecords = useMemo(() => Object.keys(callTimeline).length > 0, [callTimeline]);
+  useEffect(() => {
+    if (!hasCallRecords) return;
+    const id = setInterval(() => {
+      const now = Date.now();
+      setCallNow(now);
+      setCallTimeline(prev => advanceCrewCallTimeline(prev, agentsRef.current, now));
+    }, 250);
+    return () => clearInterval(id);
+  }, [hasCallRecords]);
+  const callIcon = useCrewCallIcon();
+  const callStyles = useMemo(() => {
+    const styles: Record<string, CrewCallOverlayStyle> = {};
+    for (const marker of presence.markers) {
+      const record = callTimeline[marker.id];
+      if (!record || record.dismissed) continue;
+      const phase = crewCallPhase(record, callNow, visualPreferences.reducedMotion);
+      const pulseT = phase === 'ringing' ? crewCallPulseValue(callNow - record.startedAt) : 0;
+      styles[marker.id] = { phase, pulseT, opacity: crewCallOpacity(record, callNow) };
+    }
+    return styles;
+  }, [presence.markers, callTimeline, callNow, visualPreferences.reducedMotion]);
+  // Timbre de teléfono (#145, motor de #150): solo una vez por llamada NUEVA mientras el
+  // agente es visible en la sala activa. Opt-in real: `playCue` no suena si está silenciado.
+  const ringedCallsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const marker of presence.markers) {
+      const record = callTimeline[marker.id];
+      if (!record || record.endedAt !== null) continue;
+      const key = `${marker.id}:${record.startedAt}`;
+      if (ringedCallsRef.current.has(key)) continue;
+      ringedCallsRef.current.add(key);
+      audio.playCue('phone-ring');
+    }
+    // `audio` es un objeto nuevo cada renderización (useCrewAudio); el guardado por
+    // `ringedCallsRef` hace que repetir este efecto sea inofensivo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presence.markers, callTimeline]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -223,8 +285,8 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, visualPreferences.highContrast, propImages.images]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, locale, highContrast: visualPreferences.highContrast, propImages: propImages.images, calls: callStyles, callIcon: callIcon.image });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, visualPreferences.highContrast, propImages.images, callStyles, callIcon.image]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -382,17 +444,41 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
         // aprobación, herramienta) sin inventar nada ni recalcular tokens/costo.
         const activity = crewAgentActivity(agent, tasks, meetings, visibility);
         const activityLine = crewActivityLine(activity, isEs);
-        return <button type="button" key={agent.id} disabled={!marker}
-          aria-label={isEs ? `Enfocar a ${agent.name}` : `Focus ${agent.name}`}
-          onClick={() => {
-            const viewport = canvasRef.current?.getBoundingClientRect();
-            if (marker && viewport) updateCamera(current => focusCrewPoint(current, room, marker, viewport));
-          }} style={{ border: '1px solid #64748b', padding: '2px 6px', borderRadius: 6 }}>
-          {marker && <span aria-hidden="true">{marker.number}. </span>}
-          <span>{agent.name}: {agent.status}</span>
-          {agent.isWalking && <span>{isEs ? ' · En tránsito' : ' · In transit'}</span>}
-          {activityLine && <span> · {activityLine}</span>}
-        </button>;
+        // Aviso de llamada (#145): mini línea de tiempo local al agente, con botón para
+        // descartarlo. "Descartar" solo oculta el aviso visual; Crew no tiene un canal
+        // real para colgar la llamada en el proveedor, así que nunca lo da a entender.
+        const callRecord = callTimeline[agent.id];
+        const showCall = !!callRecord && !callRecord.dismissed;
+        const callPhaseLabel = showCall ? {
+          ringing: isEs ? 'Timbrando' : 'Ringing',
+          talking: isEs ? 'En llamada' : 'On call',
+          ending: isEs ? 'Colgando' : 'Hanging up',
+        }[crewCallPhase(callRecord, callNow, visualPreferences.reducedMotion)] : null;
+        return <span key={agent.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <button type="button" disabled={!marker}
+            aria-label={isEs ? `Enfocar a ${agent.name}` : `Focus ${agent.name}`}
+            onClick={() => {
+              const viewport = canvasRef.current?.getBoundingClientRect();
+              if (marker && viewport) updateCamera(current => focusCrewPoint(current, room, marker, viewport));
+            }} style={{ border: '1px solid #64748b', padding: '2px 6px', borderRadius: 6 }}>
+            {marker && <span aria-hidden="true">{marker.number}. </span>}
+            <span>{agent.name}: {agent.status}</span>
+            {agent.isWalking && <span>{isEs ? ' · En tránsito' : ' · In transit'}</span>}
+            {activityLine && <span> · {activityLine}</span>}
+            {showCall && <span
+              title={isEs
+                ? 'Duración detectada localmente por Crew desde que vio la llamada; no es una marca de tiempo real del proveedor de telefonía.'
+                : 'Duration detected locally by Crew since it saw the call; not a real timestamp from the telephony provider.'}>
+              {' · '}{callPhaseLabel} {formatCrewCallElapsed(crewCallElapsedMs(callRecord, callNow))}
+            </span>}
+          </button>
+          {showCall && <button type="button" data-testid={`${idPrefix}-call-dismiss-${agent.id}`}
+            aria-label={isEs ? `Descartar aviso de llamada de ${agent.name}` : `Dismiss call notice for ${agent.name}`}
+            onClick={() => setCallTimeline(prev => dismissCrewCall(prev, agent.id))}
+            style={{ border: '1px solid #64748b', padding: '2px 6px', borderRadius: 6 }}>
+            {isEs ? 'Descartar aviso' : 'Dismiss notice'}
+          </button>}
+        </span>;
       })}
       {presence.unplaced.length > 0 && <span role="status">{isEs
         ? `${presence.unplaced.length} agentes sin espacio de representación en esta sala.`

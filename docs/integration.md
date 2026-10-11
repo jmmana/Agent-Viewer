@@ -380,6 +380,8 @@ Authorization: Bearer <token>
 | `order` | `desc` \| `asc` | Default `desc` (newest first). |
 | `limit` | integer 1..1000 | Default 100. Out of range, non-numeric or repeated answers `400`, never a silent fallback. |
 | `cursor` | opaque string | `page.nextCursor` from a previous response. |
+| `estimates` | `latest` \| `original` | Issue #295. Default `latest`. `original` is revision 0, the ingestion-time figure. Mutually exclusive with `estimateRevision`. |
+| `estimateRevision` | integer >= 0 | Issue #295. The highest revision `<= N`. Mutually exclusive with `estimates`. |
 
 Every value must be a non-empty string; an unknown parameter, an array where a single value is expected (or vice versa), or more than 100 values for one key all answer `400 invalid_filter`.
 
@@ -414,14 +416,25 @@ Every value must be a non-empty string; an unknown parameter, an array where a s
       "errorCode": null,
       "trace": { "traceId": "4bf92f3577b34da6a3ce929d0e0e4736", "parentId": null, "toolCallId": null, "meetingId": null },
       "userId": null,
-      "tags": []
+      "tags": [],
+      "estimatedCost": 0.007,
+      "estimatedCostNano": 7000000,
+      "estimatedCurrency": "USD",
+      "estimatedCostSource": "estimated",
+      "pricingVersion": 1,
+      "estimateStatus": "estimated",
+      "estimateRevision": 0,
+      "estimatedAt": 1791331200500
     }
   ],
-  "page": { "limit": 2, "order": "desc", "hasMore": true, "nextCursor": "eyJ2IjoxLCJlIjoiN2Q..." }
+  "page": { "limit": 2, "order": "desc", "hasMore": true, "nextCursor": "eyJ2IjoxLCJlIjoiN2Q..." },
+  "estimateBasis": { "mode": "latest", "revision": null, "revisionsUsed": [0] }
 }
 ```
 
 **Never returned:** `summary`, `payload`, `event_json`, message text, tool input or output, or a provider error message. The serializer (`toCallRecord`) is an explicit allow-list over the already-typed ledger row, never "event minus some keys": every field above is the full set, and a new ledger column is never exposed until it is added here and to the key-set test. `errorCode` is the stored value only when it matches a short machine-code shape (`^[A-Za-z0-9_.:-]{1,64}$`); the ledger today only ever stores `errorKind` there, never the provider's own free-text error code. Unlike the issue's original proposal (`trace.spanId`), issue #65 never added a `spanId` column (it stores `meetingId` from issue #64 instead), so `trace.meetingId` takes that place; `source` (the envelope's `source` identifier) is also not in the ledger and is therefore not in a `CallRecord` either.
+
+**The ledger's cost estimate (`estimatedCost*`/`pricingVersion`/`estimateStatus*`/`estimatedAt`, issue #295).** A separate fact from `cost`/`currency`/`costSource` above: it is what this server computed from a versioned price table (issue #83) at ingestion time, never what the provider billed, and it is never merged into the reported figure. `estimatedCostSource` is the constant `"estimated"` when `estimatedCost` is not `null`, and `null` otherwise, so a client can never confuse it with the reported `costSource`. When the row is not estimable, every `estimated*` field is `null` and `estimateStatus` names why: `no_price_for_model`, `no_price_in_force`, `no_price_for_component`, `missing_usage`, `inconsistent_usage`, `failed`, or the virtual `not_estimated` for a row written before this feature. `estimateRevision` is always `0` and `estimateBasis.revisionsUsed` is always `[0]` until the pricing recompute endpoint (a later issue) ships real revision history; the `estimates`/`estimateRevision` request parameters above are accepted and validated now anyway, so this contract does not change shape once it does.
 
 **Backfilled rows:** a row created by issue #65's one-time backfill over events stored before 0.4.0 carries `backfilled: true` and is returned exactly as the ledger stored it, with no reinterpretation. Such a row may carry a schema default (for example `cacheRead: 0`) that was never actually reported; the flag lets an auditor exclude or discount these rows. A live row is always `backfilled: false`.
 
@@ -1018,6 +1031,8 @@ Authorization: Bearer <token>
 | `sort` | `key` \| `calls` | `key` | `key` is ascending by each group key (UTF-8 byte order, `null` last); `calls` is `calls.total` descending, tied by key ascending. Cost is never a sort key: it is not comparable across currencies. |
 | `limit` | 1..10000 | 1000 | Maximum groups returned; `truncated` and `groupCount` say when there were more. |
 | `include` | comma-separated, `latency` and/or `failures` | none | Issue #89. Opt-in; omitting it reproduces the exact response below, unchanged. An unknown value is `400 invalid_filter`. See **Latency and failure rates** below. |
+| `estimates` | `latest` \| `original` | `latest` | Issue #295, shared with calls/export. `original` is revision 0. Mutually exclusive with `estimateRevision` (`400` otherwise). |
+| `estimateRevision` | integer >= 0 | none | Issue #295. The highest revision `<= N`. |
 
 Example response:
 
@@ -1027,6 +1042,7 @@ Example response:
   "query": { "groupBy": ["agent", "model"], "timeBasis": "received", "from": 1791158400000, "to": 1791763200000, "utcOffsetMinutes": 0, "filters": { "provider": ["anthropic"] }, "asOfSeq": null, "sort": "key", "limit": 1000 },
   "asOf": { "ledgerSeq": 184213, "lastRowReceivedAt": 1791460181233, "generatedAt": 1791460200000 },
   "coverage": { "storage": "sqlite", "complete": true, "droppedRows": 0, "purgedThrough": null, "backfilledRows": 0, "legacyContractRows": 0 },
+  "estimateBasis": { "mode": "latest", "revision": null, "revisionsUsed": [0] },
   "groupsAreAdditive": true,
   "groupCount": 1,
   "truncated": false,
@@ -1042,6 +1058,11 @@ Example response:
         "reasoning": { "sum": null, "reportedCalls": 0, "unreportedCalls": 412 }
       },
       "cost": { "entries": [{ "currency": "USD", "costSource": "provider-reported", "sum": 14.482113, "calls": 380 }], "unknownCostCalls": 14 },
+      "estimated": [{ "currency": "USD", "cost": 13.971, "calls": 410, "pricingVersions": [1] }],
+      "estimatedUnknownCalls": 2,
+      "estimatedUnknownByStatus": { "no_price_for_model": 2 },
+      "estimatedComplete": false,
+      "comparable": [{ "currency": "USD", "calls": 378, "reportedCost": 14.41, "estimatedCost": 13.9, "delta": -0.51 }],
       "firstAt": 1791177102000,
       "lastAt": 1791460181233
     }
@@ -1060,6 +1081,7 @@ Example response:
 - **Tags are not additive.** A row with 2 tags is counted once per tag group (`groupsAreAdditive: false` whenever `groupBy` includes `tag`), and once in `totals`, which is always computed over distinct rows with no tag join.
 - **Truncation.** `groupCount` is the number of groups before `limit`; when `truncated` is `true`, group sums do not have to add up to `totals`, which always covers every matching row.
 - **Precision.** Costs are summed as IEEE 754 doubles of the stored per-row values and rounded only once, to 9 decimals, in the shared shaper; memory and SQLite agree within `1e-9` on realistic data.
+- **Estimated and comparable (issue #295).** `estimated` sums only rows whose ledger `estimateStatus` is `'estimated'`, per currency, alongside `reported`'s existing `cost.entries`; never summed into them and never converted. `estimatedUnknownCalls` counts every other row (including the virtual `not_estimated` for a row written before migration `usage-ledger-estimates`), `estimatedUnknownByStatus` breaks that count down, and `estimatedComplete` is `true` only when it is `0`. `comparable` has one entry per currency, covering only rows that have *both* a reported cost and an estimated cost in that *same* currency (`delta = estimatedCost - reportedCost`); a row with only one side, or with the two in different currencies, is in neither sum and never zero-filled. A rollup with no estimate data at all (every row `not_estimated` or no pricing ever loaded) still reads only `usage_ledger`'s own columns: this feature adds no join to any other table, so a database that has never run a pricing recompute pays no extra query cost. `estimateBasis` (same shape as the calls endpoint's) is on every response, and the `estimates`/`estimateRevision` parameters above select it.
 
 **Attribution dimensions: `meeting` and `tool` (issue #80).** "Cost of a tool" means the sum of model calls the reporter explicitly linked to that tool call through `toolCallId`; it is *not* the calls that happened to run while the tool was in flight, and *not* the call that decided to use the tool. "Cost of a meeting" means the sum of calls the reporter linked to it through `meetingId`. Both are only ever answered from an explicit link the reporter sent on the `llm.usage`/`llm.failed` payload; there is no time-overlap inference ("the agent was in a meeting at that moment"), no nearest `tool.started`, and no inference from `taskId` or agent. A call the reporter did not link is `unattributed`, full stop; this is the honest answer, since the server cannot distinguish "not inside a tool call" from "inside one but unlinked".
 
@@ -1072,7 +1094,7 @@ Example response:
 
 **`coverage`** says when the answer may be incomplete instead of returning a partial figure as if it were whole: `storage` is which store answered, `complete` is `false` when rows that could match the query may be gone (memory mode once its ledger cap drops rows, future retention purges reaching the query range), `droppedRows` is memory mode's own upper bound on rows it could not keep, `purgedThrough` is `null` until retention (issue #70) lands, and `backfilledRows`/`legacyContractRows` count matching rows that came from a pre-0.4.0 database (whose receive time is the original insert time).
 
-**Errors.** `400 { "error": "invalid_filter", "issues": [{ "path", "message" }] }` for an unknown dimension, more than 3 dimensions, a duplicate dimension, an unknown query parameter, `from >= to`, an unparsable or offset-less date, `limit`/`asOfSeq`/`utcOffsetMinutes` out of range, more than 100 values in one filter, an empty `meetingId`/`toolCallId`/`tool` value, or an unknown `meetingAttribution`/`toolAttribution` value. `401` comes from the usual token middleware.
+**Errors.** `400 { "error": "invalid_filter", "issues": [{ "path", "message" }] }` for an unknown dimension, more than 3 dimensions, a duplicate dimension, an unknown query parameter, `from >= to`, an unparsable or offset-less date, `limit`/`asOfSeq`/`utcOffsetMinutes` out of range, more than 100 values in one filter, an empty `meetingId`/`toolCallId`/`tool` value, an unknown `meetingAttribution`/`toolAttribution` value, an unknown `estimates` value, a non-integer or negative `estimateRevision`, or `estimates` and `estimateRevision` given together. `401` comes from the usual token middleware.
 
 **Latency and failure rates (`include=latency,failures`, issue #89).** Opt-in extension to the same groups and `totals`; the fields below are absent entirely (not `null`, not `0`) unless requested, so omitting `include` reproduces the response above byte-for-byte.
 

@@ -1352,6 +1352,8 @@ app.get('/api/v1/usage/calls', async (req, res) => {
     storage: store.readiness().storage,
     data: page.rows,
     page: { limit, order, hasMore: page.hasMore, nextCursor },
+    // Issue #295: which estimate revision every row's estimate fields above were read from.
+    estimateBasis: filters.estimateBasis,
   });
 });
 
@@ -1436,6 +1438,7 @@ const EXPORT_EXPOSE_HEADERS = [
   'X-Agent-Viewer-Export-Id',
   'X-Agent-Viewer-As-Of-Seq',
   'X-Agent-Viewer-Row-Count',
+  'X-Agent-Viewer-Estimate-Basis',
 ].join(', ');
 
 function exportQueryErrorResponse(res: express.Response, error: ExportQueryError): void {
@@ -1523,6 +1526,9 @@ app.get('/api/v1/usage/export', async (req, res) => {
     res.setHeader('X-Agent-Viewer-Export-Id', exportId);
     res.setHeader('X-Agent-Viewer-As-Of-Seq', String(asOfSeq));
     res.setHeader('X-Agent-Viewer-Row-Count', String(rowCount));
+    // Issue #295: CSV has no per-request metadata record (unlike JSONL's trailing "summary" line below), so the
+    // estimate basis this export resolved against is echoed as a header instead, same tier as the headers above.
+    res.setHeader('X-Agent-Viewer-Estimate-Basis', JSON.stringify(scope.estimateBasis));
 
     let aborted = false;
     req.on('close', () => {
@@ -1579,7 +1585,17 @@ app.get('/api/v1/usage/export', async (req, res) => {
         rowCount: written,
         complete: totals.complete,
         ...(totals.incompleteReason ? { incompleteReason: totals.incompleteReason } : {}),
-        totals: { cost: totals.cost, tokens: totals.tokens, byStatus: totals.byStatus },
+        estimateBasis: totals.estimateBasis,
+        totals: {
+          cost: totals.cost,
+          tokens: totals.tokens,
+          byStatus: totals.byStatus,
+          estimated: totals.estimated,
+          estimatedUnknownCalls: totals.estimatedUnknownCalls,
+          estimatedUnknownByStatus: totals.estimatedUnknownByStatus,
+          estimatedComplete: totals.estimatedComplete,
+          comparable: totals.comparable,
+        },
       };
       await writeChunk(`${JSON.stringify(summary)}\n`);
     }

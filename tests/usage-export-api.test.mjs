@@ -210,7 +210,7 @@ test('GET /api/v1/usage/export: token/api_key in the query is rejected before th
   });
 });
 
-test('GET /api/v1/usage/export: CSV body, headers, CORS expose, 28 columns, unknown stays unknown', async () => {
+test('GET /api/v1/usage/export: CSV body, headers, CORS expose, 36 columns, unknown stays unknown', async () => {
   const { server, baseUrl } = await startTestServer();
   try {
     const agentId = uniqueId('agent');
@@ -224,7 +224,7 @@ test('GET /api/v1/usage/export: CSV body, headers, CORS expose, 28 columns, unkn
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     assert.match(response.headers.get('content-type'), /^text\/csv; charset=utf-8/);
     assert.match(response.headers.get('content-disposition'), /^attachment; filename="agent-viewer-usage_all_all_seq-\d+\.csv"$/);
-    assert.equal(response.headers.get('x-agent-viewer-export-schema'), 'agent-viewer.usage-export/1');
+    assert.equal(response.headers.get('x-agent-viewer-export-schema'), 'agent-viewer.usage-export/2');
     assert.ok(response.headers.get('x-agent-viewer-export-id').startsWith('exp_'));
     assert.equal(response.headers.get('x-agent-viewer-row-count'), '2');
     const exposeHeaders = response.headers.get('access-control-expose-headers');
@@ -234,9 +234,9 @@ test('GET /api/v1/usage/export: CSV body, headers, CORS expose, 28 columns, unkn
 
     const text = await response.text();
     const rows = parseCsv(text);
-    assert.equal(rows[0].length, 28);
+    assert.equal(rows[0].length, 36);
     assert.equal(rows.length, 3); // header + 2 rows
-    for (const row of rows) assert.equal(row.length, 28, JSON.stringify(row));
+    for (const row of rows) assert.equal(row.length, 36, JSON.stringify(row));
 
     const header = rows[0];
     assert.deepEqual(header, [
@@ -244,6 +244,9 @@ test('GET /api/v1/usage/export: CSV body, headers, CORS expose, 28 columns, unkn
       'sessionId', 'agentId', 'taskId', 'traceId', 'parentId', 'toolCallId', 'userId', 'tags', 'inputTokens',
       'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'latencyMs', 'cost', 'currency',
       'costSource', 'summary', 'redacted',
+      // Issue #295, appended last.
+      'estimatedCost', 'estimatedCostNano', 'estimatedCurrency', 'estimatedCostSource', 'pricingVersion',
+      'estimateStatus', 'estimateRevision', 'estimatedAt',
     ]);
 
     const usageRow = rows[1];
@@ -252,6 +255,9 @@ test('GET /api/v1/usage/export: CSV body, headers, CORS expose, 28 columns, unkn
     assert.equal(usageRow[header.indexOf('cost')], '');
     assert.equal(usageRow[header.indexOf('currency')], '');
     assert.equal(usageRow[header.indexOf('costSource')], 'unknown');
+    // No pricing wired up for this fixture's model ('claude'): the estimate fields are honestly empty, never 0.
+    assert.equal(usageRow[header.indexOf('estimatedCost')], '');
+    assert.equal(usageRow[header.indexOf('estimateRevision')], '0'); // the one estimate field never empty
 
     const failedRow = rows[2];
     assert.equal(failedRow[header.indexOf('status')], 'rate_limited');
@@ -316,7 +322,7 @@ test('GET /api/v1/usage/export?format=jsonl: last line is a summary record with 
 
     const summary = JSON.parse(lines.at(-1));
     assert.equal(summary.record, 'summary');
-    assert.equal(summary.schema, 'agent-viewer.usage-export/1');
+    assert.equal(summary.schema, 'agent-viewer.usage-export/2');
     assert.ok(summary.exportId.startsWith('exp_'));
     assert.equal(summary.rowCount, 2);
     assert.equal(summary.complete, true);
@@ -386,7 +392,7 @@ test('GET /api/v1/usage/export/totals: equals rollup for the same filters/asOfSe
     const totalsResponse = await fetch(`${baseUrl}/api/v1/usage/export/totals?agentId=${agentId}`);
     assert.equal(totalsResponse.status, 200);
     const totals = await totalsResponse.json();
-    assert.equal(totals.schema, 'agent-viewer.usage-export/1');
+    assert.equal(totals.schema, 'agent-viewer.usage-export/2');
     assert.equal(totals.rowCount, 3);
     assert.equal(totals.byStatus.succeeded, 2);
     assert.equal(totals.byStatus.failed, 1);

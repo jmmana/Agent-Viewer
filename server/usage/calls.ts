@@ -7,7 +7,8 @@
  */
 import crypto from 'node:crypto';
 import { LEDGER_COLUMNS, dbRowToLedgerRowInput, type CostSource, type UsageLedgerRow } from '../usageLedger';
-import { type CallRecord, type UsageFilters } from './types';
+import { nanoToDecimalCost } from '../pricing/estimate';
+import { type CallEstimateStatus, type CallRecord, type UsageFilters } from './types';
 
 export interface CallsOrder {
   order: 'desc' | 'asc';
@@ -44,6 +45,12 @@ function safeErrorCode(value: string | null): string | null {
  * a new `usage_ledger` column is never exposed by accident. Never touches `event_json`, `summary` or any other
  * free-text source: its only input is an already-typed `UsageLedgerRow`. */
 export function toCallRecord(row: UsageLedgerRow): CallRecord {
+  // Issue #295: the ledger's own ingestion-time estimate, never the reported `cost` below. `estimateStatus:
+  // null` means this row predates migration `usage-ledger-estimates` (`usageLedger.ts`'s own doc comment); it is
+  // exposed as the virtual status `not_estimated`, never as `null`. `estimateRevision` is always `0` until the
+  // recompute endpoint (the other #84 sub-issue) ships: there is no other revision to read yet.
+  const estimateStatus: CallEstimateStatus = row.estimateStatus ?? 'not_estimated';
+  const estimatedCost = row.estimatedCostNano === null ? null : nanoToDecimalCost(row.estimatedCostNano);
   return {
     seq: row.seq,
     eventId: row.eventId,
@@ -79,6 +86,15 @@ export function toCallRecord(row: UsageLedgerRow): CallRecord {
     },
     userId: row.userId,
     tags: row.tags,
+    // Issue #295: appended after every pre-existing field, in the order #84's "API" section specifies.
+    estimatedCost,
+    estimatedCostNano: row.estimatedCostNano,
+    estimatedCurrency: row.estimatedCurrency,
+    estimatedCostSource: estimatedCost === null ? null : 'estimated',
+    pricingVersion: row.pricingVersion,
+    estimateStatus,
+    estimateRevision: 0,
+    estimatedAt: row.estimatedAt,
   };
 }
 

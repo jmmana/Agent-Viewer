@@ -91,6 +91,8 @@ test('GET /api/v1/usage/calls: response shape, Cache-Control and the exact CallR
     assert.equal(body.storage, 'memory');
     assert.equal(body.data.length, 1);
     assert.deepEqual(body.page, { limit: 100, order: 'desc', hasMore: false, nextCursor: null });
+    // Issue #295: echoed on every response, independent of each row's own fields below.
+    assert.deepEqual(body.estimateBasis, { mode: 'latest', revision: null, revisionsUsed: [0] });
 
     const record = body.data[0];
     assert.deepEqual(
@@ -99,10 +101,107 @@ test('GET /api/v1/usage/calls: response shape, Cache-Control and the exact CallR
         'agentId', 'backfilled', 'cost', 'costSource', 'currency', 'errorCode', 'eventId', 'latencyMs', 'model',
         'occurredAt', 'provider', 'receivedAt', 'requestId', 'runtimeId', 'seq', 'sessionId', 'status', 'taskId',
         'tags', 'tokens', 'trace', 'type', 'userId',
+        // Issue #295, appended after every pre-existing field.
+        'estimatedCost', 'estimatedCostNano', 'estimatedCurrency', 'estimatedCostSource', 'pricingVersion',
+        'estimateStatus', 'estimateRevision', 'estimatedAt',
       ].sort()
     );
     assert.deepEqual(Object.keys(record.tokens).sort(), ['cacheRead', 'cacheWrite', 'input', 'output', 'reasoning'].sort());
     assert.deepEqual(Object.keys(record.trace).sort(), ['meetingId', 'parentId', 'toolCallId', 'traceId'].sort());
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/v1/usage/calls: estimate fields for a priced model (estimated), an unpriced one (no_price_for_model) and estimateRevision is always 0', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const agentId = uniqueAgentId('estimate');
+    // `claude-sonnet-5-5`/`anthropic` is in the bundled starter pricing table (server/pricing/starter.json), in
+    // force from 2026-10-10; `Date.now()` (unlike this file's other fixtures, fixed at 1_700_000_000_000, well
+    // before that date) lands after it. The default `claude` fixture model used elsewhere in this file is not in
+    // the table at all, at any date.
+    const now = Date.now();
+    const pricedEvent = validateCanonicalEvent({
+      id: `evt_${agentId}_priced`,
+      type: 'llm.usage',
+      timestamp: now,
+      source: `agent:${agentId}`,
+      agentId,
+      summary: 'priced call',
+      payload: {
+        provider: 'anthropic',
+        model: 'claude-sonnet-5-5',
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+    });
+    assert.equal(pricedEvent.success, true, JSON.stringify(pricedEvent.issues));
+    assert.equal((await store.append(pricedEvent.data)).outcome, 'accepted');
+
+    const unpricedEvent = validateCanonicalEvent({
+      id: `evt_${agentId}_unpriced`,
+      type: 'llm.usage',
+      timestamp: now + 1,
+      source: `agent:${agentId}`,
+      agentId,
+      summary: 'unpriced call',
+      payload: { provider: 'anthropic', model: 'a-model-no-pricing-table-will-ever-have', inputTokens: 10, outputTokens: 5 },
+    });
+    assert.equal(unpricedEvent.success, true, JSON.stringify(unpricedEvent.issues));
+    assert.equal((await store.append(unpricedEvent.data)).outcome, 'accepted');
+
+    const body = await (await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&order=asc`)).json();
+    assert.equal(body.data.length, 2);
+
+    const estimated = body.data[0];
+    assert.equal(estimated.estimateStatus, 'estimated');
+    assert.equal(estimated.estimateRevision, 0);
+    assert.equal(estimated.estimatedCostSource, 'estimated');
+    assert.notEqual(estimated.estimatedCost, null);
+    assert.notEqual(estimated.estimatedCostNano, null);
+    assert.ok(Number.isInteger(estimated.estimatedCostNano) && estimated.estimatedCostNano > 0);
+    assert.equal(estimated.estimatedCost, estimated.estimatedCostNano / 1e9);
+    assert.equal(typeof estimated.estimatedCurrency, 'string');
+    assert.equal(typeof estimated.pricingVersion, 'number');
+    assert.equal(typeof estimated.estimatedAt, 'number');
+
+    const unpriced = body.data[1];
+    assert.equal(unpriced.estimateStatus, 'no_price_for_model');
+    assert.equal(unpriced.estimateRevision, 0);
+    assert.equal(unpriced.estimatedCost, null);
+    assert.equal(unpriced.estimatedCostNano, null);
+    assert.equal(unpriced.estimatedCurrency, null);
+    assert.equal(unpriced.estimatedCostSource, null);
+    assert.equal(typeof unpriced.estimatedAt, 'number'); // the estimator ran, it just found no price
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/v1/usage/calls: estimates and estimateRevision together are a 400, each one alone is accepted', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const agentId = uniqueAgentId('basis');
+    await appendUsage(agentId);
+
+    const both = await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&estimates=original&estimateRevision=3`);
+    assert.equal(both.status, 400);
+    const bothBody = await both.json();
+    assert.equal(bothBody.error, 'invalid_filter');
+
+    const original = await (await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&estimates=original`)).json();
+    assert.deepEqual(original.estimateBasis, { mode: 'original', revision: null, revisionsUsed: [0] });
+
+    const asOf = await (await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&estimateRevision=7`)).json();
+    assert.deepEqual(asOf.estimateBasis, { mode: 'asOfRevision', revision: 7, revisionsUsed: [0] });
+    // Every row's own estimateRevision is still 0: no recompute endpoint exists yet to produce another revision.
+    assert.equal(asOf.data[0].estimateRevision, 0);
+
+    const bad = await fetch(`${baseUrl}/api/v1/usage/calls?agentId=${agentId}&estimates=bogus`);
+    assert.equal(bad.status, 400);
   } finally {
     server.close();
   }

@@ -32,6 +32,7 @@
  * input's own precision.
  */
 import { resolvePrice, type PriceEntry } from '../../src/integrations/pricingContract';
+import { formatNanoUnits } from '../usageAggregates';
 
 export const ESTIMATE_STATUSES = [
   'estimated',
@@ -199,6 +200,17 @@ export function estimateCall(row: EstimateCallInput, pricing: EstimatePricingSna
   } catch {
     return { costNano: null, currency: null, status: 'failed' };
   }
+}
+
+/**
+ * Decimal currency amount of a nano-unit cost (issue #295: `estimatedCostNano -> estimatedCost`, and the
+ * rollup's summed `estimated`/`comparable` entries). Exact: goes through `formatNanoUnits`'s fixed-point string,
+ * never a `nano / 1e9` floating-point division. `nano` must be a non-negative, finite, integer-valued number
+ * (every caller's own nano figure already is: a single row's `estimatedCostNano`, or a rollup's running integer
+ * sum of those).
+ */
+export function nanoToDecimalCost(nano: number): number {
+  return Number(formatNanoUnits(BigInt(Math.round(nano))));
 }
 
 /** The five `usage_ledger` columns this feature adds (issue #84), ready to spread onto a ledger row. */

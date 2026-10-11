@@ -18,6 +18,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { CostSource, UsageLedgerRow } from '../usageLedger';
+import { nanoToDecimalCost } from '../pricing/estimate';
 import { parseUsageFilters, type UsageFilterIssue } from './filters';
 import {
   ROLLUP_DIMENSIONS,
@@ -25,6 +26,10 @@ import {
   TOKEN_KINDS,
   filtersToEcho,
   isAttributionDimension,
+  isCallEstimateStatus,
+  type CallEstimateStatus,
+  type ComparableEntry,
+  type EstimatedCostEntry,
   type RollupDimension,
   type RollupGroupKey,
   type RollupInclude,
@@ -221,6 +226,34 @@ interface RawAggregate {
   /** Issue #89. Keyed by `failureErrorKindKey` output (so `'unspecified'` is the only bucket a missing/
    * unrecognized `errorKind` can land in); only ever incremented by a `llm.failed` row. */
   failuresByErrorKind: Record<string, number>;
+  /** Issue #295. Keyed by currency; only ever built from rows whose `estimateStatus === 'estimated'`. */
+  estimatedCostEntries: Map<string, RawEstimatedCostEntry>;
+  /** Issue #295. Calls whose `estimateStatus` (the virtual `not_estimated` included) is anything but
+   * `'estimated'`. */
+  estimatedUnknownCalls: number;
+  /** Issue #295. `estimatedUnknownCalls`, broken down by `CallEstimateStatus`. */
+  estimatedUnknownByStatus: Record<string, number>;
+  /** Issue #295. Keyed by currency; only rows with both a reported cost and an estimated cost in that same
+   * currency ever contribute (see `ComparableEntry`'s own doc comment in `types.ts`). */
+  comparableEntries: Map<string, RawComparableEntry>;
+}
+
+/** Issue #295. `nanoSum` accumulates each row's `estimatedCostNano` (an exact integer) as a plain `number`: safe
+ * for any realistic ledger size (see the module's own PR notes on the deliberate choice not to chase
+ * `Number.MAX_SAFE_INTEGER`-scale sums with `BigInt` in this slice, matching how `RawCostEntry.sum` above already
+ * treats `reported` costs). */
+interface RawEstimatedCostEntry {
+  currency: string;
+  nanoSum: number;
+  calls: number;
+  pricingVersions: Set<number>;
+}
+
+interface RawComparableEntry {
+  currency: string;
+  reportedSum: number;
+  estimatedNanoSum: number;
+  calls: number;
 }
 
 function newRawAggregate(
@@ -243,6 +276,10 @@ function newRawAggregate(
     latencySamples: [],
     latencyMissing: 0,
     failuresByErrorKind: {},
+    estimatedCostEntries: new Map(),
+    estimatedUnknownCalls: 0,
+    estimatedUnknownByStatus: {},
+    comparableEntries: new Map(),
   };
 }
 
@@ -286,6 +323,42 @@ function compareCostEntries(a: RawCostEntry, b: RawCostEntry): number {
   return COST_SOURCE_ORDER[a.costSource] - COST_SOURCE_ORDER[b.costSource];
 }
 
+/** Ascending UTF-8 byte comparison on `currency`, matching SQLite's default collation (`compareCostEntries`
+ * above does the same for `reported`'s `CostEntry[]`). Every entry here always has a non-null `currency` (issue
+ * #295: an estimate with no currency is never counted as `estimated` to begin with). */
+function compareByCurrency(a: { currency: string }, b: { currency: string }): number {
+  return Buffer.compare(Buffer.from(a.currency, 'utf8'), Buffer.from(b.currency, 'utf8'));
+}
+
+function shapeEstimatedEntries(raw: RawAggregate): EstimatedCostEntry[] {
+  return [...raw.estimatedCostEntries.values()]
+    .map((entry) => ({
+      currency: entry.currency,
+      cost: round9(nanoToDecimalCost(entry.nanoSum)),
+      calls: entry.calls,
+      pricingVersions: [...entry.pricingVersions].sort((a, b) => a - b),
+    }))
+    .sort(compareByCurrency);
+}
+
+function shapeComparableEntries(raw: RawAggregate): ComparableEntry[] {
+  return [...raw.comparableEntries.values()]
+    .map((entry) => {
+      const reportedCost = round9(entry.reportedSum);
+      const estimatedCost = round9(nanoToDecimalCost(entry.estimatedNanoSum));
+      return { currency: entry.currency, calls: entry.calls, reportedCost, estimatedCost, delta: round9(estimatedCost - reportedCost) };
+    })
+    .sort(compareByCurrency);
+}
+
+function shapeEstimatedUnknownByStatus(raw: RawAggregate): Partial<Record<CallEstimateStatus, number>> {
+  const result: Partial<Record<CallEstimateStatus, number>> = {};
+  for (const [status, count] of Object.entries(raw.estimatedUnknownByStatus)) {
+    if (count > 0 && isCallEstimateStatus(status)) result[status] = count;
+  }
+  return result;
+}
+
 function shapeTotals(raw: RawAggregate, include: readonly RollupInclude[]): UsageRollupTotals {
   const tokens = {} as UsageRollupTotals['tokens'];
   for (const kind of TOKEN_KINDS) {
@@ -303,6 +376,11 @@ function shapeTotals(raw: RawAggregate, include: readonly RollupInclude[]): Usag
     calls: { total: raw.callsTotal, succeeded: raw.callsSucceeded, failed: raw.callsFailed },
     tokens,
     cost: { entries, unknownCostCalls: raw.unknownCostCalls },
+    estimated: shapeEstimatedEntries(raw),
+    estimatedUnknownCalls: raw.estimatedUnknownCalls,
+    estimatedUnknownByStatus: shapeEstimatedUnknownByStatus(raw),
+    estimatedComplete: raw.estimatedUnknownCalls === 0,
+    comparable: shapeComparableEntries(raw),
     firstAt: raw.firstAt,
     lastAt: raw.lastAt,
   };
@@ -424,6 +502,30 @@ function mergeRawInto(target: RawAggregate, source: RawAggregate): void {
       target.costEntries.set(costKey, { ...entry });
     }
   }
+  target.estimatedUnknownCalls += source.estimatedUnknownCalls;
+  for (const [status, count] of Object.entries(source.estimatedUnknownByStatus)) {
+    target.estimatedUnknownByStatus[status] = (target.estimatedUnknownByStatus[status] ?? 0) + count;
+  }
+  for (const [currency, entry] of source.estimatedCostEntries) {
+    const existing = target.estimatedCostEntries.get(currency);
+    if (existing) {
+      existing.nanoSum += entry.nanoSum;
+      existing.calls += entry.calls;
+      for (const version of entry.pricingVersions) existing.pricingVersions.add(version);
+    } else {
+      target.estimatedCostEntries.set(currency, { ...entry, pricingVersions: new Set(entry.pricingVersions) });
+    }
+  }
+  for (const [currency, entry] of source.comparableEntries) {
+    const existing = target.comparableEntries.get(currency);
+    if (existing) {
+      existing.reportedSum += entry.reportedSum;
+      existing.estimatedNanoSum += entry.estimatedNanoSum;
+      existing.calls += entry.calls;
+    } else {
+      target.comparableEntries.set(currency, { ...entry });
+    }
+  }
   for (const sessionId of source.sessionIds) target.sessionIds.add(sessionId);
   if (source.firstAt !== null && (target.firstAt === null || source.firstAt < target.firstAt)) target.firstAt = source.firstAt;
   if (source.lastAt !== null && (target.lastAt === null || source.lastAt > target.lastAt)) target.lastAt = source.lastAt;
@@ -453,6 +555,10 @@ function mergeAfterTruncation(groups: readonly RawAggregate[], groupBy: readonly
         // below pushes/increments into them for every later collision on this same identity.
         latencySamples: [...raw.latencySamples],
         failuresByErrorKind: { ...raw.failuresByErrorKind },
+        // Issue #295: same copy-not-alias rule.
+        estimatedCostEntries: new Map(raw.estimatedCostEntries),
+        estimatedUnknownByStatus: { ...raw.estimatedUnknownByStatus },
+        comparableEntries: new Map(raw.comparableEntries),
       });
       continue;
     }
@@ -504,6 +610,7 @@ function shapeRollupResponse(args: {
     },
     asOf,
     coverage,
+    estimateBasis: query.filters.estimateBasis,
     groupsAreAdditive: !query.groupBy.includes('tag'),
     groupCount,
     truncated,
@@ -682,6 +789,37 @@ function accumulateRow(agg: RawAggregate, row: UsageLedgerRow, tsValue: number, 
     }
     entry.sum += row.cost;
     entry.calls++;
+  }
+
+  // Issue #295: the ledger's own ingestion-time cost estimate, a separate fact from `cost` above, never summed
+  // into it and never converted. `estimateStatus: null` (a row written before migration `usage-ledger-estimates`)
+  // is the virtual status `not_estimated`, same mapping `toCallRecord` uses.
+  const estimateStatus: CallEstimateStatus = row.estimateStatus ?? 'not_estimated';
+  if (estimateStatus === 'estimated' && row.estimatedCostNano !== null && row.estimatedCurrency !== null) {
+    let estimatedEntry = agg.estimatedCostEntries.get(row.estimatedCurrency);
+    if (!estimatedEntry) {
+      estimatedEntry = { currency: row.estimatedCurrency, nanoSum: 0, calls: 0, pricingVersions: new Set() };
+      agg.estimatedCostEntries.set(row.estimatedCurrency, estimatedEntry);
+    }
+    estimatedEntry.nanoSum += row.estimatedCostNano;
+    estimatedEntry.calls++;
+    if (row.pricingVersion !== null) estimatedEntry.pricingVersions.add(row.pricingVersion);
+
+    // `comparable` (issue #295): only when the SAME row also has a reported cost in the SAME currency; never
+    // converted, never zero-filled for the rows that lack one side.
+    if (row.cost !== null && row.currency !== null && row.currency === row.estimatedCurrency) {
+      let comparableEntry = agg.comparableEntries.get(row.currency);
+      if (!comparableEntry) {
+        comparableEntry = { currency: row.currency, reportedSum: 0, estimatedNanoSum: 0, calls: 0 };
+        agg.comparableEntries.set(row.currency, comparableEntry);
+      }
+      comparableEntry.reportedSum += row.cost;
+      comparableEntry.estimatedNanoSum += row.estimatedCostNano;
+      comparableEntry.calls++;
+    }
+  } else {
+    agg.estimatedUnknownCalls++;
+    agg.estimatedUnknownByStatus[estimateStatus] = (agg.estimatedUnknownByStatus[estimateStatus] ?? 0) + 1;
   }
 
   if (agg.firstAt === null || tsValue < agg.firstAt) agg.firstAt = tsValue;
@@ -1029,6 +1167,120 @@ function buildGroupCostSql(groupBy: readonly RollupDimension[], tsCol: string, w
   `;
 }
 
+/**
+ * Issue #295: one grouped query covering BOTH `estimated` (per currency) and `estimatedUnknownCalls`/
+ * `estimatedUnknownByStatus` in a single pass, so the feature costs one extra statement per rollup call, not
+ * two. A row either has `estimate_status = 'estimated'` (contributes to a currency bucket, `C|<currency>`) or it
+ * does not (contributes to a status bucket, `S|<status, 'not_estimated' for NULL>`); `bucket` encodes which.
+ * `versions` is a comma-joined list of the distinct `pricing_version` values behind a currency bucket (`NULL`
+ * for a status bucket, since `GROUP_CONCAT(DISTINCT <expr>)` with an all-`NULL` input already returns `NULL`).
+ * Reads only `usage_ledger`'s own columns, already present on every row since migration `usage-ledger-estimates`
+ * (issue #84): no join to a `usage_estimates` table is ever added here (that table does not exist in this
+ * issue's scope; see the module's own PR notes), so a database that never ran a recompute pays no extra query
+ * cost beyond this one statement.
+ */
+function buildGroupEstimateSql(groupBy: readonly RollupDimension[], tsCol: string, whereSql: string, tagJoin: boolean, toolJoin: boolean): string {
+  const keyCols = groupKeyCols(groupBy, tsCol);
+  const groupByCols = [...groupBy.map((_, i) => `k${i}`), 'bucket'].join(', ');
+  return `
+    SELECT
+      ${keyCols},
+      CASE WHEN estimate_status = 'estimated' THEN 'C|' || estimated_currency ELSE 'S|' || COALESCE(estimate_status, 'not_estimated') END AS bucket,
+      COUNT(*) AS cnt,
+      SUM(CASE WHEN estimate_status = 'estimated' THEN estimated_cost_nano ELSE 0 END) AS nano_sum,
+      GROUP_CONCAT(DISTINCT CASE WHEN estimate_status = 'estimated' THEN pricing_version END) AS versions
+    FROM usage_ledger
+    ${joinsFor(tagJoin, toolJoin)}
+    WHERE ${whereSql}
+    GROUP BY ${groupByCols}
+  `;
+}
+
+function buildTotalsEstimateSql(whereSql: string, toolJoin: boolean): string {
+  return `
+    SELECT
+      CASE WHEN estimate_status = 'estimated' THEN 'C|' || estimated_currency ELSE 'S|' || COALESCE(estimate_status, 'not_estimated') END AS bucket,
+      COUNT(*) AS cnt,
+      SUM(CASE WHEN estimate_status = 'estimated' THEN estimated_cost_nano ELSE 0 END) AS nano_sum,
+      GROUP_CONCAT(DISTINCT CASE WHEN estimate_status = 'estimated' THEN pricing_version END) AS versions
+    FROM usage_ledger
+    ${toolResolutionJoin(toolJoin)}
+    WHERE ${whereSql}
+    GROUP BY bucket
+  `;
+}
+
+/** Issue #295: `comparable`, per currency, SQL side. Only a row with both a reported cost and an estimated cost
+ * in the SAME currency is matched (`currency = estimated_currency`, both `NOT NULL`); never converted, never
+ * zero-filled for the rows that lack one side (those are simply excluded from this query's `WHERE`, exactly
+ * like the memory-mode accumulator). */
+function buildGroupComparableSql(groupBy: readonly RollupDimension[], tsCol: string, whereSql: string, tagJoin: boolean, toolJoin: boolean): string {
+  const keyCols = groupKeyCols(groupBy, tsCol);
+  const groupByCols = [...groupBy.map((_, i) => `k${i}`), 'currency'].join(', ');
+  return `
+    SELECT
+      ${keyCols},
+      currency,
+      SUM(cost) AS reported_sum,
+      SUM(estimated_cost_nano) AS estimated_nano_sum,
+      COUNT(*) AS cnt
+    FROM usage_ledger
+    ${joinsFor(tagJoin, toolJoin)}
+    WHERE ${whereSql} AND cost IS NOT NULL AND estimated_cost_nano IS NOT NULL AND estimate_status = 'estimated' AND currency = estimated_currency
+    GROUP BY ${groupByCols}
+  `;
+}
+
+function buildTotalsComparableSql(whereSql: string, toolJoin: boolean): string {
+  return `
+    SELECT currency, SUM(cost) AS reported_sum, SUM(estimated_cost_nano) AS estimated_nano_sum, COUNT(*) AS cnt
+    FROM usage_ledger
+    ${toolResolutionJoin(toolJoin)}
+    WHERE ${whereSql} AND cost IS NOT NULL AND estimated_cost_nano IS NOT NULL AND estimate_status = 'estimated' AND currency = estimated_currency
+    GROUP BY currency
+  `;
+}
+
+/** Decodes one `buildGroupEstimateSql`/`buildTotalsEstimateSql` row's `bucket`/`versions` columns into the
+ * `RawAggregate` fields it belongs to, mirroring the memory-mode `accumulateRow` branch exactly. */
+function applyEstimateBucketRow(agg: RawAggregate, row: Record<string, unknown>): void {
+  const bucket = String(row.bucket);
+  const cnt = Number(row.cnt);
+  if (bucket.startsWith('C|')) {
+    const currency = bucket.slice(2);
+    let entry = agg.estimatedCostEntries.get(currency);
+    if (!entry) {
+      entry = { currency, nanoSum: 0, calls: 0, pricingVersions: new Set() };
+      agg.estimatedCostEntries.set(currency, entry);
+    }
+    entry.nanoSum += Number(row.nano_sum ?? 0);
+    entry.calls += cnt;
+    const versionsRaw = row.versions;
+    if (typeof versionsRaw === 'string' && versionsRaw.length > 0) {
+      for (const part of versionsRaw.split(',')) {
+        const version = Number(part);
+        if (Number.isFinite(version)) entry.pricingVersions.add(version);
+      }
+    }
+    return;
+  }
+  const status = bucket.slice(2);
+  agg.estimatedUnknownCalls += cnt;
+  agg.estimatedUnknownByStatus[status] = (agg.estimatedUnknownByStatus[status] ?? 0) + cnt;
+}
+
+function applyComparableRow(agg: RawAggregate, row: Record<string, unknown>): void {
+  const currency = row.currency as string;
+  let entry = agg.comparableEntries.get(currency);
+  if (!entry) {
+    entry = { currency, reportedSum: 0, estimatedNanoSum: 0, calls: 0 };
+    agg.comparableEntries.set(currency, entry);
+  }
+  entry.reportedSum += Number(row.reported_sum ?? 0);
+  entry.estimatedNanoSum += Number(row.estimated_nano_sum ?? 0);
+  entry.calls += Number(row.cnt);
+}
+
 /** Issue #80: distinct `session_id` per group, only ever built when `groupBy` includes `meeting`. Merged into
  * `RawAggregate.sessionIds` the same way `buildGroupCostSql`'s rows are merged into `costEntries`. */
 function buildGroupSessionsSql(groupBy: readonly RollupDimension[], tsCol: string, whereSql: string, tagJoin: boolean, toolJoin: boolean): string {
@@ -1240,6 +1492,27 @@ export function computeSqliteRollup(db: DatabaseSync, query: RollupQuery, now: (
         calls: Number(row.cost_calls),
       });
     }
+    // Issue #295: one extra statement for `estimated`/`estimatedUnknownCalls`/`estimatedUnknownByStatus`, one
+    // more for `comparable`; both read only `usage_ledger`'s own columns (no join to a `usage_estimates` table,
+    // which does not exist in this issue's scope), so a database that never ran a recompute pays no extra query
+    // cost beyond these two statements.
+    const estimateRows = db
+      .prepare(buildGroupEstimateSql(query.groupBy, tsCol, whereSql, tagJoin, toolJoin))
+      .all(groupParams) as Array<Record<string, unknown>>;
+    for (const row of estimateRows) {
+      const { key, attribution } = keyFromRow(row, query.groupBy);
+      const agg = groupsMap.get(keyToString(key, attribution, query.groupBy));
+      if (agg) applyEstimateBucketRow(agg, row);
+    }
+    const comparableRows = db
+      .prepare(buildGroupComparableSql(query.groupBy, tsCol, whereSql, tagJoin, toolJoin))
+      .all(groupParams) as Array<Record<string, unknown>>;
+    for (const row of comparableRows) {
+      const { key, attribution } = keyFromRow(row, query.groupBy);
+      const agg = groupsMap.get(keyToString(key, attribution, query.groupBy));
+      if (agg) applyComparableRow(agg, row);
+    }
+
     if (query.groupBy.includes('meeting')) {
       const sessionRows = db
         .prepare(buildGroupSessionsSql(query.groupBy, tsCol, whereSql, tagJoin, toolJoin))
@@ -1312,6 +1585,16 @@ export function computeSqliteRollup(db: DatabaseSync, query: RollupQuery, now: (
         calls: Number(row.cost_calls),
       });
     }
+
+    // Issue #295: same two statements as the groups section above, ungrouped.
+    const totalsEstimateRows = db
+      .prepare(buildTotalsEstimateSql(whereSql, toolJoin))
+      .all(whereParams) as Array<Record<string, unknown>>;
+    for (const row of totalsEstimateRows) applyEstimateBucketRow(totals, row);
+    const totalsComparableRows = db
+      .prepare(buildTotalsComparableSql(whereSql, toolJoin))
+      .all(whereParams) as Array<Record<string, unknown>>;
+    for (const row of totalsComparableRows) applyComparableRow(totals, row);
 
     // Issue #89, rule 7: the totals percentiles/failure counts come from this independent, ungrouped scan of
     // every matching row, never from combining the per-group figures computed above.

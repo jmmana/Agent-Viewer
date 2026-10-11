@@ -19,9 +19,22 @@
 import type { CostSource, UsageLedgerRow } from '../usageLedger';
 import { parseUsageFilters, type UsageFilterIssue } from './filters';
 import { redactText, type RedactionPolicy } from '../../src/integrations/redaction';
-import { TOKEN_KINDS, type TokenKind, type UsageFilters, type UsageRollupResponse } from './types';
+import { nanoToDecimalCost } from '../pricing/estimate';
+import {
+  TOKEN_KINDS,
+  type CallEstimateStatus,
+  type ComparableEntry,
+  type EstimateBasis,
+  type EstimatedCostEntry,
+  type TokenKind,
+  type UsageFilters,
+  type UsageRollupResponse,
+} from './types';
 
-export const EXPORT_SCHEMA = 'agent-viewer.usage-export/1';
+// Issue #295: bumped from /1 to /2 per this module's own versioning rule (docs/usage-export.md, "Schema
+// versioning"): a column addition always ships as a new schema id, even though the 28 original columns keep
+// their names and order unchanged, with the 8 new estimate columns appended after them.
+export const EXPORT_SCHEMA = 'agent-viewer.usage-export/2';
 
 export type ExportFormat = 'csv' | 'jsonl';
 
@@ -160,6 +173,18 @@ export interface ExportCallRecord {
    * it carries the redacted `event.summary` like every other text column here. */
   summary: string | null;
   redacted: boolean;
+  /** Issue #295: the ledger's own ingestion-time cost estimate, appended after every pre-existing field above.
+   * `estimatedCurrency` goes through the same `redact()` treatment as `currency` above for consistency, though
+   * in practice an ISO 4217 code is never redacted text. `estimateStatus` and `estimatedCostSource` are
+   * validated enums, never redacted, same as `status`/`costSource`. */
+  estimatedCost: number | null;
+  estimatedCostNano: number | null;
+  estimatedCurrency: string | null;
+  estimatedCostSource: 'estimated' | null;
+  pricingVersion: number | null;
+  estimateStatus: CallEstimateStatus;
+  estimateRevision: number;
+  estimatedAt: number | null;
 }
 
 /**
@@ -187,6 +212,9 @@ export function toExportCallRecord(row: UsageLedgerRow, policy?: RedactionPolicy
     if (result.count > 0) changed = true;
     return result.text;
   });
+
+  const estimateStatus: CallEstimateStatus = row.estimateStatus ?? 'not_estimated';
+  const estimatedCost = row.estimatedCostNano === null ? null : nanoToDecimalCost(row.estimatedCostNano);
 
   return {
     ledgerSeq: row.seq,
@@ -217,6 +245,14 @@ export function toExportCallRecord(row: UsageLedgerRow, policy?: RedactionPolicy
     costSource: row.costSource,
     summary: redact(row.summary),
     redacted: changed,
+    estimatedCost,
+    estimatedCostNano: row.estimatedCostNano,
+    estimatedCurrency: redact(row.estimatedCurrency),
+    estimatedCostSource: estimatedCost === null ? null : 'estimated',
+    pricingVersion: row.pricingVersion,
+    estimateStatus,
+    estimateRevision: 0,
+    estimatedAt: row.estimatedAt,
   };
 }
 
@@ -300,10 +336,15 @@ function csvNumberCell(value: number | null): string {
 export const CSV_HEADER =
   'ledgerSeq,eventId,requestId,receivedAt,occurredAt,status,provider,model,runtimeId,sessionId,agentId,taskId,' +
   'traceId,parentId,toolCallId,userId,tags,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,' +
-  'reasoningTokens,latencyMs,cost,currency,costSource,summary,redacted';
+  'reasoningTokens,latencyMs,cost,currency,costSource,summary,redacted,' +
+  'estimatedCost,estimatedCostNano,estimatedCurrency,estimatedCostSource,pricingVersion,estimateStatus,' +
+  'estimateRevision,estimatedAt';
 
-/** One CSV row (RFC 4180, CRLF line ending, the 28 documented columns in their fixed order). `r.tags` is escaped
- * and joined here (CSV-only; JSONL carries the exact array, see `formatJsonlRow`). */
+/** One CSV row (RFC 4180, CRLF line ending, the 36 documented columns in their fixed order: the original 28 plus
+ * issue #295's 8 estimate columns, appended last). `r.tags` is escaped and joined here (CSV-only; JSONL carries
+ * the exact array, see `formatJsonlRow`). Every estimate cell is empty for `null`, never `0` (`csvNumberCell`/
+ * `csvTextCell` already give every other `null` field that same treatment); `estimateRevision` is the one
+ * estimate field never `null` (always `0` today). */
 export function formatCsvRow(r: ExportCallRecord): string {
   const fields = [
     String(r.ledgerSeq),
@@ -334,6 +375,14 @@ export function formatCsvRow(r: ExportCallRecord): string {
     csvTextCell(r.costSource),
     csvTextCell(r.summary),
     String(r.redacted),
+    csvNumberCell(r.estimatedCost),
+    csvNumberCell(r.estimatedCostNano),
+    csvTextCell(r.estimatedCurrency),
+    csvTextCell(r.estimatedCostSource),
+    csvNumberCell(r.pricingVersion),
+    csvTextCell(r.estimateStatus),
+    String(r.estimateRevision),
+    csvNumberCell(r.estimatedAt),
   ];
   return fields.join(',') + '\r\n';
 }
@@ -382,6 +431,14 @@ export function formatJsonlRow(r: ExportCallRecord): string {
     `"costSource":${JSON.stringify(r.costSource)}`,
     `"summary":${jsonStringOrNull(r.summary)}`,
     `"redacted":${r.redacted}`,
+    `"estimatedCost":${jsonNumberOrNull(r.estimatedCost)}`,
+    `"estimatedCostNano":${jsonNumberOrNull(r.estimatedCostNano)}`,
+    `"estimatedCurrency":${jsonStringOrNull(r.estimatedCurrency)}`,
+    `"estimatedCostSource":${jsonStringOrNull(r.estimatedCostSource)}`,
+    `"pricingVersion":${jsonNumberOrNull(r.pricingVersion)}`,
+    `"estimateStatus":${JSON.stringify(r.estimateStatus)}`,
+    `"estimateRevision":${r.estimateRevision}`,
+    `"estimatedAt":${jsonNumberOrNull(r.estimatedAt)}`,
   ];
   return `{${fields.join(',')}}`;
 }
@@ -430,6 +487,14 @@ export interface ExportTotals {
   cost: ExportCostEntry[];
   tokens: Record<'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens' | 'reasoningTokens', ExportTokenFigure>;
   byStatus: { succeeded: number; failed: number };
+  /** Issue #295: the same `estimated`/`comparable` figures the rollup response carries, reshaped from the one
+   * `store.rollup()` call this function already reuses (never summed a second time, same rule as `cost` above). */
+  estimated: EstimatedCostEntry[];
+  estimatedUnknownCalls: number;
+  estimatedUnknownByStatus: Partial<Record<CallEstimateStatus, number>>;
+  estimatedComplete: boolean;
+  comparable: ComparableEntry[];
+  estimateBasis: EstimateBasis;
 }
 
 const TOKEN_KIND_TO_LONG_NAME: Record<TokenKind, keyof ExportTotals['tokens']> = {
@@ -512,6 +577,12 @@ export function shapeExportTotals(rollup: UsageRollupResponse, filters: UsageFil
     cost,
     tokens,
     byStatus: { succeeded: rollup.totals.calls.succeeded, failed: rollup.totals.calls.failed },
+    estimated: rollup.totals.estimated,
+    estimatedUnknownCalls: rollup.totals.estimatedUnknownCalls,
+    estimatedUnknownByStatus: rollup.totals.estimatedUnknownByStatus,
+    estimatedComplete: rollup.totals.estimatedComplete,
+    comparable: rollup.totals.comparable,
+    estimateBasis: rollup.estimateBasis,
   };
   if (!rollup.coverage.complete) {
     result.incompleteReason = rollup.coverage.droppedRows > 0 ? 'evicted' : 'retention';

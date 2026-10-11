@@ -10,7 +10,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { MemoryEventStore, SQLiteEventStore } from '../server/store.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
-import { parseRollupQuery, UsageFilterError } from '../server/usage/rollup.ts';
+import { computeMemoryAggregates, parseRollupQuery, UsageFilterError } from '../server/usage/rollup.ts';
 
 function tempDbPath(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-rollup-'));
@@ -86,6 +86,64 @@ async function withSqliteStore(fn) {
 function eachStore(name, fn) {
   test(`${name} (memory)`, () => withMemoryStore(fn));
   test(`${name} (sqlite)`, () => withSqliteStore(fn));
+}
+
+// -------------------------------------------------------------
+// Issue #295: `estimated`/`comparable`, wired to a real (in-memory, no disk) pricing snapshot rather than the
+// default `NO_PRICING_SNAPSHOT` every `eachStore` test above uses (so those rows always read
+// `estimate_status = 'no_price_in_force'`, never `'estimated'`).
+// -------------------------------------------------------------
+
+function examplePriceEntry(overrides = {}) {
+  return {
+    provider: 'anthropic',
+    model: 'claude-example',
+    aliases: [],
+    kind: 'list',
+    currency: 'USD',
+    effectiveFrom: '2000-01-01T00:00:00.000Z',
+    inputPerMillion: 2,
+    outputPerMillion: 10,
+    cacheReadPerMillion: null,
+    cacheWritePerMillion: null,
+    reasoningPerMillion: null,
+    reasoningBilling: 'included_in_output',
+    source: 'file',
+    estimated: false,
+    sourceUrl: null,
+    sourceCheckedAt: null,
+    note: null,
+    ...overrides,
+  };
+}
+
+const EXAMPLE_PRICING = { pricingVersion: 1, entries: [examplePriceEntry()] };
+
+async function withPricedMemoryStore(fn) {
+  const store = new MemoryEventStore({ maxEvents: 100_000, getPricingSnapshot: () => EXAMPLE_PRICING });
+  await store.init();
+  try {
+    await fn(store);
+  } finally {
+    await store.close();
+  }
+}
+
+async function withPricedSqliteStore(fn) {
+  const { dir, file } = tempDbPath('rollup-priced');
+  const store = new SQLiteEventStore(file, { backup: 'off', getPricingSnapshot: () => EXAMPLE_PRICING });
+  await store.init();
+  try {
+    await fn(store);
+  } finally {
+    await store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function eachPricedStore(name, fn) {
+  test(`${name} (memory)`, () => withPricedMemoryStore(fn));
+  test(`${name} (sqlite)`, () => withPricedSqliteStore(fn));
 }
 
 // -------------------------------------------------------------
@@ -186,6 +244,19 @@ test('parseRollupQuery: defaults match the documented defaults', () => {
   assert.equal(query.sort, 'key');
   assert.equal(query.limit, 1000);
   assert.equal(query.filters.asOfSeq, null);
+  assert.deepEqual(query.filters.estimateBasis, { mode: 'latest', revision: null, revisionsUsed: [0] });
+});
+
+test('parseRollupQuery: estimates and estimateRevision are mutually exclusive, each accepted alone', () => {
+  assert.throws(() => parseRollupQuery({ groupBy: 'agent', estimates: 'original', estimateRevision: '2' }), UsageFilterError);
+  assert.throws(() => parseRollupQuery({ groupBy: 'agent', estimates: 'bogus' }), UsageFilterError);
+  assert.throws(() => parseRollupQuery({ groupBy: 'agent', estimateRevision: '-1' }), UsageFilterError);
+
+  const original = parseRollupQuery({ groupBy: 'agent', estimates: 'original' });
+  assert.deepEqual(original.filters.estimateBasis, { mode: 'original', revision: null, revisionsUsed: [0] });
+
+  const asOf = parseRollupQuery({ groupBy: 'agent', estimateRevision: '5' });
+  assert.deepEqual(asOf.filters.estimateBasis, { mode: 'asOfRevision', revision: 5, revisionsUsed: [0] });
 });
 
 // -------------------------------------------------------------
@@ -282,6 +353,119 @@ eachStore('rollup: cost entries are ordered by currency ascending (null last), t
       [null, 'provider-reported'],
     ]
   );
+});
+
+// -------------------------------------------------------------
+// Issue #295: `estimated`, `estimatedUnknownCalls`/`estimatedUnknownByStatus`/`estimatedComplete`, `comparable`
+// and `estimateBasis`.
+// -------------------------------------------------------------
+
+eachPricedStore('rollup: an estimable row (priced model) contributes to estimated, an unpriceable one to estimatedUnknownCalls', async (store) => {
+  await seed(store, [
+    // 1,000,000 input tokens at $2/M = $2, no cache, no reasoning (reasoningBilling: included_in_output).
+    usageEvent({ payload: { model: 'claude-example', inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: undefined, currency: undefined } }),
+    usageEvent({ payload: { model: 'a-model-with-no-price-entry', cost: undefined, currency: undefined } }),
+  ]);
+  const result = await store.rollup(parseRollupQuery({ groupBy: 'agent' }));
+
+  assert.equal(result.totals.estimated.length, 1);
+  assert.equal(result.totals.estimated[0].currency, 'USD');
+  assert.equal(result.totals.estimated[0].calls, 1);
+  assert.equal(result.totals.estimated[0].cost, 2);
+  assert.deepEqual(result.totals.estimated[0].pricingVersions, [1]);
+
+  assert.equal(result.totals.estimatedUnknownCalls, 1);
+  assert.deepEqual(result.totals.estimatedUnknownByStatus, { no_price_for_model: 1 });
+  assert.equal(result.totals.estimatedComplete, false);
+  assert.deepEqual(result.estimateBasis, { mode: 'latest', revision: null, revisionsUsed: [0] });
+
+  // Group sums reconcile with totals, same invariant every other figure in this file already follows.
+  const group = result.groups.find((g) => g.key.agent === 'agent-1');
+  assert.deepEqual(group.estimated, result.totals.estimated);
+  assert.equal(group.estimatedUnknownCalls, result.totals.estimatedUnknownCalls);
+});
+
+eachPricedStore('rollup: estimatedComplete is true only when every call in scope has an estimate', async (store) => {
+  await seed(store, [
+    usageEvent({ payload: { model: 'claude-example', inputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: undefined, currency: undefined } }),
+  ]);
+  const result = await store.rollup(parseRollupQuery({ groupBy: 'agent' }));
+  assert.equal(result.totals.estimatedUnknownCalls, 0);
+  assert.equal(result.totals.estimatedComplete, true);
+  assert.deepEqual(result.totals.estimatedUnknownByStatus, {});
+});
+
+eachPricedStore('rollup: comparable covers only rows with both a reported and an estimated cost in the SAME currency, never zero-filled', async (store) => {
+  await seed(store, [
+    // Reported USD 1, estimated from 1,000,000 input tokens at $2/M = USD 2: both present, same currency.
+    usageEvent({ payload: { model: 'claude-example', inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 1, currency: 'USD', costSource: 'provider-reported' } }),
+    // Reported cost but in a currency that never has an estimate counterpart in this fixture (no estimate at
+    // all here: unpriced model), so it must be excluded from `comparable`, never zero-filled.
+    usageEvent({ payload: { model: 'a-model-with-no-price-entry', cost: 5, currency: 'EUR', costSource: 'provider-reported' } }),
+    // Estimate only, no reported cost: also excluded from `comparable`.
+    usageEvent({ payload: { model: 'claude-example', inputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: undefined, currency: undefined } }),
+  ]);
+  const result = await store.rollup(parseRollupQuery({ groupBy: 'agent' }));
+  assert.equal(result.totals.comparable.length, 1);
+  const entry = result.totals.comparable[0];
+  assert.equal(entry.currency, 'USD');
+  assert.equal(entry.calls, 1);
+  assert.equal(entry.reportedCost, 1);
+  assert.equal(entry.estimatedCost, 2);
+  assert.equal(entry.delta, 2 - 1);
+});
+
+eachStore('rollup: a request without pricing wired reports every row as estimatedUnknownCalls, never a false estimated entry', async (store) => {
+  await seed(store, [usageEvent({ payload: { cost: 1, currency: 'USD' } })]);
+  const result = await store.rollup(parseRollupQuery({ groupBy: 'agent' }));
+  assert.deepEqual(result.totals.estimated, []);
+  assert.equal(result.totals.estimatedUnknownCalls, 1);
+  assert.equal(result.totals.estimatedComplete, false);
+  assert.deepEqual(result.totals.comparable, []);
+});
+
+test('rollup: a pre-#84 row (estimateStatus null) is counted under the virtual status not_estimated', () => {
+  // `usageEvent`'s own fixture never produces a null `estimateStatus` (every live-ingested row gets a real
+  // status from `estimateLedgerRow`); this is covered at the unit level instead, directly on the aggregator
+  // (`computeMemoryAggregates`), against a hand-built row with `estimateStatus: null`.
+  const row = {
+    seq: 1,
+    eventType: 'llm.usage',
+    agentId: 'a',
+    model: null,
+    provider: null,
+    sessionId: null,
+    taskId: null,
+    runtimeId: null,
+    userId: null,
+    status: 'ok',
+    errorKind: null,
+    costSource: 'unknown',
+    cost: null,
+    currency: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    reasoningTokens: null,
+    latencyMs: null,
+    tags: [],
+    meetingId: null,
+    toolCallId: null,
+    origin: 'live',
+    legacyContract: false,
+    occurredAt: 1_700_000_000_000,
+    receivedAt: 1_700_000_000_000,
+    estimatedCostNano: null,
+    estimatedCurrency: null,
+    pricingVersion: null,
+    estimateStatus: null,
+    estimatedAt: null,
+  };
+  const query = parseRollupQuery({ groupBy: 'agent' });
+  const { totals } = computeMemoryAggregates([row], query);
+  assert.equal(totals.estimatedUnknownCalls, 1);
+  assert.deepEqual(totals.estimatedUnknownByStatus, { not_estimated: 1 });
 });
 
 eachStore('rollup: a token kind nobody reported returns sum null, reportedCalls + unreportedCalls === calls.total', async (store) => {

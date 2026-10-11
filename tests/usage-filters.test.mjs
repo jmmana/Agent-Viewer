@@ -7,6 +7,8 @@
 // never parsed from a query string by this function at all (the export route sets it directly on the filters
 // object it got back from here), so it is always `null` regardless of options. Issue #80 added five more
 // rollup-only fields under the same gate: `meetingId`, `toolCallId`, `tool`, `meetingAttribution`, `toolAttribution`.
+// Issue #295 added `estimateBasis`, shared (not gated by either option) since calls, rollup and export all parse
+// `estimates`/`estimateRevision` through this same function.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseUsageFilters } from '../server/usage/filters.ts';
@@ -50,6 +52,8 @@ test('parseUsageFilters: defaults with no query at all', () => {
     meetingAttribution: [],
     toolAttribution: [],
     afterSeq: null,
+    // Issue #295: shared estimate basis, default when neither `estimates` nor `estimateRevision` is given.
+    estimateBasis: { mode: 'latest', revision: null, revisionsUsed: [0] },
   });
   assert.equal(value.order, 'desc');
   assert.equal(value.limit, 100);
@@ -130,6 +134,27 @@ test('parseUsageFilters: asOfSeq and utcOffsetMinutes validation', () => {
   assert.deepEqual(issuePaths({ utcOffsetMinutes: 'abc' }, rollupOnly), ['utcOffsetMinutes']);
   assert.equal(okFilters({ utcOffsetMinutes: '-720' }, rollupOnly).filters.utcOffsetMinutes, -720);
   assert.equal(okFilters({ utcOffsetMinutes: '840' }, rollupOnly).filters.utcOffsetMinutes, 840);
+});
+
+test('parseUsageFilters: estimates and estimateRevision, shared by every caller regardless of options (issue #295)', () => {
+  for (const options of [{ allowCallsOnly: true }, { allowCallsOnly: false, allowRollupOnly: true }]) {
+    assert.deepEqual(okFilters({ estimates: 'original' }, options).filters.estimateBasis, {
+      mode: 'original',
+      revision: null,
+      revisionsUsed: [0],
+    });
+    assert.deepEqual(okFilters({ estimateRevision: '12' }, options).filters.estimateBasis, {
+      mode: 'asOfRevision',
+      revision: 12,
+      revisionsUsed: [0],
+    });
+    assert.deepEqual(issuePaths({ estimates: 'original', estimateRevision: '1' }, options), ['estimateRevision']);
+    assert.deepEqual(issuePaths({ estimates: 'bogus' }, options), ['estimates']);
+    assert.deepEqual(issuePaths({ estimateRevision: '-1' }, options), ['estimateRevision']);
+    assert.deepEqual(issuePaths({ estimateRevision: 'abc' }, options), ['estimateRevision']);
+  }
+  // `estimateRevision: 0` is a valid, meaningful request (equivalent to `estimates=original` today), not rejected.
+  assert.deepEqual(okFilters({ estimateRevision: '0' }).filters.estimateBasis, { mode: 'asOfRevision', revision: 0, revisionsUsed: [0] });
 });
 
 test('parseUsageFilters: token and api_key are accepted and ignored, never surfaced as filters', () => {

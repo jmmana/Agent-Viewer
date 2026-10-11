@@ -13,11 +13,13 @@ Both sit under `/api/v1`, so they get the same Bearer auth, rate limit, query-to
 configured) loopback/Host/Origin guard every other `/api/v1` route gets. See the Security table in
 [README.md](../README.md#-security) for that guard's exact rules.
 
-## Column reference (`agent-viewer.usage-export/1`)
+## Column reference (`agent-viewer.usage-export/2`)
 
 One row per ledger row: one model call, including failed or rate-limited calls. Column order is fixed and
 versioned in the `X-Agent-Viewer-Export-Schema` header and in every JSONL record's `schema` field; a future
-column addition bumps the schema to `/2` rather than reordering or renaming anything here.
+column addition bumps the schema again rather than reordering or renaming anything here. Issue #295 bumped this
+from `/1` to `/2` to append the 8 estimate columns below; the first 28 columns keep their exact names and order
+from `/1`.
 
 | # | Column | Type | Empty / `null` means | Redacted? |
 |---|---|---|---|---|
@@ -49,9 +51,27 @@ column addition bumps the schema to `/2` rather than reordering or renaming anyt
 | 26 | `costSource` | `provider-reported` \| `estimated` \| `unknown` | never empty | no (validated enum) |
 | 27 | `summary` | string | **always `null` today**, see below | yes |
 | 28 | `redacted` | `true` \| `false` | never empty | n/a |
+| 29 | `estimatedCost` | decimal | not estimable | no (numeric) |
+| 30 | `estimatedCostNano` | integer, 1e-9 of the currency unit | not estimable | no (numeric) |
+| 31 | `estimatedCurrency` | ISO 4217 code | not estimable | yes |
+| 32 | `estimatedCostSource` | the constant `estimated`, or empty | not estimable | no (validated enum) |
+| 33 | `pricingVersion` | integer | no price table version was checked (no table loaded at all) | no (numeric) |
+| 34 | `estimateStatus` | enum, see below | never empty | no (validated enum) |
+| 35 | `estimateRevision` | integer | never empty, always `0` today | no (numeric) |
+| 36 | `estimatedAt` | epoch ms | not estimable | no (numeric) |
 
 A value that was never reported is an empty CSV cell or a JSON `null`, never `0`. A reported `0` is written as
-`0`. Values are exported as stored: no currency conversion, no cost estimation, no token rounding.
+`0`. Values are exported as stored: no currency conversion, no token rounding. Columns 29-36 (issue #295) are the
+one exception to "no cost estimation": they are the ledger's own ingestion-time estimate (issue #84,
+`server/pricing/estimate.ts`), a separate fact from `cost`/`currency`/`costSource` above, computed from a
+versioned price table and never merged with what the provider or runtime reported. `estimateStatus` is one of
+`estimated`, `no_price_in_force`, `no_price_for_model`, `no_price_for_component`, `missing_usage`,
+`inconsistent_usage`, `failed`, or the virtual `not_estimated` (a row written before the estimate columns
+existed). Every estimate cell is empty for any status other than `estimated`, except `estimateStatus` itself and
+`estimateRevision` (always `0` until the recompute endpoint of a later issue ships real revision history).
+`estimatedCostSource` exists only so a consumer can never confuse it with `costSource`: it is the literal string
+`estimated` when `estimatedCost` is not empty, and empty otherwise. See the **Estimate basis** section below for
+the `estimates`/`estimateRevision` request parameters both export routes share with calls and rollup.
 
 ### `summary` is always empty right now
 
@@ -114,7 +134,7 @@ with per-`(currency, costSource)` cost buckets, per-token-kind sums, and `byStat
 
 ```json
 {
-  "schema": "agent-viewer.usage-export/1",
+  "schema": "agent-viewer.usage-export/2",
   "asOfSeq": 48213,
   "rowCount": 1240,
   "complete": true,
@@ -123,9 +143,27 @@ with per-`(currency, costSource)` cost buckets, per-token-kind sums, and `byStat
     { "currency": null, "costSource": "unknown", "calls": 12, "callsWithCost": 0, "callsWithoutCost": 12, "knownCost": null, "cost": null }
   ],
   "tokens": { "inputTokens": { "sum": 6120044, "callsReported": 1240, "callsNotReported": 0 }, "...": "..." },
-  "byStatus": { "succeeded": 1228, "failed": 12 }
+  "byStatus": { "succeeded": 1228, "failed": 12 },
+  "estimated": [{ "currency": "USD", "cost": 398.221, "calls": 1240, "pricingVersions": [1] }],
+  "estimatedUnknownCalls": 0,
+  "estimatedUnknownByStatus": {},
+  "estimatedComplete": true,
+  "comparable": [{ "currency": "USD", "calls": 1198, "reportedCost": 412.0831, "estimatedCost": 398.221, "delta": -13.8621 }],
+  "estimateBasis": { "mode": "latest", "revision": null, "revisionsUsed": [0] }
 }
 ```
+
+### Estimate basis (issue #295)
+
+`GET /api/v1/usage/export`, `GET /api/v1/usage/export/totals`, `GET /api/v1/usage/calls` and `GET /api/v1/usage/rollup` share one `estimates`/`estimateRevision` parameter pair, so a reconciliation run can pin exactly which estimate revision it read:
+
+| Param | Meaning |
+|---|---|
+| `estimates=latest` | Default. The highest revision of each row's estimate. |
+| `estimates=original` | Revision 0, the ingestion-time figure, regardless of any later recompute. |
+| `estimateRevision=N` | The highest revision `<= N` (what a price table said when run `N` was newest). |
+
+`estimates` and `estimateRevision` are mutually exclusive (`400 invalid_filter` otherwise). Every response echoes `estimateBasis: { mode, revision, revisionsUsed }`. Only revision 0 exists until the pricing recompute endpoint (a separate issue) ships, so every mode reads the same data today and every row's own `estimateRevision` is always `0`; the parameter is accepted and validated now so this contract never has to change shape later. For CSV, which has no per-request metadata record, `estimateBasis` is echoed as the `X-Agent-Viewer-Estimate-Basis` response header instead (JSON-encoded, also in `Access-Control-Expose-Headers`); JSONL carries it on the trailing `summary` record, same as every other response.
 
 To reconcile against a provider invoice: match each `(currency, costSource)` bucket against the matching line on
 the invoice, one currency and one cost source at a time. There is never a cross-currency total and never a total
@@ -199,14 +237,15 @@ log or a browser's address bar than a short-lived API call.
 
 ## Schema versioning
 
-The schema id (`agent-viewer.usage-export/1`) appears in the `X-Agent-Viewer-Export-Schema` response header, in
-every JSONL record (`call`, `summary` and `error`), and in the totals sidecar's `schema` field. A future column
-addition, removal or type change ships as `/2`; columns are never reordered or renamed within a version, so a
-consumer can safely assume a given version's column list never shifts under it.
+The schema id (`agent-viewer.usage-export/2` as of issue #295, was `/1`) appears in the `X-Agent-Viewer-Export-Schema`
+response header, in every JSONL record (`call`, `summary` and `error`), and in the totals sidecar's `schema` field.
+A future column addition, removal or type change ships as `/3`; columns are never reordered or renamed within a
+version, so a consumer can safely assume a given version's column list never shifts under it.
 
 ## Out of scope for this item
 
-Parquet, XLSX, scheduled or emailed exports, gzip of the stream, cost estimation/pricing columns, and SDK/CLI
-`export` helpers are all out of scope here (see the issue's own "Out of scope" section). The portal's own export
-dialog, when it ships, will be a thin client over exactly these two endpoints: it will never sum, convert or
-price anything itself.
+Parquet, XLSX, scheduled or emailed exports, gzip of the stream, and SDK/CLI `export` helpers are all out of scope
+here (see the issue's own "Out of scope" section). Cost estimation/pricing columns (issue #295) shipped later and
+are documented above; pricing recompute and revision history (a separate, still-open issue) stay out of scope:
+`estimateRevision` is always `0` until that lands. The portal's own export dialog, when it ships, will be a thin
+client over exactly these two endpoints: it will never sum, convert or price anything itself.

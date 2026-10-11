@@ -53,6 +53,13 @@ function baseRow(overrides = {}) {
     userId: null,
     tags: [],
     summary: null,
+    // Issue #295: the ledger's own ingestion-time estimate. `null` reproduces a pre-#84 row (virtual status
+    // `not_estimated`); individual tests override these to exercise an `'estimated'` or unpriceable row.
+    estimatedCostNano: null,
+    estimatedCurrency: null,
+    pricingVersion: null,
+    estimateStatus: null,
+    estimatedAt: null,
     ...overrides,
   };
 }
@@ -155,7 +162,7 @@ test('formatDecimal: large value 1.5e21 expands to plain digits', () => {
 // formatCsvRow
 // -------------------------------------------------------------
 
-test('formatCsvRow: full row from the issue has exactly 28 fields and ends with CRLF', () => {
+test('formatCsvRow: full row from the issue has exactly 36 fields and ends with CRLF', () => {
   const row = baseRow({
     requestId: 'req_9f2',
     runtimeId: 'cc-local',
@@ -172,6 +179,11 @@ test('formatCsvRow: full row from the issue has exactly 28 fields and ends with 
     currency: 'USD',
     costSource: 'provider-reported',
     summary: 'planner LLM usage reported',
+    estimatedCostNano: 7_000_000,
+    estimatedCurrency: 'USD',
+    pricingVersion: 1,
+    estimateStatus: 'estimated',
+    estimatedAt: 1_700_000_000_000,
   });
   const record = toExportCallRecord(row);
   const csv = formatCsvRow(record);
@@ -179,8 +191,92 @@ test('formatCsvRow: full row from the issue has exactly 28 fields and ends with 
   const line = csv.slice(0, -2);
   // Fields on this fixture never contain an embedded comma inside a quoted value with commas of their own, so a
   // naive split is a safe way to count fields here (the embedded-comma/quote cases are covered below instead).
-  assert.equal(line.split(',').length >= 28, true);
-  assert.equal(CSV_HEADER.split(',').length, 28);
+  assert.equal(line.split(',').length, 36);
+  assert.equal(CSV_HEADER.split(',').length, 36);
+});
+
+// -------------------------------------------------------------
+// formatCsvRow / formatJsonlRow: issue #295's eight estimate columns
+// -------------------------------------------------------------
+
+test('formatCsvRow: an estimated row writes a plain decimal estimatedCost, never 0, and the estimated columns', () => {
+  const row = baseRow({
+    estimatedCostNano: 7_000_000,
+    estimatedCurrency: 'USD',
+    pricingVersion: 1,
+    estimateStatus: 'estimated',
+    estimatedAt: 1_700_000_000_000,
+  });
+  const csv = formatCsvRow(toExportCallRecord(row));
+  const fields = csv.slice(0, -2).split(',');
+  // ...,summary,redacted,estimatedCost,estimatedCostNano,estimatedCurrency,estimatedCostSource,pricingVersion,
+  // estimateStatus,estimateRevision,estimatedAt (indices 28..35)
+  assert.equal(fields[28], '0.007'); // estimatedCost: plain decimal, never exponent
+  assert.equal(fields[29], '7000000'); // estimatedCostNano
+  assert.equal(fields[30], '"USD"'); // estimatedCurrency
+  assert.equal(fields[31], '"estimated"'); // estimatedCostSource
+  assert.equal(fields[32], '1'); // pricingVersion
+  assert.equal(fields[33], '"estimated"'); // estimateStatus
+  assert.equal(fields[34], '0'); // estimateRevision: always 0 today, never empty
+  assert.equal(fields[35], '1700000000000'); // estimatedAt
+});
+
+test('formatCsvRow: an unestimable row leaves every estimate cell empty except estimateStatus and estimateRevision', () => {
+  const row = baseRow({ estimateStatus: 'no_price_for_model', estimatedAt: 1_700_000_000_000 });
+  const csv = formatCsvRow(toExportCallRecord(row));
+  const fields = csv.slice(0, -2).split(',');
+  assert.equal(fields[28], ''); // estimatedCost: empty, never "0"
+  assert.equal(fields[29], ''); // estimatedCostNano
+  assert.equal(fields[30], ''); // estimatedCurrency
+  assert.equal(fields[31], ''); // estimatedCostSource
+  assert.equal(fields[32], ''); // pricingVersion was never resolved either (no price table in force in this fixture)
+  assert.equal(fields[33], '"no_price_for_model"');
+  assert.equal(fields[34], '0');
+  assert.equal(fields[35], '1700000000000');
+});
+
+test('formatCsvRow: a pre-#84 row (estimateStatus null) reads as the virtual status not_estimated, every estimate field empty', () => {
+  const row = baseRow();
+  const record = toExportCallRecord(row);
+  assert.equal(record.estimateStatus, 'not_estimated');
+  const csv = formatCsvRow(record);
+  const fields = csv.slice(0, -2).split(',');
+  assert.equal(fields[28], '');
+  assert.equal(fields[33], '"not_estimated"');
+  assert.equal(fields[34], '0');
+  assert.equal(fields[35], '');
+});
+
+test('formatJsonlRow: an estimated row round-trips every estimate field, estimatedCostSource is the constant "estimated"', () => {
+  const row = baseRow({
+    estimatedCostNano: 7_000_000,
+    estimatedCurrency: 'USD',
+    pricingVersion: 1,
+    estimateStatus: 'estimated',
+    estimatedAt: 1_700_000_000_000,
+  });
+  const parsed = JSON.parse(formatJsonlRow(toExportCallRecord(row)));
+  assert.equal(parsed.estimatedCost, 0.007);
+  assert.equal(parsed.estimatedCostNano, 7_000_000);
+  assert.equal(parsed.estimatedCurrency, 'USD');
+  assert.equal(parsed.estimatedCostSource, 'estimated');
+  assert.equal(parsed.pricingVersion, 1);
+  assert.equal(parsed.estimateStatus, 'estimated');
+  assert.equal(parsed.estimateRevision, 0);
+  assert.equal(parsed.estimatedAt, 1_700_000_000_000);
+});
+
+test('formatJsonlRow: not_estimated row has null estimate fields and estimateRevision 0, never null', () => {
+  const row = baseRow();
+  const parsed = JSON.parse(formatJsonlRow(toExportCallRecord(row)));
+  assert.equal(parsed.estimatedCost, null);
+  assert.equal(parsed.estimatedCostNano, null);
+  assert.equal(parsed.estimatedCurrency, null);
+  assert.equal(parsed.estimatedCostSource, null);
+  assert.equal(parsed.pricingVersion, null);
+  assert.equal(parsed.estimateStatus, 'not_estimated');
+  assert.equal(parsed.estimateRevision, 0);
+  assert.equal(parsed.estimatedAt, null);
 });
 
 test('formatCsvRow: unknown values are empty cells, never 0', () => {
@@ -214,7 +310,10 @@ test('formatCsvRow: redacted is bare true/false, never quoted', () => {
   const record = toExportCallRecord(row);
   const csv = formatCsvRow(record);
   assert.ok(record.redacted, 'expected the seeded secret to trigger redaction');
-  assert.ok(csv.trim().endsWith(',true'));
+  // `redacted` is column 27 (0-based); issue #295 appends 8 more estimate columns after it, so it is no longer
+  // the last field on the row.
+  const fields = csv.slice(0, -2).split(',');
+  assert.equal(fields[27], 'true');
   assert.ok(!csv.includes('"true"') && !csv.includes('"false"'));
 });
 

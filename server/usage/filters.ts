@@ -21,6 +21,8 @@ import type { CostSource } from '../usageLedger';
 import { emptyUsageFilters, isCallStatus, isCostSource, type CallStatus, type TimeBasis, type UsageFilters } from './types';
 import type { MeetingAttributionState, ToolAttributionState } from './attribution';
 
+const ESTIMATE_REVISION_PATTERN = /^\d+$/;
+
 const MEETING_ATTRIBUTION_STATES: readonly MeetingAttributionState[] = ['attributed', 'unattributed'];
 const TOOL_ATTRIBUTION_STATES: readonly ToolAttributionState[] = ['attributed', 'unattributed', 'unresolved', 'ambiguous'];
 
@@ -73,7 +75,9 @@ const SHARED_REPEATABLE_KEYS = [
   'currency',
 ] as const;
 
-const SHARED_SINGLE_KEYS = ['from', 'to', 'timeBasis'] as const;
+/** Issue #295: `estimates`/`estimateRevision` are shared across calls, rollup and export, same as `from`/`to`/
+ * `timeBasis` above (they are parsed here once; every route that calls `parseUsageFilters` gets them for free). */
+const SHARED_SINGLE_KEYS = ['from', 'to', 'timeBasis', 'estimates', 'estimateRevision'] as const;
 
 const CALLS_ONLY_REPEATABLE_KEYS = ['requestId'] as const;
 const CALLS_ONLY_SINGLE_KEYS = ['traceId', 'order', 'limit', 'cursor'] as const;
@@ -314,6 +318,27 @@ export function parseUsageFilters(
       } else {
         issues.push({ path: 'utcOffsetMinutes', message: '"utcOffsetMinutes" must be an integer' });
       }
+    }
+  }
+
+  // Issue #295: estimate basis, shared by calls, rollup and export. Only revision 0 exists today (no recompute
+  // endpoint yet), so every mode below produces the same per-row data; the parameter is still fully validated so
+  // the contract does not change shape once recompute lands.
+  const estimatesRaw = readSingle(query, 'estimates', issues);
+  const estimateRevisionRaw = readSingle(query, 'estimateRevision', issues);
+  if (estimatesRaw !== undefined && estimateRevisionRaw !== undefined) {
+    issues.push({ path: 'estimateRevision', message: '"estimates" and "estimateRevision" are mutually exclusive' });
+  } else if (estimateRevisionRaw !== undefined) {
+    if (ESTIMATE_REVISION_PATTERN.test(estimateRevisionRaw)) {
+      filters.estimateBasis = { mode: 'asOfRevision', revision: Number(estimateRevisionRaw), revisionsUsed: [0] };
+    } else {
+      issues.push({ path: 'estimateRevision', message: '"estimateRevision" must be a non-negative integer' });
+    }
+  } else if (estimatesRaw !== undefined) {
+    if (estimatesRaw === 'latest' || estimatesRaw === 'original') {
+      filters.estimateBasis = { mode: estimatesRaw, revision: null, revisionsUsed: [0] };
+    } else {
+      issues.push({ path: 'estimates', message: '"estimates" must be "latest" or "original"' });
     }
   }
 

@@ -36,8 +36,65 @@ import type { LedgerEventType, CostSource } from '../usageLedger';
 import { LLM_ERROR_KINDS, type LlmErrorKind } from '../../src/integrations/canonicalTypes';
 import type { MeetingAttributionState, ToolAttributionState } from './attribution';
 import type { ReliabilityFailures, ReliabilityLatency } from './reliability';
+import { ESTIMATE_STATUSES, type EstimateStatus } from '../pricing/estimate';
 
 export type { CostSource } from '../usageLedger';
+
+// -------------------------------------------------------------
+// Estimate exposure (issue #295, sub-issue of #84): the ledger's own ingestion-time cost estimate
+// (`server/pricing/estimate.ts`), surfaced on calls/export rows and summarized on the rollup. Never the reported
+// `cost` above: these are a separate fact, computed from a price table, never merged with what the runtime or
+// provider reported.
+// -------------------------------------------------------------
+
+/** `estimateStatus` as exposed over the API: every real `EstimateStatus` plus the virtual `not_estimated`, for a
+ * row written before migration `usage-ledger-estimates` (issue #84), whose five estimate columns are `NULL`
+ * (`usage_ledger` is append-only and can never be backfilled in place). `UsageLedgerRow.estimateStatus === null`
+ * is exactly this case; `toCallRecord`/`toExportCallRecord` map it to this virtual status, never to `null`. */
+export type CallEstimateStatus = EstimateStatus | 'not_estimated';
+
+export const CALL_ESTIMATE_STATUSES: readonly CallEstimateStatus[] = [...ESTIMATE_STATUSES, 'not_estimated'];
+
+export function isCallEstimateStatus(value: unknown): value is CallEstimateStatus {
+  return typeof value === 'string' && (CALL_ESTIMATE_STATUSES as readonly string[]).includes(value);
+}
+
+/** Which revision of each row's estimate a request reads (issue #295's own text, mirroring #84's "Estimate
+ * basis" section). Only revision 0 (the ingestion-time figure) exists until the recompute endpoint (the other
+ * #84 sub-issue) ships, so every mode resolves to the same data today; the parameter is still accepted and
+ * validated now so the contract never needs to change once recompute lands. `asOfRevision` is the mode selected
+ * by `estimateRevision=N`; `latest` and `original` are selected by `estimates=latest`/`estimates=original`
+ * (`latest` is the default when neither parameter is given). */
+export type EstimateBasisMode = 'latest' | 'original' | 'asOfRevision';
+
+/** Echoed on every calls/rollup/export response (issue #295): which basis was requested, and which revisions it
+ * actually drew from. `revisionsUsed` is always `[0]` today (see `EstimateBasisMode`'s doc comment above). */
+export interface EstimateBasis {
+  mode: EstimateBasisMode;
+  /** The `N` of `estimateRevision=N`; `null` for `latest`/`original`. */
+  revision: number | null;
+  revisionsUsed: number[];
+}
+
+export function defaultEstimateBasis(): EstimateBasis {
+  return { mode: 'latest', revision: null, revisionsUsed: [0] };
+}
+
+/** The eight fields issue #295 appends to every calls row and every export row, in this fixed order, always
+ * after every pre-existing field. `estimatedCostSource` is the constant `'estimated'` when `estimatedCost` is
+ * not `null`, and `null` otherwise (issue #84's own rule: it exists only so a client can never confuse it with
+ * the reported `costSource`). `estimateRevision` is always `0` until the recompute endpoint ships (see
+ * `EstimateBasisMode`). */
+export interface CallEstimateFields {
+  estimatedCost: number | null;
+  estimatedCostNano: number | null;
+  estimatedCurrency: string | null;
+  estimatedCostSource: 'estimated' | null;
+  pricingVersion: number | null;
+  estimateStatus: CallEstimateStatus;
+  estimateRevision: number;
+  estimatedAt: number | null;
+}
 
 /** `'ok'` for a successful `llm.usage` row, otherwise the `llm.failed` row's `errorKind` (issue #46's enum). */
 export type CallStatus = 'ok' | LlmErrorKind;
@@ -75,7 +132,7 @@ export interface CallTrace {
  * explicit allow-list: every field returned here is enumerated, so a new `usage_ledger` column never leaks
  * through this type until someone adds it here, to the serializer and to the key-set test.
  */
-export interface CallRecord {
+export interface CallRecord extends CallEstimateFields {
   seq: number;
   eventId: string;
   type: LedgerEventType;
@@ -161,6 +218,11 @@ export interface UsageFilters {
    * rollup aggregation (`computeMemoryRollup`/`computeSqliteRollup`) instead of summing a second time. `null`
    * means no lower bound. */
   afterSeq: number | null;
+  /** Issue #295. Shared by calls, rollup and export (`estimates=latest|original`, `estimateRevision=N`): never
+   * filters which rows match (every row always has at most one estimate, revision 0, today), only which
+   * revision each row's estimate fields are read from and what `estimateBasis` echoes back. Kept out of the
+   * calls cursor's filter hash on purpose, for the same reason: it never changes the matching row set. */
+  estimateBasis: EstimateBasis;
 }
 
 export function emptyUsageFilters(): UsageFilters {
@@ -189,6 +251,7 @@ export function emptyUsageFilters(): UsageFilters {
     meetingAttribution: [],
     toolAttribution: [],
     afterSeq: null,
+    estimateBasis: defaultEstimateBasis(),
   };
 }
 
@@ -274,6 +337,29 @@ export interface CostEntry {
   calls: number;
 }
 
+/** One currency's summed estimate (issue #295), only ever built from rows whose `estimateStatus === 'estimated'`
+ * (an unestimable row never contributes a `0`; it is counted in `estimatedUnknownCalls` instead). Never converted
+ * and never merged across currencies, mirroring `CostEntry` above. `pricingVersions` lists every distinct
+ * `pricingVersion` that contributed, ascending; today that is always `[1]`-shaped (a single version), since no
+ * recompute has ever run. */
+export interface EstimatedCostEntry {
+  currency: string;
+  cost: number;
+  calls: number;
+  pricingVersions: number[];
+}
+
+/** Reported vs. estimated for rows that have *both*, in the *same* currency (issue #295). A row with a reported
+ * cost in one currency and an estimate in another contributes to neither sum and is counted in neither `calls`:
+ * never converted, never zero-filled. `delta = estimatedCost - reportedCost`. */
+export interface ComparableEntry {
+  currency: string;
+  calls: number;
+  reportedCost: number;
+  estimatedCost: number;
+  delta: number;
+}
+
 export type TokenKind = 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'reasoning';
 
 export const TOKEN_KINDS: readonly TokenKind[] = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
@@ -282,6 +368,18 @@ export interface UsageRollupTotals {
   calls: { total: number; succeeded: number; failed: number };
   tokens: Record<TokenKind, TokenKindRollup>;
   cost: { entries: CostEntry[]; unknownCostCalls: number };
+  /** Issue #295: the ledger's own cost estimate, summed per currency, alongside `cost` above. Never added to it
+   * and never converted. */
+  estimated: EstimatedCostEntry[];
+  /** Issue #295: calls whose `estimateStatus` is anything other than `'estimated'` (including the virtual
+   * `not_estimated`), counted here instead of folded into `estimated` as a `0`. */
+  estimatedUnknownCalls: number;
+  /** Issue #295: `estimatedUnknownCalls`, broken down by `CallEstimateStatus`. Keys with a `0` count are omitted. */
+  estimatedUnknownByStatus: Partial<Record<CallEstimateStatus, number>>;
+  /** Issue #295: `true` only when `estimatedUnknownCalls` is `0` (every call in scope has an estimate). */
+  estimatedComplete: boolean;
+  /** Issue #295: reported vs. estimated, same-currency rows only. See `ComparableEntry`'s own doc comment. */
+  comparable: ComparableEntry[];
   /** On the selected time basis. */
   firstAt: number | null;
   lastAt: number | null;
@@ -366,6 +464,9 @@ export interface UsageRollupResponse {
   query: UsageRollupQueryEcho;
   asOf: UsageRollupAsOf;
   coverage: UsageRollupCoverage;
+  /** Issue #295: which estimate revision this whole response was computed from. See `EstimateBasis`'s own doc
+   * comment. */
+  estimateBasis: EstimateBasis;
   /** `false` only when `groupBy` includes `tag` (a row with 2 tags counts in 2 groups; `totals` still counts it
    * once). */
   groupsAreAdditive: boolean;

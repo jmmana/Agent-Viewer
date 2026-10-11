@@ -43,6 +43,17 @@ type CallAgent = Pick<Agent, 'id' | 'status'>;
  * marcador al que anclar su aviso, así que no tiene sentido conservarlo ni con
  * desvanecido. Un agente presente que deja de reportar PHONE_CALL conserva su registro
  * solo durante `CREW_CALL_ENDING_MS`, para la fase `ending` del aviso visual.
+ *
+ * Estabilidad referencial deliberada: si el resultado es idéntico en valor al `state`
+ * recibido, devuelve exactamente el mismo objeto `state` (nunca uno nuevo). `CrewStage`
+ * llama esto desde un `useEffect` con `[agents]` como dependencia; como la prop `agents`
+ * puede llegar como un arreglo literal nuevo en cada renderización (p. ej. su propio
+ * valor por defecto `agents = []`), sin esta estabilidad cada llamada devolvería un
+ * objeto `{}` nuevo aunque no cambiara nada, y `setState` con una referencia nueva
+ * dispara otra renderización, otro efecto y otra llamada: un bucle infinito. Antes de
+ * tocar este archivo, confirma con la prueba de "estabilidad referencial" de
+ * `crewCallTimeline.test.ts` que `agents = []` repetido nunca produce una referencia
+ * nueva.
  */
 export function advanceCrewCallTimeline(
   state: CrewCallTimelineState,
@@ -61,6 +72,11 @@ export function advanceCrewCallTimeline(
     } else if (existing && existing.endedAt !== null && now - existing.endedAt < CREW_CALL_ENDING_MS) {
       next[agent.id] = existing;
     }
+  }
+  const stateKeys = Object.keys(state);
+  const nextKeys = Object.keys(next);
+  if (stateKeys.length === nextKeys.length && nextKeys.every(key => next[key] === state[key])) {
+    return state;
   }
   return next;
 }

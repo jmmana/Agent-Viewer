@@ -98,6 +98,34 @@ describe('Línea de tiempo local de llamada Crew (#145)', () => {
     expect(crewCallOpacity({ endedAt: 1000 }, 1000 + CREW_CALL_ENDING_MS * 2)).toBe(0);
   });
 
+  it('estabilidad referencial: sin cambios reales, devuelve EXACTAMENTE el mismo objeto state (nunca uno nuevo)', () => {
+    // Regresión del bucle infinito real: `agents = []` es el valor por defecto de la prop
+    // de CrewStage, y JS crea un arreglo NUEVO por cada renderización en la que se omite
+    // esa prop. Si `advanceCrewCallTimeline` devolviera un `{}` nuevo cada vez, el `setState`
+    // de CrewStage vería una referencia distinta, dispararía otra renderización, y así para
+    // siempre. Esta prueba repite exactamente ese patrón (arreglos `[]` nuevos, mismo valor).
+    const empty: CrewCallTimelineState = {};
+    let state = advanceCrewCallTimeline(empty, [], 1000);
+    expect(state).toBe(empty);
+    for (let i = 0; i < 50; i++) {
+      const next = advanceCrewCallTimeline(state, [], 1000 + i);
+      expect(next).toBe(state); // nunca una referencia nueva mientras no cambie nada real
+      state = next;
+    }
+
+    // También con agentes reales que no cambian de status entre llamadas.
+    const agents = [agent('a', 'CODING'), agent('b', 'IDLE')];
+    let withAgents = advanceCrewCallTimeline({}, agents, 1000);
+    expect(withAgents).toEqual({});
+    const second = advanceCrewCallTimeline(withAgents, [...agents], 2000); // arreglo nuevo, mismo contenido
+    expect(second).toBe(withAgents);
+
+    // Un agente en llamada real: el registro se conserva por referencia mientras sigue activo.
+    let inCall = advanceCrewCallTimeline({}, [agent('ceo', 'PHONE_CALL')], 1000);
+    const inCallAgain = advanceCrewCallTimeline(inCall, [agent('ceo', 'PHONE_CALL')], 1500);
+    expect(inCallAgain).toBe(inCall);
+  });
+
   it('formatCrewCallElapsed da mm:ss sin depender de locale', () => {
     expect(formatCrewCallElapsed(0)).toBe('0:00');
     expect(formatCrewCallElapsed(5000)).toBe('0:05');

@@ -15,9 +15,20 @@ import {
   Activity,
   Users,
   CheckCircle2,
+  Clock,
 } from 'lucide-react';
 import { isSoundEnabled, setSoundEnabled } from '../engine/soundEffects';
-import { Locale, t } from '../i18n';
+import { Locale, t, type TranslationKey } from '../i18n';
+import { USAGE_WINDOW_OPTIONS, type UsageWindowOption } from '../integrations/usageWindow';
+
+/** Already-formatted ledger total for the usage chip (issue #78): the host computed every figure, the chip only
+ * renders strings. Absent while the ledger has never answered (demo mode, `unavailable`, still loading for the
+ * first time), in which case the chip falls back to `totalTokens`/`totalCost`. */
+export interface TopBarUsageSummary {
+  tokens: string;
+  cost: string;
+  windowLabel: string;
+}
 
 interface TopBarProps {
   currentTab: 'office' | 'tasks' | 'meetings' | 'timeline';
@@ -32,6 +43,14 @@ interface TopBarProps {
   onChangeSpeed: (speed: number) => void;
   totalTokens: { input: number; output: number };
   totalCost: number;
+  /** Ledger-backed replacement for `totalTokens`/`totalCost` (issue #78), already formatted by the host. */
+  usageSummary?: TopBarUsageSummary;
+  /** Present only when the host has a ledger to query; draws the Last hour/Today/7 days/All selector. */
+  usageWindow?: UsageWindowOption;
+  onChangeUsageWindow?: (option: UsageWindowOption) => void;
+  /** `true` when the last ledger refetch failed but `usageSummary` still shows earlier figures (issue #78): the
+   * chip is then shown dimmed with a clock marker instead of looking like a confirmed-fresh reading. */
+  isUsageStale?: boolean;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
   onOpenSettings: () => void;
@@ -67,6 +86,10 @@ export const TopBar: React.FC<TopBarProps> = ({
   onChangeSpeed,
   totalTokens,
   totalCost,
+  usageSummary,
+  usageWindow,
+  onChangeUsageWindow,
+  isUsageStale = false,
   theme,
   onToggleTheme,
   onOpenSettings,
@@ -89,8 +112,8 @@ export const TopBar: React.FC<TopBarProps> = ({
     setSoundOn(next);
   };
 
-  const formattedTokens = ((totalTokens.input + totalTokens.output) / 1000).toFixed(1) + 'K';
-  const formattedCost = `$${totalCost.toFixed(3)}`;
+  const formattedTokens = usageSummary ? usageSummary.tokens : ((totalTokens.input + totalTokens.output) / 1000).toFixed(1) + 'K';
+  const formattedCost = usageSummary ? usageSummary.cost : `$${totalCost.toFixed(3)}`;
 
   return (
     <header className="flex flex-wrap gap-2 items-center justify-between px-3 sm:px-5 py-2.5 bg-slate-900 border-b border-slate-800 text-slate-100 select-none z-30 shrink-0">
@@ -283,13 +306,30 @@ export const TopBar: React.FC<TopBarProps> = ({
           </div>
         )}
 
+        {/* Usage window selector (issue #78): only meaningful once there is a ledger to query. */}
+        {usageWindow && onChangeUsageWindow && (
+          <select
+            aria-label={t(locale, 'usage.window.label')}
+            value={usageWindow}
+            onChange={(event) => onChangeUsageWindow(event.target.value as UsageWindowOption)}
+            className="bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-1.5 text-[11px] text-slate-300"
+          >
+            {USAGE_WINDOW_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {t(locale, `usage.window.${option}` as TranslationKey)}
+              </option>
+            ))}
+          </select>
+        )}
+
         {/* Global Live Tokens & Cost Pill (Interactive Model Ops Launcher) */}
         <button
           onClick={onOpenModelOps}
-          title={t(locale, 'controls.modelOpsTitle')}
-          className="flex items-center gap-2 text-xs font-mono tabular-nums bg-slate-950/80 hover:bg-slate-850 px-3 py-1.5 rounded-lg border border-slate-800 hover:border-cyan-500/50 shadow-sm transition-all group cursor-pointer"
+          title={usageSummary && isUsageStale ? t(locale, 'usage.stale') : t(locale, 'controls.modelOpsTitle')}
+          className={`flex items-center gap-2 text-xs font-mono tabular-nums bg-slate-950/80 hover:bg-slate-850 px-3 py-1.5 rounded-lg border border-slate-800 hover:border-cyan-500/50 shadow-sm transition-all group cursor-pointer ${usageSummary && isUsageStale ? 'opacity-60' : ''}`}
         >
           <div className="w-2 h-2 rounded-full bg-emerald-400 group-hover:bg-cyan-400 animate-pulse shrink-0" aria-hidden="true" />
+          {usageSummary && isUsageStale && <Clock className="w-3 h-3 text-amber-400 shrink-0" aria-hidden="true" />}
           <div className="flex items-center gap-1 text-slate-300">
             <span className="text-slate-400">{t(locale, 'controls.tokens')}</span>
             <span className="text-sky-400 font-semibold">{formattedTokens}</span>
@@ -299,6 +339,11 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span className="text-slate-400">{t(locale, 'controls.cost')}</span>
             <span className="text-emerald-400 font-semibold">{formattedCost}</span>
           </div>
+          {usageSummary && (
+            <span className="text-slate-500 text-[10px]" title={t(locale, 'usage.window.label')}>
+              ({usageSummary.windowLabel})
+            </span>
+          )}
           <span className="text-[10px] font-sans font-semibold text-cyan-300 group-hover:text-cyan-200 ml-1">
             {t(locale, 'controls.modelOpsLabel')}
           </span>

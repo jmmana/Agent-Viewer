@@ -1,5 +1,5 @@
 import React from 'react';
-import { Meeting, Agent } from '../types/agent';
+import { Meeting, Agent, ViewerEvent } from '../types/agent';
 import type { Locale } from '../i18n';
 import { t, type TranslationKey } from '../i18n';
 import { localizeDemoText } from '../content/demoScript';
@@ -12,6 +12,10 @@ import {
   FileCheck,
   Zap,
 } from 'lucide-react';
+import type { LedgerConnection } from './modelOps/useModelOpsLedger';
+import { useMeetingUsage } from './usage/useMeetingUsage';
+import { appTranslate, meetingGroupTitle, spendRows, unknownSpendRows } from './usage/spendFormat';
+import type { RollupGroup } from '../integrations/ledgerClient';
 
 interface MeetingRoomModalProps {
   meetings: Meeting[];
@@ -19,6 +23,19 @@ interface MeetingRoomModalProps {
   agents: Agent[];
   onSelectAgent: (agentId: string) => void;
   locale: Locale;
+  events: ViewerEvent[];
+  /** `null` means demo mode: the panel falls back to the simulated `tokensAccumulated`/`costAccumulated`. */
+  ledger: LedgerConnection | null;
+}
+
+/** A meeting the table shows: either one of the portal's own meetings, or a server-only group with no portal
+ * counterpart (never hidden), or the single `unattributed` bucket, last. */
+interface SpendTableRow {
+  key: string;
+  title: string;
+  startedAt: number | null;
+  group: RollupGroup | undefined;
+  unattributed?: boolean;
 }
 
 export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
@@ -27,6 +44,8 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
   agents,
   onSelectAgent,
   locale,
+  events,
+  ledger,
 }) => {
   const getAgentName = (id: string) => {
     const a = agents.find((ag) => ag.id === id);
@@ -34,6 +53,49 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
   };
 
   const activeMeeting = meetings.find((m) => m.id === activeMeetingId) || meetings[0];
+  const usage = useMeetingUsage({ ledger, isOpen: true, events });
+  const translate = appTranslate(locale);
+
+  const activeGroup = usage.status === 'ready'
+    ? usage.data.groups.find((group) => group.key.meetingId === activeMeeting?.id)
+    : undefined;
+  const unattributedGroup = usage.status === 'ready'
+    ? usage.data.groups.find((group) => group.attribution?.meeting === 'unattributed')
+    : undefined;
+
+  const spendTableRows: SpendTableRow[] = (() => {
+    if (usage.status !== 'ready') return [];
+    const byMeetingId = new Map(usage.data.groups.map((group) => [group.key.meetingId, group]));
+    const portalIds = new Set(meetings.map((meeting) => meeting.id));
+    const rows: SpendTableRow[] = meetings
+      .slice()
+      .sort((a, b) => {
+        if (a.startedAt === 0 && b.startedAt !== 0) return 1;
+        if (b.startedAt === 0 && a.startedAt !== 0) return -1;
+        return b.startedAt - a.startedAt;
+      })
+      .map((meeting) => ({
+        key: meeting.id,
+        title: localizeDemoText(meeting.title, locale) || meeting.id,
+        startedAt: meeting.startedAt,
+        group: byMeetingId.get(meeting.id),
+      }));
+    for (const group of usage.data.groups) {
+      const meetingId = group.key.meetingId;
+      if (meetingId === null || portalIds.has(meetingId)) continue;
+      rows.push({ key: meetingId, title: meetingGroupTitle(group) ?? meetingId, startedAt: null, group });
+    }
+    if (unattributedGroup) {
+      rows.push({
+        key: '__unattributed__',
+        title: t(locale, 'meetings.spend.unattributedRow'),
+        startedAt: null,
+        group: unattributedGroup,
+        unattributed: true,
+      });
+    }
+    return rows;
+  })();
 
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-950 text-slate-100 overflow-y-auto p-6 space-y-6">
@@ -171,30 +233,91 @@ export const MeetingRoomModal: React.FC<MeetingRoomModalProps> = ({
           <div className="space-y-5">
             {/* Meeting Telemetry */}
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-3 font-mono tabular-nums">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide">
-                {t(locale, 'meetings.telemetry')}
-              </h4>
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide">
+                  {t(locale, 'meetings.telemetry')}
+                </h4>
+                {!ledger && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-950/60 text-amber-400 border border-amber-800/60 uppercase">
+                    {t(locale, 'meetings.spend.simulated')}
+                  </span>
+                )}
+              </div>
               <div className="space-y-2">
-                <div className="flex justify-between text-xs py-1 border-b border-slate-800">
-                  <span className="text-slate-400">{t(locale, 'meetings.tokens')}</span>
-                  <span className="font-bold text-sky-400">
-                    {activeMeeting.tokensAccumulated.toLocaleString()}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xs py-1 border-b border-slate-800">
-                  <span className="text-slate-400">{t(locale, 'meetings.cost')}</span>
-                  <span className="font-bold text-emerald-400">
-                    ${activeMeeting.costAccumulated.toFixed(3)}
-                  </span>
-                </div>
+                {!ledger ? (
+                  <>
+                    <div className="flex justify-between text-xs py-1 border-b border-slate-800">
+                      <span className="text-slate-400">{t(locale, 'meetings.tokens')}</span>
+                      <span className="font-bold text-sky-400">
+                        {activeMeeting.tokensAccumulated.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-xs py-1 border-b border-slate-800">
+                      <span className="text-slate-400">{t(locale, 'meetings.cost')}</span>
+                      <span className="font-bold text-emerald-400">
+                        ${activeMeeting.costAccumulated.toFixed(3)}
+                      </span>
+                    </div>
+                  </>
+                ) : usage.status === 'loading' || usage.status === 'idle' ? (
+                  <p className="text-xs text-slate-400 py-1">{t(locale, 'meetings.spend.loading')}</p>
+                ) : usage.status === 'ready' ? (
+                  (activeGroup ? spendRows(activeGroup, locale, translate) : unknownSpendRows(locale)).map((row) => (
+                    <div key={row.key} className="flex justify-between text-xs py-1 border-b border-slate-800 last:border-b-0">
+                      <span className="text-slate-400">{row.label}</span>
+                      <span className="font-bold text-sky-300">{row.value}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-400 py-1">{t(locale, 'meetings.spend.unavailable')}</p>
+                )}
                 <div className="flex justify-between text-xs py-1">
                   <span className="text-slate-400">{t(locale, 'meetings.tasksSpawned')}</span>
                   <span className="font-bold text-indigo-400">
                     {activeMeeting.tasksCreated.length}
                   </span>
                 </div>
+                {ledger && usage.status === 'ready' && (
+                  <p className="text-[10px] text-slate-500 pt-1">
+                    {t(locale, 'meetings.spend.asOf', { time: new Date(usage.data.asOf.generatedAt).toLocaleTimeString(locale) })}
+                    {!usage.data.coverage.complete ? ` · ${t(locale, 'meetings.spend.incomplete')}` : ''}
+                  </p>
+                )}
               </div>
             </div>
+
+            {/* Spend per meeting (issue #81): lists every portal meeting plus any server-only row, never changes
+                the active meeting, no totals row. Ledger mode only: demo figures are per-meeting only. */}
+            {ledger && usage.status === 'ready' && spendTableRows.length > 0 && (
+              <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-3">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide">
+                  {t(locale, 'meetings.spend.table')}
+                </h4>
+                <table className="w-full text-xs font-mono tabular-nums">
+                  <thead>
+                    <tr className="text-left text-slate-500 text-[10px] uppercase">
+                      <th scope="col" className="font-semibold pb-1">{t(locale, 'meetings.spend.tableTitle')}</th>
+                      <th scope="col" className="font-semibold pb-1 text-right">{t(locale, 'meetings.spend.tableTokens')}</th>
+                      <th scope="col" className="font-semibold pb-1 text-right">{t(locale, 'meetings.spend.tableCost')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {spendTableRows.map((row) => {
+                      const rows = row.group ? spendRows(row.group, locale, translate) : unknownSpendRows(locale);
+                      const tokens = rows.find((item) => item.key === 'tokens.input')?.value ?? t(locale, 'usage.unknown');
+                      const cost = rows.find((item) => item.key.startsWith('cost'))?.value ?? t(locale, 'usage.unknown');
+                      return (
+                        <tr key={row.key} className={`border-t border-slate-800 ${row.unattributed ? 'text-amber-300' : 'text-slate-200'}`}>
+                          <td className="py-1 truncate max-w-[9rem]">{row.title}</td>
+                          <td className="py-1 text-right">{tokens}</td>
+                          <td className="py-1 text-right">{cost}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Seated Attendees */}
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 space-y-3">

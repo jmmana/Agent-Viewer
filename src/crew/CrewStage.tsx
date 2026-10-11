@@ -6,6 +6,8 @@ import { projectCrewPresence } from './crewPresence';
 import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
+import { useCrewPropImages } from './useCrewPropImages';
+import { CREW_ROOM_PROP_IMAGES, type CrewPropImageId } from './crewPropImages';
 import { useCrewBlink } from './useCrewBlink';
 import { useCrewActions } from './useCrewActions';
 import { crewActionMarkers } from './crewActorActions';
@@ -24,6 +26,8 @@ import {
   type CrewPreferences,
 } from './crewPreferences';
 import { crewTheme } from './crewContrast';
+import { useCrewAudio } from './useCrewAudio';
+import type { CrewAudioState } from './crewAudioEngine';
 import { CrewGestures } from './crewGestures';
 import { crewAgentActivity, crewActivityLine, crewViewerModeLabel, type CrewViewerMode, type CrewVisibility } from './crewEventBridge';
 import type { Agent, Meeting, Task } from '../types/agent';
@@ -171,6 +175,19 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     catch { /* Read-only or disabled storage must not break rendering. */ }
   }, [cameraByRoom, persistCamera]);
   const isEs = locale.startsWith('es');
+  // Motor de audio propio de Crew (#150): una instancia por montaje de CrewStage,
+  // sincronizada con la sala activa y con mute/volumen (#157). Nunca se autoinicia.
+  const audio = useCrewAudio({ roomId, muted: visualPreferences.muted, volume: visualPreferences.volume });
+  const lastAudioState = useRef<CrewAudioState | null>(null);
+  useEffect(() => {
+    if (lastAudioState.current === audio.state) return;
+    lastAudioState.current = audio.state;
+    if (audio.state === 'playing') pushCaption(isEs ? 'Audio de la sala: reproduciendo.' : 'Room audio: playing.');
+    else if (audio.state === 'paused') pushCaption(isEs ? 'Audio de la sala: en pausa.' : 'Room audio: paused.');
+    else if (audio.state === 'blocked') pushCaption(isEs
+      ? 'El navegador bloqueó el audio; pulsa Reproducir de nuevo.'
+      : 'The browser blocked audio playback; press Play again.');
+  }, [audio.state, isEs, pushCaption]);
   const room = CREW_ROOMS.find(r => r.id === roomId)!;
   const visibleAgents = useMemo(() => crewAgentsInRoom(agents, roomId), [agents, roomId]);
   const action = useCrewActions(visibleAgents, room, view, visualPreferences.reducedMotion);
@@ -191,6 +208,14 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const direction=crewSpriteView(marker,view);
     return [marker.id,direction ? walk.frames[direction] : undefined];
   })),[walkingMarkers,view,walk.frames]);
+  // Piloto acotado de #115: solo los muebles listados en CREW_ROOM_PROP_IMAGES (hoy,
+  // escritorio y planta de Dirección) cargan una imagen real; el resto de las once
+  // salas sigue con el bloque 2.5D de siempre, sin red ni carga adicional.
+  const roomPropImageIds = useMemo(() => Array.from(new Set(room.furniture
+    .map(item => CREW_ROOM_PROP_IMAGES[item.id])
+    .filter((id): id is CrewPropImageId => id !== undefined))), [room]);
+  const propImages = useCrewPropImages(roomPropImageIds);
+  const illustratedProps = roomPropImageIds.filter(id => !!propImages.images[id]).length;
   const messages = builtInMessages(locale);
 
   const render = useCallback(() => {
@@ -204,8 +229,8 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, locale, highContrast: visualPreferences.highContrast });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, visualPreferences.highContrast]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, locale, highContrast: visualPreferences.highContrast, propImages: propImages.images });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, visualPreferences.highContrast, propImages.images]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -306,6 +331,22 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
           aria-valuetext={`${Math.round(visualPreferences.volume * 100)}%`}
           onChange={event => changePreferences({ ...visualPreferences, volume: Number(event.target.value) })} />
         <span aria-hidden="true">{Math.round(visualPreferences.volume * 100)}%</span>
+        {/* Botón Play/Pause del motor de audio de Crew (#150). Nunca se reproduce solo:
+          requiere este clic (o Enter/Espacio con el foco aquí) por cada sala con música. */}
+        <button type="button" data-testid={`${idPrefix}-audio-toggle`}
+          disabled={audio.state === 'unsupported' || !audio.roomHasTrack}
+          aria-pressed={audio.state === 'playing'}
+          onClick={() => (audio.state === 'playing' ? audio.pause() : audio.play())}>
+          {audio.state === 'playing' ? (isEs ? '⏸ Pausar audio de la sala' : '⏸ Pause room audio')
+            : (isEs ? '▶ Reproducir audio de la sala' : '▶ Play room audio')}
+        </button>
+        <span role="status" data-testid={`${idPrefix}-audio-status`} style={{ fontSize: 12 * hudScale }}>
+          {audio.state === 'unsupported' ? (isEs ? 'Audio no disponible en este navegador.' : 'Audio unavailable in this browser.')
+            : audio.state === 'blocked' ? (isEs ? 'Bloqueado por el navegador. Pulsa Reproducir de nuevo.' : 'Blocked by the browser. Press Play again.')
+            : !audio.roomHasTrack ? (isEs ? 'Esta oficina no tiene música propia.' : 'This office has no music of its own.')
+            : audio.state === 'playing' ? (isEs ? 'Reproduciendo.' : 'Playing.')
+            : (isEs ? 'En pausa. No se reproduce sin pulsar Reproducir.' : 'Paused. Never plays without pressing Play.')}
+        </span>
         <label htmlFor={`${idPrefix}-hud-size`}>{isEs ? 'Tamaño de controles' : 'Controls size'}</label>
         <select id={`${idPrefix}-hud-size`} value={visualPreferences.hudSize}
           onChange={event => changePreferences({ ...visualPreferences, hudSize: event.target.value as CrewHudSize })}
@@ -324,8 +365,9 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
         </select>
       </div>
       <p style={{ margin: '2px 0', fontSize: 11 * hudScale, opacity: .85 }}>
-        {isEs ? 'Aún no existe un motor de audio propio de Crew (#150): mute/volumen quedan listos pero sin sonido que controlar.'
-          : 'Crew has no audio engine yet (#150): mute/volume are wired but there is no sound to control.'}
+        {isEs
+          ? 'Motor de audio de Crew (#150): música sintetizada, nunca se reproduce sola. Hoy solo la sala de descanso tiene pista; ver origen y licencia en docs/crew/AUDIO_LICENSES.md.'
+          : 'Crew audio engine (#150): synthesized music, never autoplays. Only the lounge has a track today; see origin and license in docs/crew/AUDIO_LICENSES.md.'}
       </p>
     </details>
     {/* aria-live sin role explícito, igual que el listado de agentes de abajo:
@@ -400,6 +442,11 @@ export function CrewStage({ locale = 'es', agents = [], tasks = [], meetings = [
       {sprite.failed && (isEs ? ' No se pudo cargar la imagen; se conserva el marcador.' : ' Image unavailable; the marker remains visible.')}
       {action.failed && <span data-testid="crew-action-fallback"> {messages['crew.actionFallback']}</span>}
       {walk.failed && <span data-testid="crew-walk-fallback"> {messages['crew.walkFallback']}</span>}
+    </p>
+    <p aria-live="polite" data-testid="crew-prop-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
+      {isEs ? `Mobiliario con imagen real: ${illustratedProps}.` : `Furniture with real artwork: ${illustratedProps}.`}
+      {!propImages.failed && roomPropImageIds.some(id => !propImages.images[id]) && (isEs ? ' Cargando imagen de mobiliario…' : ' Loading furniture artwork…')}
+      {propImages.failed && (isEs ? ' No se pudo cargar la imagen del mueble; se conserva el bloque 2.5D.' : ' Furniture image unavailable; the 2.5D block remains visible.')}
     </p>
     <p style={{ padding: '6px 12px', margin: 0, fontSize: 12 }}>
       {messages['crew.walkPrototype']}

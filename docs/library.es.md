@@ -2,7 +2,7 @@
 
 `@warlockcode/agent-viewer` lleva la oficina de Agent Viewer a tu propia app React. La oficina es una escena Canvas2D que se dibuja solo con los eventos que le pasas: los agentes que registra tu runtime, sus estados, las herramientas que usan, los mensajes que envían y las reuniones que hacen.
 
-Esta guía cubre la versión **0.2.0**. Read in English: [library.md](library.md).
+Esta guía cubre la versión **0.5.0**. Read in English: [library.md](library.md).
 
 ## Contenido
 
@@ -40,7 +40,7 @@ Las dependencias de ejecución son `lucide-react` (iconos), `zod` (validación e
 La publicación en npm llegará pronto. Mientras tanto, instala el paquete desde el archivo de la release de GitHub:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
 ```
 
 El nombre del paquete es `@warlockcode/agent-viewer` en ambos casos, así que tus importaciones no cambian cuando pases al registro de npm.
@@ -155,8 +155,11 @@ Dale a cada evento un `id` estable y único. La oficina ignora un evento cuyo `i
 | `showUsage` | `boolean` | `false` | Muestra las cifras que pasas en `usage`. Consulta [Cifras de consumo](#cifras-de-consumo). |
 | `showUsageBadges` | `boolean` | `false` | Dibuja una insignia compacta de consumo en cada tarjeta de agente, a partir de `usage.byAgent`. Independiente de `showUsage`. Consulta [Cifras de consumo](#cifras-de-consumo). |
 | `usage` | `OfficeUsage` | ninguno | Cifras de consumo calculadas por tu app. La oficina nunca las calcula. |
+| `meetingUsage` | `MeetingUsage` | ninguno | Cifras de consumo por reunión calculadas por tu app, indexadas por id de reunión. Se muestran solo mientras `showUsage` también es `true`. Ver [Cifras de reuniones](#cifras-de-reuniones). |
+| `showCallDetails` | `boolean` | `false` | Muestra un panel de solo lectura con las llamadas del agente seleccionado, a partir de `agentCallDetails`. Independiente de `showUsage`/`showUsageBadges`. Consulta [Detalle de llamadas](#detalle-de-llamadas). |
+| `agentCallDetails` | `AgentCallDetails` | ninguno | Metadatos de llamadas por id de agente, calculados y paginados por tu app. Solo se lee la entrada del agente seleccionado. |
 | `selectedAgentId` | `string \| null` | ninguno | Selección controlada. Déjala sin definir para que la oficina lleve la suya. Cuando cambia, la cámara se centra en ese agente. |
-| `onSelectAgent` | `(agentId: string \| null) => void` | ninguno | Se llama cuando quien mira hace clic en un agente del canvas. |
+| `onSelectAgent` | `(agentId: string \| null) => void` | ninguno | Se llama cuando quien mira hace clic en un agente del canvas, lo elige de la lista de agentes, o cierra el panel de detalle de llamadas (botón de cerrar o `Escape`). |
 | `bubbleDurationMs` | `number` | `6500` | Cuánto tiempo se ve una burbuja, en milisegundos. |
 | `className` | `string` | ninguno | Clase adicional para la raíz `<section class="av-office av-theme-…">`. |
 | `style` | `React.CSSProperties` | ninguno | Estilos en línea para la raíz. |
@@ -304,7 +307,7 @@ const officeT = useCallback<HostTranslate>(
 
 ### Claves de texto
 
-Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` y `modelOps.*` pertenecen a la consola Model Ops y a la línea de tiempo de la app de demostración; la oficina embebida no las muestra. Desde el issue #79, Model Ops lee el ledger de uso del servidor: ese cliente de lectura y sus componentes de pestañas basados en el ledger viven en `src/integrations/ledgerClient.ts` y `src/components/modelOps/`, ambos exclusivos de la app de demostración. `@warlockcode/agent-viewer` no incluye ningún cliente de ledger, ninguna referencia al endpoint del ledger de uso ni ningún componente de Model Ops (verificado por `tests/lib/libraryIsolation.test.ts`).
+Hay 156 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline`, `modelOps.*` y `crew.*` pertenecen a la app de demostración (la consola Model Ops y su línea de tiempo, y el renderizador Crew aparte en `src/crew/`); la oficina embebida no las muestra. Desde el issue #79, Model Ops lee el ledger de uso del servidor: ese cliente de lectura y sus componentes de pestañas basados en el ledger viven en `src/integrations/ledgerClient.ts` y `src/components/modelOps/`, ambos exclusivos de la app de demostración. `@warlockcode/agent-viewer` no incluye ningún cliente de ledger, ninguna referencia al endpoint del ledger de uso ni ningún componente de Model Ops (verificado por `tests/lib/libraryIsolation.test.ts`).
 
 #### `rooms.*` (10)
 
@@ -457,7 +460,7 @@ Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`
 | `office.agentLineNoRole` | {name}: {status} | {name}: {status} |
 | `office.empty` | Esperando actividad de los agentes | Waiting for agent activity |
 
-#### `usage.*` (26)
+#### `usage.*` (31)
 
 | Clave | Texto en español | Texto en inglés |
 |---|---|---|
@@ -487,6 +490,28 @@ Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`
 | `usage.noCurrency` | Moneda no reportada | Currency not reported |
 | `usage.estimatedShort` | estimado | estimated |
 | `usage.sourceUnknown` | Fuente desconocida | Source unknown |
+| `usage.calls` | Llamadas al modelo | Model calls |
+| `usage.unattributedCalls` | Sin atribuir a esta reunión | Not attributed to this meeting |
+| `usage.meeting` | Gasto de la reunión | Meeting spend |
+| `usage.meetingsHeading` | Reuniones | Meetings |
+| `usage.meetingLine` | {title}: {usage} | {title}: {usage} |
+
+#### `calls.*` (12)
+
+| Clave | Texto en español | Texto en inglés |
+|---|---|---|
+| `calls.title` | Detalle de llamadas: {name} | Call details: {name} |
+| `calls.close` | Cerrar el detalle de llamadas | Close call details |
+| `calls.empty` | No se proporcionó detalle de llamadas | No call details provided |
+| `calls.provider` | Proveedor | Provider |
+| `calls.model` | Modelo | Model |
+| `calls.status` | Estado | Status |
+| `calls.status.ok` | Correcta | OK |
+| `calls.status.failed` | Fallida | Failed |
+| `calls.status.rate_limited` | Limitada por frecuencia | Rate limited |
+| `calls.latency` | Latencia | Latency |
+| `calls.latencyValue` | {value} ms | {value} ms |
+| `calls.requestId` | Id de solicitud | Request id |
 
 #### `replay.*` (8)
 
@@ -506,6 +531,16 @@ Hay 116 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`
 | Clave | Texto en español | Texto en inglés |
 |---|---|---|
 | `video.time` | Hora: {time} | Time: {time} |
+
+#### `crew.*` (3)
+
+| Clave | Texto en español | Texto en inglés |
+|---|---|---|
+| `crew.walkFallback` | Atlas de caminar no disponible; se conserva la pose original. | Walk atlas unavailable; the original pose remains visible. |
+| `crew.walkDemo` | DEMO: snapshot sintético de tránsito del CEO, de solo lectura. | DEMO: synthetic read-only CEO transit snapshot. |
+| `crew.walkPrototype` | PROTOTIPO 2.5D: los cuadros de caminar del CEO siguen el tránsito reportado en cuatro direcciones; arte final y trayectorias físicas pendientes. | 2.5D PROTOTYPE: CEO walk frames follow reported transit in four directions; final art and physical paths are pending. |
+
+Igual que `modelOps.*`, estas claves pertenecen al renderizador Crew aparte de la app de demostración (`src/crew/`), nunca a `@warlockcode/agent-viewer`.
 
 ## Temas y estilos
 
@@ -561,7 +596,7 @@ Notas:
 
 - El dibujo del canvas (piso, muebles, agentes, tarjetas de nombre y burbujas) usa la paleta oscura o clara que elige `theme`. Las variables `--av-*` no lo cambian.
 - No se carga ninguna fuente. El texto del canvas pide `"Plus Jakarta Sans"` y usa la fuente sans-serif del navegador si tu página no la ofrece.
-- Clases a las que puedes apuntar: `av-office`, `av-theme-dark`, `av-theme-light`, `av-office-stage`, `av-office-empty`, `av-usage`, `av-usage-item`, `av-sr-only`, `av-canvas-root`, `av-toolbar`, `av-toolbar-sep`, `av-tool-btn`, `av-tool-btn--accent`, `av-tool-btn--active`, `av-zoom-level`, `av-stage`, `av-canvas`, `av-icon`, `av-replay`, `av-replay-btn`, `av-replay-btn--primary`, `av-replay-range`, `av-replay-progress`, `av-replay-speed`. Las clases `av-tooltip*`, `av-tool-btn--telemetry` y `av-icon--live` las usa la app de demostración.
+- Clases a las que puedes apuntar: `av-office`, `av-theme-dark`, `av-theme-light`, `av-office-stage`, `av-office-empty`, `av-usage-stack`, `av-usage`, `av-usage-item`, `av-meeting-usage`, `av-meeting-usage-title`, `av-sr-only`, `av-canvas-root`, `av-toolbar`, `av-toolbar-sep`, `av-tool-btn`, `av-tool-btn--accent`, `av-tool-btn--active`, `av-zoom-level`, `av-stage`, `av-canvas`, `av-icon`, `av-replay`, `av-replay-btn`, `av-replay-btn--primary`, `av-replay-range`, `av-replay-progress`, `av-replay-speed`, `av-call-details`, `av-call-details-header`, `av-call-details-close`, `av-call-details-empty`, `av-call-details-list`, `av-call-item`, `av-call-row`, `av-call-request-id`. Las clases `av-tooltip*`, `av-tool-btn--telemetry` y `av-icon--live` las usa la app de demostración.
 
 ## Accesibilidad
 
@@ -570,9 +605,19 @@ Notas:
 - Una lista oculta a la vista y anunciada con cortesía (`aria-live="polite"`) nombra a cada agente con su rol y su estado, por ejemplo "Atlas, Desarrollador: Programando". Con `showUsage` o `showUsageBadges` (cualquiera de los dos), cada línea incluye además las cifras exactas de ese agente en `usage.byAgent`, así que el texto para lector de pantalla siempre coincide con una insignia visible, incluso cuando la insignia misma está oculta por debajo del zoom 0.55. La lista queda oculta a la vista hasta que recibe el foco del teclado (Tab); entonces se abre como un panel de botones.
 - La barra (`role="toolbar"`) y los controles de repetición son botones reales con nombre accesible y anillo de foco visible. La barra de posición anuncia el avance y los botones de velocidad usan `aria-pressed`.
 - Con `prefers-reduced-motion: reduce` nada se anima: los agentes llegan a su destino sin caminar, los detalles animados se quedan quietos y las transiciones de los botones se desactivan.
-- Selección con teclado: cada agente de esa lista es un botón (`aria-pressed` marca el seleccionado). Al pulsarlo se selecciona el agente y la cámara va hacia él, igual que con un clic en el canvas; al pulsarlo otra vez se quita la selección. La oficina no registra atajos de teclado globales.
+- Selección con teclado: cada agente de esa lista es un botón (`aria-pressed` marca el seleccionado). Al pulsarlo se selecciona el agente y la cámara va hacia él, igual que con un clic en el canvas; al pulsarlo otra vez se quita la selección. La oficina no registra atajos de teclado globales, salvo `Escape` dentro del panel de detalle de llamadas abierto (`showCallDetails`), que solo cierra ese panel.
+- El panel de detalle de llamadas (`showCallDetails`) es un `<section>` con el nombre de `calls.title`; abrirlo no mueve el foco hacia adentro ni lo atrapa, así que quien lo abrió desde la lista de agentes conserva el foco ahí y `Escape` lo cierra sin ningún paso extra. No tiene región `aria-live`: no es una notificación, así que ni abrirlo ni una cifra nueva que llegue mientras está abierto se anuncian.
 
 ## Cifras de consumo
+
+### Las cuatro reglas
+
+Estas cuatro reglas valen para toda prop relacionada con consumo (`showUsage`, `showUsageBadges`, `showCallDetails`, `meetingUsage` y la opción de consumo de `recordReplay` por igual). Este es el único lugar que las declara juntas; el resto del capítulo solo explica la mecánica.
+
+1. **El anfitrión calcula, el componente muestra.** Las cifras llegan por props. El componente nunca suma, pone precio, convierte moneda ni compara contra un límite: no existe ninguna prop que haga que la oficina sume eventos por su cuenta.
+2. **Oculto por defecto.** `showUsage`, `showUsageBadges` y `showCallDetails` son `false` hasta que el anfitrión los activa. Nada de consumo se dibuja antes de eso, sin importar lo que traigan `usage`, `meetingUsage` o `agentCallDetails`.
+3. **Lo desconocido nunca es cero.** Una cifra que falta o es `null` se muestra como "desconocido" (`usage.unknown`), nunca como `0`. Un `0` real reportado sigue mostrando `0`.
+4. **Solo metadatos.** El panel de detalle de llamadas muestra modelo, proveedor, tokens, `requestId`, latencia, estado y costo. `AgentCallDetail` no tiene ningún campo para un prompt, una respuesta completa o argumentos de herramienta, y el panel solo lee sus campos nombrados, nunca el objeto completo, así que una clave extra nunca puede filtrarse.
 
 La oficina nunca calcula, suma ni pone precio al consumo. Solo muestra las cifras que le pasa tu app, y solo cuando lo pides:
 
@@ -642,6 +687,62 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 - Sin ningún evento `llm.usage`, todas las cifras son `null` (se muestran como "desconocido"), no cero, y `byAgent` es `{}` (salvo que algún agente tenga eventos `llm.failed` propios, en cuyo caso recibe una entrada con `failedCalls` fijado y todo lo demás en `null`).
 
 **Campos de correlación de uso (issue #64).** Los payloads de `llm.usage` y `llm.failed` pueden traer `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` y `tags` (ver [integration.md](integration.md#correlation-and-attribution-fields-issue-64), en inglés, para las reglas de validación). `summarizeUsage` no los lee: su resultado es idéntico tenga o no un evento estos campos, y nunca agrupa por ellos. Ningún componente de la librería muestra `userId` ni `tags`, ya que `userId` es una atribución seudónima y `tags` puede usarse para etiquetas internas, ninguno pensado para la vista embebida. La librería exporta los límites y el tipo correspondientes, solo como valores y tipo, sin ningún comportamiento nuevo: `CORRELATION_ID_MAX_LENGTH` (128), `USAGE_TAGS_MAX` (20), `USAGE_TAG_MAX_LENGTH` (64) y el tipo `UsageCorrelation`.
+
+### Cifras de reuniones
+
+Una reunión es donde varios agentes gastan juntos; `meetingUsage` responde "cuánto costó esta reunión" igual que `usage.byAgent` lo responde por agente, solo con las cifras de tu propia app (issue #81):
+
+```tsx
+import type { MeetingUsage } from '@warlockcode/agent-viewer';
+
+const meetingUsage = useMemo<MeetingUsage>(() => ({
+  'm-1': { calls: 14, totalTokens: 23550, cost: 0.0412, currency: 'USD', callsWithoutCost: 2, unattributedCalls: 3 },
+}), []);
+
+<AgentOffice events={events} showUsage usage={usage} meetingUsage={meetingUsage} />
+```
+
+- `MeetingUsageFigures` extiende `UsageFigures` con `calls` (llamadas al modelo que tu app atribuyó a la reunión), `callsWithoutCost` (de `calls`, cuántas no tuvieron costo: la cifra de costo se marca como parcial cuando esto es mayor que `0`) y `unattributedCalls` (llamadas que no pudiste atribuir a la reunión, mostradas en su propia línea, nunca sumadas a `calls` ni a ninguna otra cifra). `MeetingUsage` es `Record<idDeReunión, MeetingUsageFigures>`.
+- Oculto a menos que `showUsage` sea `true` y `meetingUsage` tenga una entrada para la reunión mostrada. La reunión mostrada es la activa (`snapshot.activeMeetingId`) cuando tiene una entrada; si no, como el id activo se limpia en cuanto una reunión termina, es la reunión con el `startedAt` más reciente que tenga una entrada, así una reunión recién concluida sigue mostrando sus cifras. Una entrada cuya clave no coincide con ninguna reunión del snapshot actual se ignora.
+- Un nuevo panel `dl.av-meeting-usage`, ubicado debajo del panel `av-usage` de la ejecución, muestra el título de la reunión y las mismas reglas de fila que `usage.byAgent`: un campo ausente o `null` se lee como "desconocido", un `0` real se muestra como `0`, y una clave omitida no muestra ninguna fila. `unattributedCalls` se muestra cuando envías un número (incluido `0`) y se omite por completo cuando falta la clave.
+- La lista oculta para lectores de pantalla recibe un segundo encabezado, "Reuniones", con una línea por cada reunión que tenga una entrada, para que los lectores de pantalla reciban las mismas cifras que el panel visible.
+- Nada se suma: dos reuniones en `meetingUsage` nunca producen una cifra combinada, `unattributedCalls` nunca se suma a `calls`, y la oficina nunca lee `Meeting.tokensAccumulated` ni `Meeting.costAccumulated` (ambos `@deprecated`: siempre `0` fuera del guion de demostración incluido). Si tu host reporta una reunión con monedas mixtas, envía `cost: null` en vez de elegir una moneda; `UsageFigures` tiene espacio para exactamente una.
+- `formatMeetingUsage(figures, locale, translate)` se exporta y devuelve las mismas filas formateadas que usa el panel, por si quieres mostrarlas en otra parte de tu interfaz.
+- Tu host debe enviar un `meetingId` en sus eventos de reunión para indexar esta prop de forma confiable. Sin uno, la librería recurre a `meeting-<id del evento>`.
+
+### Detalle de llamadas
+
+Los totales por agente responden "quién gastó qué"; `showCallDetails` responde la siguiente pregunta: qué llamadas formaron ese número. `false` por defecto, independiente de `showUsage` y `showUsageBadges`:
+
+```tsx
+import type { AgentCallDetails } from '@warlockcode/agent-viewer';
+
+const agentCallDetails = useMemo<AgentCallDetails>(() => ({
+  builder: [
+    {
+      id: 'call-8f2',
+      provider: 'Anthropic',
+      model: 'claude-sonnet-4-5',
+      tokens: { input: 1800, output: 450, cacheRead: 12000, cacheWrite: null },
+      requestId: 'req_01H8',
+      latencyMs: 2140,
+      status: 'ok',
+      costSource: 'provider-reported',
+      cost: 0.012,
+      currency: 'USD',
+    },
+  ],
+}), []);
+
+<AgentOffice events={events} locale="es" showCallDetails agentCallDetails={agentCallDetails} onSelectAgent={setSelected} />
+```
+
+- Al hacer clic en un agente del canvas, elegirlo de la lista de agentes por teclado, o fijar `selectedAgentId`, se abre un panel junto a las llamadas de ese agente, tal como vienen en `agentCallDetails[agentId]`. Un id seleccionado que no sea un agente del snapshot actual no abre nada. `onSelectAgent` no cambia: no existe un segundo callback para el panel.
+- El panel nunca calcula, suma, cotiza ni ordena nada. Cada llamada aparece en el orden en que la enviaste, con 12 filas fijas: proveedor, modelo, estado, latencia, id de solicitud, tokens de entrada, tokens de salida, origen del costo y costo siempre; tokens de lectura de caché, escritura de caché y razonamiento solo cuando esa clave está presente en `tokens` (una clave enviada como `null` igual muestra "desconocido"; un `0` real muestra `0`; una clave omitida no muestra ninguna fila, la misma regla que usa `showUsage` para los campos de tokens opcionales).
+- Un agente sin entrada en `agentCallDetails`, o con un arreglo vacío, muestra "No se proporcionó detalle de llamadas", nunca "0 llamadas".
+- `AgentCallDetail` no tiene ningún campo que pueda llevar un prompt, una respuesta ni ningún otro texto libre: `provider`, `model` y `requestId` son las únicas cadenas libres, limitadas a 128 puntos de código Unicode (los valores más largos se cortan con puntos suspensivos, en el texto y en el atributo `title`), y `status`/`costSource` están cerrados a sus valores conocidos; cualquier otro valor se lee como "desconocido". El panel nunca difunde (`spread`) el objeto de la fila, así que una clave adicional que tu código agregue por error (`prompt`, `content`...) nunca se muestra.
+- Cierra el panel con el botón de cerrar o con `Escape` (con el foco dentro de él); ambos llaman a `onSelectAgent(null)`, igual que pulsar de nuevo al agente seleccionado en la lista por teclado.
+- El panel nunca se dibuja al [exportar video](#exportar-video): `recordReplay` no tiene ninguna opción para él.
 
 ### Cifras del servidor de Agent Viewer
 
@@ -824,6 +925,7 @@ Notas:
 - El formato es el primero que admita el navegador entre WebM (VP9, VP8) y MP4; `getSupportedMimeType()` te dice cuál.
 - La promesa se rechaza si el navegador no puede grabar (`isRecordingSupported()` es `false`) o no admite ninguno de esos formatos.
 - El video muestra la hora del último evento visible (`video.time`).
+- `RecordReplayOptions` no tiene ningún campo para el detalle de llamadas: el panel de `showCallDetails`/`agentCallDetails` nunca se dibuja en un video, sin importar qué muestre la página desde la que se capturó.
 
 ## El modelo de la oficina sin árbol React
 
@@ -890,7 +992,8 @@ Todo se exporta desde `@warlockcode/agent-viewer`. La hoja de estilos es `@warlo
 | Oficina | `AgentOffice` | `AgentOfficeProps` |
 | Modelo de la oficina | `OfficeStore`, `buildOfficeSnapshot` | `AgentProfile`, `OfficeEventInput`, `OfficeMode`, `OfficeSnapshot`, `OfficeStoreOptions` |
 | Repetición | `useEventReplay`, `ReplayControls` | `EventReplay`, `EventReplayOptions`, `ReplayControlsProps` |
-| Consumo | `formatUsage`, `formatTokens`, `formatCost`, `formatUsageBadge`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource` |
+| Consumo | `formatUsage`, `formatTokens`, `formatCost`, `formatCostSource`, `formatUsageBadge`, `formatMeetingUsage`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource`, `MeetingUsage`, `MeetingUsageFigures` |
+| Detalle de llamadas | ninguno | `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource` |
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Tipos base | ninguno | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
 | Contrato de eventos V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
@@ -930,6 +1033,8 @@ const connection = connectEventStream(base, (event) => setEvents((prev) => [...p
 
 - Dos oficinas en la misma página nunca comparten estado: cada `<AgentOffice>` tiene su propio store.
 - No se lee ni se escribe nada en `localStorage` ni en ningún otro almacenamiento del navegador.
+- Ninguna cifra de consumo se guarda: `usage`, `meetingUsage` y `agentCallDetails` se leen en cada render y nunca se copian al store, a `localStorage` ni a ninguna otra persistencia; cerrar y volver a abrir la oficina con las mismas props dibuja las mismas cifras, sin nada cacheado de por medio.
+- La insignia de consumo, el panel por agente y el panel de detalle de llamadas no muestran nada a menos que el anfitrión los active con `showUsage`, `showUsageBadges` o `showCallDetails`: las props pueden traer cada cifra llena y aun así no producir ninguna interfaz de consumo visible mientras estas estén en `false`.
 - Ningún temporizador inventa datos. La oficina revisa cada 250 ms si terminaron los desplazamientos y si pueden empezar las reuniones; solo `mode="showcase"` agrega actividad simulada, y va marcada como simulada.
 - No hay atajos de teclado globales.
 - Nada se ejecuta al importar y no se inyectan estilos.
@@ -940,3 +1045,5 @@ La app de demostración de este repositorio (`npm run dev`) se construye aparte 
 ## Versiones
 
 La librería sigue [Versionado Semántico](https://semver.org/lang/es/). Mientras esté en 0.x, la API todavía puede cambiar: una versión menor (0.3.0, 0.4.0...) puede traer cambios incompatibles, y se listan en el [CHANGELOG](../CHANGELOG.md). Un rango como `^0.2.0` solo acepta parches 0.2.x.
+
+0.5.0 agrega `showUsageBadges`, `showCallDetails`, `meetingUsage` y sus tipos (`UsageBadge`, `UsageCostSource`, `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource`, `MeetingUsage`, `MeetingUsageFigures`). Todos son aditivos y vienen apagados por defecto: una app escrita contra 0.2.x sigue funcionando sin cambios.

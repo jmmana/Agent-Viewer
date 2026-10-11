@@ -94,15 +94,26 @@
   font-size: 13px;
 }
 
-.av-usage {
+/* Stacks `.av-usage` and `.av-meeting-usage` (issue #81) top-right without either needing to know the other's
+   height: each is a normal-flow box inside this one absolutely positioned column. */
+.av-usage-stack {
   position: absolute;
   top: 12px;
   right: 12px;
   z-index: 2;
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 80px);
+}
+
+.av-usage,
+.av-meeting-usage {
+  display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
-  max-width: calc(100% - 80px);
+  max-width: 100%;
   margin: 0;
   padding: 8px 12px;
   border: 1px solid var(--av-border);
@@ -119,15 +130,23 @@
   margin: 0;
 }
 
-.av-usage dt {
+.av-usage dt,
+.av-meeting-usage dt {
   color: var(--av-text-muted);
 }
 
-.av-usage dd {
+.av-usage dd,
+.av-meeting-usage dd {
   margin: 0;
   font-family: var(--av-font-mono);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+}
+
+.av-meeting-usage-title {
+  flex-basis: 100%;
+  font-weight: 700;
+  color: var(--av-text);
 }
 
 .av-sr-only {
@@ -216,6 +235,122 @@
 .av-agent-list-item:focus-visible {
   outline: var(--av-focus);
   outline-offset: 1px;
+}
+
+/* Call details panel: metadata of the selected agent's calls (issue #77). Every rule here is `:where`-scoped
+   so a host keeps the right to override it at zero specificity, same as the theme variables above. No
+   transition or animation: the panel appears and disappears with the selection, nothing to ease. */
+
+:where(.av-call-details) {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  width: min(360px, calc(100% - 72px));
+  max-height: 60%;
+  overflow: auto;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--av-border-strong);
+  border-radius: var(--av-radius);
+  background: var(--av-surface-raised);
+  box-shadow: var(--av-shadow);
+  font-size: 12px;
+}
+
+:where(.av-call-details-header) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--av-border);
+  color: var(--av-text);
+  font-weight: 700;
+}
+
+:where(.av-call-details-close) {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--av-text-muted);
+  cursor: pointer;
+}
+
+:where(.av-call-details-close:hover) {
+  background: var(--av-border);
+}
+
+:where(.av-call-details-close:focus-visible) {
+  outline: var(--av-focus);
+  outline-offset: 1px;
+}
+
+:where(.av-call-details-empty) {
+  margin: 0;
+  color: var(--av-text-muted);
+}
+
+:where(.av-call-details-list) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+:where(.av-call-item) {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--av-border);
+}
+
+:where(.av-call-item:last-child) {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+:where(.av-call-item dl) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+:where(.av-call-row) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+:where(.av-call-row dt) {
+  flex: 0 0 auto;
+  color: var(--av-text-muted);
+}
+
+:where(.av-call-row dd) {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+:where(.av-call-request-id) {
+  overflow: hidden;
+  font-family: var(--av-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Canvas with its toolbar ------------------------------------------------- */

@@ -5,7 +5,9 @@ import {
   AgentOffice,
   ReplayControls,
   useEventReplay,
+  type AgentCallDetails,
   type HostTranslate,
+  type MeetingUsage,
   type OfficeEventInput,
   type OfficeUsage,
 } from '../../src/lib/index';
@@ -15,6 +17,7 @@ import {
   findEnglishLeaks,
   llmFailed,
   llmUsage,
+  makeEvent,
   meetingMessage,
   meetingRequested,
   messageSent,
@@ -167,6 +170,40 @@ describe('AgentOffice: no English text when Spanish is requested', () => {
     const leaks = findEnglishLeaks(collectVisibleTexts());
     expect(leaks.length).toBeGreaterThan(5);
     expect(leaks.join('\n')).toContain('office.agentsHeading');
+  });
+
+  const agentCallDetails: AgentCallDetails = {
+    planner: [
+      {
+        id: 'call-1',
+        provider: 'Anthropic',
+        model: 'claude-sonnet-4-5',
+        tokens: { input: 1200, output: 300, cacheRead: 500 },
+        requestId: 'req_01H8',
+        latencyMs: 980,
+        status: 'ok',
+        costSource: 'provider-reported',
+        cost: 0.01,
+        currency: 'USD',
+      },
+      { id: 'call-2', status: 'rate_limited', costSource: 'unknown' },
+    ],
+  };
+
+  it('renders the call details panel in Spanish without English catalog texts', () => {
+    render(
+      <AgentOffice
+        events={busyScene}
+        locale="es"
+        showCallDetails
+        agentCallDetails={agentCallDetails}
+        selectedAgentId="planner"
+      />,
+    );
+    expect(document.querySelector('.av-call-details')).not.toBeNull();
+    expect(document.querySelectorAll('.av-call-item')).toHaveLength(2);
+
+    expect(findEnglishLeaks(collectVisibleTexts())).toEqual([]);
   });
 });
 
@@ -492,5 +529,96 @@ describe('AgentOffice: keyboard selection', () => {
     render(<AgentOffice events={events} selectedAgentId="bruno" />);
     expect(screen.getByRole('button', { name: /Bruno Díaz/ }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: /Ana Rivas/ }).getAttribute('aria-pressed')).toBe('false');
+  });
+});
+
+describe('AgentOffice: meetingUsage (issue #81, display only)', () => {
+  const activeMeetingEvents: OfficeEventInput[] = [
+    registered('ana', 'Ana Rivas', { roleTitle: 'Planner', workspace: 'leads_area' }, { at: T0 }),
+    registered('bruno', 'Bruno Díaz', { roleTitle: 'Engineer', workspace: 'development' }, { at: T0 + 10 }),
+    meetingRequested('ana', 'm-1', ['ana', 'bruno'], { at: T0 + 20 }),
+    makeEvent('meeting.started', 'ana', { meetingId: 'm-1' }, { at: T0 + 30 }),
+  ];
+
+  // `useId()` generates a fresh id per render, which is the only difference a React-id-free diff should see.
+  const stripGeneratedIds = (html: string) => html.replace(/_r_[0-9a-z]+_/g, '_id_');
+
+  it('renders exactly as before when meetingUsage is absent, or when showUsage is false', () => {
+    const without = render(<AgentOffice events={activeMeetingEvents} showUsage />);
+    const withoutHtml = stripGeneratedIds(without.container.innerHTML);
+    without.unmount();
+
+    const withEntryButOff = render(
+      <AgentOffice events={activeMeetingEvents} meetingUsage={{ 'm-1': { calls: 9 } }} />,
+    );
+    expect(stripGeneratedIds(withEntryButOff.container.innerHTML)).toBe(withoutHtml);
+    withEntryButOff.unmount();
+
+    expect(document.querySelector('.av-meeting-usage')).toBeNull();
+  });
+
+  it('shows the panel and the hidden-list line only while showUsage is also true', () => {
+    const usage: MeetingUsage = { 'm-1': { calls: 12, totalTokens: 500, cost: 0.02, currency: 'USD' } };
+    const { rerender } = render(<AgentOffice events={activeMeetingEvents} meetingUsage={usage} showUsage={false} />);
+    expect(document.querySelector('.av-meeting-usage')).toBeNull();
+
+    rerender(<AgentOffice events={activeMeetingEvents} meetingUsage={usage} showUsage />);
+    const panel = document.querySelector('dl.av-meeting-usage');
+    expect(panel).not.toBeNull();
+    expect(panel!.textContent).toContain('12');
+    const hiddenList = screen.getByText('Meetings').closest('div')!;
+    expect(within(hiddenList).getByText(/Release review/)).toBeTruthy();
+  });
+
+  it('keeps showing the latest meeting with an entry after it concludes (activeMeetingId clears)', () => {
+    const usage: MeetingUsage = { 'm-1': { calls: 4 } };
+    const events: OfficeEventInput[] = [...activeMeetingEvents, makeEvent('meeting.ended', 'ana', { meetingId: 'm-1' }, { at: T0 + 40 })];
+    render(<AgentOffice events={events} meetingUsage={usage} showUsage />);
+    expect(document.querySelector('dl.av-meeting-usage')!.textContent).toContain('4');
+  });
+
+  it('an entry for a meeting id not in the current snapshot renders nothing', () => {
+    render(<AgentOffice events={activeMeetingEvents} meetingUsage={{ 'no-such-meeting': { calls: 1 } }} showUsage />);
+    expect(document.querySelector('.av-meeting-usage')).toBeNull();
+  });
+
+  it('null or missing fields read "unknown"; unattributedCalls 0 shows 0; absent shows no row; partial cost is marked', () => {
+    const usage: MeetingUsage = {
+      'm-1': { totalTokens: null, cost: null, unattributedCalls: 0 },
+    };
+    const first = render(<AgentOffice events={activeMeetingEvents} meetingUsage={usage} showUsage />);
+    const panel = document.querySelector('dl.av-meeting-usage')!;
+    expect(panel.textContent).toContain('unknown');
+    expect(screen.getByText('Not attributed to this meeting').nextElementSibling?.textContent).toBe('0');
+    first.unmount();
+
+    const { unmount } = render(
+      <AgentOffice events={activeMeetingEvents} meetingUsage={{ 'm-1': { calls: 5, cost: 0.1, currency: 'USD', callsWithoutCost: 2 } }} showUsage />,
+    );
+    expect(screen.getAllByText(/\+ 2 calls with unknown cost/).length).toBeGreaterThan(0);
+    unmount();
+  });
+
+  it('never sums figures across two meetings: each panel/entry shows only its own meeting', () => {
+    const events: OfficeEventInput[] = [
+      ...activeMeetingEvents,
+      makeEvent('meeting.ended', 'ana', { meetingId: 'm-1' }, { at: T0 + 40 }),
+      meetingRequested('bruno', 'm-2', ['ana', 'bruno'], { at: T0 + 50 }),
+      makeEvent('meeting.started', 'bruno', { meetingId: 'm-2' }, { at: T0 + 60 }),
+    ];
+    const usage: MeetingUsage = { 'm-1': { calls: 4 }, 'm-2': { calls: 9 } };
+    render(<AgentOffice events={events} meetingUsage={usage} showUsage />);
+    // The shown meeting (m-2, the active one) never shows a combined 13.
+    expect(document.querySelector('dl.av-meeting-usage')!.textContent).toContain('9');
+    expect(document.querySelector('dl.av-meeting-usage')!.textContent).not.toContain('13');
+    // Both meetings still appear separately in the accessible list.
+    const hiddenList = screen.getByText('Meetings').closest('div')!;
+    expect(within(hiddenList).getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('shows Spanish texts with no English leaks', () => {
+    const usage: MeetingUsage = { 'm-1': { calls: 4, unattributedCalls: 1 } };
+    render(<AgentOffice events={activeMeetingEvents} meetingUsage={usage} showUsage locale="es" />);
+    expect(findEnglishLeaks(collectVisibleTexts())).toEqual([]);
   });
 });

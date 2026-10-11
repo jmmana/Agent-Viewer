@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/jmmana/Agent-Viewer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/jmmana/Agent-Viewer/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white" alt="Estado de CI" /></a>
-  <a href="../CHANGELOG.md"><img src="https://img.shields.io/badge/versi%C3%B3n-v0.2.1-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Versión 0.2.1" /></a>
+  <a href="../CHANGELOG.md"><img src="https://img.shields.io/badge/versi%C3%B3n-v0.5.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Versión 0.5.0" /></a>
   <a href="../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-22c55e?style=for-the-badge" alt="Licencia MIT" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer"><img src="https://img.shields.io/github/stars/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=a855f7&label=estrellas" alt="Estrellas en GitHub" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer/network/members"><img src="https://img.shields.io/github/forks/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=4c1d95&label=forks" alt="Forks en GitHub" /></a>
@@ -57,7 +57,7 @@ Es código abierto (MIT), corre en tu máquina, no necesita ninguna clave de pro
   <tr>
     <td align="center" width="25%"><h2>23</h2><sub>tipos de evento<br/>en el contrato V1</sub></td>
     <td align="center" width="25%"><h2>9</h2><sub>salas donde los agentes<br/>trabajan y se reúnen</sub></td>
-    <td align="center" width="25%"><h2>ES · EN</h2><sub>116 claves de texto,<br/>todas reemplazables</sub></td>
+    <td align="center" width="25%"><h2>ES · EN</h2><sub>156 claves de texto,<br/>todas reemplazables</sub></td>
     <td align="center" width="25%"><h2>0</h2><sub>cifras de consumo calculadas<br/>por el componente</sub></td>
   </tr>
 </table>
@@ -69,7 +69,7 @@ Es código abierto (MIT), corre en tu máquina, no necesita ninguna clave de pro
 | Pieza | Qué hace |
 |---|---|
 | 🏢 **Oficina viva** | Escena React + Canvas2D con 9 salas. Los agentes caminan a sus puestos y a las salas de reunión, muestran su estado y la herramienta que usan, y hablan con burbujas encabezadas por el tipo de mensaje. Gira, ajusta, desplaza, acerca y haz clic para seleccionar. |
-| 🧩 **Librería integrable** | `@warlockcode/agent-viewer`: `<AgentOffice events={events} />` en cualquier app React 19. Modo profesional por defecto, CSS aislado con prefijo `av-`, español e inglés incluidos, controles de repetición y exportación de video. |
+| 🧩 **Librería integrable** | `@warlockcode/agent-viewer`: `<AgentOffice events={events} />` en cualquier app React 19. Modo profesional por defecto, CSS aislado con prefijo `av-`, español e inglés incluidos, controles de repetición y exportación de video. Insignias de consumo por agente, panel de detalle por llamada y cifras de gasto por reunión, opcionales y activadas por el host: el componente nunca calcula, suma ni pone precio a nada. |
 | 📡 **Servidor de ingesta** | API Express en el puerto 8787: ingesta individual y por lotes con idempotencia, flujo Server-Sent Events que se reanuda desde el último evento, webhook genérico con firma HMAC y almacenamiento en memoria o SQLite. |
 | 🐍 **SDKs y adaptadores** | Clientes en Python y TypeScript, y adaptadores de ejemplo para LangGraph, CrewAI, AutoGen, OpenAI Agents SDK y Google ADK. |
 | 🎬 **Repetición y exportación** | Carga un log JSONL V1, repítelo a su ritmo original con salto y velocidad, y grábalo en WebM o MP4 desde el navegador. |
@@ -82,7 +82,7 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 1. **Tu runtime manda.** Agent Viewer proyecta eventos; nunca decide qué está haciendo un agente. La animación jamás sobrescribe un estado de trabajo real (`IDLE`, `THINKING`, `CODING`...).
 2. **Solo lo observable.** Estados, nombres de herramientas, mensajes explícitos, reuniones y consumo reportado. La cadena de pensamiento privada nunca se pide ni se muestra.
 3. **Nada inventado en modo profesional.** La oficina integrada no tiene vida ambiental, ni frases inventadas, ni sonidos. El modo vitrina agrega vida de oficina simulada, y cada burbuja simulada lo dice (`SOCIAL · SIMULADO`).
-4. **Desconocido no es cero.** El componente nunca calcula, suma ni pone precio al consumo. Un costo que falta se muestra como "desconocido", nunca como `0`.
+4. **Desconocido no es cero.** El componente nunca calcula, suma ni pone precio al consumo. Un costo que falta se muestra como "desconocido", nunca como `0`. Las cifras de reuniones (`meetingUsage`) siguen exactamente la misma regla: vienen de tu host, nunca de los campos obsoletos `Meeting.tokensAccumulated`/`costAccumulated`.
 5. **Un buen invitado en tu app.** No inyecta estilos, no usa selectores globales ni `localStorage`, no registra atajos de teclado globales y no ejecuta nada al importarse. Dos oficinas en la misma página nunca comparten estado.
 6. **Desconocido no es cero, en ningún lado.** El servidor, el portal, la CLI y los SDK nunca guardan ni muestran una cifra desconocida como cero, y nunca suman monedas distintas. Semántica completa, campo por campo: [docs/usage-semantics.es.md](usage-semantics.es.md) ([english](../README.md)).
 
@@ -202,12 +202,12 @@ Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compi
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> en modo profesional: una reunión donde los agentes proponen, objetan, acuerdan y deciden. Solo se dibujan los eventos que recibe el componente.</sub>
 </p>
 
-Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.2.1**. Solo módulos ES, React y React DOM 19 como dependencias peer, `express`, `lucide-react` y `zod` como dependencias de ejecución (con `express` corre el servidor del comando `agent-viewer`; los módulos de la librería nunca lo importan), y declaraciones de TypeScript incluidas.
+Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.5.0**. Solo módulos ES, React y React DOM 19 como dependencias peer, `express`, `lucide-react` y `zod` como dependencias de ejecución (con `express` corre el servidor del comando `agent-viewer`; los módulos de la librería nunca lo importan), y declaraciones de TypeScript incluidas.
 
 La publicación en npm llegará muy pronto. Mientras tanto, instálala desde el archivo de la release de GitHub (el nombre del paquete y tus imports no cambian cuando pases a npm):
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
 ```
 
 ### Ejemplo mínimo
@@ -387,6 +387,20 @@ export function OficinaConConsumo({ events }: { events: readonly OfficeEventInpu
 ```
 
 `showUsage` viene apagado. Un valor que falta se muestra como "desconocido", nunca como cero. ¿No tienes un servicio de consumo? `summarizeUsage(events)` es una ayuda opcional y explícita que solo suma lo que reportaron los eventos `llm.usage`: ignora los ids de evento repetidos, deja como desconocido un conteo de tokens que un evento no reporta y devuelve un costo desconocido antes que una suma parcial o una suma de monedas mezcladas o ausentes.
+
+¿Quieres responder "qué llamadas formaron ese número" para un agente? Agrega `showCallDetails` con `agentCallDetails` (apagado por defecto, independiente de `showUsage`/`showUsageBadges`):
+
+```tsx
+<AgentOffice events={events} locale="es" showCallDetails agentCallDetails={agentCallDetails} />
+```
+
+Al hacer clic en un agente se abre un panel de solo lectura con sus llamadas (proveedor, modelo, tokens por tipo, id de solicitud, latencia, estado, origen del costo), tal como las reporta `agentCallDetails[agentId]`: la oficina nunca calcula, suma, cotiza ni ordena nada de esto, y `AgentCallDetail` no tiene ningún campo que pueda llevar un prompt, una respuesta ni ningún otro texto libre.
+
+¿Quieres responder "cuánto costó esta reunión"? Agrega `meetingUsage`, indexado por id de reunión (se muestra solo junto con `showUsage`; ver [Cifras de reuniones](library.es.md#cifras-de-reuniones)):
+
+```tsx
+<AgentOffice events={events} locale="es" showUsage usage={usage} meetingUsage={meetingUsage} />
+```
 
 </details>
 
@@ -869,7 +883,7 @@ Agent Viewer no necesita claves de proveedores de modelos: las cifras de consumo
 
 ## 🧭 Hoja de ruta
 
-Ya incluido en la [0.2.0](../CHANGELOG.md): la librería integrable, los modos profesional y vitrina, los tipos de mensaje, la repetición, la exportación de video, el CSS aislado, el acceso por teclado y los textos en español e inglés. Ya incluido en la [0.3.0](../CHANGELOG.md): cifras de consumo ciertas de punta a punta, `llm.failed`, telemetría de tokens de Claude Code, y la primera publicación en npm, PyPI y GHCR. Ya incluido en la [0.4.0](../CHANGELOG.md): el ledger de consumo con la hora de recepción del servidor, las APIs de rollup y de llamadas, la exportación CSV/JSONL con totales de reconciliación, la retención, la redacción de secretos al exportar, una API que ya no acepta un token en la URL ni corre abierta por accidente, el portal cargando el historial completo al abrir, y la ingesta de métricas OTLP. Ver [migrating-to-0.4.md](migrating-to-0.4.md) (en inglés) si actualizas desde la 0.3.0.
+Ya incluido en la [0.2.0](../CHANGELOG.md): la librería integrable, los modos profesional y vitrina, los tipos de mensaje, la repetición, la exportación de video, el CSS aislado, el acceso por teclado y los textos en español e inglés. Ya incluido en la [0.3.0](../CHANGELOG.md): cifras de consumo ciertas de punta a punta, `llm.failed`, telemetría de tokens de Claude Code, y la primera publicación en npm, PyPI y GHCR. Ya incluido en la [0.4.0](../CHANGELOG.md): el ledger de consumo con la hora de recepción del servidor, las APIs de rollup y de llamadas, la exportación CSV/JSONL con totales de reconciliación, la retención, la redacción de secretos al exportar, una API que ya no acepta un token en la URL ni corre abierta por accidente, el portal cargando el historial completo al abrir, y la ingesta de métricas OTLP. Ya incluido en la [0.5.0](../CHANGELOG.md): insignias de consumo por agente y un panel de detalle por llamada en el canvas, costo por reunión y por herramienta, Model Ops conciliando llamada por llamada contra el ledger real, y las cuatro reglas de privacidad de consumo de la guía de librería declaradas juntas en [library.es.md](library.es.md#cifras-de-consumo). Ver [migrating-to-0.4.md](migrating-to-0.4.md) (en inglés) si actualizas desde la 0.3.0.
 
 Planeado, todavía no disponible:
 

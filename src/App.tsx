@@ -12,8 +12,19 @@ import { localizeDemoText } from './content/demoScript';
 import { TopBar } from './components/TopBar';
 import { OpenApiBanner } from './components/OpenApiBanner';
 import { ResyncNotice } from './components/ResyncNotice';
-import type { CameraState } from './engine/canvasRenderer';
+import type { CameraState, AgentBadge } from './engine/canvasRenderer';
 import { OfficeCanvas } from './components/OfficeCanvas';
+import { formatCost, formatTokens, formatUsageBadge } from './lib/usage';
+import { rollupToOfficeUsage } from './integrations/ledgerToUsage';
+import type { RollupResponse } from './integrations/ledgerClient';
+import { useLedgerAgentUsage } from './components/usage/useLedgerAgentUsage';
+import { loadUsageWindow, saveUsageWindow, type UsageWindowOption } from './integrations/usageWindow';
+import {
+  loadMaskSecrets,
+  saveMaskSecrets,
+  loadShowUsageBadges,
+  saveShowUsageBadges,
+} from './integrations/displayPreferences';
 import { CrewStage } from './crew/CrewStage';
 import type { VisualMode } from './crew/crewModel';
 import { readCrewPreferences, saveCrewPreferences } from './crew/crewPreferences';
@@ -29,6 +40,7 @@ import { OverflowFloorView } from './components/OverflowFloorView';
 import { ModelOpsModal } from './components/ModelOpsModal';
 import { AgentDetailModal } from './components/AgentDetailModal';
 import { recordSimulatedCall, SimulatedCall } from './engine/modelOps';
+import type { LedgerConnection } from './components/modelOps/useModelOpsLedger';
 import { DoorOpen } from 'lucide-react';
 import { applyDocumentLocale, detectLocale, Locale, persistLocale, t, type TranslationKey } from './i18n';
 import { createOfficeTranslator } from './content/officeMessages';
@@ -128,9 +140,65 @@ export default function App() {
   // `sessionStorage`, see `liveConnection.ts`). `resolved` stays false until that finishes, so the modal shows a
   // loading state instead of ever reading a real 401 as "unauthorized" too early.
   const [liveTokenState, setLiveTokenState] = useState<{ resolved: boolean; token?: string }>({ resolved: false });
+  // Shared by Model Ops, the office spend badges/top-bar total (issue #78) and the Meetings panel / tool spend
+  // tooltips (issue #81): one `LedgerConnection` so every consumer reads the same base URL and token and agrees
+  // on "unavailable" vs "unauthorized".
+  const ledgerConnection = useMemo<LedgerConnection | null>(
+    () => (apiBase ? { baseUrl: apiBase, token: liveTokenState.token, tokenResolved: liveTokenState.resolved } : null),
+    [apiBase, liveTokenState.token, liveTokenState.resolved],
+  );
+
+  // Usage window for the office spend badges and top-bar total (issue #78), persisted across reloads.
+  const [usageWindow, setUsageWindowState] = useState<UsageWindowOption>(() =>
+    loadUsageWindow(typeof window !== 'undefined' ? window.localStorage : undefined)
+  );
+  const handleChangeUsageWindow = (option: UsageWindowOption) => {
+    setUsageWindowState(option);
+    saveUsageWindow(typeof window !== 'undefined' ? window.localStorage : undefined, option);
+  };
+  const ledgerUsage = useLedgerAgentUsage({ ledger: ledgerConnection, window: usageWindow, events: simState.events });
+  // Kept across a loading/error refetch so the badges and top-bar total never flash back to the (misleading)
+  // locally summed figures while the ledger is merely re-fetching; cleared only when the server tells us the
+  // ledger truly is not available (`unavailable`/`unauthorized`), when the previous figures would be wrong to
+  // keep showing.
+  const [lastReadyRollup, setLastReadyRollup] = useState<RollupResponse | null>(null);
+  useEffect(() => {
+    if (ledgerUsage.query.status === 'ready') setLastReadyRollup(ledgerUsage.query.data);
+    else if (ledgerUsage.query.status === 'unavailable' || ledgerUsage.query.status === 'unauthorized') setLastReadyRollup(null);
+  }, [ledgerUsage.query]);
+  const officeLedgerUsage = lastReadyRollup ? rollupToOfficeUsage(lastReadyRollup) : null;
+  // A refetch failed but earlier figures are still shown (issue #78): every usage surface marks itself "stale"
+  // instead of looking like a confirmed-fresh reading.
+  const isUsageStale = ledgerUsage.query.status === 'error' && lastReadyRollup !== null;
+
+  // Display preferences (issue #78), persisted in `localStorage`: display-only, never sent to the server and
+  // never affecting what is fetched.
+  const [maskSecrets, setMaskSecretsState] = useState(() =>
+    loadMaskSecrets(typeof window !== 'undefined' ? window.localStorage : undefined)
+  );
+  const handleChangeMaskSecrets = (value: boolean) => {
+    setMaskSecretsState(value);
+    saveMaskSecrets(typeof window !== 'undefined' ? window.localStorage : undefined, value);
+  };
+  const [showUsageBadges, setShowUsageBadgesState] = useState(() =>
+    loadShowUsageBadges(typeof window !== 'undefined' ? window.localStorage : undefined)
+  );
+  const handleChangeShowUsageBadges = (value: boolean) => {
+    setShowUsageBadgesState(value);
+    saveShowUsageBadges(typeof window !== 'undefined' ? window.localStorage : undefined, value);
+  };
 
   // Agent Detail Modal state (triggered on double click)
   const [detailModalAgentId, setDetailModalAgentId] = useState<string | null>(null);
+  // Which tab the modal should land on next (issue #78's "View calls" from the inspector); reset once consumed
+  // so re-opening the same agent from elsewhere does not keep jumping back to metrics.
+  const [detailModalInitialTab, setDetailModalInitialTab] = useState<
+    'overview' | 'tasks' | 'metrics' | 'logs' | 'console' | null
+  >(null);
+  const openDetailModal = (agentId: string, tab?: 'overview' | 'tasks' | 'metrics' | 'logs' | 'console') => {
+    setDetailModalAgentId(agentId);
+    setDetailModalInitialTab(tab ?? null);
+  };
 
   // Demo Playback Engine state
   const [isPlayingDemo, setIsPlayingDemo] = useState(false);
@@ -618,6 +686,7 @@ export default function App() {
         setIsNewTaskOpen(false);
         setIsModelOpsOpen(false);
         setDetailModalAgentId(null);
+        setDetailModalInitialTab(null);
       } else if (e.key === ' ') {
         e.preventDefault();
         handleTogglePlayDemo();
@@ -643,6 +712,30 @@ export default function App() {
     const roleTitle = localizeDemoText(agent.roleTitle, locale);
     return roleTitle === agent.roleTitle ? agent : { ...agent, roleTitle };
   });
+
+  // Per-agent spend badges drawn on the canvas (issue #78), built only from the ledger rollup: an agent with no
+  // row in `byAgent` gets no badge at all (not an "unknown" one), since it recorded no calls in this window.
+  // Hidden entirely while `showUsageBadges` is off (display preference, never gating the top-bar total).
+  let agentBadges: Map<string, AgentBadge> | undefined;
+  if (showUsageBadges && officeLedgerUsage?.byAgent) {
+    const badges = new Map<string, AgentBadge>();
+    for (const agent of canvasAgents) {
+      const figures = officeLedgerUsage.byAgent[agent.id];
+      if (!figures) continue;
+      const badge = formatUsageBadge(figures, locale, officeTranslate);
+      badges.set(agent.id, { tokens: badge.tokens, costLabel: badge.costLabel, failed: badge.failed });
+    }
+    if (badges.size > 0) agentBadges = badges;
+  }
+  // While the ledger has ever answered, the badges are the only source of truth: the canvas, top bar, inspector
+  // etc. must stop drawing figures summed from local agents so nothing on screen contradicts a badge.
+  const usageSummary = officeLedgerUsage?.total
+    ? {
+        tokens: formatTokens(officeLedgerUsage.total.totalTokens, locale, officeTranslate),
+        cost: formatCost(officeLedgerUsage.total.cost, officeLedgerUsage.total.currency, locale, officeTranslate),
+        windowLabel: t(locale, `usage.window.${usageWindow}` as TranslationKey),
+      }
+    : undefined;
 
   const handleFileDrop = async (e: React.DragEvent) => {
     e.preventDefault();
@@ -724,6 +817,10 @@ export default function App() {
           output: simState.totalTokens.output,
         }}
         totalCost={simState.totalCost}
+        usageSummary={usageSummary}
+        usageWindow={isLiveMode ? usageWindow : undefined}
+        onChangeUsageWindow={isLiveMode ? handleChangeUsageWindow : undefined}
+        isUsageStale={isUsageStale}
         theme={theme}
         onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -774,12 +871,13 @@ export default function App() {
                       setSelectedAgentId(id);
                       if (!isSidebarOpen) setIsSidebarOpen(true);
                     }}
-                    onDoubleClickAgent={(id) => setDetailModalAgentId(id)}
+                    onDoubleClickAgent={(id) => openDetailModal(id)}
                     onOpenModelOps={handleOpenModelOps}
                     activeMeetingId={simState.activeMeetingId}
                     theme={theme}
                     translate={officeTranslate}
-                    usageTelemetry
+                    usageTelemetry={!officeLedgerUsage}
+                    agentBadges={agentBadges}
                     isInspectorOpen={isSidebarOpen}
                     isSidebarOpen={isSidebarOpen}
                     onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
@@ -825,9 +923,12 @@ export default function App() {
                 onFocusAgent={handleFocusAgent}
                 onSendMessage={handleSendMessageToAgent}
                 onUpdateStatus={handleUpdateAgentStatus}
-                onOpenAgentDetailModal={(id) => setDetailModalAgentId(id)}
+                onOpenAgentDetailModal={(id, tab) => openDetailModal(id, tab)}
                 theme={theme}
                 locale={locale}
+                usageFigures={selectedAgent ? officeLedgerUsage?.byAgent?.[selectedAgent.id] : undefined}
+                ledgerReady={Boolean(officeLedgerUsage)}
+                isStale={isUsageStale}
               />
             </div>
           </div>
@@ -842,7 +943,7 @@ export default function App() {
               setSelectedAgentId(id);
               setCurrentTab('office');
             }}
-            onOpenAgentDetail={(id) => setDetailModalAgentId(id)}
+            onOpenAgentDetail={(id) => openDetailModal(id)}
             onOpenNewTask={() => setIsNewTaskOpen(true)}
             locale={locale}
           />
@@ -859,6 +960,8 @@ export default function App() {
               setCurrentTab('office');
             }}
             locale={locale}
+            events={simState.events}
+            ledger={ledgerConnection}
           />
         )}
 
@@ -883,9 +986,13 @@ export default function App() {
             onFocusAgent={handleFocusAgent}
             onSendMessage={handleSendMessageToAgent}
             onUpdateStatus={handleUpdateAgentStatus}
-            onOpenDetailModal={(id) => setDetailModalAgentId(id)}
+            onOpenDetailModal={(id, tab) => openDetailModal(id, tab)}
             events={simState.events}
             locale={locale}
+            ledger={ledgerConnection}
+            usageFigures={officeLedgerUsage?.byAgent?.[selectedAgent.id]}
+            ledgerReady={Boolean(officeLedgerUsage)}
+            isStale={isUsageStale}
           />
         )}
       </main>
@@ -902,6 +1009,10 @@ export default function App() {
         onAmbientSocialEnabledChange={setAmbientSocialEnabled}
         politicsChatterEnabled={politicsChatterEnabled}
         onPoliticsChatterEnabledChange={setPoliticsChatterEnabled}
+        maskSecrets={maskSecrets}
+        onMaskSecretsChange={handleChangeMaskSecrets}
+        showUsageBadges={showUsageBadges}
+        onShowUsageBadgesChange={handleChangeShowUsageBadges}
         locale={locale}
       />
 
@@ -927,7 +1038,7 @@ export default function App() {
         events={simState.events}
         locale={locale}
         isLiveMode={isLiveMode}
-        ledger={apiBase ? { baseUrl: apiBase, token: liveTokenState.token, tokenResolved: liveTokenState.resolved } : null}
+        ledger={ledgerConnection}
       />
 
       {/* Comprehensive Agent Detail Modal (Double click on agent) */}
@@ -938,12 +1049,24 @@ export default function App() {
         tasks={simState.tasks}
         events={simState.events}
         pricing={pricing}
-        onClose={() => setDetailModalAgentId(null)}
+        onClose={() => {
+          setDetailModalAgentId(null);
+          setDetailModalInitialTab(null);
+        }}
         onSelectAgent={(id) => setSelectedAgentId(id)}
         onFocusAgent={handleFocusAgent}
         onSendMessage={handleSendMessageToAgent}
         onUpdateStatus={handleUpdateAgentStatus}
         locale={locale}
+        ledger={ledgerConnection}
+        usageFigures={
+          detailModalAgentId ? officeLedgerUsage?.byAgent?.[detailModalAgentId] : undefined
+        }
+        ledgerReady={Boolean(officeLedgerUsage)}
+        isStale={isUsageStale}
+        usageWindow={usageWindow}
+        maskSecrets={maskSecrets}
+        initialTab={detailModalInitialTab ?? undefined}
       />
     </div>
   );

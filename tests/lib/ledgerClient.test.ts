@@ -172,4 +172,29 @@ describe('fetchCalls', () => {
     });
     await fetchCalls('https://server.example/', undefined, { limit: 50 }, fetchMock as unknown as typeof fetch);
   });
+
+  it('forwards from/to as pass-through query params, same convention as fetchRollup (issue #78)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      expect(parsed.searchParams.get('from')).toBe('1000');
+      expect(parsed.searchParams.get('to')).toBe('2000');
+      return jsonResponse(200, VALID_CALLS);
+    });
+    await fetchCalls(
+      'https://server.example',
+      'tok',
+      { agentId: ['atlas'], from: 1000, to: 2000 },
+      fetchMock as unknown as typeof fetch
+    );
+  });
+
+  it('omits from/to entirely when not given ("All time")', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      expect(parsed.searchParams.has('from')).toBe(false);
+      expect(parsed.searchParams.has('to')).toBe(false);
+      return jsonResponse(200, VALID_CALLS);
+    });
+    await fetchCalls('https://server.example', 'tok', { agentId: ['atlas'] }, fetchMock as unknown as typeof fetch);
+  });
 });

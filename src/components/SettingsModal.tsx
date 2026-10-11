@@ -1,7 +1,7 @@
 import React, { useId, useState } from 'react';
 import { PricingConfig } from '../types/agent';
 import { isSoundEnabled, setSoundEnabled } from '../engine/soundEffects';
-import { X, DollarSign, Shield, Volume2, RotateCcw, Download, Coffee } from 'lucide-react';
+import { X, DollarSign, Shield, Volume2, RotateCcw, Download, Coffee, Eye } from 'lucide-react';
 import type { Locale } from '../i18n';
 import { t } from '../i18n';
 
@@ -16,6 +16,14 @@ interface SettingsModalProps {
   onAmbientSocialEnabledChange: (enabled: boolean) => void;
   politicsChatterEnabled: boolean;
   onPoliticsChatterEnabledChange: (enabled: boolean) => void;
+  /** Display preference (issue #78), lifted out of this modal's own state so other usage surfaces (the call
+   * detail panel) can read it too. Persisted in `localStorage` by the caller. */
+  maskSecrets: boolean;
+  onMaskSecretsChange: (masked: boolean) => void;
+  /** Display preference (issue #78): hides the per-agent spend badges on the office canvas. The top-bar total
+   * is never gated by this. */
+  showUsageBadges: boolean;
+  onShowUsageBadgesChange: (show: boolean) => void;
   locale: Locale;
 }
 
@@ -30,10 +38,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onAmbientSocialEnabledChange,
   politicsChatterEnabled,
   onPoliticsChatterEnabledChange,
+  maskSecrets,
+  onMaskSecretsChange,
+  showUsageBadges,
+  onShowUsageBadgesChange,
   locale,
 }) => {
   const [localPricing, setLocalPricing] = useState<PricingConfig[]>(pricing);
-  const [maskSecrets, setMaskSecrets] = useState(true);
   const [soundActive, setSoundActive] = useState(isSoundEnabled());
   const titleId = useId();
 
@@ -140,13 +151,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <input
                 type="checkbox"
                 checked={maskSecrets}
-                onChange={(e) => setMaskSecrets(e.target.checked)}
+                onChange={(e) => onMaskSecretsChange(e.target.checked)}
                 className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4"
               />
               <div>
                 <span className="font-semibold text-slate-200 block">{t(locale, 'settings.privacyLabel')}</span>
                 <span className="text-[11px] text-slate-400">
                   {t(locale, 'settings.privacyHelp')}
+                </span>
+              </div>
+            </label>
+          </div>
+
+          {/* Section: Usage display (issue #78) */}
+          <div className="space-y-3 pt-3 border-t border-slate-800">
+            <div className="flex items-center gap-2">
+              <Eye className="w-4 h-4 text-sky-400" aria-hidden="true" />
+              <h3 className="font-semibold text-slate-200">{t(locale, 'settings.usageDisplayTitle')}</h3>
+            </div>
+            <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showUsageBadges}
+                onChange={(e) => onShowUsageBadgesChange(e.target.checked)}
+                className="rounded border-slate-700 text-indigo-600 focus:ring-0 w-4 h-4"
+              />
+              <div>
+                <span className="font-semibold text-slate-200 block">{t(locale, 'settings.showUsageBadgesLabel')}</span>
+                <span className="text-[11px] text-slate-400">
+                  {t(locale, 'settings.showUsageBadgesHelp')}
                 </span>
               </div>
             </label>

@@ -20,7 +20,7 @@ You can also build a wheel and install it elsewhere:
 
 ```bash
 python -m pip wheel ./sdk/python -w dist/
-pip install dist/agent_viewer-0.3.0-py3-none-any.whl
+pip install dist/agent_viewer-0.5.0-py3-none-any.whl
 ```
 
 ## Quick start

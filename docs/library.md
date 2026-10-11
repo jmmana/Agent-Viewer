@@ -2,7 +2,7 @@
 
 `@warlockcode/agent-viewer` puts the Agent Viewer office inside your own React app. The office is a Canvas2D scene drawn only from the events you pass: the agents your runtime registers, their statuses, the tools they use, the messages they send and the meetings they hold.
 
-This guide covers version **0.2.0**. Leer en español: [library.es.md](library.es.md).
+This guide covers version **0.5.0**. Leer en español: [library.es.md](library.es.md).
 
 ## Contents
 
@@ -40,7 +40,7 @@ The runtime dependencies are `lucide-react` (icons), `zod` (strict event validat
 Publication on npm is coming soon. Until then, install the package from the GitHub release asset:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.2.1/warlockcode-agent-viewer-0.2.1.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
 ```
 
 The package name is `@warlockcode/agent-viewer` in both cases, so your imports will not change when you switch to the npm registry.
@@ -155,8 +155,11 @@ Give every event a stable, unique `id`. The office ignores an event whose `id` i
 | `showUsage` | `boolean` | `false` | Shows the figures passed in `usage`. See [Usage figures](#usage-figures). |
 | `showUsageBadges` | `boolean` | `false` | Draws a compact usage badge on each agent card from `usage.byAgent`. Independent of `showUsage`. See [Usage figures](#usage-figures). |
 | `usage` | `OfficeUsage` | none | Usage figures computed by your app. The office never computes them. |
+| `meetingUsage` | `MeetingUsage` | none | Per-meeting usage figures computed by your app, keyed by meeting id. Shown only while `showUsage` is also `true`. See [Meeting figures](#meeting-figures). |
+| `showCallDetails` | `boolean` | `false` | Shows a read-only panel with the calls of the selected agent, from `agentCallDetails`. Independent of `showUsage`/`showUsageBadges`. See [Call details](#call-details). |
+| `agentCallDetails` | `AgentCallDetails` | none | Call metadata per agent id, computed and paged by your app. Only the selected agent's entry is read. |
 | `selectedAgentId` | `string \| null` | none | Controlled selection. Leave it undefined to let the office keep its own. When it changes, the camera centers on that agent. |
-| `onSelectAgent` | `(agentId: string \| null) => void` | none | Called when the viewer clicks an agent on the canvas. |
+| `onSelectAgent` | `(agentId: string \| null) => void` | none | Called when the viewer clicks an agent on the canvas, chooses it from the agent list, or closes the call details panel (close button or `Escape`). |
 | `bubbleDurationMs` | `number` | `6500` | How long a speech bubble stays on screen, in milliseconds. |
 | `className` | `string` | none | Extra class for the root `<section class="av-office av-theme-…">`. |
 | `style` | `React.CSSProperties` | none | Inline styles for the root element. |
@@ -304,7 +307,7 @@ const officeT = useCallback<HostTranslate>(
 
 ### Message keys
 
-There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline` and `modelOps.*` keys belong to the demo app's Model Ops console and timeline; the embedded office does not show them. As of issue #79, Model Ops reads the server's usage ledger: that read client and its ledger-backed tab components live under `src/integrations/ledgerClient.ts` and `src/components/modelOps/`, both demo-app-only. `@warlockcode/agent-viewer` ships no ledger client, no usage-ledger endpoint reference and no Model Ops component (enforced by `tests/lib/libraryIsolation.test.ts`).
+There are 156 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline`, `modelOps.*` and `crew.*` keys belong to the demo app (the Model Ops console and timeline, and the separate Crew renderer under `src/crew/`); the embedded office does not show them. As of issue #79, Model Ops reads the server's usage ledger: that read client and its ledger-backed tab components live under `src/integrations/ledgerClient.ts` and `src/components/modelOps/`, both demo-app-only. `@warlockcode/agent-viewer` ships no ledger client, no usage-ledger endpoint reference and no Model Ops component (enforced by `tests/lib/libraryIsolation.test.ts`).
 
 #### `rooms.*` (10)
 
@@ -457,7 +460,7 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | `office.agentLineNoRole` | {name}: {status} | {name}: {status} |
 | `office.empty` | Waiting for agent activity | Esperando actividad de los agentes |
 
-#### `usage.*` (26)
+#### `usage.*` (31)
 
 | Key | English | Spanish |
 |---|---|---|
@@ -487,6 +490,28 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | `usage.noCurrency` | Currency not reported | Moneda no reportada |
 | `usage.estimatedShort` | estimated | estimado |
 | `usage.sourceUnknown` | Source unknown | Fuente desconocida |
+| `usage.calls` | Model calls | Llamadas al modelo |
+| `usage.unattributedCalls` | Not attributed to this meeting | Sin atribuir a esta reunión |
+| `usage.meeting` | Meeting spend | Gasto de la reunión |
+| `usage.meetingsHeading` | Meetings | Reuniones |
+| `usage.meetingLine` | {title}: {usage} | {title}: {usage} |
+
+#### `calls.*` (12)
+
+| Key | English | Spanish |
+|---|---|---|
+| `calls.title` | Call details: {name} | Detalle de llamadas: {name} |
+| `calls.close` | Close call details | Cerrar el detalle de llamadas |
+| `calls.empty` | No call details provided | No se proporcionó detalle de llamadas |
+| `calls.provider` | Provider | Proveedor |
+| `calls.model` | Model | Modelo |
+| `calls.status` | Status | Estado |
+| `calls.status.ok` | OK | Correcta |
+| `calls.status.failed` | Failed | Fallida |
+| `calls.status.rate_limited` | Rate limited | Limitada por frecuencia |
+| `calls.latency` | Latency | Latencia |
+| `calls.latencyValue` | {value} ms | {value} ms |
+| `calls.requestId` | Request id | Id de solicitud |
 
 #### `replay.*` (8)
 
@@ -506,6 +531,16 @@ There are 116 keys. The `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `
 | Key | English | Spanish |
 |---|---|---|
 | `video.time` | Time: {time} | Hora: {time} |
+
+#### `crew.*` (3)
+
+| Key | English | Spanish |
+|---|---|---|
+| `crew.walkFallback` | Walk atlas unavailable; the original pose remains visible. | Atlas de caminar no disponible; se conserva la pose original. |
+| `crew.walkDemo` | DEMO: synthetic read-only CEO transit snapshot. | DEMO: snapshot sintético de tránsito del CEO, de solo lectura. |
+| `crew.walkPrototype` | 2.5D PROTOTYPE: CEO walk frames follow reported transit in four directions; final art and physical paths are pending. | PROTOTIPO 2.5D: los cuadros de caminar del CEO siguen el tránsito reportado en cuatro direcciones; arte final y trayectorias físicas pendientes. |
+
+Like `modelOps.*`, these keys belong to the demo app's separate Crew renderer (`src/crew/`), never `@warlockcode/agent-viewer`.
 
 ## Theming
 
@@ -561,7 +596,7 @@ Notes:
 
 - The canvas drawing itself (floor, furniture, agents, name cards and bubbles) uses the built-in dark or light palette chosen by `theme`. The `--av-*` variables do not change it.
 - No fonts are loaded. Canvas text asks for `"Plus Jakarta Sans"` and falls back to the browser's sans-serif font when your page does not provide it.
-- Class names you can target: `av-office`, `av-theme-dark`, `av-theme-light`, `av-office-stage`, `av-office-empty`, `av-usage`, `av-usage-item`, `av-sr-only`, `av-canvas-root`, `av-toolbar`, `av-toolbar-sep`, `av-tool-btn`, `av-tool-btn--accent`, `av-tool-btn--active`, `av-zoom-level`, `av-stage`, `av-canvas`, `av-icon`, `av-replay`, `av-replay-btn`, `av-replay-btn--primary`, `av-replay-range`, `av-replay-progress`, `av-replay-speed`. The `av-tooltip*`, `av-tool-btn--telemetry` and `av-icon--live` classes are used by the demo app.
+- Class names you can target: `av-office`, `av-theme-dark`, `av-theme-light`, `av-office-stage`, `av-office-empty`, `av-usage-stack`, `av-usage`, `av-usage-item`, `av-meeting-usage`, `av-meeting-usage-title`, `av-sr-only`, `av-canvas-root`, `av-toolbar`, `av-toolbar-sep`, `av-tool-btn`, `av-tool-btn--accent`, `av-tool-btn--active`, `av-zoom-level`, `av-stage`, `av-canvas`, `av-icon`, `av-replay`, `av-replay-btn`, `av-replay-btn--primary`, `av-replay-range`, `av-replay-progress`, `av-replay-speed`, `av-call-details`, `av-call-details-header`, `av-call-details-close`, `av-call-details-empty`, `av-call-details-list`, `av-call-item`, `av-call-row`, `av-call-request-id`. The `av-tooltip*`, `av-tool-btn--telemetry` and `av-icon--live` classes are used by the demo app.
 
 ## Accessibility
 
@@ -570,9 +605,19 @@ Notes:
 - An agent list, announced politely (`aria-live="polite"`), names every agent with its role and status, for example "Atlas, Builder: Coding". With `showUsage` or `showUsageBadges` (either one), each line also carries that agent's exact figures from `usage.byAgent`, so the screen-reader text always agrees with a visible badge even when the badge itself is hidden below zoom 0.55. The list stays visually hidden until it receives keyboard focus (Tab); then it opens as a panel of buttons.
 - The toolbar (`role="toolbar"`) and the replay controls are real buttons with accessible names and a visible focus ring. The replay slider announces its progress, and the speed buttons use `aria-pressed`.
 - With `prefers-reduced-motion: reduce`, nothing animates: agents move to their destination without walking, animated details stay still and button transitions are off.
-- Keyboard selection: each agent in that list is a button (`aria-pressed` shows the selected one). Pressing it selects the agent and moves the camera to it, like a click on the canvas; pressing it again clears the selection. The office registers no global keyboard shortcuts.
+- Keyboard selection: each agent in that list is a button (`aria-pressed` shows the selected one). Pressing it selects the agent and moves the camera to it, like a click on the canvas; pressing it again clears the selection. The office registers no global keyboard shortcuts, except `Escape` inside the open call details panel (`showCallDetails`), which only closes that panel.
+- The call details panel (`showCallDetails`) is a `<section>` named by `calls.title`; opening it does not move focus into it or trap it, so a keyboard user who opened it from the agent list keeps focus there and `Escape` closes it without any extra step. It has no `aria-live` region: it is not a notification, so neither opening it nor a new figure arriving while it is open is announced.
 
 ## Usage figures
+
+### The four rules
+
+These four rules hold for every usage-related prop (`showUsage`, `showUsageBadges`, `showCallDetails`, `meetingUsage` and the usage option of `recordReplay` alike). This is the one place that states them together; the rest of this chapter only explains the mechanics.
+
+1. **The host computes, the component displays.** Figures arrive through props. The component never sums, prices, converts currency or compares against a limit: there is no prop that makes the office add events up itself.
+2. **Hidden by default.** `showUsage`, `showUsageBadges` and `showCallDetails` are each `false` until the host opts in. Nothing about usage renders before then, whatever `usage`, `meetingUsage` or `agentCallDetails` carry.
+3. **Unknown is never zero.** A missing or `null` figure is shown as "unknown" (`usage.unknown`), never as `0`. A real reported `0` still shows `0`.
+4. **Metadata only.** The call detail panel shows model, provider, tokens, `requestId`, latency, status and cost. `AgentCallDetail` has no field for a prompt, a completion or tool arguments, and the panel reads only its named fields, never the whole object, so an extra key can never leak through.
 
 The office never computes, adds up or prices usage. It only displays the figures your app passes, and only when you ask:
 
@@ -642,6 +687,62 @@ const usage = useMemo(() => summarizeUsage(events), [events]);
 - Without any `llm.usage` event, every figure is `null` (shown as "unknown"), not zero, and `byAgent` is `{}` (unless some agent has `llm.failed` events of its own, in which case it gets an entry with `failedCalls` set and everything else `null`).
 
 **Usage correlation fields (issue #64).** `llm.usage` and `llm.failed` payloads may carry `traceId`, `parentId`, `toolCallId`, `meetingId`, `userId` and `tags` (see [docs/integration.md](integration.md#correlation-and-attribution-fields-issue-64) for the validation rules). `summarizeUsage` does not read them: its output is identical whether or not an event carries these fields, and it never groups by them. No library component renders `userId` or `tags`, since `userId` is pseudonymous attribution and `tags` can be used for internal labels, neither meant for the embedded display. The library exports the matching limits and type as values and a type only, with no new behavior: `CORRELATION_ID_MAX_LENGTH` (128), `USAGE_TAGS_MAX` (20), `USAGE_TAG_MAX_LENGTH` (64) and the type `UsageCorrelation`.
+
+### Meeting figures
+
+A meeting is where several agents spend together; `meetingUsage` answers "what did this meeting cost" the same way `usage.byAgent` answers it per agent, from your app's own figures only (issue #81):
+
+```tsx
+import type { MeetingUsage } from '@warlockcode/agent-viewer';
+
+const meetingUsage = useMemo<MeetingUsage>(() => ({
+  'm-1': { calls: 14, totalTokens: 23550, cost: 0.0412, currency: 'USD', callsWithoutCost: 2, unattributedCalls: 3 },
+}), []);
+
+<AgentOffice events={events} showUsage usage={usage} meetingUsage={meetingUsage} />
+```
+
+- `MeetingUsageFigures` extends `UsageFigures` with `calls` (model calls attributed to the meeting), `callsWithoutCost` (of `calls`, how many had no cost: the cost figure is marked partial when this is greater than `0`) and `unattributedCalls` (calls you could not attribute to the meeting, shown on its own line, never added to `calls` or to any other figure). `MeetingUsage` is `Record<meetingId, MeetingUsageFigures>`.
+- Hidden unless `showUsage` is `true` and `meetingUsage` has an entry for the shown meeting. The shown meeting is the active one (`snapshot.activeMeetingId`) when it has an entry; otherwise, since the active id clears the moment a meeting ends, it is the meeting with the greatest `startedAt` that has an entry, so a just-concluded meeting still shows its figures. An entry whose key matches no meeting in the current snapshot is ignored.
+- A new `dl.av-meeting-usage` panel, placed under the per-run `av-usage` panel, shows the meeting's title and the same row rules as `usage.byAgent`: a missing or `null` field reads "unknown", a real `0` shows `0`, and an omitted key shows no row. `unattributedCalls` is shown when you send a number (including `0`) and omitted entirely when the key is absent.
+- The visually hidden list gets a second heading, "Meetings", with one line per meeting that has an entry, so screen readers get the same figures as the visible panel.
+- Nothing is summed: two meetings in `meetingUsage` never produce a combined figure, `unattributedCalls` is never added to `calls`, and the office never reads `Meeting.tokensAccumulated` or `Meeting.costAccumulated` (both `@deprecated`: always `0` outside the bundled demo script). If your host reports a mixed-currency meeting, send `cost: null` rather than picking one currency; `UsageFigures` has room for exactly one.
+- `formatMeetingUsage(figures, locale, translate)` is exported and returns the same formatted rows the panel uses, if you want to show them elsewhere.
+- Your host must send a `meetingId` on its meeting events to key this prop reliably. Without one, the library falls back to `meeting-<event id>`.
+
+### Call details
+
+Per-agent totals answer "who spent what"; `showCallDetails` answers the next question: which calls made up that number. `false` by default, independent of `showUsage` and `showUsageBadges`:
+
+```tsx
+import type { AgentCallDetails } from '@warlockcode/agent-viewer';
+
+const agentCallDetails = useMemo<AgentCallDetails>(() => ({
+  builder: [
+    {
+      id: 'call-8f2',
+      provider: 'Anthropic',
+      model: 'claude-sonnet-4-5',
+      tokens: { input: 1800, output: 450, cacheRead: 12000, cacheWrite: null },
+      requestId: 'req_01H8',
+      latencyMs: 2140,
+      status: 'ok',
+      costSource: 'provider-reported',
+      cost: 0.012,
+      currency: 'USD',
+    },
+  ],
+}), []);
+
+<AgentOffice events={events} showCallDetails agentCallDetails={agentCallDetails} onSelectAgent={setSelected} />
+```
+
+- Clicking an agent on the canvas, choosing it from the keyboard agent list, or setting `selectedAgentId` opens a panel next to that agent's calls, as reported in `agentCallDetails[agentId]`. A selected id that is not an agent in the current snapshot opens nothing. `onSelectAgent` is unchanged: there is no second callback for the panel.
+- The panel never fetches, sums, prices or sorts anything. Every call appears in the order you sent it, with 12 fixed rows: provider, model, status, latency, request id, input tokens, output tokens, cost source and cost always; cache read, cache write and reasoning tokens only when that key is present in `tokens` (a key sent as `null` still shows "unknown"; a real `0` shows `0`; an omitted key shows no row at all, the same rule `showUsage` uses for optional token fields).
+- An agent with no entry in `agentCallDetails`, or an empty array, shows "No call details provided", never "0 calls".
+- `AgentCallDetail` has no field that can carry a prompt, a completion or any other free text: `provider`, `model` and `requestId` are the only free strings, capped at 128 Unicode code points (longer values are cut with an ellipsis, in the text and in the `title` attribute), and `status`/`costSource` are closed to their known values, anything else reads "unknown". The panel never spreads the row object, so an extra key your code might add by mistake (`prompt`, `content`...) is never rendered.
+- Close the panel with the close button or `Escape` (while focus is inside it); both call `onSelectAgent(null)`, same as pressing the selected agent again in the keyboard list.
+- The panel is never drawn into a [video export](#video-export): `recordReplay` has no option for it.
 
 ### Figures from the Agent Viewer server
 
@@ -824,6 +925,7 @@ Notes:
 - The format is the first one the browser supports among WebM (VP9, VP8) and MP4; `getSupportedMimeType()` tells you which.
 - The promise rejects when the browser cannot record (`isRecordingSupported()` is `false`) or supports none of those formats.
 - The video shows the time of the latest visible event (`video.time`).
+- `RecordReplayOptions` has no field for call details: the panel from `showCallDetails`/`agentCallDetails` is never drawn into a video, whatever the page it was captured from shows.
 
 ## The office model without a React tree
 
@@ -890,7 +992,8 @@ Everything is exported from `@warlockcode/agent-viewer`. The stylesheet is `@war
 | Office | `AgentOffice` | `AgentOfficeProps` |
 | Office model | `OfficeStore`, `buildOfficeSnapshot` | `AgentProfile`, `OfficeEventInput`, `OfficeMode`, `OfficeSnapshot`, `OfficeStoreOptions` |
 | Replay | `useEventReplay`, `ReplayControls` | `EventReplay`, `EventReplayOptions`, `ReplayControlsProps` |
-| Usage | `formatUsage`, `formatTokens`, `formatCost`, `formatUsageBadge`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource` |
+| Usage | `formatUsage`, `formatTokens`, `formatCost`, `formatCostSource`, `formatUsageBadge`, `formatMeetingUsage`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource`, `MeetingUsage`, `MeetingUsageFigures` |
+| Call details | none | `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource` |
 | Texts | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Core types | none | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
 | Event contract V1 | `SCHEMA_VERSION`, `CANONICAL_EVENT_TYPES`, `EVENT_TYPE_ALIASES`, `MESSAGE_KINDS`, `isMessageKind`, `LLM_ERROR_KINDS`, `isLlmErrorKind`, `normalizeCanonicalEvent`, `validateCanonicalEvent` | `CanonicalEvent`, `CanonicalEventInput`, `CanonicalEventType`, `LegacyEventType`, `EventSeverity`, `MessageKind`, `LlmErrorKind`, `ValidationIssue`, `ValidationResult` |
@@ -930,6 +1033,8 @@ const connection = connectEventStream(base, (event) => setEvents((prev) => [...p
 
 - Two offices on the same page never share state: each `<AgentOffice>` owns its store.
 - Nothing is read from or written to `localStorage` or any other browser storage.
+- No usage figure is ever stored: `usage`, `meetingUsage` and `agentCallDetails` are read on each render and never copied into the store, `localStorage` or any other persistence; closing and reopening the office with the same props draws the same figures, nothing cached in between.
+- The usage badge, the per-agent panel and the call detail panel render nothing unless the host opts in with `showUsage`, `showUsageBadges` or `showCallDetails`: the props can carry every figure filled in and still produce no visible usage UI while these are `false`.
 - No timer invents data. The office checks every 250 ms whether walks finished and meetings can start; only `mode="showcase"` adds simulated activity, and it is marked as simulated.
 - No global keyboard shortcuts.
 - Nothing runs on import, and no styles are injected.
@@ -940,3 +1045,5 @@ The demo app of this repository (`npm run dev`) is built separately with `npm ru
 ## Versioning
 
 The library follows [Semantic Versioning](https://semver.org/). While it is at 0.x, the API may still change: a minor release (0.3.0, 0.4.0...) can include breaking changes, and they are listed in the [CHANGELOG](../CHANGELOG.md). A range such as `^0.2.0` accepts only 0.2.x patch releases.
+
+0.5.0 adds `showUsageBadges`, `showCallDetails`, `meetingUsage` and their types (`UsageBadge`, `UsageCostSource`, `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource`, `MeetingUsage`, `MeetingUsageFigures`). Every one of them is additive and off by default: an app written against 0.2.x keeps working unchanged.

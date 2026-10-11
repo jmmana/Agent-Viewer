@@ -1,6 +1,6 @@
 {
   "name": "@warlockcode/agent-viewer",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "description": "Open-source visual observability for AI agents in an interactive animated virtual office, with a one-command CLI and a Claude Code adapter",
   "license": "MIT",
   "type": "module",
@@ -70,6 +70,7 @@
     "crew:assets:import": "node scripts/crew-assets.mjs import",
     "crew:perf:bench": "tsx scripts/crew-perf-benchmark.mjs",
     "crew:perf:browser": "node scripts/crew-perf-browser.mjs",
+    "crew:palette:measure": "node scripts/crew-palette-measure.mjs",
     "cli": "tsx cli/index.ts"
   },
   "peerDependencies": {

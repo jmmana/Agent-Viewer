@@ -104,6 +104,16 @@ export function crewActivityLine(activity: CrewAgentActivity, isEs: boolean): st
   return parts.join(' · ');
 }
 
+/**
+ * Verdadero solo cuando el propio status real del agente (campo del dominio, nunca
+ * inferido de la sala ni de ninguna otra señal) es `PHONE_CALL` (issue #145). Es el único
+ * origen de verdad que usan la línea de tiempo local de llamada (`crewCallTimeline.ts`) y
+ * la superposición visual de Crew: ninguna de las dos infiere una llamada de otra forma.
+ */
+export function crewInPhoneCall(agent: Pick<Agent, 'status'>): boolean {
+  return agent.status === 'PHONE_CALL';
+}
+
 /** Rótulo corto para la insignia LIVE/DEMO/REPLAY que el host puede mostrar en Crew. */
 export function crewViewerModeLabel(mode: CrewViewerMode, isEs: boolean): string {
   switch (mode) {

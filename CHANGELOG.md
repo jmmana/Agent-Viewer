@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Crew: phone call overlay (ring + talking + hang-up fade) anchored to the agent's own
-  marker in the room, driven only by the real `Agent.status === 'PHONE_CALL'` field
-  (never inferred, never a connectivity proof). A local mini call-timeline per agent
-  shows elapsed time since Crew detected the call and a "Dismiss notice" button that
-  hides the local visual only (Crew has no real action channel to end a provider call).
-  The CEO gets its banked `phone-front` pose in the front camera view while in a real
-  call; every other role and view gets the generic ring + call icon. Reuses the Crew
-  audio engine from #150 with a new opt-in `phone-ring` cue, muted by default like every
-  other Crew sound (#145, refs #114).
-
 ## [0.5.0] - 2026-10-10
 
 "Spend in the office": per-agent usage badges and a per-call detail panel on the canvas, fed only by host props (#76, #77); the portal reading those same figures from the real usage ledger for canvas badges, the agent inspector and the call-detail modal (#78); cost per meeting and per tool computed on the server and shown in the Meetings panel and tool tooltips (#80, #81); Model Ops's Matrix, Agents and Feed tabs reconciling call by call against the ledger instead of local counters (#79); and the library guide's four privacy rules written out in one place for integrators: the host computes, the component only displays; usage UI stays hidden until the host opts in; a missing figure is always "unknown", never `0`; and the call detail panel is metadata only, never prompt, completion or tool-argument text. Full reference: [the usage chapter of the library guide](docs/library.md#usage-figures) ([español](docs/library.es.md#cifras-de-consumo)).

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Agent } from '../types/agent';
 import { CameraState, renderOfficeScene, type AgentBadge } from '../engine/canvasRenderer';
+import type { AgentBudgetState } from '../lib/budget';
 import { getOfficeRenderedBounds, gridToScreen, screenToGrid } from '../engine/officeModel';
 import { compactTokens } from '../engine/modelOps';
 import { OfficeMotion } from '../engine/visualMotion';
@@ -30,6 +31,12 @@ interface OfficeCanvasProps {
   usageTelemetry?: boolean;
   /** Pre-formatted per-agent usage badges, keyed by agent id. The canvas never computes these itself. */
   agentBadges?: ReadonlyMap<string, AgentBadge>;
+  /**
+   * Pre-normalized per-agent budget state (issue #87), keyed by agent id. The canvas never computes this
+   * state, it only draws the host's verdict. Embedded views leave it undefined or empty: no marker, no
+   * desk tint and no extra reserved space are drawn.
+   */
+  budgetByAgent?: ReadonlyMap<string, AgentBudgetState>;
   /**
    * Declare the theme tokens on the canvas root. Turn it off when a parent (such as `.av-office`) already
    * declares them, so host overrides on that parent reach the toolbar too.
@@ -98,6 +105,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
   translate,
   usageTelemetry = false,
   agentBadges,
+  budgetByAgent,
   themeScope = true,
   isInspectorOpen = false,
   onToggleSidebar,
@@ -300,6 +308,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
         translate,
         usageTelemetry,
         agentBadges,
+        budgetByAgent,
       });
 
       ctx.restore();
@@ -312,7 +321,7 @@ export const OfficeCanvas: React.FC<OfficeCanvasProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, translate, usageTelemetry, agentBadges, reducedMotion]);
+  }, [camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, theme, translate, usageTelemetry, agentBadges, budgetByAgent, reducedMotion]);
 
   // Mouse drag & pan
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {

@@ -2,6 +2,7 @@ import { bubbleExitStyle, cameraCenter, fitBubbleNames, isSpeechActive, placeOve
 import type { Agent } from '../types/agent';
 import { isOfficeMessageKey, type OfficeTranslate } from '../content/officeMessages';
 import { aggregateModelUsage, compactTokens } from './modelOps';
+import type { AgentBudgetState, BudgetState } from '../lib/budget';
 import {
   FurnitureItem,
   GRID_COLS,
@@ -43,6 +44,23 @@ const BADGE_FONT = '500 9px "Plus Jakarta Sans", sans-serif';
 const BADGE_FONT_BOLD = '700 9px "Plus Jakarta Sans", sans-serif';
 const BADGE_SEPARATOR = ' · ';
 
+/**
+ * Marker colors per theme, exported so a test can check WCAG contrast (1.4.11, at least 3:1) against the
+ * marker's own opaque backing plate (`plate`), not against whatever is drawn underneath. `ok` draws no
+ * marker and has no color here on purpose.
+ */
+export const BUDGET_COLORS = {
+  dark: { plate: '#0d1524', warning: '#fbbf24', exceeded: '#f87171', unknown: '#a9b7ca' },
+  light: { plate: '#ffffff', warning: '#b45309', exceeded: '#b91c1c', unknown: '#526176' },
+} as const;
+
+/** Fixed screen-space diameter of a budget marker plate, in pixels. Never scales with camera zoom. */
+const BUDGET_MARKER_SIZE = 18;
+const BUDGET_MARKER_FONT = '700 11px "Plus Jakarta Sans", sans-serif';
+
+/** Keyed by agent id; an empty map when the host sends none. Reused across frames (read-only). */
+const EMPTY_BUDGET_MAP: ReadonlyMap<string, AgentBudgetState> = new Map();
+
 export interface RenderContext {
   ctx: CanvasRenderingContext2D;
   width: number;
@@ -68,12 +86,21 @@ export interface RenderContext {
    * badge path never imports from `modelOps` and draws nothing when an agent has no entry here.
    */
   agentBadges?: ReadonlyMap<string, AgentBadge>;
+  /**
+   * Pre-normalized per-agent budget state (issue #87), keyed by agent id. The canvas never computes this
+   * state: it only draws the host's verdict (already normalized by `AgentOffice`, through
+   * `normalizeBudgetState`). Embedded views leave it undefined or empty: no marker, no desk tint and no
+   * extra reserved space are ever drawn.
+   */
+  budgetByAgent?: ReadonlyMap<string, AgentBudgetState>;
 }
 
 /** Text settings shared by every drawing helper. */
 interface SceneText {
   translate: OfficeTranslate;
   usageTelemetry: boolean;
+  /** See `RenderContext.budgetByAgent`. Always a `Map`, empty when the host sends none. */
+  budgetByAgent: ReadonlyMap<string, AgentBudgetState>;
 }
 
 /** Label of a furniture item from the catalog. Items without a catalog entry draw no text. */
@@ -92,7 +119,11 @@ function furnitureLabel(item: FurnitureItem, scene: SceneText): string | undefin
 export function renderOfficeScene(rc: RenderContext) {
   const { ctx, width, height, camera, agents, selectedAgentId, hoveredAgentId, activeMeetingId, timeMs, theme, nowMs } = rc;
   const rot = ((camera.rotation % 4) + 4) % 4;
-  const scene: SceneText = { translate: rc.translate, usageTelemetry: rc.usageTelemetry ?? false };
+  const scene: SceneText = {
+    translate: rc.translate,
+    usageTelemetry: rc.usageTelemetry ?? false,
+    budgetByAgent: rc.budgetByAgent ?? EMPTY_BUDGET_MAP,
+  };
 
   ctx.clearRect(0, 0, width, height);
 
@@ -914,6 +945,22 @@ function renderDesk(
     ctx.fillStyle = theme === 'dark' ? '#94a3b8' : '#64748b';
     ctx.textAlign = 'left';
     ctx.fillText(deskLabel, posX - 2, posY + deskH + 9, deskW + 4);
+  }
+
+  // Catalog desk tint (issue #87): a reinforcement only, never the only signal of a budget state. Only the
+  // demo team's own desks carry `assignedAgentId`; a host agent with no catalog desk gets no tint here, its
+  // state still reaches the screen through the agent marker in `drawAgentOverlays`.
+  const deskBudget = item.assignedAgentId ? scene.budgetByAgent.get(item.assignedAgentId) : undefined;
+  const deskBudgetColor = deskBudget ? budgetMarkerColor(deskBudget.state, theme) : null;
+  if (deskBudgetColor) {
+    ctx.strokeStyle = deskBudgetColor;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    // Radius 5.5 on purpose: distinct from every other `roundRect` radius this file already draws (chairs,
+    // screens, agent clothing), so a test can isolate this exact tint by shape alone.
+    ctx.roundRect(posX - 2, posY - 2, deskW + 4, deskH + 4, 5.5);
+    ctx.stroke();
   }
 }
 
@@ -1892,24 +1939,135 @@ function drawAgentBadge(ctx: CanvasRenderingContext2D, card: OverlayRect, rows: 
   }
 }
 
+/** Agent's budget entry from `RenderContext.budgetByAgent`, or `undefined` without an entry (no claim made). */
+function agentBudgetEntry(rc: RenderContext, agentId: string): AgentBudgetState | undefined {
+  return rc.budgetByAgent?.get(agentId);
+}
+
+/** `ok` draws no marker (quiet when healthy); every other known or unrecognized state does. */
+function hasBudgetMarker(entry: AgentBudgetState | undefined): boolean {
+  return entry !== undefined && entry.state !== 'ok';
+}
+
+/** The marker color for a state, or `null` for `ok` (drawn as nothing). */
+function budgetMarkerColor(state: BudgetState, theme: 'dark' | 'light'): string | null {
+  if (state === 'ok') return null;
+  if (state === 'warning') return BUDGET_COLORS[theme].warning;
+  if (state === 'exceeded') return BUDGET_COLORS[theme].exceeded;
+  return BUDGET_COLORS[theme].unknown; // 'unknown' and any value outside the four known states
+}
+
+/** The marker glyph for a state: shape, glyph and outline pattern carry the meaning, not only color. */
+function budgetMarkerGlyph(state: BudgetState): string | null {
+  if (state === 'warning') return '!';
+  if (state === 'exceeded') return '×';
+  if (state === 'ok') return null;
+  return '?'; // 'unknown' and any value outside the four known states
+}
+
+/** Fixed screen-space rectangle a budget marker reserves, at the right edge of the agent's head box. */
+function budgetMarkerRect(anchorX: number, anchorY: number): OverlayRect {
+  return { x: anchorX + 15, y: anchorY - 5, width: BUDGET_MARKER_SIZE, height: BUDGET_MARKER_SIZE };
+}
+
+/**
+ * Draws one budget marker: an opaque backing plate, then a shape, glyph and outline pattern unique to the
+ * state (WCAG: distinguishable without color). Static in every frame, independent of `timeMs` and
+ * `reducedMotion`: nothing about a budget state pulses, blinks or fades. `ok` draws nothing.
+ */
+function drawBudgetMarker(ctx: CanvasRenderingContext2D, cx: number, cy: number, state: BudgetState, theme: 'dark' | 'light'): void {
+  const color = budgetMarkerColor(state, theme);
+  const glyph = budgetMarkerGlyph(state);
+  if (!color || !glyph) return;
+  const r = BUDGET_MARKER_SIZE / 2;
+
+  ctx.save();
+  ctx.fillStyle = BUDGET_COLORS[theme].plate;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = color;
+  if (state === 'warning') {
+    // Triangle, dotted outline.
+    ctx.setLineDash([2, 2]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r + 2);
+    ctx.lineTo(cx + r - 2, cy + r - 3);
+    ctx.lineTo(cx - r + 2, cy + r - 3);
+    ctx.closePath();
+    ctx.stroke();
+  } else if (state === 'exceeded') {
+    // Octagon, solid thick outline.
+    ctx.setLineDash([]);
+    ctx.lineWidth = 3;
+    const sides = 8;
+    ctx.beginPath();
+    for (let i = 0; i < sides; i++) {
+      const angle = Math.PI / sides + (i * 2 * Math.PI) / sides;
+      const px = cx + (r - 2) * Math.cos(angle);
+      const py = cy + (r - 2) * Math.sin(angle);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  } else {
+    // Circle, dashed outline ('unknown' and any value outside the four known states).
+    ctx.setLineDash([3, 2]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r - 2, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  ctx.font = BUDGET_MARKER_FONT;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(glyph, cx, cy + 1);
+  ctx.restore();
+}
+
 function drawAgentOverlays(rc: RenderContext) {
   const { ctx, agents, camera, width, height, nowMs, timeMs, theme, translate } = rc;
   const center = cameraCenter(width, height);
   const visualOffsets = getAgentVisualOffsets(agents);
-  const anchors = agents.filter(agent => camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble ?? agent.ambientBubble, nowMs)).map(agent => {
-    const world = gridToScreen(agent.x, agent.y, camera.rotation);
-    const offset = visualOffsets.get(agent.id) ?? { ox: 0, oy: 0 };
-    return { agent, x: center.x + (world.x + TILE_SIZE / 2 + offset.ox + camera.x) * camera.zoom,
-      y: center.y + (world.y - 13 + offset.oy + camera.y) * camera.zoom };
-  }).filter(anchor => anchor.x > -20 && anchor.x < width + 20 && anchor.y > -20 && anchor.y < height + 20);
-  // Reserve heads and room plaques before laying out cards, so labels cannot hide a character or a room name.
+  const anchors = agents
+    .map(agent => {
+      const world = gridToScreen(agent.x, agent.y, camera.rotation);
+      const offset = visualOffsets.get(agent.id) ?? { ox: 0, oy: 0 };
+      const x = center.x + (world.x + TILE_SIZE / 2 + offset.ox + camera.x) * camera.zoom;
+      const y = center.y + (world.y - 13 + offset.oy + camera.y) * camera.zoom;
+      const budgetEntry = agentBudgetEntry(rc, agent.id);
+      const showCard = camera.zoom >= 0.55 || agent.id === rc.selectedAgentId || agent.id === rc.hoveredAgentId || isSpeechActive(agent.speechBubble ?? agent.ambientBubble, nowMs);
+      return { agent, x, y, budgetEntry, hasMarker: hasBudgetMarker(budgetEntry), showCard };
+    })
+    // A marker-only agent (no card at this zoom) still gets into the list, so its marker stays visible
+    // below zoom 0.55, where the name card itself is skipped.
+    .filter(anchor => (anchor.showCard || anchor.hasMarker) && anchor.x > -20 && anchor.x < width + 20 && anchor.y > -20 && anchor.y < height + 20);
+  // Reserve heads, budget markers and room plaques before laying out cards, so a card can never cover a
+  // character, a marker or a room name.
   const occupied: OverlayRect[] = anchors.map(a => ({ x: a.x - 15, y: a.y - 5, width: 30, height: 46 }));
+  for (const a of anchors) {
+    if (a.hasMarker) occupied.push(budgetMarkerRect(a.x, a.y));
+  }
   occupied.push(...roomPlaqueScreenRects(ctx, rc));
   const labels = new Map<string, OverlayRect>();
   const foreground = theme === 'dark' ? '#f1f5f9' : '#0f172a';
   const background = theme === 'dark' ? '#0d1524' : '#ffffff';
   ctx.save();
   for (const a of [...anchors].sort((a, b) => a.y - b.y)) {
+    if (!a.showCard) {
+      // Below zoom 0.55, name cards are hidden but a marker still is not: it has its own fixed-size,
+      // always-visible anchor next to the agent's head.
+      if (a.hasMarker) {
+        const markerRect = budgetMarkerRect(a.x, a.y);
+        drawBudgetMarker(ctx, markerRect.x + BUDGET_MARKER_SIZE / 2, markerRect.y + BUDGET_MARKER_SIZE / 2, a.budgetEntry!.state, theme);
+      }
+      continue;
+    }
     const { color, label } = statusAppearance(a.agent.status, translate);
     const name = agentDisplayName(a.agent, translate);
     ctx.font = '600 10px "Plus Jakarta Sans", sans-serif';
@@ -1944,6 +2102,11 @@ function drawAgentOverlays(rc: RenderContext) {
     ctx.font = '500 9px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = theme === 'dark' ? '#a9b7ca' : '#526176';
     ctx.fillText(wrapText(subtitle, card.width - 20, t => ctx.measureText(t).width, 1)[0], card.x + 10, card.y + 30);
     if (badgeRows.length > 0) drawAgentBadge(ctx, card, badgeRows, AGENT_BADGE_COLORS[theme]);
+    // Budget marker at the card's top right corner: the same marker drawn when the card is hidden, so the
+    // state reads the same whichever one is visible this frame.
+    if (a.hasMarker) {
+      drawBudgetMarker(ctx, card.x + card.width - BUDGET_MARKER_SIZE / 2 - 2, card.y + BUDGET_MARKER_SIZE / 2 + 2, a.budgetEntry!.state, theme);
+    }
   }
   for (const a of anchors) {
     const speech = a.agent.speechBubble ?? a.agent.ambientBubble;

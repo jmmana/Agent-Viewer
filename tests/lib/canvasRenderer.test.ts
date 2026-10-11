@@ -5,7 +5,9 @@ import {
   OFFICE_MESSAGES,
   buildOfficeSnapshot,
   createOfficeTranslator,
+  normalizeBudgetState,
   type Agent,
+  type AgentBudgetState,
   type OfficeTranslate,
 } from '../../src/lib/index';
 import { T0, findEnglishLeaks, meetingMessage, meetingRequested, messageSent, registered, statusChanged } from './fixtures';
@@ -93,10 +95,13 @@ interface DrawOptions {
   agents?: Agent[];
   activeMeetingId?: string | null;
   agentBadges?: ReadonlyMap<string, AgentBadge>;
+  budgetByAgent?: ReadonlyMap<string, AgentBudgetState>;
   theme?: 'dark' | 'light';
   width?: number;
   height?: number;
   camera?: CameraState;
+  selectedAgentId?: string | null;
+  timeMs?: number;
 }
 
 function drawScene(translate: OfficeTranslate, options: DrawOptions = {}) {
@@ -107,14 +112,15 @@ function drawScene(translate: OfficeTranslate, options: DrawOptions = {}) {
     height: options.height ?? HEIGHT,
     camera: options.camera ?? centeredCamera(),
     agents: options.agents ?? sceneAgents(),
-    selectedAgentId: null,
+    selectedAgentId: options.selectedAgentId ?? null,
     hoveredAgentId: null,
     activeMeetingId: options.activeMeetingId ?? null,
-    timeMs: 1000,
+    timeMs: options.timeMs ?? 1000,
     theme: options.theme ?? 'dark',
     translate,
     usageTelemetry: options.usageTelemetry,
     agentBadges: options.agentBadges,
+    budgetByAgent: options.budgetByAgent,
     nowMs: NOW + 100,
     reducedMotion: true,
   });
@@ -360,5 +366,99 @@ describe('renderOfficeScene: agent usage badges', () => {
       expect(contrast(secondary, background)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(failed, background)).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+/** Rectangles of every catalog desk tint: `renderDesk` draws its budget border with radius 5.5, a value no
+ *  other `roundRect` call in the renderer uses, so a test can isolate it from chairs, screens and clothing. */
+function deskTintRects(rects: readonly RecordedRect[]): RecordedRect[] {
+  return rects.filter((rect) => rect.radius === 5.5);
+}
+
+describe('renderOfficeScene: budget markers (issue #87)', () => {
+  const warning = (): AgentBudgetState => normalizeBudgetState({ state: 'warning' });
+  const exceeded = (): AgentBudgetState => normalizeBudgetState({ state: 'exceeded' });
+  const unknown = (): AgentBudgetState => normalizeBudgetState({ state: 'unknown' });
+  const ok = (): AgentBudgetState => normalizeBudgetState({ state: 'ok' });
+
+  it('draws no marker glyph when budgetByAgent is undefined', () => {
+    const { texts } = drawScene(english, { agents: singleAgent() });
+    expect(texts.filter((t) => t === '!' || t === '×' || t === '?')).toEqual([]);
+  });
+
+  it('draws no marker glyph when budgetByAgent is given but empty', () => {
+    const { texts } = drawScene(english, { agents: singleAgent(), budgetByAgent: new Map() });
+    expect(texts.filter((t) => t === '!' || t === '×' || t === '?')).toEqual([]);
+  });
+
+  it('draws no marker glyph for an "ok" state: a healthy budget is quiet', () => {
+    const { texts } = drawScene(english, { agents: singleAgent(), budgetByAgent: new Map([['solo', ok()]]) });
+    expect(texts.filter((t) => t === '!' || t === '×' || t === '?')).toEqual([]);
+  });
+
+  it('draws the matching glyph only for the agent that has an entry, none for an absent one', () => {
+    const agents = sceneAgents(); // ana, bruno, carla
+    const budgetByAgent = new Map<string, AgentBudgetState>([
+      ['ana', warning()],
+      ['carla', exceeded()],
+      // bruno has no entry at all.
+    ]);
+    const { texts } = drawScene(english, { agents, budgetByAgent });
+    expect(texts).toContain('!');
+    expect(texts).toContain('×');
+    expect(texts.filter((t) => t === '?')).toEqual([]);
+  });
+
+  it('draws the "?" glyph for an unknown state', () => {
+    const { texts } = drawScene(english, { agents: singleAgent(), budgetByAgent: new Map([['solo', unknown()]]) });
+    expect(texts).toContain('?');
+  });
+
+  it('keeps drawing the glyph at low zoom (0.4), where the name card itself is skipped', () => {
+    const agents = singleAgent();
+    const withoutMarker = drawScene(english, { agents, camera: { ...centeredCamera(), zoom: 0.4 } });
+    expect(agentCardRects(withoutMarker.rects)).toEqual([]); // confirms the card really is hidden at this zoom
+
+    const withMarker = drawScene(english, { agents, camera: { ...centeredCamera(), zoom: 0.4 }, budgetByAgent: new Map([['solo', exceeded()]]) });
+    expect(agentCardRects(withMarker.rects)).toEqual([]); // the card stays hidden...
+    expect(withMarker.texts).toContain('×'); // ...but the marker glyph is still drawn
+  });
+
+  it('draws the marker glyph on the card too once the card is visible (selected, so it is drawn)', () => {
+    const agents = singleAgent();
+    const { texts, rects } = drawScene(english, {
+      agents,
+      selectedAgentId: 'solo',
+      camera: { ...centeredCamera(), zoom: 0.4 },
+      budgetByAgent: new Map([['solo', warning()]]),
+    });
+    expect(agentCardRects(rects)).toHaveLength(1);
+    expect(texts).toContain('!');
+  });
+
+  it('draws budget marker calls identically across two frames with different timeMs (static, no animation)', () => {
+    const agents = sceneAgents();
+    const budgetByAgent = new Map<string, AgentBudgetState>([['ana', warning()], ['carla', exceeded()]]);
+    const glyphsOf = (timeMs: number) =>
+      drawScene(english, { agents, budgetByAgent, timeMs }).textCalls.filter((c) => c.text === '!' || c.text === '×');
+    expect(glyphsOf(1000)).toEqual(glyphsOf(99_000));
+  });
+
+  it('tints the catalog desk of a matching demo-team agent id with a 2px border, as a reinforcement only', () => {
+    const quiet = drawScene(english, { agents: sceneAgents() });
+    expect(deskTintRects(quiet.rects)).toEqual([]);
+
+    const tinted = drawScene(english, { agents: sceneAgents(), budgetByAgent: new Map([['tech-lead', exceeded()]]) });
+    expect(deskTintRects(tinted.rects)).toHaveLength(1);
+  });
+
+  it('never tints a desk for an "ok" state', () => {
+    const { rects } = drawScene(english, { agents: sceneAgents(), budgetByAgent: new Map([['tech-lead', ok()]]) });
+    expect(deskTintRects(rects)).toEqual([]);
+  });
+
+  it('never tints a desk for an agent id with no catalog desk (a host-only agent)', () => {
+    const { rects } = drawScene(english, { agents: sceneAgents(), budgetByAgent: new Map([['ana', exceeded()]]) });
+    expect(deskTintRects(rects)).toEqual([]);
   });
 });

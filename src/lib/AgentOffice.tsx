@@ -19,6 +19,7 @@ import {
   type OfficeMode,
 } from './officeStore';
 import { formatUsage, formatUsageBadge, formatMeetingUsage, type OfficeUsage, type MeetingUsage } from './usage';
+import { normalizeBudgetState, formatBudgetState, type AgentBudgetState } from './budget';
 import type { AgentBadge } from '../engine/canvasRenderer';
 import { CallDetailsPanel } from './CallDetailsPanel';
 import type { AgentCallDetails } from './callDetails';
@@ -81,6 +82,18 @@ export interface AgentOfficeProps {
    */
   meetingUsage?: MeetingUsage;
   /**
+   * Shows the budget state passed in `budgetStateByAgent` (issue #87). Off by default. The office never
+   * computes a budget state: it never holds a limit, never receives a spend figure and never compares one
+   * against the other, so there is no field here that could let it do so by accident.
+   */
+  showBudget?: boolean;
+  /**
+   * Budget state per agent id, decided by your app (`ok`/`warning`/`exceeded`/`unknown`), with an optional
+   * already-translated `label`. Shown only while `showBudget` is `true`. An agent id absent from this map
+   * shows no marker and no text: absence is never read as `ok`.
+   */
+  budgetStateByAgent?: Record<string, AgentBudgetState>;
+  /**
    * Shows the per-call detail panel for the selected agent. Off by default: without it, `agentCallDetails`
    * is never read and none of its data reaches the DOM, even when an agent is selected.
    */
@@ -122,6 +135,8 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
   showUsageBadges = false,
   usage,
   meetingUsage,
+  showBudget = false,
+  budgetStateByAgent,
   showCallDetails = false,
   agentCallDetails,
   selectedAgentId,
@@ -198,6 +213,21 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
     return map;
   }, [showUsageBadges, usage, locale, translate]);
 
+  // Built only while `showBudget` is on: normalizes every host entry (`normalizeBudgetState` never trusts
+  // the raw shape) and keeps only ids present in this snapshot, so an id that is not an agent here is
+  // silently ignored, as the privacy rules require. `Object.entries` reads own enumerable properties only,
+  // so a key such as `__proto__` is a plain agent id and never touches a prototype.
+  const budgetByAgent = useMemo<ReadonlyMap<string, AgentBudgetState>>(() => {
+    if (!showBudget || !budgetStateByAgent) return new Map();
+    const knownIds = new Set(snapshot.agents.map((agent) => agent.id));
+    const map = new Map<string, AgentBudgetState>();
+    for (const [agentId, entry] of Object.entries(budgetStateByAgent)) {
+      if (!knownIds.has(agentId)) continue;
+      map.set(agentId, normalizeBudgetState(entry));
+    }
+    return map;
+  }, [showBudget, budgetStateByAgent, snapshot.agents]);
+
   // The panel only exists while `showCallDetails` is on and the selected id is an agent in the current
   // snapshot; a stale `selectedAgentId` (not in this snapshot) renders nothing, same as a click would.
   const selectedAgentForDetails = showCallDetails
@@ -244,6 +274,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
           translate={translate}
           themeScope={false}
           agentBadges={agentBadges}
+          budgetByAgent={budgetByAgent}
         />}
 
         {visualMode === 'cartoon' && snapshot.agents.length === 0 && (
@@ -296,6 +327,8 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
             const usageText = agentUsage
               ? formatUsage(agentUsage, locale, translate).map((item) => `${item.label}: ${item.value}`).join(', ')
               : '';
+            const agentBudget = showBudget ? budgetByAgent.get(agent.id) : undefined;
+            const budgetText = agentBudget ? formatBudgetState(agentBudget, translate) : '';
             const selected = selectedId === agent.id;
             return (
               <li key={agent.id} data-agent-id={agent.id}>
@@ -305,7 +338,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
                   aria-pressed={selected}
                   onClick={() => handleSelect(selected ? null : agent.id)}
                 >
-                  {usageText ? `${line}. ${usageText}` : line}
+                  {[line, usageText, budgetText].filter(Boolean).join('. ')}
                 </button>
               </li>
             );

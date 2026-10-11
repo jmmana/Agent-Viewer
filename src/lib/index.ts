@@ -22,6 +22,10 @@ export type { ReplayControlsProps } from './ReplayControls';
 export { formatUsage, formatTokens, formatCost, formatCostSource, formatUsageBadge, formatMeetingUsage, summarizeUsage } from './usage';
 export type { OfficeUsage, UsageFigures, FormattedUsageItem, UsageBadge, UsageCostSource, MeetingUsage, MeetingUsageFigures } from './usage';
 
+// Budget state (display only, issue #87): the host decides the state, the office only draws it.
+export { normalizeBudgetState, formatBudgetState, MAX_BUDGET_LABEL_LENGTH, BUDGET_STATES } from './budget';
+export type { BudgetState, AgentBudgetState } from './budget';
+
 // Per-call detail panel (display only)
 export type { AgentCallDetail, AgentCallDetails, AgentCallTokens, AgentCallStatus, AgentCallCostSource } from './callDetails';
 

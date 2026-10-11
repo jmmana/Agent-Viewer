@@ -5,6 +5,7 @@ import {
   AgentOffice,
   ReplayControls,
   useEventReplay,
+  type AgentBudgetState,
   type AgentCallDetails,
   type HostTranslate,
   type MeetingUsage,
@@ -620,5 +621,131 @@ describe('AgentOffice: meetingUsage (issue #81, display only)', () => {
     const usage: MeetingUsage = { 'm-1': { calls: 4, unattributedCalls: 1 } };
     render(<AgentOffice events={activeMeetingEvents} meetingUsage={usage} showUsage locale="es" />);
     expect(findEnglishLeaks(collectVisibleTexts())).toEqual([]);
+  });
+});
+
+describe('AgentOffice: budget state (issue #87, display only)', () => {
+  // `useId()` generates a fresh id per render; strip it so a DOM diff only reports a real difference.
+  const stripGeneratedIds = (html: string) => html.replace(/_r_[0-9a-z]+_/g, '_id_');
+
+  const budgetStateByAgent: Record<string, AgentBudgetState> = {
+    planner: { state: 'exceeded', label: 'Daily budget at 118%' },
+    builder: { state: 'warning' },
+    reviewer: { state: 'unknown' },
+  };
+
+  it('hides every budget text when showBudget is omitted, even with a map full of exceeded entries', () => {
+    render(<AgentOffice events={englishTeam} budgetStateByAgent={budgetStateByAgent} />);
+    const html = document.body.innerHTML;
+    for (const text of ['Budget exceeded', 'Budget warning', 'Budget unknown', 'Within budget', 'Daily budget at 118%']) {
+      expect(html).not.toContain(text);
+    }
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking');
+  });
+
+  it('hides every budget text when showBudget is false, in Spanish too', () => {
+    render(<AgentOffice events={spanishTeam} budgetStateByAgent={budgetStateByAgent} showBudget={false} locale="es" />);
+    const html = document.body.innerHTML;
+    for (const text of ['Presupuesto excedido', 'Alerta de presupuesto', 'Presupuesto desconocido', 'Dentro del presupuesto']) {
+      expect(html).not.toContain(text);
+    }
+  });
+
+  it('shows the budget line for every agent that has an entry when showBudget is true', () => {
+    render(<AgentOffice events={englishTeam} budgetStateByAgent={budgetStateByAgent} showBudget />);
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking. Budget exceeded (Daily budget at 118%)');
+    expect(agentLines().builder).toBe('Bruno Díaz, Engineer: Coding. Budget warning');
+    expect(agentLines().reviewer).toBe('Carla Méndez: Idle. Budget unknown');
+  });
+
+  it('shows nothing for an agent absent from the map: absence is never read as ok', () => {
+    render(<AgentOffice events={englishTeam} budgetStateByAgent={{ planner: { state: 'warning' } }} showBudget />);
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking. Budget warning');
+    expect(agentLines().builder).toBe('Bruno Díaz, Engineer: Coding');
+    expect(agentLines().reviewer).toBe('Carla Méndez: Idle');
+  });
+
+  it.each<[string, unknown]>([
+    ['an unrecognized state string', { state: 'danger' }],
+    ['a missing state', { label: 'No state here' }],
+    ['null', null],
+    ['a number', 42],
+  ])('reads an invalid entry (%s) as unknown, never as ok', (_label, entry) => {
+    const invalidMap = { planner: entry } as unknown as Record<string, AgentBudgetState>;
+    render(<AgentOffice events={englishTeam} budgetStateByAgent={invalidMap} showBudget />);
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking. Budget unknown');
+  });
+
+  it('joins the usage segment and the budget segment with ". ", in that order', () => {
+    const usage: OfficeUsage = { byAgent: { planner: { totalTokens: 1_000, cost: 2.25, currency: 'USD' } } };
+    render(
+      <AgentOffice
+        events={englishTeam}
+        usage={usage}
+        showUsage
+        budgetStateByAgent={{ planner: { state: 'warning' } }}
+        showBudget
+      />,
+    );
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking. Tokens: 1,000, Cost: $2.25. Budget warning');
+  });
+
+  it('updates the agent list line under aria-live="polite" when the budget state prop changes', () => {
+    const { rerender } = render(
+      <AgentOffice events={englishTeam} budgetStateByAgent={{ planner: { state: 'warning' } }} showBudget />,
+    );
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking. Budget warning');
+    expect(agentList().getAttribute('aria-live')).toBe('polite');
+
+    rerender(<AgentOffice events={englishTeam} budgetStateByAgent={{ planner: { state: 'exceeded' } }} showBudget />);
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking. Budget exceeded');
+  });
+
+  it('keeps usage and budget isolated: changing usage alone never changes the budget text, or vice versa', () => {
+    const budget = { planner: { state: 'warning' as const } };
+    const { rerender } = render(
+      <AgentOffice events={englishTeam} usage={{ byAgent: { planner: { totalTokens: 100 } } }} showUsage budgetStateByAgent={budget} showBudget />,
+    );
+    const withFirstUsage = agentLines().planner;
+    expect(withFirstUsage).toContain('Budget warning');
+
+    rerender(
+      <AgentOffice events={englishTeam} usage={{ byAgent: { planner: { totalTokens: 999_999 } } }} showUsage budgetStateByAgent={budget} showBudget />,
+    );
+    expect(agentLines().planner).toContain('Budget warning');
+    expect(agentLines().planner).not.toBe(withFirstUsage); // the usage figure itself did change
+
+    rerender(
+      <AgentOffice events={englishTeam} usage={{ byAgent: { planner: { totalTokens: 999_999 } } }} showUsage budgetStateByAgent={{ planner: { state: 'exceeded' } }} showBudget />,
+    );
+    expect(agentLines().planner).toContain('Tokens: 999,999');
+    expect(agentLines().planner).toContain('Budget exceeded');
+  });
+
+  it('treats a map key of "__proto__" as a plain, harmless agent id', () => {
+    // JSON.parse makes "__proto__" a real own enumerable property, not a prototype write, so this is exactly
+    // what a host JSON payload looks like. `Object.entries` (used to build the internal map) reads it the
+    // same as any other key.
+    const malicious = JSON.parse('{"__proto__": {"state": "exceeded"}}') as Record<string, AgentBudgetState>;
+    expect(() => render(<AgentOffice events={englishTeam} budgetStateByAgent={malicious} showBudget />)).not.toThrow();
+    // No agent in this office is actually named "__proto__", so no line gains any budget text, and nothing
+    // leaked onto a shared prototype.
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Thinking');
+    expect(({} as Record<string, unknown>).state).toBeUndefined();
+  });
+
+  it('shows no English leak in a Spanish scene with budget state on', () => {
+    render(<AgentOffice events={spanishTeam} budgetStateByAgent={budgetStateByAgent} showBudget locale="es" />);
+    expect(findEnglishLeaks(collectVisibleTexts())).toEqual([]);
+  });
+
+  it('renders exactly as 0.2.1 (no budget props) when neither showBudget nor budgetStateByAgent is passed', () => {
+    const baseline = render(<AgentOffice events={englishTeam} />);
+    const baselineHtml = stripGeneratedIds(baseline.container.innerHTML);
+    baseline.unmount();
+
+    // Passing the map without showBudget must draw exactly the same DOM as passing neither prop at all.
+    const withMapOnly = render(<AgentOffice events={englishTeam} budgetStateByAgent={budgetStateByAgent} />);
+    expect(stripGeneratedIds(withMapOnly.container.innerHTML)).toBe(baselineHtml);
   });
 });

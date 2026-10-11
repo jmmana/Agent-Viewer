@@ -163,6 +163,13 @@ const EN = {
   'usage.meetingsHeading': 'Meetings',
   'usage.meetingLine': '{title}: {usage}',
 
+  // Budget state (display only, issue #87). The host decides the state; the office only draws it.
+  'budget.state.ok': 'Within budget',
+  'budget.state.warning': 'Budget warning',
+  'budget.state.exceeded': 'Budget exceeded',
+  'budget.state.unknown': 'Budget unknown',
+  'budget.withLabel': '{state} ({label})',
+
   // Per-call detail panel (only shown when the host allows it, for the selected agent)
   'calls.title': 'Call details: {name}',
   'calls.close': 'Close call details',
@@ -340,6 +347,12 @@ const ES: OfficeMessages = {
   'usage.meeting': 'Gasto de la reunión',
   'usage.meetingsHeading': 'Reuniones',
   'usage.meetingLine': '{title}: {usage}',
+
+  'budget.state.ok': 'Dentro del presupuesto',
+  'budget.state.warning': 'Alerta de presupuesto',
+  'budget.state.exceeded': 'Presupuesto excedido',
+  'budget.state.unknown': 'Presupuesto desconocido',
+  'budget.withLabel': '{state} ({label})',
 
   'calls.title': 'Detalle de llamadas: {name}',
   'calls.close': 'Cerrar el detalle de llamadas',

@@ -19,6 +19,7 @@ Esta guía cubre la versión **0.5.0**. Read in English: [library.md](library.md
 - [Temas y estilos](#temas-y-estilos)
 - [Accesibilidad](#accesibilidad)
 - [Cifras de consumo](#cifras-de-consumo)
+- [Estado de presupuesto](#estado-de-presupuesto)
 - [Repetición](#repetición)
 - [Cargar un archivo de log](#cargar-un-archivo-de-log)
 - [Exportar video](#exportar-video)
@@ -156,6 +157,8 @@ Dale a cada evento un `id` estable y único. La oficina ignora un evento cuyo `i
 | `showUsageBadges` | `boolean` | `false` | Dibuja una insignia compacta de consumo en cada tarjeta de agente, a partir de `usage.byAgent`. Independiente de `showUsage`. Consulta [Cifras de consumo](#cifras-de-consumo). |
 | `usage` | `OfficeUsage` | ninguno | Cifras de consumo calculadas por tu app. La oficina nunca las calcula. |
 | `meetingUsage` | `MeetingUsage` | ninguno | Cifras de consumo por reunión calculadas por tu app, indexadas por id de reunión. Se muestran solo mientras `showUsage` también es `true`. Ver [Cifras de reuniones](#cifras-de-reuniones). |
+| `showBudget` | `boolean` | `false` | Muestra el estado de presupuesto por agente que pasas en `budgetStateByAgent`. Consulta [Estado de presupuesto](#estado-de-presupuesto). |
+| `budgetStateByAgent` | `Record<string, AgentBudgetState>` | ninguno | Veredicto de presupuesto por id de agente, decidido por tu app. La oficina nunca lo calcula. Consulta [Estado de presupuesto](#estado-de-presupuesto). |
 | `showCallDetails` | `boolean` | `false` | Muestra un panel de solo lectura con las llamadas del agente seleccionado, a partir de `agentCallDetails`. Independiente de `showUsage`/`showUsageBadges`. Consulta [Detalle de llamadas](#detalle-de-llamadas). |
 | `agentCallDetails` | `AgentCallDetails` | ninguno | Metadatos de llamadas por id de agente, calculados y paginados por tu app. Solo se lee la entrada del agente seleccionado. |
 | `selectedAgentId` | `string \| null` | ninguno | Selección controlada. Déjala sin definir para que la oficina lleve la suya. Cuando cambia, la cámara se centra en ese agente. |
@@ -307,7 +310,7 @@ const officeT = useCallback<HostTranslate>(
 
 ### Claves de texto
 
-Hay 156 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline`, `modelOps.*` y `crew.*` pertenecen a la app de demostración (la consola Model Ops y su línea de tiempo, y el renderizador Crew aparte en `src/crew/`); la oficina embebida no las muestra. Desde el issue #79, Model Ops lee el ledger de uso del servidor: ese cliente de lectura y sus componentes de pestañas basados en el ledger viven en `src/integrations/ledgerClient.ts` y `src/components/modelOps/`, ambos exclusivos de la app de demostración. `@warlockcode/agent-viewer` no incluye ningún cliente de ledger, ninguna referencia al endpoint del ledger de uso ni ningún componente de Model Ops (verificado por `tests/lib/libraryIsolation.test.ts`).
+Hay 162 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`, `canvas.modelOps`, `canvas.showTimeline`, `canvas.hideTimeline`, `modelOps.*` y `crew.*` pertenecen a la app de demostración (la consola Model Ops y su línea de tiempo, y el renderizador Crew aparte en `src/crew/`); la oficina embebida no las muestra. Desde el issue #79, Model Ops lee el ledger de uso del servidor: ese cliente de lectura y sus componentes de pestañas basados en el ledger viven en `src/integrations/ledgerClient.ts` y `src/components/modelOps/`, ambos exclusivos de la app de demostración. `@warlockcode/agent-viewer` no incluye ningún cliente de ledger, ninguna referencia al endpoint del ledger de uso ni ningún componente de Model Ops (verificado por `tests/lib/libraryIsolation.test.ts`).
 
 #### `rooms.*` (10)
 
@@ -496,6 +499,16 @@ Hay 156 claves. Las claves `screen.tokenFlow`, `screen.telemetry`, `screen.open`
 | `usage.meetingsHeading` | Reuniones | Meetings |
 | `usage.meetingLine` | {title}: {usage} | {title}: {usage} |
 
+#### `budget.*` (5)
+
+| Clave | Texto en español | Texto en inglés |
+|---|---|---|
+| `budget.state.ok` | Dentro del presupuesto | Within budget |
+| `budget.state.warning` | Alerta de presupuesto | Budget warning |
+| `budget.state.exceeded` | Presupuesto excedido | Budget exceeded |
+| `budget.state.unknown` | Presupuesto desconocido | Budget unknown |
+| `budget.withLabel` | {state} ({label}) | {state} ({label}) |
+
 #### `calls.*` (12)
 
 | Clave | Texto en español | Texto en inglés |
@@ -602,7 +615,8 @@ Notas:
 
 - La oficina es un `<section>` con el nombre de `ariaLabel` (por defecto, el texto de `office.label`).
 - El canvas tiene `role="img"` y un `aria-label` (`canvas.aria`) que remite a la lista en texto.
-- Una lista oculta a la vista y anunciada con cortesía (`aria-live="polite"`) nombra a cada agente con su rol y su estado, por ejemplo "Atlas, Desarrollador: Programando". Con `showUsage` o `showUsageBadges` (cualquiera de los dos), cada línea incluye además las cifras exactas de ese agente en `usage.byAgent`, así que el texto para lector de pantalla siempre coincide con una insignia visible, incluso cuando la insignia misma está oculta por debajo del zoom 0.55. La lista queda oculta a la vista hasta que recibe el foco del teclado (Tab); entonces se abre como un panel de botones.
+- Una lista oculta a la vista y anunciada con cortesía (`aria-live="polite"`) nombra a cada agente con su rol y su estado, por ejemplo "Atlas, Desarrollador: Programando". Con `showUsage` o `showUsageBadges` (cualquiera de los dos), cada línea incluye además las cifras exactas de ese agente en `usage.byAgent`, así que el texto para lector de pantalla siempre coincide con una insignia visible, incluso cuando la insignia misma está oculta por debajo del zoom 0.55. Con `showBudget`, un segmento de presupuesto sigue a continuación, unido con `". "` (después del segmento de consumo cuando ambos están presentes): consulta [Estado de presupuesto](#estado-de-presupuesto). La lista queda oculta a la vista hasta que recibe el foco del teclado (Tab); entonces se abre como un panel de botones.
+- El marcador de presupuesto dibujado en el canvas (`showBudget`) nunca es la única forma en que un estado llega a la página: la forma, el glifo y el patrón del trazo distinguen los cuatro estados sin depender del color, y la lista de agentes lleva el mismo veredicto como texto plano para un lector de pantalla.
 - La barra (`role="toolbar"`) y los controles de repetición son botones reales con nombre accesible y anillo de foco visible. La barra de posición anuncia el avance y los botones de velocidad usan `aria-pressed`.
 - Con `prefers-reduced-motion: reduce` nada se anima: los agentes llegan a su destino sin caminar, los detalles animados se quedan quietos y las transiciones de los botones se desactivan.
 - Selección con teclado: cada agente de esa lista es un botón (`aria-pressed` marca el seleccionado). Al pulsarlo se selecciona el agente y la cámara va hacia él, igual que con un clic en el canvas; al pulsarlo otra vez se quita la selección. La oficina no registra atajos de teclado globales, salvo `Escape` dentro del panel de detalle de llamadas abierto (`showCallDetails`), que solo cierra ese panel.
@@ -814,6 +828,43 @@ const usage = {
 
 El gasto por reunión y por herramienta (issue #80, `groupBy: ['meeting']`/`['tool']` en el mismo endpoint) funciona igual: `toUsageFigures()` mapea uno de esos grupos como cualquier otro, y si un anfitrión quiere mostrar el costo de una reunión o de una herramienta en la oficina, lo calcula del lado del servidor y lo pasa por sus propias props, igual que el ejemplo por agente de arriba. La librería no tiene ningún concepto de `meeting`/`tool`: nunca llama al rollup, nunca suma nada, y este cambio no agrega ningún import ni prop nuevo a `@warlockcode/agent-viewer`.
 
+## Estado de presupuesto
+
+Un presupuesto es una comparación de gasto contra un límite. Si la oficina hiciera esa comparación tendría que guardar un límite, recibir una cifra de gasto, sumar o convertir monedas y decidir un umbral, rompiendo cada una de [las cuatro reglas](#las-cuatro-reglas) de arriba. Así que tu app (normalmente respaldada por el motor de presupuestos del servidor) decide el veredicto y solo pasa ese veredicto; la oficina lo dibuja, con una alternativa de texto accesible, y nada más.
+
+```tsx
+import { useMemo } from 'react';
+import { AgentOffice, type AgentBudgetState } from '@warlockcode/agent-viewer';
+
+const budgetStateByAgent = useMemo<Record<string, AgentBudgetState>>(() => ({
+  planner: { state: 'warning', label: 'Presupuesto diario al 82%' },
+  builder: { state: 'exceeded' },
+  reviewer: { state: 'unknown' },
+}), []);
+
+<AgentOffice events={events} locale="es" showBudget budgetStateByAgent={budgetStateByAgent} />
+```
+
+`AgentBudgetState` es `{ state: BudgetState; label?: string }`, donde `BudgetState` es exactamente `'ok' | 'warning' | 'exceeded' | 'unknown'`. No tiene campo `limit`, `spent`, `percent`, `currency` ni `threshold`, a propósito: la oficina no puede comparar el gasto con un límite porque nunca recibe ninguno de los dos números. `label` es un texto corto, ya traducido, de tu app (por ejemplo "Presupuesto diario al 82%"); la oficina lo muestra tal cual en la lista de agentes solamente, nunca lo analiza, nunca deriva ninguna cifra de él y nunca lo traduce.
+
+| Tu app envía | Canvas | Lista de agentes (texto accesible) |
+|---|---|---|
+| `showBudget` en `false` u omitido (lo que traiga `budgetStateByAgent`) | nada | nada |
+| `showBudget` en `true`, id de agente ausente del mapa | nada (no se afirma nada) | nada |
+| `state: 'ok'` | sin marcador (silencioso cuando está sano) | "Dentro del presupuesto" |
+| `state: 'warning'` | marcador triángulo ámbar, `!` | "Alerta de presupuesto" |
+| `state: 'exceeded'` | marcador octágono rojo, `×` | "Presupuesto excedido" |
+| `state: 'unknown'`, o cualquier valor fuera de los cuatro estados | marcador círculo gris, `?` | "Presupuesto desconocido" |
+
+- **Oculto salvo que se active.** `showBudget` es `false` por defecto; nada de presupuesto se dibuja antes de que tu app lo active, sin importar lo que traiga `budgetStateByAgent`, igual que `showUsage`.
+- **Desconocido nunca es ok.** `normalizeBudgetState` convierte una entrada que no es un objeto (`null`, un número, una cadena, un arreglo), un `state` ausente o un `state` fuera de los cuatro valores conocidos en `{ state: 'unknown' }`, nunca en `{ state: 'ok' }`. Un id de agente sin entrada en el mapa no muestra nada, lo cual tampoco es lo mismo que `ok`.
+- **La forma y el glifo llevan el significado, no solo el color** (WCAG 1.4.11, al menos 3:1 contra la propia placa de fondo del marcador en ambos temas, exportado como `BUDGET_COLORS` para una prueba de contraste): `warning` es un triángulo con trazo punteado, `exceeded` es un octágono con trazo sólido de 3px, `unknown` es un círculo con trazo discontinuo. `ok` no dibuja nada.
+- **Tamaño de píxel fijo, sigue al agente.** El marcador se dibuja en espacio de pantalla junto a la cabeza del agente, con un tamaño fijo de 18px sin importar el zoom de la cámara, y sigue visible por debajo del zoom 0.55, donde la tarjeta de nombre misma está oculta. Cuando la tarjeta de nombre se dibuja, el mismo marcador también aparece en su esquina superior derecha. Si el agente tiene un escritorio del catálogo integrado, ese escritorio recibe además un borde de 2px con el color del estado, como refuerzo, nunca como la única señal.
+- **Estático.** Nada en un marcador de presupuesto se anima: sin pulso, sin parpadeo, sin desvanecimiento, en ningún modo, sin importar `prefers-reduced-motion`.
+- **Lista de agentes.** La lista oculta con `aria-live="polite"` (consulta [Accesibilidad](#accesibilidad)) agrega un segmento de presupuesto después del segmento de consumo, unidos con `". "`: por ejemplo `"Ana Rivas, Planificadora: Pensando. Presupuesto excedido (Presupuesto diario al 118%)"`, o con consumo también, `"Ana Rivas, Planificadora: Pensando. Tokens: 1.000, Costo: $2,25. Alerta de presupuesto"`.
+- **Sin cambio de servidor, SDK ni contrato.** El estado de presupuesto lo decide por completo el anfitrión; la librería no define ningún endpoint, ningún campo de evento ni ningún método del SDK para esto.
+- **Exportación de video.** `recordReplay` nunca dibuja un marcador de presupuesto: `budgetByAgent` es un concepto exclusivo del canvas, sin opción en la exportación de video.
+
 ## Repetición
 
 `useEventReplay` reproduce una ejecución grabada a su propio ritmo y devuelve el tramo visible, listo para `<AgentOffice events>`. Solo revela eventos; nunca crea ninguno. `ReplayControls` es una barra opcional para el hook: reproducir y pausar, volver al inicio, una barra de posición y botones de velocidad.
@@ -919,6 +970,8 @@ async function exportarEjecucion(run: readonly OfficeEventInput[], signal: Abort
 | `onProgress` | ninguno | Se llama con un valor de 0 a 1. |
 | `signal` | ninguno | `AbortSignal`. Al abortar, la promesa se rechaza con un `AbortError`. |
 
+`recordReplay` no tiene opción `showBudget`/`budgetStateByAgent`: un marcador de presupuesto (issue #87) nunca se dibuja en un video exportado, aunque la oficina en vivo lo muestre.
+
 Notas:
 
 - La grabación ocurre en tiempo real: un video de un minuto tarda más o menos un minuto en grabarse. Usa `speed` y `maxGapMs` para acortar ejecuciones largas, y `computeReplaySchedule(events, { speed, maxGapMs, tailMs, maxDurationMs })` para conocer la duración de antemano (`durationMs`).
@@ -993,6 +1046,7 @@ Todo se exporta desde `@warlockcode/agent-viewer`. La hoja de estilos es `@warlo
 | Modelo de la oficina | `OfficeStore`, `buildOfficeSnapshot` | `AgentProfile`, `OfficeEventInput`, `OfficeMode`, `OfficeSnapshot`, `OfficeStoreOptions` |
 | Repetición | `useEventReplay`, `ReplayControls` | `EventReplay`, `EventReplayOptions`, `ReplayControlsProps` |
 | Consumo | `formatUsage`, `formatTokens`, `formatCost`, `formatCostSource`, `formatUsageBadge`, `formatMeetingUsage`, `summarizeUsage` | `OfficeUsage`, `UsageFigures`, `FormattedUsageItem`, `UsageBadge`, `UsageCostSource`, `MeetingUsage`, `MeetingUsageFigures` |
+| Presupuesto (solo visualización) | `normalizeBudgetState`, `formatBudgetState`, `MAX_BUDGET_LABEL_LENGTH`, `BUDGET_STATES` | `BudgetState`, `AgentBudgetState` |
 | Detalle de llamadas | ninguno | `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource` |
 | Textos | `OFFICE_MESSAGES`, `createOfficeTranslator`, `formatMessage`, `builtInMessages`, `isOfficeMessageKey` | `OfficeMessageKey`, `OfficeMessages`, `OfficeMessageParams`, `OfficeTranslate`, `OfficeTranslatorOptions`, `HostTranslate` |
 | Tipos base | ninguno | `Agent`, `AgentRole`, `AgentStatus`, `AgentMood`, `WorkspaceZone`, `ViewerEvent`, `Task`, `TaskStatus`, `Meeting`, `MeetingMessage` |
@@ -1047,3 +1101,5 @@ La app de demostración de este repositorio (`npm run dev`) se construye aparte 
 La librería sigue [Versionado Semántico](https://semver.org/lang/es/). Mientras esté en 0.x, la API todavía puede cambiar: una versión menor (0.3.0, 0.4.0...) puede traer cambios incompatibles, y se listan en el [CHANGELOG](../CHANGELOG.md). Un rango como `^0.2.0` solo acepta parches 0.2.x.
 
 0.5.0 agrega `showUsageBadges`, `showCallDetails`, `meetingUsage` y sus tipos (`UsageBadge`, `UsageCostSource`, `AgentCallDetail`, `AgentCallDetails`, `AgentCallTokens`, `AgentCallStatus`, `AgentCallCostSource`, `MeetingUsage`, `MeetingUsageFigures`). Todos son aditivos y vienen apagados por defecto: una app escrita contra 0.2.x sigue funcionando sin cambios.
+
+0.6.0 agrega `showBudget`, `budgetStateByAgent` y sus tipos (`BudgetState`, `AgentBudgetState`), además de `normalizeBudgetState`, `formatBudgetState` y `MAX_BUDGET_LABEL_LENGTH` (consulta [Estado de presupuesto](#estado-de-presupuesto)). Aditivo y apagado por defecto, igual que toda prop anterior: una app escrita contra 0.2.x sigue funcionando sin cambios.

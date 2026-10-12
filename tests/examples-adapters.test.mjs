@@ -10,8 +10,9 @@ import { GoogleADKViewerAdapter } from '../examples/google-adk-adapter.ts';
  *
  * The OpenAI Agents case that used to live here was removed by issue #100: the hand-wired
  * `OpenAIAgentsViewerAdapter` callback class it tested was replaced by a real tracing-processor
- * implementation (`examples/openai-agents-adapter/processor.ts`, registered on the real `@openai/agents`
- * tracing pipeline) with its own, more thorough test suite at `tests/openai-agents-adapter.test.mjs`.
+ * implementation (`packages/openai-agents/src/processor.ts`, published as
+ * `@warlockcode/agent-viewer-openai-agents`, issue #361; registered on the real `@openai/agents` tracing
+ * pipeline) with its own, more thorough test suite at `tests/openai-agents-adapter.test.mjs`.
  */
 function stubFetch(t) {
   const requests = [];

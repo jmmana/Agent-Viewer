@@ -1,22 +1,24 @@
 /**
- * OpenAI Agents SDK tracing processor for Agent Viewer (issue #100).
+ * OpenAI Agents SDK tracing processor for Agent Viewer (issue #100, published as `@warlockcode/agent-viewer-openai-agents`, issue #361).
  *
  * Plugs into `@openai/agents`'s own tracing pipeline (`addTraceProcessor`/`setTraceProcessors`) instead of
  * requiring the host to call a callback at every step. The mapping, field names and privacy rules below were
  * verified against `@openai/agents@0.20.0` (`@openai/agents-core`, `@openai/agents-openai`) by reading the
  * installed package's type declarations and span-creation source, not from memory of the SDK; see
- * `examples/openai-agents-adapter/README.md` ("Step 0 findings") for what differs from the original issue
- * draft, in particular that usage is only observable on `generation`/`response` spans when the run's
- * `traceIncludeSensitiveData` is left at its SDK default of `true`.
+ * `README.md` ("Step 0 findings") for what differs from the original issue draft, in particular that usage is
+ * only observable on `generation`/`response` spans when the run's `traceIncludeSensitiveData` is left at its
+ * SDK default of `true`.
  *
- * Kept in `examples/` for now, not `packages/openai-agents/`: publishing as an npm package needs the shared
- * `packages/sdk/` workspace extraction (issue #343, in progress in parallel). This module intentionally makes
- * no changes to `sdk/typescript/index.ts` so it does not conflict with that work: per-event session
- * attribution is achieved by keeping one `AgentViewer` instance per trace session instead of a per-event
- * `sessionId` override.
+ * Moved here from `examples/openai-agents-adapter/` (issue #361) now that `packages/sdk/` exists (issue #343)
+ * to depend on: this module imports `AgentViewer`/`EmitEventInput` from the published
+ * `@warlockcode/agent-viewer-sdk` package instead of the repo-relative `sdk/typescript/index.ts` path the
+ * original `examples/` version used. It still keeps one `AgentViewer` instance per trace session rather than
+ * adopting the SDK's newer per-event `sessionId` override (added alongside `packages/sdk` for issue #99): that
+ * behavior change is out of this issue's scope and left for a follow-up (see "Known limitations" in
+ * `README.md`).
  */
 
-import { AgentViewer, type EmitEventInput } from '../../sdk/typescript/index';
+import { AgentViewer, type EmitEventInput } from '@warlockcode/agent-viewer-sdk';
 import { addTraceProcessor, setTraceProcessors } from '@openai/agents';
 import type {
   TracingProcessor,

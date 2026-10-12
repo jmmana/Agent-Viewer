@@ -3,4 +3,4 @@ export {
   instrumentOpenAIAgents,
   type AgentViewerTracingProcessorOptions,
   type AgentViewerTracingProcessorStats,
-} from './processor';
+} from './processor.js';

@@ -1,12 +1,28 @@
-# OpenAI Agents SDK tracing processor (issue #100)
+# @warlockcode/agent-viewer-openai-agents
 
-Plugs Agent Viewer into `@openai/agents`'s own tracing pipeline. Instead of calling a callback at every step
-(the old `examples/openai-agents-adapter.ts`, removed), register `AgentViewerTracingProcessor` once and every
-agent run, handoff, tool call and model generation is captured automatically.
+OpenAI Agents SDK tracing processor for [Agent Viewer](https://github.com/jmmana/Agent-Viewer#readme) (issue
+#100). Plugs into `@openai/agents`'s own tracing pipeline instead of requiring a callback at every step:
+register `AgentViewerTracingProcessor` once and every agent run, handoff, tool call and model generation is
+captured automatically.
+
+This package is the standalone, publishable extraction of what used to live at
+`examples/openai-agents-adapter/` (issue #361), now that `packages/sdk/` (issue #343) exists for it to depend
+on instead of the repo-relative `sdk/typescript/index.ts` path the `examples/` version used.
+
+## Install
+
+```bash
+npm install @warlockcode/agent-viewer-openai-agents @openai/agents
+```
+
+`@openai/agents` is a peer dependency: bring your own version, this package never bundles its own copy of the
+tracing pipeline it plugs into.
+
+## Usage
 
 ```ts
 import { Agent, run } from '@openai/agents';
-import { instrumentOpenAIAgents } from './processor';
+import { instrumentOpenAIAgents } from '@warlockcode/agent-viewer-openai-agents';
 
 const { shutdown } = instrumentOpenAIAgents({
   url: process.env.AGENT_VIEWER_URL,
@@ -23,7 +39,7 @@ Or register it alongside other processors yourself:
 
 ```ts
 import { addTraceProcessor } from '@openai/agents';
-import { AgentViewerTracingProcessor } from './processor';
+import { AgentViewerTracingProcessor } from '@warlockcode/agent-viewer-openai-agents';
 
 addTraceProcessor(new AgentViewerTracingProcessor({ runtimeId: 'openai-agents' }));
 ```
@@ -35,15 +51,14 @@ traces (prompts, tool IO) at its own trace backend. That is the existing behavio
 something this adapter adds, but it means `exclusive: false` (the default) does not, by itself, stop that
 other export path.
 
-## Not a published package yet
+## A note on the issue's peer dependency list
 
-This lives in `examples/` rather than `packages/openai-agents/`. Publishing as
-`@warlockcode/agent-viewer-openai-agents` needs the shared `packages/sdk/` npm workspace extraction that issue
-#343 is building in parallel (the same workspace `#99`'s LangGraph adapter will also use). A follow-up
-sub-issue moves this module into that workspace, wires `publint`/`attw` and the release workflow, and adds a
-peer dependency on `@openai/agents`. Until then, it is tested in CI against a real, pinned `@openai/agents`
-devDependency, and imports the SDK by relative path (`../../sdk/typescript/index`), exactly like every other
-example in this repository.
+Issue #361 lists `@warlockcode/agent-viewer` (the main library package) as a peer dependency alongside
+`@openai/agents`. The processor actually imports `AgentViewer`/`EmitEventInput` from `@warlockcode/agent-viewer-sdk`
+(issue #343's extraction, zero dependencies, no React/zod) and never touches the main library package at all, so
+this package declares `@warlockcode/agent-viewer-sdk` as a regular `dependencies` entry instead (an internal
+implementation detail, not a version a host needs to control like `@openai/agents`) and does not depend on
+`@warlockcode/agent-viewer` in any way.
 
 ## Step 0 findings
 
@@ -126,10 +141,11 @@ halving. A batch that fails after the SDK's own retries is currently dropped who
 ## Known limitations
 
 - One `AgentViewer` instance is kept per distinct session id (capped at 1000, oldest evicted) instead of a
-  single instance with a per-event `sessionId`, because the shared SDK does not have that field yet (it is
-  being added in parallel for issue #99/#343). A consequence: `agent.registered` is only ever sent once, under
-  whichever session first needed that agent, even though agents are a global concept in the office, not a
-  per-session one.
+  single instance with a per-event `sessionId`. `@warlockcode/agent-viewer-sdk` gained that per-event
+  `sessionId` override on `emit()`/`emitBatch()` for issue #99, but adopting it here (dropping the
+  multi-viewer workaround) is a behavior change out of scope for issue #361's package extraction; left for a
+  follow-up. A consequence today: `agent.registered` is only ever sent once, under whichever session first
+  needed that agent, even though agents are a global concept in the office, not a per-session one.
 - `errorKind` on `llm.failed` is always `'unknown'`: the OpenAI Agents SDK's `SpanError` has no structured
   status code today.
 - No Python equivalent (the `openai-agents` Python package has the same tracing processor concept; out of

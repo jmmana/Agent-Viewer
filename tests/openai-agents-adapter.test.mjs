@@ -22,7 +22,7 @@ import {
   createHandoffSpan,
 } from '@openai/agents';
 import { app } from '../server/index.ts';
-import { AgentViewerTracingProcessor } from '../examples/openai-agents-adapter/processor.ts';
+import { AgentViewerTracingProcessor } from '../packages/openai-agents/src/processor.ts';
 
 // `@openai/agents` disables tracing by default when NODE_ENV === 'test' (see `config.js`'s `tracing.disabled`
 // getter); this suite exercises the real tracing pipeline, so it must be turned back on explicitly.

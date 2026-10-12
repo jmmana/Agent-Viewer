@@ -1,0 +1,232 @@
+{
+  "canonicalizeVectors": [
+    {
+      "name": "empty-object",
+      "input": {},
+      "canonical": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty-array",
+      "input": [],
+      "canonical": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "key-order",
+      "input": {
+        "2": "two",
+        "10": "ten",
+        "b": 1,
+        "a": 2
+      },
+      "canonical": "{\"10\":\"ten\",\"2\":\"two\",\"a\":2,\"b\":1}",
+      "sha256": "d2f02f4797e52eb59e26cc68a0f483a374afe5745927dab82d879af9571c80b0"
+    },
+    {
+      "name": "nested",
+      "input": {
+        "outer": {
+          "z": [
+            1,
+            2,
+            {
+              "k": "v"
+            }
+          ],
+          "a": null
+        }
+      },
+      "canonical": "{\"outer\":{\"a\":null,\"z\":[1,2,{\"k\":\"v\"}]}}",
+      "sha256": "36a8ab1ff2d56dd3fde2bb2bf37215c123191fb18983cb7a0ea87fa7057ecdd0"
+    },
+    {
+      "name": "float-small-exponent",
+      "input": {
+        "x": 1e-7
+      },
+      "canonical": "{\"x\":1e-7}",
+      "sha256": "43c8e92bd5552bd45030718eb9366d6d6500623793c248666d77dca01ba337c0"
+    },
+    {
+      "name": "float-large-exponent",
+      "input": {
+        "x": 1e+21
+      },
+      "canonical": "{\"x\":1e+21}",
+      "sha256": "f4bcbb57bdf54b5b595d88096406c936d86bf0b6dd316d0ad2b4d2504c610403"
+    },
+    {
+      "name": "negative-zero",
+      "input": {
+        "x": 0
+      },
+      "canonical": "{\"x\":0}",
+      "sha256": "5bff452c5ed93f2e87a23984db5a15050c6477335fdec955b70063bb2d692bf1"
+    },
+    {
+      "name": "integers",
+      "input": {
+        "a": 0,
+        "b": -1,
+        "c": 9007199254740991
+      },
+      "canonical": "{\"a\":0,\"b\":-1,\"c\":9007199254740991}",
+      "sha256": "d5f92aea86e27c145bb58b33604839520e593fc3dd2313dab668f0b049163448"
+    },
+    {
+      "name": "unicode-basic",
+      "input": {
+        "text": "héllo wörld, 日本語"
+      },
+      "canonical": "{\"text\":\"héllo wörld, 日本語\"}",
+      "sha256": "45fde6ccbf2dd2abe7994fa9e052e01718dd931bd7a2c91628cd83928575c257"
+    },
+    {
+      "name": "unicode-astral",
+      "input": {
+        "text": "emoji: 😀 and 🚀"
+      },
+      "canonical": "{\"text\":\"emoji: 😀 and 🚀\"}",
+      "sha256": "59a6245beb24700cb580d332704a02ddaa5d5ea9d4a39237c98d4a38bc9ed177"
+    },
+    {
+      "name": "booleans-and-null",
+      "input": {
+        "a": true,
+        "b": false,
+        "c": null
+      },
+      "canonical": "{\"a\":true,\"b\":false,\"c\":null}",
+      "sha256": "58ea9f23c715c4f8fee078efd41139485403f053775482d58b6f4f454b34ecf0"
+    },
+    {
+      "name": "array-of-arrays",
+      "input": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          [
+            4,
+            5
+          ]
+        ]
+      ],
+      "canonical": "[[1,2],[3,[4,5]]]",
+      "sha256": "7f9ac81ac763c420338e149551a71ea3bab81390b09e7f56823940acad97e306"
+    },
+    {
+      "name": "top-level-string",
+      "input": "hello",
+      "canonical": "\"hello\"",
+      "sha256": "5aa762ae383fbb727af3c7a36d4940a5b8c40a989452d2304fc958ff3f354e7a"
+    },
+    {
+      "name": "top-level-number",
+      "input": 3.5,
+      "canonical": "3.5",
+      "sha256": "8a199b120cf400d69c300e1dd6eacdc8b0002353e3044bbab21e0125b32c9fd6"
+    },
+    {
+      "name": "top-level-null",
+      "input": null,
+      "canonical": "null",
+      "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    }
+  ],
+  "eventVectors": [
+    {
+      "name": "genesis-first-event",
+      "input": {
+        "seq": 1,
+        "prevHash": "9f2c0000000000000000000000000000000000000000000000000000000000",
+        "receivedAt": 1791460800000,
+        "submitterId": "shared-token",
+        "event": {
+          "schemaVersion": "1.0",
+          "id": "evt_1",
+          "type": "llm.usage",
+          "timestamp": 1791460800000,
+          "severity": "info",
+          "summary": "ok",
+          "payload": {
+            "cost": 0.0001234
+          }
+        }
+      },
+      "hash": "450ca36477632d96bf617dcdd7bf61807d2788440fa70ecb393cf91b626f9be1"
+    },
+    {
+      "name": "nested-payload-unicode",
+      "input": {
+        "seq": 42,
+        "prevHash": "ab12cd0000000000000000000000000000000000000000000000000000000",
+        "receivedAt": 1791460900000,
+        "submitterId": "ingest-key-1",
+        "event": {
+          "schemaVersion": "1.0",
+          "id": "evt_42",
+          "type": "tool.started",
+          "timestamp": 1791460900000,
+          "severity": "info",
+          "summary": "日本語 tool",
+          "payload": {
+            "nested": {
+              "a": [
+                1,
+                0,
+                1e-7
+              ],
+              "b": null
+            }
+          }
+        }
+      },
+      "hash": "16223fb70aa98bbafc531f2643fc3dee482079553555150e6e8cbbb400d8c364"
+    }
+  ],
+  "checkpointVectors": [
+    {
+      "name": "genesis-fresh-db",
+      "input": {
+        "kind": "genesis",
+        "prevHash": null,
+        "unchainedCount": 0,
+        "unchainedDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "firstEventId": null,
+        "lastEventId": null,
+        "createdAt": 1791460800000
+      },
+      "hash": "e0a0cdc0b860cfc99c13e7d98e38989954df28e4aabfdf23aca40a4547661a9b"
+    },
+    {
+      "name": "genesis-with-rows",
+      "input": {
+        "kind": "genesis",
+        "prevHash": null,
+        "unchainedCount": 1204,
+        "unchainedDigest": "4ab709000000000000000000000000000000000000000000000000000000",
+        "firstEventId": "evt_0001",
+        "lastEventId": "evt_1204",
+        "createdAt": 1791460800000
+      },
+      "hash": "b72e901e688bf9fd3fa6dd4e9f6e6725958cf2d0f5c22e5e3e796befc9ba7058"
+    },
+    {
+      "name": "resume-after-downgrade",
+      "input": {
+        "kind": "resume",
+        "prevHash": "9f2c0000000000000000000000000000000000000000000000000000000000",
+        "unchainedCount": 3,
+        "unchainedDigest": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+        "firstEventId": "evt_9001",
+        "lastEventId": "evt_9003",
+        "createdAt": 1791460950000
+      },
+      "hash": "fc6256a20d1522fe9b797204df3e477168426f27e2b648d3f9eacbff90c0120a"
+    }
+  ]
+}

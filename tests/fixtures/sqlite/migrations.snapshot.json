@@ -14,5 +14,6 @@
   [13, "pricing-recompute"],
   [14, "budgets"],
   [15, "budget-alerts"],
-  [16, "budget-alert-deliveries"]
+  [16, "budget-alert-deliveries"],
+  [17, "event-hash-chain"]
 ]

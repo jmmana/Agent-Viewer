@@ -17,6 +17,8 @@ import {
 } from '../server/db/migrations.ts';
 import { createEventStore, SQLiteEventStore } from '../server/store.ts';
 import { readPackageVersion } from '../server/version.ts';
+import { EMPTY_DIGEST } from '../server/chain.ts';
+import { specSha256Hex, specCanonicalize, specCheckpointHash } from './helpers/chainSpec.mjs';
 
 const fixtures = path.join(import.meta.dirname, 'fixtures/sqlite');
 const appVersion = readPackageVersion();
@@ -187,6 +189,55 @@ for (const fixtureName of fixtureNames) {
       assert.deepEqual(reopened.migration.applied, []);
       assert.equal(reopened.migration.backupPath, null);
       await reopened.close();
+    } finally {
+      await store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const fixtureName of fixtureNames) {
+  test(`${fixtureName}: migration 17's genesis checkpoint covers every pre-chain row with an independently reproducible digest (issue #105)`, async () => {
+    const { dir, file } = tempDbPath('genesis-digest');
+    fs.copyFileSync(path.join(fixtures, fixtureName), file);
+    const originalDb = new DatabaseSync(file);
+    const hasEventJson = originalDb.prepare('PRAGMA table_info(events)').all().some(({ name }) => name === 'event_json');
+    const originalRows = originalDb
+      .prepare(`SELECT id, ${hasEventJson ? 'event_json,' : ''} type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, created_at FROM events`)
+      .all();
+    originalDb.close();
+
+    const store = new SQLiteEventStore(file);
+    try {
+      const db = store.getDatabaseHandle();
+      const genesis = db.prepare("SELECT * FROM chain_checkpoints WHERE kind = 'genesis'").get();
+      assert.ok(genesis);
+      assert.equal(genesis.unchained_count, originalRows.length);
+      assert.equal(db.prepare('SELECT COUNT(*) AS c FROM events WHERE hash IS NOT NULL').get().c, 0);
+
+      // Independently reproduced: sorted by id (BINARY collation), not by rowid/seq, per the documented format.
+      const sortedIds = originalRows.map(({ id }) => id).sort();
+      const byId = new Map(originalRows.map((row) => [row.id, row]));
+      let runningHashInput = '';
+      for (const id of sortedIds) {
+        const row = byId.get(id);
+        const event = hasEventJson && row.event_json ? JSON.parse(row.event_json) : eventFromLegacyRow(row);
+        runningHashInput += `${id}\n${specSha256Hex(specCanonicalize(event))}\n`;
+      }
+      const expectedDigest = sortedIds.length === 0 ? EMPTY_DIGEST : specSha256Hex(runningHashInput);
+      assert.equal(genesis.unchained_digest, expectedDigest, 'genesis digest must be reproducible by an independent implementation');
+      assert.equal(
+        genesis.hash,
+        specCheckpointHash({
+          kind: 'genesis',
+          prevHash: null,
+          unchainedCount: originalRows.length,
+          unchainedDigest: expectedDigest,
+          firstEventId: sortedIds.at(0) ?? null,
+          lastEventId: sortedIds.at(-1) ?? null,
+          createdAt: Number(genesis.created_at),
+        })
+      );
     } finally {
       await store.close();
       fs.rmSync(dir, { recursive: true, force: true });

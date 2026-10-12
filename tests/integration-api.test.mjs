@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { app, store } from '../server/index.ts';
 
 function startTestServer() {
@@ -51,6 +52,8 @@ test('REST API: /health and /ready endpoints', async () => {
         finishedAt: readyJson.rebuild.finishedAt,
         durationMs: 0,
       },
+      // Issue #105: memory mode never chains anything.
+      chain: 'disabled',
     });
     assert.equal(typeof readyJson.ingestion.conflicts, 'number');
     assert.equal(typeof readyJson.rebuild.startedAt, 'number');
@@ -86,10 +89,11 @@ test('REST API: /ready includes schema info only when SQLite is the active store
     assert.deepEqual(ready.database, {
       // Migration 7 (usage-calls-indexes, issue #67), 8 (retention, issue #70), 9 (usage-rollup, issue #66),
       // 10 (usage-ledger-summary, issue #69), 11 (rollup-attribution, issue #80), 12 (usage-ledger-estimates,
-      // issue #84), 13 (pricing-recompute, issue #296), 14 (budgets, issue #303), 15 (budget-alerts, issue #319)
-      // and 16 (budget-alert-deliveries, issue #321): the latest, adding the budget_alert_deliveries table.
-      schemaVersion: 16,
-      latestKnownSchemaVersion: 16,
+      // issue #84), 13 (pricing-recompute, issue #296), 14 (budgets, issue #303), 15 (budget-alerts, issue #319),
+      // 16 (budget-alert-deliveries, issue #321) and 17 (event-hash-chain, issue #105): the latest, adding the
+      // hash-chain columns and the chain_checkpoints table.
+      schemaVersion: 17,
+      latestKnownSchemaVersion: 17,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');
@@ -1617,6 +1621,139 @@ test('REST API: GET /api/v1/usage/ledger/status requires the API token when one 
   } finally {
     delete process.env.AGENT_VIEWER_API_TOKEN;
     server.close();
+  }
+});
+
+test('REST API: GET /api/v1/audit/chain reports disabled in memory mode; GET /api/v1/events?include=chain adds no chain map', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const chainRes = await fetch(`${baseUrl}/api/v1/audit/chain`);
+    assert.equal(chainRes.status, 200);
+    assert.deepEqual(await chainRes.json(), { enabled: false, reason: 'memory_storage', tamperEvident: false });
+
+    await postEvent(baseUrl, usageWithRequest('evt_chain_mem_include', 'req-chain-mem-include'));
+    const withoutInclude = await (await fetch(`${baseUrl}/api/v1/events`)).json();
+    const withInclude = await (await fetch(`${baseUrl}/api/v1/events?include=chain`)).json();
+    assert.deepEqual(withInclude.events, withoutInclude.events);
+    assert.equal('chain' in withoutInclude, false);
+    assert.deepEqual(withInclude.chain, {});
+  } finally {
+    server.close();
+  }
+});
+
+test('REST API (issue #105, SQLite mode): audit/chain, include=chain, ingestion receipts, submitter_id and /ready are wired end to end', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-api-chain-'));
+  try {
+    const serverUrl = new URL('../server/index.ts', import.meta.url).href;
+    const script = `
+      const http = await import('node:http');
+      const { app } = await import(${JSON.stringify(serverUrl)});
+      const server = http.createServer(app);
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const baseUrl = 'http://127.0.0.1:' + server.address().port;
+      const authHeaders = { Authorization: 'Bearer chain-secret', 'Content-Type': 'application/json' };
+
+      const unauthChain = await fetch(baseUrl + '/api/v1/audit/chain');
+
+      const single = await fetch(baseUrl + '/api/v1/events', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          schemaVersion: '1.0', id: 'evt_chain_single', type: 'agent.message.sent', timestamp: Date.now(),
+          source: 'agent:writer', agentId: 'writer', summary: 'hi', payload: { text: 'hi' },
+        }),
+      });
+      const singleBody = await single.json();
+
+      const batchEvent = {
+        schemaVersion: '1.0', id: 'evt_chain_batch_1', type: 'agent.message.sent', timestamp: Date.now(),
+        source: 'agent:writer', agentId: 'writer', summary: 'a', payload: { text: 'a' },
+      };
+      const batch = await fetch(baseUrl + '/api/v1/events/batch', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ events: [batchEvent, batchEvent] }),
+      });
+      const batchBody = await batch.json();
+
+      const chain = await fetch(baseUrl + '/api/v1/audit/chain', { headers: authHeaders });
+      const chainBody = await chain.json();
+
+      const includeChain = await fetch(baseUrl + '/api/v1/events?include=chain', { headers: authHeaders });
+      const includeChainBody = await includeChain.json();
+
+      const ready = await fetch(baseUrl + '/ready');
+      const readyBody = await ready.json();
+
+      // Server-generated event: POST /api/v1/agents (so submitter_id follows the request, not a separate identity).
+      await fetch(baseUrl + '/api/v1/agents', {
+        method: 'POST', headers: authHeaders,
+        body: JSON.stringify({ id: 'agent_chain_test', name: 'Chain Test' }),
+      });
+
+      server.close();
+      console.log(JSON.stringify({
+        unauthChainStatus: unauthChain.status,
+        singleStatus: single.status, singleBody,
+        batchStatus: batch.status, batchBody,
+        chainBody, includeChainBody, readyBody,
+      }));
+      process.exit(0);
+    `;
+    const env = {
+      ...process.env,
+      NODE_ENV: 'test',
+      AGENT_VIEWER_STORAGE: 'sqlite',
+      AGENT_VIEWER_SQLITE_PATH: path.join(dir, 'chain.db'),
+      AGENT_VIEWER_API_TOKEN: 'chain-secret',
+    };
+    delete env.AGENT_VIEWER_API_KEY;
+    const result = spawnSync(
+      process.execPath,
+      ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script],
+      { cwd: dir, env, encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const out = JSON.parse(result.stdout.trim().split('\n').pop());
+
+    assert.equal(out.unauthChainStatus, 401);
+
+    assert.equal(out.singleStatus, 202);
+    assert.equal(out.singleBody.chain.seq, 1);
+    assert.equal(typeof out.singleBody.chain.hash, 'string');
+    assert.equal(out.singleBody.chain.receivedAt, out.singleBody.receivedAt);
+
+    assert.equal(out.batchStatus, 202);
+    assert.equal(out.batchBody.results[0].status, 'accepted');
+    assert.equal(out.batchBody.results[0].chain.seq, 2);
+    assert.equal(out.batchBody.results[1].status, 'duplicate');
+    assert.equal('chain' in out.batchBody.results[1], false, 'a duplicate never carries a chain receipt');
+
+    assert.equal(out.chainBody.enabled, true);
+    assert.equal(out.chainBody.version, 1);
+    assert.equal(out.chainBody.algorithm, 'sha256');
+    assert.equal(out.chainBody.canonicalization, 'JCS-RFC8785');
+    assert.equal(out.chainBody.chainedCount, 2);
+    assert.equal(out.chainBody.head.seq, 2);
+    assert.equal(out.chainBody.head.eventId, 'evt_chain_batch_1');
+    assert.ok(out.chainBody.genesis);
+    assert.equal(out.chainBody.genesis.unchainedCount, 0);
+
+    assert.deepEqual(out.includeChainBody.events, out.includeChainBody.events);
+    assert.ok(out.includeChainBody.chain.evt_chain_single);
+    assert.equal(out.includeChainBody.chain.evt_chain_single.submitterId, 'shared-token');
+    assert.equal(out.includeChainBody.chain.evt_chain_batch_1.prevHash, out.includeChainBody.chain.evt_chain_single.hash);
+
+    assert.equal(out.readyBody.chain, 'enabled');
+
+    // submitter_id for a server-generated event (POST /api/v1/agents) follows the request's own auth.
+    const db = new DatabaseSync(path.join(dir, 'chain.db'));
+    const row = db.prepare("SELECT submitter_id FROM events WHERE type = 'agent.registered' AND agent_id = 'agent_chain_test'").get();
+    assert.equal(row.submitter_id, 'shared-token');
+    db.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

@@ -392,6 +392,10 @@ test('replay follows seq, not rowid: a rowid swap after the fact does not change
     // Swap the rowid of the first and last `agent.updated` rows (A and C). Their `seq` column values travel with
     // the row's content, not with rowid, so seq order stays A, B, C even though rowid order is now C, B, A.
     const raw = new DatabaseSync(file);
+    // Issue #105: `events_immutable` (defense in depth, not a security boundary, see its own doc comment)
+    // blocks any UPDATE, rowid included, on a row the store already chained. This swap simulates an operator
+    // with direct file access, exactly the actor the trigger is not meant to stop.
+    raw.exec('DROP TRIGGER IF EXISTS events_immutable');
     const rowA = raw.prepare('SELECT rowid AS rid FROM events WHERE id = ?').get('evt_order_a');
     const rowC = raw.prepare('SELECT rowid AS rid FROM events WHERE id = ?').get('evt_order_c');
     const freeRowid = raw.prepare('SELECT MAX(rowid) + 1000 AS rid FROM events').get().rid;

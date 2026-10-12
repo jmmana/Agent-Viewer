@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { MemoryEventStore, SQLiteEventStore, parseMaxEvents, createEventStore } from '../server/store.ts';
 import { eventFingerprint } from '../server/eventFingerprint.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
+import { EMPTY_DIGEST } from '../server/chain.ts';
+import { specEventHash, specCheckpointHash } from './helpers/chainSpec.mjs';
 
 function tempDbPath(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-viewer-store-'));
@@ -932,6 +934,7 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
       'budgets',
       'budget-alerts',
       'budget-alert-deliveries',
+      'event-hash-chain',
     ]);
     const db = new DatabaseSync(file);
     const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();
@@ -2147,6 +2150,296 @@ test('SQLiteEventStore: telemetry_metric_points survives a restart and sumTeleme
     assert.equal(rows.length, 1);
     assert.equal(rows[0].value, 500);
     await second.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// -------------------------------------------------------------
+// Hash chain (issue #105)
+// -------------------------------------------------------------
+
+function rawEventRow(db, id) {
+  return db.prepare('SELECT * FROM events WHERE id = ?').get(id);
+}
+
+function rawChainRow(db, id) {
+  const row = rawEventRow(db, id);
+  return { seq: Number(row.seq), prevHash: row.prev_hash, hash: row.hash, submitterId: row.submitter_id, createdAt: Number(row.created_at) };
+}
+
+test('SQLiteEventStore: a fresh database gets a genesis checkpoint and the first event chains to it', async () => {
+  const { dir, file } = tempDbPath('chain-fresh-genesis');
+  try {
+    const store = new SQLiteEventStore(file);
+    const db = store.getDatabaseHandle();
+    const genesis = db.prepare("SELECT * FROM chain_checkpoints WHERE kind = 'genesis'").get();
+    assert.ok(genesis, 'genesis checkpoint exists');
+    assert.equal(genesis.unchained_count, 0);
+    assert.equal(genesis.unchained_digest, EMPTY_DIGEST);
+    assert.equal(genesis.hash, specCheckpointHash({
+      kind: 'genesis', prevHash: null, unchainedCount: 0, unchainedDigest: EMPTY_DIGEST,
+      firstEventId: null, lastEventId: null, createdAt: Number(genesis.created_at),
+    }));
+
+    await store.append(storeEvent('evt_genesis_1', 1000));
+    const row = rawChainRow(db, 'evt_genesis_1');
+    assert.equal(row.seq, 1);
+    assert.equal(row.prevHash, genesis.hash);
+    assert.ok(row.hash);
+    assert.equal(row.submitterId, 'unattributed');
+    await store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: chain is gapless and each prevHash equals the previous hash, across append, appendBatch and a reopen', async () => {
+  const { dir, file } = tempDbPath('chain-linkage');
+  try {
+    const store1 = new SQLiteEventStore(file);
+    await store1.append(storeEvent('evt_chain_1', 1000), { submitterId: 'shared-token' });
+    await store1.appendBatch([storeEvent('evt_chain_2', 2000), storeEvent('evt_chain_3', 3000)], { submitterId: 'shared-token' });
+    await store1.close();
+
+    const store2 = new SQLiteEventStore(file);
+    await store2.append(storeEvent('evt_chain_4', 4000), { submitterId: 'shared-token' });
+    const db = store2.getDatabaseHandle();
+
+    const rows = ['evt_chain_1', 'evt_chain_2', 'evt_chain_3', 'evt_chain_4'].map((id) => rawChainRow(db, id));
+    for (let i = 0; i < rows.length; i++) {
+      assert.equal(rows[i].seq, i + 1);
+      assert.ok(rows[i].hash);
+      if (i > 0) assert.equal(rows[i].prevHash, rows[i - 1].hash);
+    }
+    await store2.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a duplicate id stores nothing and never advances the chain head', async () => {
+  const { dir, file } = tempDbPath('chain-duplicate');
+  try {
+    const store = new SQLiteEventStore(file);
+    const event = storeEvent('evt_dup_chain', 1000);
+    const first = await store.append(event, { submitterId: 'shared-token' });
+    assert.equal(first.outcome, 'accepted');
+    const db = store.getDatabaseHandle();
+    const headBefore = db.prepare('SELECT hash FROM events WHERE hash IS NOT NULL ORDER BY seq DESC LIMIT 1').get();
+
+    const second = await store.append(event, { submitterId: 'shared-token' });
+    assert.equal(second.outcome, 'duplicate');
+    const headAfter = db.prepare('SELECT hash FROM events WHERE hash IS NOT NULL ORDER BY seq DESC LIMIT 1').get();
+    assert.equal(headAfter.hash, headBefore.hash);
+
+    const countRow = db.prepare('SELECT COUNT(*) AS c FROM events').get();
+    assert.equal(countRow.c, 1);
+    await store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: the stored hash equals the documented formula, independently recomputed', async () => {
+  const { dir, file } = tempDbPath('chain-formula');
+  try {
+    const store = new SQLiteEventStore(file);
+    await store.append(storeEvent('evt_formula_1', 1000), { submitterId: 'ingest-key-42' });
+    const db = store.getDatabaseHandle();
+    const row = rawEventRow(db, 'evt_formula_1');
+    const expected = specEventHash({
+      seq: Number(row.seq),
+      prevHash: row.prev_hash,
+      receivedAt: Number(row.created_at),
+      submitterId: row.submitter_id,
+      event: JSON.parse(row.event_json),
+    });
+    assert.equal(row.hash, expected);
+    await store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: editing any hashed input of a stored row makes the independently recomputed hash disagree', async () => {
+  const { dir, file } = tempDbPath('chain-tamper');
+  try {
+    const store = new SQLiteEventStore(file);
+    await store.append(storeEvent('evt_tamper_1', 1000), { submitterId: 'shared-token' });
+    const db = store.getDatabaseHandle();
+    await store.close();
+
+    // Edits run on a direct, separate connection, like an operator with file access (issue #105's threat model).
+    const raw = new DatabaseSync(file);
+    const before = raw.prepare('SELECT * FROM events WHERE id = ?').get('evt_tamper_1');
+    const originalHashInput = {
+      seq: Number(before.seq),
+      prevHash: before.prev_hash,
+      receivedAt: Number(before.created_at),
+      submitterId: before.submitter_id,
+      event: JSON.parse(before.event_json),
+    };
+    assert.equal(before.hash, specEventHash(originalHashInput));
+
+    // Bypass the events_immutable trigger the way an operator with file access could: drop it first.
+    raw.exec('DROP TRIGGER events_immutable');
+    const editedJson = JSON.stringify({ ...JSON.parse(before.event_json), summary: 'tampered summary' });
+    raw.prepare('UPDATE events SET event_json = ? WHERE id = ?').run(editedJson, 'evt_tamper_1');
+    const after = raw.prepare('SELECT * FROM events WHERE id = ?').get('evt_tamper_1');
+    assert.equal(after.hash, before.hash, 'the stored hash itself is never silently recomputed');
+    const recomputed = specEventHash({ ...originalHashInput, event: JSON.parse(editedJson) });
+    assert.notEqual(recomputed, after.hash, 'the independently recomputed hash must now disagree with the stored one');
+    raw.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: deleting a middle row leaves the next row pointing at a hash nothing stores anymore', async () => {
+  const { dir, file } = tempDbPath('chain-delete-middle');
+  try {
+    const store = new SQLiteEventStore(file);
+    await store.append(storeEvent('evt_del_1', 1000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_del_2', 2000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_del_3', 3000), { submitterId: 'shared-token' });
+    await store.close();
+
+    const raw = new DatabaseSync(file);
+    const middle = raw.prepare('SELECT hash FROM events WHERE id = ?').get('evt_del_2');
+    raw.exec('DROP TRIGGER events_immutable');
+    raw.prepare('DELETE FROM events WHERE id = ?').run('evt_del_2');
+    const next = raw.prepare('SELECT prev_hash FROM events WHERE id = ?').get('evt_del_3');
+    assert.equal(next.prev_hash, middle.hash);
+    const stillPresent = raw.prepare('SELECT 1 AS present FROM events WHERE hash = ?').get(next.prev_hash);
+    assert.equal(stillPresent, undefined, 'no stored row still carries the hash evt_del_3 points back to');
+    raw.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: events_immutable rejects an UPDATE of a chained row but allows one on an unchained row', async () => {
+  const { dir, file } = tempDbPath('chain-trigger');
+  try {
+    const store = new SQLiteEventStore(file);
+    const db = store.getDatabaseHandle();
+    await store.append(storeEvent('evt_trigger_chained', 1000), { submitterId: 'shared-token' });
+    // An unchained row: insert directly with hash left NULL, simulating a legacy or pre-genesis row.
+    db.prepare(
+      `INSERT INTO events (id, type, timestamp, severity, summary, payload, event_json, created_at, seq)
+       VALUES ('evt_trigger_unchained', 'agent.message.sent', 1000, 'normal', 's', '{}', '{}', 1000, 99999)`
+    ).run();
+
+    assert.throws(() => {
+      db.prepare('UPDATE events SET summary = ? WHERE id = ?').run('edited', 'evt_trigger_chained');
+    }, /immutable/);
+
+    assert.doesNotThrow(() => {
+      db.prepare('UPDATE events SET summary = ? WHERE id = ?').run('edited', 'evt_trigger_unchained');
+    });
+    await store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a row appended by a simulated older server is covered by a resume checkpoint at the next start, idempotently', async () => {
+  const { dir, file } = tempDbPath('chain-resume');
+  try {
+    const store1 = new SQLiteEventStore(file);
+    await store1.append(storeEvent('evt_resume_before', 1000), { submitterId: 'shared-token' });
+    const headBeforeDowngrade = store1.getDatabaseHandle().prepare('SELECT hash FROM events WHERE hash IS NOT NULL ORDER BY seq DESC LIMIT 1').get();
+    await store1.close();
+
+    // Simulate an older server (no chain awareness at all): insert a row directly with no chain columns set.
+    const raw = new DatabaseSync(file);
+    const maxSeq = raw.prepare('SELECT MAX(seq) AS maxSeq FROM events').get().maxSeq;
+    raw.prepare(
+      `INSERT INTO events (id, type, timestamp, severity, summary, payload, event_json, created_at, seq)
+       VALUES ('evt_resume_downgrade', 'agent.message.sent', 1500, 'normal', 's', '{}', '{"id":"evt_resume_downgrade"}', 1500, ?)`
+    ).run(maxSeq + 1);
+    raw.close();
+
+    const store2 = new SQLiteEventStore(file);
+    const db2 = store2.getDatabaseHandle();
+    const checkpoints = db2.prepare("SELECT * FROM chain_checkpoints ORDER BY id").all();
+    const resumeCheckpoints = checkpoints.filter((c) => c.kind === 'resume');
+    assert.equal(resumeCheckpoints.length, 1);
+    assert.equal(resumeCheckpoints[0].unchained_count, 1);
+    assert.equal(resumeCheckpoints[0].prev_hash, headBeforeDowngrade.hash);
+    assert.equal(
+      resumeCheckpoints[0].hash,
+      specCheckpointHash({
+        kind: 'resume',
+        prevHash: headBeforeDowngrade.hash,
+        unchainedCount: 1,
+        unchainedDigest: resumeCheckpoints[0].unchained_digest,
+        firstEventId: 'evt_resume_downgrade',
+        lastEventId: 'evt_resume_downgrade',
+        createdAt: Number(resumeCheckpoints[0].created_at),
+      })
+    );
+
+    await store2.append(storeEvent('evt_resume_after', 2000), { submitterId: 'shared-token' });
+    const after = rawChainRow(db2, 'evt_resume_after');
+    assert.equal(after.prevHash, resumeCheckpoints[0].hash);
+    await store2.close();
+
+    // A third start with nothing new since the resume checkpoint writes no further checkpoint.
+    const store3 = new SQLiteEventStore(file);
+    const checkpointsAfter = store3.getDatabaseHandle().prepare('SELECT COUNT(*) AS c FROM chain_checkpoints').get();
+    assert.equal(checkpointsAfter.c, checkpoints.length);
+    await store3.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('MemoryEventStore: chainInfo reports disabled, chainRecords returns nothing', async () => {
+  const store = new MemoryEventStore(50);
+  await store.append(storeEvent('evt_mem_chain', 1000));
+  assert.deepEqual(await store.chainInfo(), { enabled: false, reason: 'memory_storage', tamperEvident: false });
+  assert.deepEqual(await store.chainRecords(['evt_mem_chain']), {});
+});
+
+test('SQLiteEventStore: chainInfo reflects genesis, head and chainedCount; chainRecords is keyed by id and omits unknown ids', async () => {
+  const { dir, file } = tempDbPath('chain-info');
+  try {
+    const store = new SQLiteEventStore(file);
+    await store.append(storeEvent('evt_info_1', 1000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_info_2', 2000), { submitterId: 'shared-token' });
+
+    const info = await store.chainInfo();
+    assert.equal(info.enabled, true);
+    assert.equal(info.version, 1);
+    assert.equal(info.algorithm, 'sha256');
+    assert.equal(info.canonicalization, 'JCS-RFC8785');
+    assert.equal(info.chainedCount, 2);
+    assert.equal(info.head.seq, 2);
+    assert.equal(info.head.eventId, 'evt_info_2');
+
+    const records = await store.chainRecords(['evt_info_1', 'evt_info_2', 'evt_unknown']);
+    assert.ok(records.evt_info_1);
+    assert.ok(records.evt_info_2);
+    assert.equal(records.evt_unknown, undefined);
+    assert.equal(records.evt_info_2.prevHash, records.evt_info_1.hash);
+    await store.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('SQLiteEventStore: a store opened against a migrations list that stops before the chain migration never chains anything', async () => {
+  const { dir, file } = tempDbPath('chain-disabled-schema');
+  const { MIGRATIONS } = await import('../server/db/migrations.ts');
+  try {
+    const store = new SQLiteEventStore(file, { migrations: MIGRATIONS.slice(0, 16) });
+    const result = await store.append(storeEvent('evt_no_chain', 1000), { submitterId: 'shared-token' });
+    assert.equal(result.outcome, 'accepted');
+    assert.deepEqual(await store.chainInfo(), { enabled: false, reason: 'schema_not_migrated', tamperEvident: false });
+    assert.deepEqual(await store.chainRecords(['evt_no_chain']), {});
+    await store.close();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

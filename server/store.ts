@@ -7,8 +7,9 @@ import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
 import type { BudgetAlertStoreInput, BudgetAlertRow, BudgetAlertDeliveryState } from './budgetAlerts';
 import { eventFingerprint } from './eventFingerprint';
-import { rowToEvent } from './eventRow';
+import { rowToEvent, rowToEventForDigest } from './eventRow';
 import { readPackageVersion } from './version';
+import { eventHash, checkpointHash, UnchainedDigest } from './chain';
 import type { TelemetryPointInput } from './otlp/metrics';
 import type { TelemetryPointRecord } from './telemetry';
 import {
@@ -226,6 +227,41 @@ export interface AppendOptions {
   receivedAt?: number;
   /** Which route accepted this event, recorded on its ledger row when it is `llm.usage`/`llm.failed`. */
   channel?: IngestChannel;
+  /** Stable, non-secret id of who submitted this event (issue #105), recorded on every physically stored row
+   * (including a request-id duplicate reference). Never derived from token material. Default `'unattributed'`
+   * (a caller, such as a test, that passes no context at all). */
+  submitterId?: string;
+}
+
+/** `GET /api/v1/audit/chain` body (issue #105). `enabled: false` in memory mode, or when the database predates
+ * the hash-chain migration. */
+export type ChainInfo =
+  | {
+      enabled: true;
+      version: 1;
+      algorithm: 'sha256';
+      canonicalization: 'JCS-RFC8785';
+      genesis: {
+        hash: string;
+        createdAt: number;
+        unchainedCount: number;
+        unchainedDigest: string;
+        serverVersion: string;
+      } | null;
+      checkpoints: number;
+      chainedCount: number;
+      head: { seq: number; eventId: string; hash: string; receivedAt: number } | null;
+    }
+  | { enabled: false; reason: string; tamperEvident: false };
+
+/** One chained row's integrity fields (issue #105), keyed by event id in `chainRecords`. Absent for an
+ * unchained (pre-genesis or chain-disabled) row. */
+export interface ChainRecord {
+  seq: EventSeq;
+  prevHash: string;
+  hash: string;
+  receivedAt: number;
+  submitterId: string;
 }
 
 /** What `list()` returns (issue #65): the stored event plus the server receive time SQLite already kept in
@@ -730,6 +766,14 @@ export interface EventStore {
   /** Finishes a run started by `recordRetentionRun`, and prunes the run log to the latest 500 rows. */
   finishRetentionRun(id: number, patch: RetentionRunPatch): Promise<void>;
 
+  /** `GET /api/v1/audit/chain` (issue #105): the current state of the hash chain. `{ enabled: false, reason:
+   * 'memory_storage' }` for `MemoryEventStore`. */
+  chainInfo(): Promise<ChainInfo>;
+  /** Chain integrity fields for the chained ids among `ids` (issue #105), keyed by event id; an id with no
+   * chained row (not found, a pure id-duplicate, or chain-disabled) is simply absent. Used by `include=chain`
+   * and by the optional ingestion receipt. */
+  chainRecords(ids: readonly string[]): Promise<Record<string, ChainRecord>>;
+
   close(): Promise<void>;
 }
 
@@ -1070,6 +1114,19 @@ export class MemoryEventStore implements EventStore {
       throw new Error(`MemoryEventStore usageLedgerMaxRows must be a positive integer, got ${usageLedgerMaxRows}`);
     }
     this.usageLedgerMaxRows = usageLedgerMaxRows;
+    // Issue #105: memory mode keeps no hash chain at all (the ring buffer forgets rows past maxEvents, which a
+    // chain could not represent anyway), so this is stated once per store, loudly, rather than left implicit.
+    console.log('[agent-viewer] memory storage: audit hash chain disabled, history is not tamper-evident');
+  }
+
+  /** Issue #105: memory mode never chains anything. */
+  async chainInfo(): Promise<ChainInfo> {
+    return { enabled: false, reason: 'memory_storage', tamperEvident: false };
+  }
+
+  /** Issue #105: memory mode never chains anything. */
+  async chainRecords(_ids: readonly string[]): Promise<Record<string, ChainRecord>> {
+    return {};
   }
 
   /** Nothing to replay: a `MemoryEventStore` starts empty and is ready as soon as it is constructed. */
@@ -1994,6 +2051,15 @@ export class SQLiteEventStore implements EventStore {
   /** Issue #67's cursor "store epoch": the `usage_ledger_meta` row migration 7 (`usage-calls-indexes`) writes
    * once, read back here so it survives a restart. Set in the constructor, right after migrations run. */
   private ledgerEpoch = '';
+  /** Issue #105: `chain_checkpoints` exists only once migration 17 has run. A store opened against a custom,
+   * truncated `migrations` list (some tests do this deliberately) simply never chains anything; every other
+   * behavior stays unchanged. */
+  private chainEnabled = false;
+  /** Issue #105: the chain head, read fresh at startup and advanced in lockstep with every chained insert
+   * (never re-derived from a stale in-memory value mid-request: `insertEvent` runs inside the same transaction
+   * `append`/`appendBatch` already hold the write lock for). `seq: 0` is used for "no chained row yet, prevHash
+   * is the genesis checkpoint's own hash". */
+  private chainHead: { seq: number; hash: string } | null = null;
   private readonly rebuildOptions: {
     pageSize: number;
     pageDelayMs: number;
@@ -2069,6 +2135,14 @@ export class SQLiteEventStore implements EventStore {
     this.backfillNullSeq();
     const maxSeqRow = this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM events').get() as { maxSeq: number };
     this.nextSeq = maxSeqRow.maxSeq + 1;
+
+    // Issue #105: must run after seq is fully backfilled (it reads seq) and before the chain head is cached
+    // below (a resume checkpoint changes what the head hash is).
+    this.chainEnabled = this.tableExists('chain_checkpoints');
+    if (this.chainEnabled) {
+      this.ensureChainResumeCheckpoint();
+      this.chainHead = this.readChainHead();
+    }
     const countRow = this.db.prepare('SELECT COUNT(*) AS count FROM events WHERE duplicate_of IS NULL').get() as { count: number };
     this.eventsCountCache = countRow.count;
     const earliestRow = this.db.prepare('SELECT MIN(created_at) AS earliest FROM events WHERE duplicate_of IS NULL').get() as {
@@ -2133,6 +2207,82 @@ export class SQLiteEventStore implements EventStore {
     const update = this.db.prepare('UPDATE events SET seq = ? WHERE rowid = ?');
     let next = maxSeqRow.maxSeq + 1;
     for (const { rid } of nullRows) update.run(next++, rid);
+  }
+
+  /**
+   * The current chain head. Compares the newest chained row's `seq` against the newest `chain_checkpoints`
+   * row's `last_seq` and returns whichever is further along: a resume checkpoint's `last_seq` covers rows
+   * inserted after the last chained row (by construction, see `ensureChainResumeCheckpoint`), so once one has
+   * been written it is the true head even though no `events` row carries its hash. `seq: 0` with a checkpoint's
+   * own hash means "nothing chained yet, link to this checkpoint". Must be read fresh, never cached across an
+   * `ensureChainResumeCheckpoint()` call, since that call can itself change what the head is.
+   */
+  private readChainHead(): { seq: number; hash: string } | null {
+    const headRow = this.db
+      .prepare('SELECT seq, hash FROM events WHERE hash IS NOT NULL ORDER BY seq DESC LIMIT 1')
+      .get() as { seq: number; hash: string } | undefined;
+    const latestCheckpoint = this.db
+      .prepare('SELECT last_seq AS lastSeq, hash FROM chain_checkpoints ORDER BY id DESC LIMIT 1')
+      .get() as { lastSeq: number; hash: string } | undefined;
+    if (!headRow && !latestCheckpoint) return null;
+    if (!latestCheckpoint) return { seq: Number(headRow!.seq), hash: headRow!.hash };
+    if (!headRow || Number(latestCheckpoint.lastSeq) >= Number(headRow.seq)) {
+      return { seq: Number(latestCheckpoint.lastSeq), hash: latestCheckpoint.hash };
+    }
+    return { seq: Number(headRow.seq), hash: headRow.hash };
+  }
+
+  /**
+   * Issue #105: covers, with a `resume` checkpoint, any row an older server appended (`hash IS NULL`) after the
+   * most recent `chain_checkpoints` row, so those rows are never silently treated as if they always carried a
+   * chain integrity guarantee. Idempotent: a second call with nothing new since the last checkpoint writes
+   * nothing, so two restarts (or two processes starting together) write at most one resume checkpoint each time
+   * there is actually something uncovered. `prevHash` is the *current chain head* (not simply the previous
+   * checkpoint's own hash): a server can append any number of ordinary chained rows after a checkpoint before an
+   * older server's unchained rows are ever noticed, and the resume checkpoint must link to whatever the head
+   * actually is at that moment, or verification would see a broken link on every row in between.
+   */
+  private ensureChainResumeCheckpoint(): void {
+    const latestCheckpointRow = this.db
+      .prepare('SELECT last_seq AS lastSeq FROM chain_checkpoints ORDER BY id DESC LIMIT 1')
+      .get() as { lastSeq: number } | undefined;
+    if (!latestCheckpointRow) return;
+    const unaccounted = this.db
+      .prepare('SELECT * FROM events WHERE hash IS NULL AND seq > ? ORDER BY id')
+      .all(latestCheckpointRow.lastSeq) as any[];
+    if (unaccounted.length === 0) return;
+    // The actual current head, not merely the previous checkpoint's own hash (see the method doc comment).
+    const head = this.readChainHead();
+    if (!head) return; // unreachable once a checkpoint exists, but never fabricate a prevHash if it somehow did
+
+    const digest = new UnchainedDigest();
+    let firstEventId: string | null = null;
+    let lastEventId: string | null = null;
+    let maxSeq = latestCheckpointRow.lastSeq;
+    for (const row of unaccounted) {
+      if (firstEventId === null) firstEventId = row.id;
+      lastEventId = row.id;
+      if (Number(row.seq) > maxSeq) maxSeq = Number(row.seq);
+      digest.update(row.id, rowToEventForDigest(row));
+    }
+    const unchainedDigest = digest.digest();
+    const createdAt = Date.now();
+    const hash = checkpointHash({
+      kind: 'resume',
+      prevHash: head.hash,
+      unchainedCount: unaccounted.length,
+      unchainedDigest,
+      firstEventId,
+      lastEventId,
+      createdAt,
+    });
+    this.db
+      .prepare(
+        `INSERT INTO chain_checkpoints
+           (kind, prev_hash, unchained_count, unchained_digest, first_event_id, last_event_id, created_at, server_version, last_seq, hash)
+         VALUES ('resume', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(head.hash, unaccounted.length, unchainedDigest, firstEventId, lastEventId, createdAt, readPackageVersion(), maxSeq, hash);
   }
 
   /**
@@ -2265,7 +2415,10 @@ export class SQLiteEventStore implements EventStore {
   }
 
   /** Inserts the row and returns the `seq` it was given (issue #54): the same durable counter #52 already uses
-   * to order the startup rebuild, reused here as the cursor SSE reconnect replay pages against. */
+   * to order the startup rebuild, reused here as the cursor SSE reconnect replay pages against. Also advances
+   * the hash chain (issue #105) over every physically stored row, including a request-id duplicate reference:
+   * a pure id-duplicate never reaches this method at all (see `classifyStored`), which is what "a duplicate
+   * never advances the chain" actually means for a store whose `seq` already counts every stored row. */
   private insertEvent(
     insertStmt: any,
     event: CanonicalEvent,
@@ -2273,10 +2426,19 @@ export class SQLiteEventStore implements EventStore {
     requestKey: { provider: string; requestId: string } | null,
     duplicateOf: string | null,
     matchesOriginal: boolean | null,
-    receivedAt: number
+    receivedAt: number,
+    submitterId: string
   ): EventSeq {
     const seq = this.nextSeq++;
-    insertStmt.run(
+    let prevHash: string | null = null;
+    let hash: string | null = null;
+    let storedSubmitterId: string | null = null;
+    if (this.chainEnabled && this.chainHead) {
+      prevHash = this.chainHead.hash;
+      hash = eventHash({ seq, prevHash, receivedAt, submitterId, event });
+      storedSubmitterId = submitterId;
+    }
+    const args: unknown[] = [
       event.id,
       event.type,
       event.timestamp,
@@ -2294,18 +2456,26 @@ export class SQLiteEventStore implements EventStore {
       requestKey ? requestKey.requestId : null,
       duplicateOf,
       matchesOriginal === null ? null : matchesOriginal ? 1 : 0,
-      seq
-    );
+      seq,
+    ];
+    // `chain_checkpoints`/the chain columns only exist once migration 17 has run (`this.chainEnabled`); a store
+    // opened against an older, truncated `migrations` list (some tests do this) must never bind more parameters
+    // than the statement below declares.
+    if (this.chainEnabled) args.push(prevHash, hash, storedSubmitterId);
+    insertStmt.run(...args);
+    if (hash !== null) this.chainHead = { seq, hash };
     return seq;
   }
 
   private prepareInsert(): any {
+    const chainColumns = this.chainEnabled ? ', prev_hash, hash, submitter_id' : '';
+    const chainPlaceholders = this.chainEnabled ? ', ?, ?, ?' : '';
     return this.db.prepare(`
       INSERT INTO events (
         id, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, payload, event_json,
-        created_at, content_hash, request_provider, request_id, duplicate_of, matches_original, seq
+        created_at, content_hash, request_provider, request_id, duplicate_of, matches_original, seq${chainColumns}
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${chainPlaceholders})
     `);
   }
 
@@ -2387,7 +2557,8 @@ export class SQLiteEventStore implements EventStore {
     event: CanonicalEvent,
     ignoreTimestamp = false,
     receivedAt: number = Date.now(),
-    channel: IngestChannel = 'events'
+    channel: IngestChannel = 'events',
+    submitterId: string = 'unattributed'
   ): PendingOutcome {
     const fingerprint = eventFingerprint(event, ignoreTimestamp);
     const existing = lookupStmt.get(event.id) as
@@ -2400,7 +2571,7 @@ export class SQLiteEventStore implements EventStore {
     if (requestKey && original) {
       const matchesOriginal = fingerprintFieldsMatch(original.fields, extractUsageFingerprintFields(event));
       try {
-        this.insertEvent(insertStmt, event, fingerprint, requestKey, original.id, matchesOriginal, receivedAt);
+        this.insertEvent(insertStmt, event, fingerprint, requestKey, original.id, matchesOriginal, receivedAt, submitterId);
       } catch (error) {
         if (!isUniqueIdViolation(error)) throw error;
         const raced = lookupStmt.get(event.id) as
@@ -2426,7 +2597,7 @@ export class SQLiteEventStore implements EventStore {
 
     let seq: EventSeq;
     try {
-      seq = this.insertEvent(insertStmt, event, fingerprint, requestKey, null, null, receivedAt);
+      seq = this.insertEvent(insertStmt, event, fingerprint, requestKey, null, null, receivedAt, submitterId);
     } catch (error) {
       if (requestKey && isUniqueRequestKeyViolation(error)) {
         // Lost a race with another writer that claimed this request key first. Defensive only: several processes
@@ -2436,7 +2607,7 @@ export class SQLiteEventStore implements EventStore {
         const raced = this.lookupRequestKey(requestKey.provider, requestKey.requestId);
         if (raced) {
           const matchesOriginal = fingerprintFieldsMatch(raced.fields, extractUsageFingerprintFields(event));
-          this.insertEvent(insertStmt, event, fingerprint, requestKey, raced.id, matchesOriginal, receivedAt);
+          this.insertEvent(insertStmt, event, fingerprint, requestKey, raced.id, matchesOriginal, receivedAt, submitterId);
           return {
             result: appendResult('duplicate', raced.id, fingerprint, undefined, {
               duplicateReason: 'request_id',
@@ -2740,10 +2911,11 @@ export class SQLiteEventStore implements EventStore {
   async append(event: CanonicalEvent, options?: AppendOptions): Promise<AppendResult> {
     const receivedAt = options?.receivedAt ?? Date.now();
     const channel = options?.channel ?? 'events';
+    const submitterId = options?.submitterId ?? 'unattributed';
     let pending: PendingOutcome;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event, false, receivedAt, channel);
+      pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event, false, receivedAt, channel, submitterId);
       this.db.exec('COMMIT');
     } catch (error) {
       try {
@@ -2780,6 +2952,7 @@ export class SQLiteEventStore implements EventStore {
     // every item's `events.created_at`, so the two can never disagree.
     const receivedAt = options?.receivedAt ?? Date.now();
     const channel = options?.channel ?? 'events-batch';
+    const submitterId = options?.submitterId ?? 'unattributed';
 
     const lookupStmt = this.prepareLookup();
     const insertStmt = this.prepareInsert();
@@ -2814,7 +2987,7 @@ export class SQLiteEventStore implements EventStore {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const event of events) {
-        pending.push(this.classifyAndInsert(lookupStmt, insertStmt, event, ignoreTimestamp, receivedAt, channel));
+        pending.push(this.classifyAndInsert(lookupStmt, insertStmt, event, ignoreTimestamp, receivedAt, channel, submitterId));
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -2913,7 +3086,7 @@ export class SQLiteEventStore implements EventStore {
       // `channel` only classifies a usage-ledger row; `budget.alert` is never a ledger event (`toLedgerRow`
       // returns `null` for any type other than `llm.usage`/`llm.failed`), so the exact value has no observable
       // effect here.
-      pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event, false, alert.detectedAt, 'unknown');
+      pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event, false, alert.detectedAt, 'unknown', 'system');
       if (pending.result.outcome !== 'accepted') {
         throw new Error(
           `Deterministic budget alert event id ${JSON.stringify(event.id)} was already stored with different content; the alert was not recorded.`
@@ -3741,6 +3914,69 @@ export class SQLiteEventStore implements EventStore {
     this.db
       .prepare(`DELETE FROM retention_runs WHERE id NOT IN (SELECT id FROM retention_runs ORDER BY id DESC LIMIT ${RETENTION_RUNS_MAX})`)
       .run();
+  }
+
+  /** Issue #105: `GET /api/v1/audit/chain`. */
+  async chainInfo(): Promise<ChainInfo> {
+    if (!this.chainEnabled) {
+      return { enabled: false, reason: 'schema_not_migrated', tamperEvident: false };
+    }
+    const genesisRow = this.db.prepare("SELECT * FROM chain_checkpoints WHERE kind = 'genesis' LIMIT 1").get() as
+      | {
+          hash: string;
+          created_at: number;
+          unchained_count: number;
+          unchained_digest: string;
+          server_version: string;
+        }
+      | undefined;
+    const checkpointCount = (this.db.prepare('SELECT COUNT(*) AS c FROM chain_checkpoints').get() as { c: number }).c;
+    const chainedCount = (this.db.prepare('SELECT COUNT(*) AS c FROM events WHERE hash IS NOT NULL').get() as { c: number }).c;
+    const headRow = this.db
+      .prepare('SELECT id, seq, hash, created_at FROM events WHERE hash IS NOT NULL ORDER BY seq DESC LIMIT 1')
+      .get() as { id: string; seq: number; hash: string; created_at: number } | undefined;
+    return {
+      enabled: true,
+      version: 1,
+      algorithm: 'sha256',
+      canonicalization: 'JCS-RFC8785',
+      genesis: genesisRow
+        ? {
+            hash: genesisRow.hash,
+            createdAt: Number(genesisRow.created_at),
+            unchainedCount: Number(genesisRow.unchained_count),
+            unchainedDigest: genesisRow.unchained_digest,
+            serverVersion: genesisRow.server_version,
+          }
+        : null,
+      checkpoints: checkpointCount,
+      chainedCount,
+      head: headRow
+        ? { seq: Number(headRow.seq), eventId: headRow.id, hash: headRow.hash, receivedAt: Number(headRow.created_at) }
+        : null,
+    };
+  }
+
+  /** Issue #105: chain fields for the chained ids among `ids` (`include=chain`, ingestion receipts). */
+  async chainRecords(ids: readonly string[]): Promise<Record<string, ChainRecord>> {
+    if (!this.chainEnabled || ids.length === 0) return {};
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(
+        `SELECT id, seq, prev_hash, hash, created_at, submitter_id FROM events WHERE id IN (${placeholders}) AND hash IS NOT NULL`
+      )
+      .all(...ids) as Array<{ id: string; seq: number; prev_hash: string; hash: string; created_at: number; submitter_id: string }>;
+    const out: Record<string, ChainRecord> = {};
+    for (const row of rows) {
+      out[row.id] = {
+        seq: Number(row.seq),
+        prevHash: row.prev_hash,
+        hash: row.hash,
+        receivedAt: Number(row.created_at),
+        submitterId: row.submitter_id,
+      };
+    }
+    return out;
   }
 
   async close(): Promise<void> {

@@ -534,6 +534,22 @@ function isRequestAuthorized(req: express.Request): boolean {
 }
 
 /**
+ * Issue #105: the stable, non-secret id recorded as `submitter_id` on every chained row, derived from how the
+ * request authenticated, never from token material itself. `'shared-token'` when the one configured
+ * `AGENT_VIEWER_API_TOKEN` matched, `'anonymous'` when no token is configured (the open-API case) or when
+ * neither applies (unreachable on a route protected by `requireApiToken`, kept as a safe default rather than
+ * throwing). The webhook route never calls this for an HMAC-verified request: it uses the literal
+ * `'webhook-hmac'` instead, only after its own signature check passes.
+ */
+function submitterIdForRequest(req: express.Request): string {
+  const expectedToken = getApiToken();
+  if (!expectedToken) return 'anonymous';
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
+  if (bearerMatch && safeEqual(bearerMatch[1], expectedToken)) return 'shared-token';
+  return 'anonymous';
+}
+
+/**
  * Named token-check middleware (issue #59), parameterized so `/api/v1` keeps its own response shape and
  * webhook HMAC exemption while `/v1/logs` gets an OTLP-style 401. The authorization decision itself
  * (`isRequestAuthorized`) is identical on both routes.
@@ -754,7 +770,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
 
   let appendResult: AppendBatchResult;
   try {
-    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp' });
+    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp', submitterId: submitterIdForRequest(req) });
     recordAppendResults(appendResult.results, mapped.events);
   } catch (error) {
     otlpStats.requestsRejected += 1;
@@ -1049,7 +1065,7 @@ app.post(OTLP_TRACES_PATH, async (req, res) => {
 
   let appendResult: AppendBatchResult;
   try {
-    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp' });
+    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp', submitterId: submitterIdForRequest(req) });
     recordAppendResults(appendResult.results, mapped.events);
   } catch (error) {
     otlpTracesStats.requestsRejected += 1;
@@ -1448,10 +1464,12 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/ready', (_req, res) => {
+app.get('/ready', async (_req, res) => {
   try {
     const readiness = store.readiness();
     const database = store.getSchemaInfo?.();
+    // Issue #105: 'enabled'/'disabled', not the full chain body (that is GET /api/v1/audit/chain).
+    const chain = (await store.chainInfo()).enabled ? 'enabled' : 'disabled';
     if (!readiness.ready) res.setHeader('Retry-After', '1');
     res.status(readiness.ready ? 200 : 503).json({
       ok: readiness.ready,
@@ -1462,6 +1480,7 @@ app.get('/ready', (_req, res) => {
       ingestion: store.ingestionCounters(),
       // Startup rebuild from SQLite (issue #52): 'done' at once for memory storage, nothing to replay.
       rebuild: readiness.rebuild,
+      chain,
     });
   } catch (err: any) {
     res.status(503).json({ ok: false, ready: false, error: err?.message || 'Storage error' });
@@ -1544,9 +1563,11 @@ function reservedBudgetAlertIssue(body: unknown): { path: 'type' | 'id'; message
  * Stores an event the server built itself and broadcasts it only when the store accepted it. Any other outcome
  * means a server-generated id was reused, which is a server bug: it is logged at error and answered with
  * `500 internal_id_collision` instead of being hidden. Returns false when the response was already sent.
+ * Issue #105: `submitter_id` on a server-generated event is the submitter of the request that triggered it
+ * (`POST /agents`, `PATCH /agents`, `POST /runtimes`), never a separate "server" identity.
  */
-async function appendServerEvent(event: CanonicalEvent, res: express.Response): Promise<boolean> {
-  const result: AppendResult = await store.append(event);
+async function appendServerEvent(event: CanonicalEvent, req: express.Request, res: express.Response): Promise<boolean> {
+  const result: AppendResult = await store.append(event, { submitterId: submitterIdForRequest(req) });
   if (result.outcome === 'accepted') {
     broadcastEvent(event, result.seq);
     return true;
@@ -1712,7 +1733,7 @@ app.post('/api/v1/events', async (req, res) => {
   }
 
   const event = validation.data;
-  const result = await store.append(event);
+  const result = await store.append(event, { submitterId: submitterIdForRequest(req) });
   recordAppendResults([result], [event]);
 
   if (result.outcome === 'conflict') {
@@ -1746,12 +1767,18 @@ app.post('/api/v1/events', async (req, res) => {
 
   broadcastEvent(event, result.seq);
 
+  // Issue #105: an optional receipt, SQLite mode only (chainRecords returns {} in memory mode and when the
+  // chain is disabled).
+  const chainRecords = await store.chainRecords([event.id]);
+  const chainReceipt = chainRecords[event.id];
+
   res.status(202).json({
     accepted: true,
     duplicate: false,
     id: event.id,
     fingerprint: result.fingerprint,
     receivedAt: result.receivedAt,
+    ...(chainReceipt ? { chain: { seq: chainReceipt.seq, hash: chainReceipt.hash, receivedAt: chainReceipt.receivedAt } } : {}),
   });
 });
 
@@ -1817,10 +1844,15 @@ app.post('/api/v1/events/batch', async (req, res) => {
 
   const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(validatedEvents, {
     channel: 'events-batch',
+    submitterId: submitterIdForRequest(req),
   });
   recordAppendResults(results, validatedEvents);
 
   acceptedEvents.forEach((event, index) => broadcastEvent(event, acceptedSeqs[index] ?? null));
+
+  // Issue #105: an optional receipt per accepted item, SQLite mode only, looked up by id (absent for
+  // duplicates and conflicts).
+  const chainRecords = await store.chainRecords(acceptedEvents.map((event) => event.id));
 
   // 202 even when every item is a conflict, so existing clients keep working: read `conflicts` and each `status`.
   res.status(202).json({
@@ -1848,6 +1880,15 @@ app.post('/api/v1/events/batch', async (req, res) => {
             ...(result.duplicateReason ? { duplicateReason: result.duplicateReason } : {}),
             ...(result.submittedId !== undefined ? { submittedId: result.submittedId } : {}),
             ...(result.matchesOriginal !== undefined ? { matchesOriginal: result.matchesOriginal } : {}),
+            ...(result.outcome === 'accepted' && chainRecords[result.id]
+              ? {
+                  chain: {
+                    seq: chainRecords[result.id].seq,
+                    hash: chainRecords[result.id].hash,
+                    receivedAt: chainRecords[result.id].receivedAt,
+                  },
+                }
+              : {}),
           }
     ),
   });
@@ -1893,6 +1934,10 @@ app.get('/api/v1/events', async (req, res) => {
   const events = hasMore ? page.slice(0, limit) : page;
   const nextBeforeId = hasMore ? (events[events.length - 1]?.id ?? null) : null;
   const retention = await store.retention();
+  // Issue #105: `include=chain` adds a sibling map keyed by event id, byte-identical `events` otherwise. Any
+  // other `include` value is ignored, as before this item.
+  const includeChain = req.query.include === 'chain';
+  const chain = includeChain ? await store.chainRecords(events.map((e) => e.id)) : undefined;
   res.json({
     schemaVersion: '1.0',
     count: events.length,
@@ -1900,6 +1945,7 @@ app.get('/api/v1/events', async (req, res) => {
     nextBeforeId,
     events,
     retention,
+    ...(chain ? { chain } : {}),
   });
 });
 
@@ -1923,6 +1969,16 @@ app.get('/api/v1/usage', async (_req, res) => {
 // Sits under /api/v1, so it gets the same auth and rate limit as every other route here.
 app.get('/api/v1/usage/ledger/status', async (_req, res) => {
   res.json(await store.usageLedgerStatus());
+});
+
+/**
+ * Issue #105: the current state of the hash chain. Read-only and under `/api/v1`, so it gets the same rate
+ * limit, query-token rejection and Bearer auth as every other route here, including the future read-only
+ * auditor role of #108. Never includes event payloads.
+ */
+app.get('/api/v1/audit/chain', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await store.chainInfo());
 });
 
 // -------------------------------------------------------------
@@ -2649,7 +2705,7 @@ app.post('/api/v1/agents', requireReady, async (req, res) => {
     },
   };
 
-  if (!(await appendServerEvent(regEvent, res))) return;
+  if (!(await appendServerEvent(regEvent, req, res))) return;
 
   res.status(201).json(await store.getAgent(id));
 });
@@ -2774,7 +2830,7 @@ app.patch('/api/v1/agents/:agentId', requireReady, async (req, res) => {
         summary: `${agentId} profile updated`,
         payload: profilePayload,
       };
-      if (!(await appendServerEvent(updatedEvent, res))) return;
+      if (!(await appendServerEvent(updatedEvent, req, res))) return;
     }
 
     const statusEvent: CanonicalEvent = {
@@ -2788,7 +2844,7 @@ app.patch('/api/v1/agents/:agentId', requireReady, async (req, res) => {
       summary: `${agentId} status updated to ${status}`,
       payload: statusPayload,
     };
-    if (!(await appendServerEvent(statusEvent, res))) return;
+    if (!(await appendServerEvent(statusEvent, req, res))) return;
   } else {
     const updatedEvent: CanonicalEvent = {
       schemaVersion: '1.0',
@@ -2801,7 +2857,7 @@ app.patch('/api/v1/agents/:agentId', requireReady, async (req, res) => {
       summary: `${agentId} profile updated`,
       payload: { ...profilePayload, ...statusPayload },
     };
-    if (!(await appendServerEvent(updatedEvent, res))) return;
+    if (!(await appendServerEvent(updatedEvent, req, res))) return;
   }
 
   res.json(await store.getAgent(agentId));
@@ -2832,7 +2888,7 @@ app.post('/api/v1/runtimes', requireReady, async (req, res) => {
     summary: `Runtime ${id} connected`,
     payload: { id, name, framework: resolvedFramework, version, metadata },
   };
-  if (!(await appendServerEvent(event, res))) return;
+  if (!(await appendServerEvent(event, req, res))) return;
 
   const runtime = (await store.listRuntimes()).find((r) => r.id === id) ?? null;
   res.status(201).json(runtime);
@@ -2948,6 +3004,10 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
 
     verifiedSignature = expected;
   }
+
+  // Issue #105: 'webhook-hmac' only once the signature check above has actually passed (a return above this
+  // point never reaches here); otherwise this request went through the normal token middleware instead.
+  const submitterId = secret ? 'webhook-hmac' : submitterIdForRequest(req);
 
   // Step 2: Parse and validate the webhook payload
   const parseResult = GenericWebhookPayloadSchema.safeParse(req.body ?? {});
@@ -3198,6 +3258,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(generatedEvents, {
     ...appendOptions,
     channel: 'webhook',
+    submitterId,
   } as any);
   recordAppendResults(results, generatedEvents);
 

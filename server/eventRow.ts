@@ -31,3 +31,19 @@ export function rowToEvent(r: any): CanonicalEvent {
     payload: JSON.parse(r.payload || '{}'),
   };
 }
+
+/**
+ * Issue #105: like `rowToEvent`, but never throws. The genesis/resume checkpoint digest must cover every row,
+ * including one whose `payload` column is itself unparseable (the live rebuild path skips such a row and logs
+ * it; a migration or a store constructor cannot skip a row the same way without silently shrinking the chain's
+ * coverage of pre-chain history, and must not crash the server either). Falls back to a stable sentinel built
+ * only from the row's `id` and raw stored text, so even a fully corrupt row still contributes a reproducible,
+ * content-dependent value: editing its raw bytes still changes the digest.
+ */
+export function rowToEventForDigest(r: any): unknown {
+  try {
+    return rowToEvent(r);
+  } catch {
+    return { id: r.id, unparseable: true, eventJson: r.event_json ?? null, payload: r.payload ?? null };
+  }
+}

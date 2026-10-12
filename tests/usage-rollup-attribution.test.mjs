@@ -511,6 +511,10 @@ test('SQLite: a pre-existing database (no event_json) backfills tool_calls/meeti
     await store.close();
 
     const raw = new DatabaseSync(file);
+    // Issue #105: `events_immutable` (defense in depth, not a security boundary) blocks an UPDATE on a row the
+    // store already chained; this simulates a pre-0.2.0 row written directly to the file, the same actor the
+    // trigger is not meant to stop.
+    raw.exec('DROP TRIGGER IF EXISTS events_immutable');
     raw.prepare("UPDATE events SET event_json = NULL WHERE id = 'evt_legacy_tool'").run();
     raw.exec('DROP VIEW tool_call_resolution; DROP TABLE tool_calls; DROP TABLE meeting_labels;');
     raw.close();

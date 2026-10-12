@@ -1,3 +1,4 @@
+import { CREW_AMBIENCES, CREW_AMBIENCE_LABELS, resolveCrewAmbience, type CrewAmbienceMode } from './crewAmbience';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { CrewRoomSelector } from './CrewRoomSelector';
@@ -184,6 +185,18 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
     catch { /* Read-only or disabled storage must not break rendering. */ }
   }, [cameraByRoom, persistCamera]);
   const isEs = locale.startsWith('es');
+  const ambienceMode = visualPreferences.ambienceByRoom?.[roomId] ?? 'day';
+  const [localHour, setLocalHour] = useState(() => new Date().getHours());
+  useEffect(() => {
+    if (ambienceMode !== 'auto') return;
+    const update = () => setLocalHour(new Date().getHours());
+    update();
+    const timer = window.setInterval(update, 30_000);
+    window.addEventListener('focus', update);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', update); };
+  }, [ambienceMode]);
+  const ambience = resolveCrewAmbience(ambienceMode, localHour);
+  const ambienceLabels = CREW_AMBIENCE_LABELS[isEs ? 'es' : 'en'];
   // Motor de audio propio de Crew (#150): una instancia por montaje de CrewStage,
   // sincronizada con la sala activa y con mute/volumen (#157). Nunca se autoinicia.
   const audio = useCrewAudio({ roomId, muted: visualPreferences.muted, volume: visualPreferences.volume });
@@ -291,8 +304,8 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, workstationImage, seats: action.actions.flatMap(actor => actor.workstation ? [{ ...actor.workstation, actorId: actor.id }] : []), locale, highContrast: visualPreferences.highContrast, propImages: propImages.images, calls: callStyles, callIcon: callIcon.image });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, action.actions, workstationImage, visualPreferences.highContrast, propImages.images, callStyles, callIcon.image]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, workstationImage, seats: action.actions.flatMap(actor => actor.workstation ? [{ ...actor.workstation, actorId: actor.id }] : []), locale, ambience, highContrast: visualPreferences.highContrast, propImages: propImages.images, calls: callStyles, callIcon: callIcon.image });
+  }, [room, camera, locale, ambience, presence, sprite.images, blink, walks, action.frames, action.actions, workstationImage, visualPreferences.highContrast, propImages.images, callStyles, callIcon.image]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -334,6 +347,19 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
         style={{ color: '#111827', background: '#fff', padding: 6 }}>
         {CREW_VIEWS.map(v => <option key={v} value={v}>{(isEs ? { front: 'Frente', right: 'Derecha', back: 'Atrás', left: 'Izquierda' } : { front: 'Front', right: 'Right', back: 'Back', left: 'Left' })[v]}</option>)}
       </select>
+      <label htmlFor={`${idPrefix}-ambience`}>{isEs ? 'Ambiente' : 'Ambience'}</label>
+      <select id={`${idPrefix}-ambience`} value={ambienceMode}
+        style={{ color: '#111827', background: '#fff', padding: 6 }}
+        onChange={event => {
+          const mode = event.target.value as CrewAmbienceMode;
+          changePreferences({ ...visualPreferences, ambienceByRoom: { ...visualPreferences.ambienceByRoom, [roomId]: mode } });
+          pushCaption(`${isEs ? 'Ambiente' : 'Ambience'}: ${ambienceLabels[mode]}`);
+        }}>
+        {(['auto', ...CREW_AMBIENCES] as const).map(mode => <option key={mode} value={mode}>{ambienceLabels[mode]}</option>)}
+      </select>
+      <span role="status" data-testid={`${idPrefix}-ambience-status`} style={{ fontSize: 12 * hudScale }}>
+        {isEs ? 'Ambiente visual' : 'Visual ambience'}: {ambienceLabels[ambience]}
+      </span>
       <button type="button" onClick={() => setZoom(z => Math.max(.5, z / 1.2))} aria-label={isEs ? 'Alejar' : 'Zoom out'}>−</button>
       <span>{Math.round(zoom * 100)}%</span>
       <button type="button" onClick={() => setZoom(z => Math.min(3, z * 1.2))} aria-label={isEs ? 'Acercar' : 'Zoom in'}>+</button>
@@ -495,7 +521,7 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
         ? `${presence.unplaced.length} agentes sin espacio de representación en esta sala.`
         : `${presence.unplaced.length} agents have no available display position in this room.`}</span>}
     </div>
-    <canvas ref={canvasRef} style={{ width: '100%', flex: 1, minHeight: 120, touchAction: 'none', cursor: 'grab' }}
+    <canvas data-crew-ambience={ambience} ref={canvasRef} style={{ width: '100%', flex: 1, minHeight: 120, touchAction: 'none', cursor: 'grab' }}
       aria-label={isEs ? `Vista de oficina: ${room.label.es}` : `Office view: ${room.label.en}`}
       tabIndex={0}
       onKeyDown={event => {

@@ -155,7 +155,7 @@ Este inventario refleja el estado al redactar la primera ejecución. Desde enton
 | [#145](https://github.com/jmmana/Agent-Viewer/issues/145) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#146](https://github.com/jmmana/Agent-Viewer/issues/146) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#147](https://github.com/jmmana/Agent-Viewer/issues/147) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
-| [#148](https://github.com/jmmana/Agent-Viewer/issues/148) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
+| [#148](https://github.com/jmmana/Agent-Viewer/issues/148) | Implementado en rama `feat/crew-room-ambience-148`: selector amanecer/día/atardecer/noche/auto por sala, persistencia v1, ventanas y skyline procedurales en cuatro cámaras, color ambiental y atenuación de monitores geométricos. Alto contraste tiene prioridad, sin transiciones ni audio. Pruebas de reloj, aislamiento, persistencia, escritorio/móvil y regreso a Caricatura. [Contrato y verificación](AMBIENCE.md), [evidencia runtime](evidence/ambience-148/README.md). Arte `prototype`, pendiente de aceptación visual y QA física; Refs, no Closes. |
 | [#149](https://github.com/jmmana/Agent-Viewer/issues/149) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#150](https://github.com/jmmana/Agent-Viewer/issues/150) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |
 | [#151](https://github.com/jmmana/Agent-Viewer/issues/151) | Pendiente en Crew independiente; antecedentes de arte o showroom no equivalen a entrega. |

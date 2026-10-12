@@ -1,7 +1,7 @@
+import { CREW_AMBIENCE_PALETTES, type CrewAmbience } from './crewAmbience';
 import { crewProject, type CrewRoomDefinition, type CrewView } from './crewModel';
 import { crewPolygon, type CrewPoint } from './crewRenderPrimitives';
 import {
-  CREW_BACKGROUND_COLOR,
   CREW_BACKGROUND_COLOR_HIGH_CONTRAST,
   CREW_DOOR_COLOR,
   CREW_FLOOR_GRID_STYLE,
@@ -24,20 +24,20 @@ export interface CrewSceneGeometry {
 }
 
 /** Fondo de cámara en píxeles de pantalla, antes de aplicar la transformación de escena. */
-export function drawCrewBackground(ctx: CanvasRenderingContext2D, width: number, height: number, highContrast = false): void {
-  ctx.fillStyle = highContrast ? CREW_BACKGROUND_COLOR_HIGH_CONTRAST : CREW_BACKGROUND_COLOR;
+export function drawCrewBackground(ctx: CanvasRenderingContext2D, width: number, height: number, highContrast = false, ambience: CrewAmbience = 'day'): void {
+  ctx.fillStyle = highContrast ? CREW_BACKGROUND_COLOR_HIGH_CONTRAST : CREW_AMBIENCE_PALETTES[ambience].background;
   ctx.fillRect(0, 0, width, height);
 }
 
 /** Dos paredes traseras con altura 2.5D y el piso de la sala; las frontales se omiten (cutaway). */
 export function drawCrewRoomShell(ctx: CanvasRenderingContext2D, room: Pick<CrewRoomDefinition, 'id'>,
-  width: number, depth: number, { isoPoint, wallHeight }: CrewSceneGeometry, highContrast = false): void {
+  width: number, depth: number, { isoPoint, wallHeight }: CrewSceneGeometry, highContrast = false, ambience: CrewAmbience = 'day'): void {
   const corners = [isoPoint(0, 0), isoPoint(width, 0), isoPoint(width, depth), isoPoint(0, depth)];
-  const walls = crewWallShades(highContrast);
+  const walls = highContrast ? crewWallShades(true) : CREW_AMBIENCE_PALETTES[ambience];
   const stroke = highContrast ? CREW_STROKE_HIGH_CONTRAST : undefined;
   crewPolygon(ctx, [corners[0], corners[1], isoPoint(width, 0, wallHeight), isoPoint(0, 0, wallHeight)], walls.xWall, stroke);
   crewPolygon(ctx, [corners[3], corners[0], isoPoint(0, 0, wallHeight), isoPoint(0, depth, wallHeight)], walls.yWall, stroke);
-  crewPolygon(ctx, corners, crewFloorColor(room, highContrast), stroke);
+  crewPolygon(ctx, corners, highContrast || ambience === 'day' ? crewFloorColor(room, highContrast) : CREW_AMBIENCE_PALETTES[ambience].floor, stroke);
 }
 
 /** Cuadrícula de piso cada unidad local; es ayuda visual, no un contrato de celdas. */

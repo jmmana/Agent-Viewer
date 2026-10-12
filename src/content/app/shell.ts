@@ -84,9 +84,8 @@ const EN = {
   'drop.readFailed': 'The event log file could not be read',
   'drop.dismiss': 'Dismiss error',
   'drop.otlpMetrics': 'This file holds OTLP metrics, which are pre-aggregated counters and cannot be replayed as individual calls. Export the logs signal (resourceLogs) instead.',
-  'drop.otlpTraces': 'OTLP traces are not supported yet. Export the run as canonical JSONL V1.',
-  'drop.otlpNoUsage': 'This OTLP logs file was read, but no record mapped to a usable call.',
-  'drop.otlpRejected': 'This OTLP logs file was read, but every record was rejected (missing fields or timestamp).',
+  'drop.otlpNoUsage': 'This OTLP file was read, but no record or span mapped to a usable call.',
+  'drop.otlpRejected': 'This OTLP file was read, but every record or span was rejected (missing fields or timestamp).',
 
   // Operator actions recorded by the demo app
   'operator.messageEvent': 'Operator instruction sent to {agent}: "{message}"',
@@ -174,9 +173,8 @@ const ES: Record<keyof typeof EN, string> = {
   'drop.readFailed': 'No se pudo leer el archivo de eventos',
   'drop.dismiss': 'Cerrar el error',
   'drop.otlpMetrics': 'Este archivo contiene métricas OTLP, que son contadores preagregados y no se pueden reproducir como llamadas individuales. Exporta la señal de logs (resourceLogs) en su lugar.',
-  'drop.otlpTraces': 'Los traces OTLP aún no son compatibles. Exporta la sesión como JSONL canónico V1.',
-  'drop.otlpNoUsage': 'Este archivo de logs OTLP se leyó, pero ningún registro corresponde a una llamada utilizable.',
-  'drop.otlpRejected': 'Este archivo de logs OTLP se leyó, pero se rechazaron todos los registros (faltan campos o la marca de tiempo).',
+  'drop.otlpNoUsage': 'Este archivo OTLP se leyó, pero ningún registro o span corresponde a una llamada utilizable.',
+  'drop.otlpRejected': 'Este archivo OTLP se leyó, pero se rechazaron todos los registros o spans (faltan campos o la marca de tiempo).',
 
   'operator.messageEvent': 'Instrucción del operador enviada a {agent}: "{message}"',
   'operator.statusText': 'El operador cambió el estado a {status}',

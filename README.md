@@ -86,7 +86,7 @@ These are design rules, enforced in code, not marketing:
 5. **A good guest in your app.** No injected styles, no global selectors, no `localStorage`, no global keyboard shortcuts, nothing runs on import. Two offices on one page never share state.
 6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Unknown stays unknown for budgets too: a budget with an uncountable call is `unknown`, never a guessed `ok` ([docs/budgets.md](docs/budgets.md)). Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
-**What it is not:** a tracing backend, a log store or an APM replacement. `POST /v1/traces` converts GenAI spans into events, it does not store spans, offer a trace explorer, or import a saved trace file yet (that part is still on the [roadmap](#-roadmap)). It does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
+**What it is not:** a tracing backend, a log store or an APM replacement. `POST /v1/traces` converts GenAI spans into events and does not store spans or offer a trace explorer; `parseEventLog` can replay a saved OTLP JSON trace export through that same mapper, but neither path is a tracing backend. It does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
 
 ---
 
@@ -497,13 +497,13 @@ Honest maturity, so you know what you are getting:
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
 | **JSONL log replay** | [`parseEventLog`](docs/event-log.md) | ✅ **Stable.** Library API, and drag and drop in the demo app. |
-| **OTLP logs file import (Claude Code)** | [`parseEventLog`](docs/event-log.md#otlp-files) | ✅ **Stable.** Reads a saved OTLP/JSON export (pretty-printed, or one request per line from a Collector `file` exporter) and converts `resourceLogs` into `llm.usage`/`llm.failed` events through the same mapper as the live `POST /v1/logs` receiver. `resourceMetrics` returns one clear issue instead of inventing per-call figures; `resourceSpans` is not supported yet. |
+| **OTLP logs/traces file import** | [`parseEventLog`](docs/event-log.md#otlp-files) | ✅ **Stable.** Reads a saved OTLP/JSON export (pretty-printed, or one request per line from a Collector `file` exporter). `resourceLogs` (Claude Code) and `resourceSpans` (GenAI traces) both convert into canonical events through the exact same mappers their live receivers use (`POST /v1/logs`, `POST /v1/traces`). `resourceMetrics` returns one clear issue instead of inventing per-call figures. |
 | **LangGraph** | [`examples/langgraph-adapter.ts`](examples/langgraph-adapter.ts) | 🧪 **Example adapter.** Node, tool and usage callbacks mapped to SDK calls. Type-checked in CI, not run against LangGraph. |
 | **CrewAI** | [`examples/crewai-adapter.py`](examples/crewai-adapter.py) | 🧪 **Example adapter.** Crew agents, tasks, tools, messages and usage. Not run in CI. |
 | **AutoGen** | [`examples/autogen-adapter.py`](examples/autogen-adapter.py) | 🧪 **Example adapter.** Conversable agents and group chat messages, tools and usage. Not run in CI. |
 | **OpenAI Agents SDK** | [`examples/openai-agents-adapter.ts`](examples/openai-agents-adapter.ts) | 🧪 **Example adapter.** Agent runs, handoffs, tools and usage. Type-checked in CI. |
 | **Google ADK** | [`examples/google-adk-adapter.ts`](examples/google-adk-adapter.ts) | 🧪 **Example adapter.** Gemini turns, function calls and usage. Type-checked in CI. |
-| **OTLP GenAI traces** | `POST /v1/traces` | ✅ **Stable receiver, http/json and http/protobuf, no gRPC.** Converts OpenTelemetry GenAI spans (`gen_ai.*`, for example OpenLLMetry/Traceloop) into `llm.usage`/`llm.failed` and `tool.*` events; spans are never stored. File import of a saved trace export in `parseEventLog` is not supported yet (issue #98). Reference: [docs/otlp.md](docs/otlp.md#otlp-traces-post-v1traces). |
+| **OTLP GenAI traces** | `POST /v1/traces` | ✅ **Stable receiver, http/json and http/protobuf, no gRPC.** Converts OpenTelemetry GenAI spans (`gen_ai.*`, for example OpenLLMetry/Traceloop) into `llm.usage`/`llm.failed` and `tool.*` events; spans are never stored. File import of a saved trace export is also supported, through the same mapper, via `parseEventLog` (see the row above). Reference: [docs/otlp.md](docs/otlp.md#otlp-traces-post-v1traces). |
 
 <sub>✅ stable and tested · 🧪 example code you wire into the framework's own callbacks (the adapters do not import the frameworks) · ❌ not available</sub>
 
@@ -959,7 +959,6 @@ Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showc
 Planned, not available yet:
 
 - [ ] `GET /api/v1/usage/reconciliation`: compare the OTLP metrics stored by `POST /v1/metrics` against the usage ledger. The ledger itself shipped in 0.4.0; this comparison endpoint is still not built.
-- [ ] Import a saved OTLP trace export (`resourceSpans`) in `parseEventLog`, reusing the live `POST /v1/traces` receiver's mapper (issue #98). The live receiver itself shipped in 0.7.0.
 - [ ] More adapters, packaged and tested against the real frameworks.
 - [ ] An MCP server, so agents can report into the office directly.
 - [ ] A web component for apps that do not use React.

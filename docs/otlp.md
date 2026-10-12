@@ -329,8 +329,9 @@ Converts OpenTelemetry GenAI spans into `llm.usage`/`llm.failed` and `tool.start
 shared `AGENT_VIEWER_OTLP_MAX_BODY`/`AGENT_VIEWER_OTLP_MAX_RECORDS` pair across all three OTLP routes, not the
 separate `_BYTES`/`AGENT_VIEWER_OTLP_MAX_SPANS` names the original proposal used before the shared limiter in
 #59/#73 existed). The pure mapper lives at `src/integrations/otlpTraces.ts` (`mapOtlpTraces`), exported at the
-top level of `src/integrations` (not under `src/integrations/otlp/`) so issue #98's OTLP trace file import can
-reuse it; it is excluded from the embeddable library bundle (`src/lib/index.ts` never imports it).
+top level of `src/integrations` (not under `src/integrations/otlp/`) so `parseEventLog`'s OTLP trace file import
+(issue #98) reuses it directly; it is excluded from the embeddable library bundle (`src/lib/index.ts` never
+imports it).
 
 **Pinned semantic convention version.** The attribute names below follow the OpenTelemetry GenAI semantic
 conventions as of the `1.37.0` release of `semantic-conventions` (`gen_ai.provider.name` replacing the older

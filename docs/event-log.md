@@ -45,7 +45,7 @@ Each signal is handled differently, because only one of them carries replayable 
 
 - **Logs (`resourceLogs`):** converted into `llm.usage` (and `llm.failed`) events through the same Claude Code mapper the live `POST /v1/logs` receiver uses (`docs/otlp.md`, `docs/claude-code.md`). A record missing a required field, or with no usable timestamp, is skipped and counted, never invented: the parser never substitutes the current time or a `0` for an unreported figure.
 - **Metrics (`resourceMetrics`):** never replayed as calls. Metrics are pre-aggregated counters: turning one into a per-call event would invent a figure nobody reported. `parseEventLog` returns no events and one issue per file explaining the alternative (export the logs signal, or send metrics to the server).
-- **Traces (`resourceSpans`):** file import is not supported yet (tracked by issue #98, which will reuse the live receiver's mapper, `src/integrations/otlpTraces.ts`). `parseEventLog` returns no events and one issue per file, unchanged from earlier releases. A *live* OTLP GenAI traces receiver, `POST /v1/traces`, already exists for runtimes that export over the network instead of to a file: see [otlp.md](otlp.md#otlp-traces-post-v1traces).
+- **Traces (`resourceSpans`):** converted into `llm.usage`/`llm.failed` and `tool.started`/`tool.completed`/`tool.failed` events through the exact same GenAI spans mapper the live `POST /v1/traces` receiver uses (`src/integrations/otlpTraces.ts`, issue #97/#98: one mapper, so the live path and the file path can never disagree about a run). A span missing usage, a required id, or a usable timestamp is skipped or rejected and counted, never invented. Prompt and completion content (`gen_ai.prompt`, `gen_ai.completion`, message attributes) is never read by the mapper, so it never reaches `events` or `issues`. See [otlp.md](otlp.md#otlp-traces-post-v1traces) for the live receiver and the full mapping table.
 
 A Collector configuration that writes Claude Code's OTLP/HTTP logs export to a file for later import:
 
@@ -64,7 +64,7 @@ service:
       exporters: [file]
 ```
 
-`EventLogParseResult.otlp` (present whenever `format === "otlp"`) reports which signals were found, in the fixed order `logs`, `metrics`, `traces`, plus per-record counters: `logRecords` (records seen), `converted` (mapped to an event), `skipped` (not an error: a record type the mapper does not read), and `rejected` (an `otlp-record-skipped` issue, capped at 50 individually listed; the rest are still counted). The invariant `logRecords === converted + skipped + rejected` always holds.
+`EventLogParseResult.otlp` (present whenever `format === "otlp"`) reports which signals were found, in the fixed order `logs`, `metrics`, `traces`, plus per-record counters: `logRecords` (log records seen, plus trace spans seen: one shared counter under its original #74 name), `converted` (mapped to an event; a tool span's started+completed pair still counts once), `skipped` (not an error: a record or span type the mapper does not read), and `rejected` (an `otlp-record-skipped` issue, capped at 50 individually listed; the rest are still counted). The invariant `logRecords === converted + skipped + rejected` always holds.
 
 Every issue the parser emits now carries a machine-readable `code`:
 
@@ -73,9 +73,8 @@ Every issue the parser emits now carries a machine-readable `code`:
 | `invalid-json` | A line (or the whole file) could not be parsed as JSON. |
 | `invalid-event` | Parsed JSON that is not a recognized OTLP request failed the canonical contract. |
 | `otlp-metrics-not-replayable` | The file holds OTLP metrics, which cannot become per-call events. |
-| `otlp-traces-not-supported` | The file holds OTLP traces, not supported yet. |
-| `otlp-record-skipped` | One OTLP logs record was missing a required field or a usable timestamp. |
-| `otlp-no-usage-records` | The file's logs signal had records, but none mapped to a usable call. |
+| `otlp-record-skipped` | One OTLP logs record or trace span was missing a required field or a usable timestamp. |
+| `otlp-no-usage-records` | The file's logs or traces signal had records/spans, but none mapped to a usable call. |
 
 An OTLP issue never sets `raw` (a log record can carry sensitive text); only a canonical JSONL issue may.
 

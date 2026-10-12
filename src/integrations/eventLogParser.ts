@@ -1,5 +1,6 @@
 import { validateCanonicalEvent, type CanonicalEvent } from './canonicalContract';
 import { mapOtlpLogsRequest, type OtlpExportLogsServiceRequest } from './otlp/claudeCodeLogs';
+import { mapOtlpTraces, type OtlpExportTraceServiceRequest } from './otlpTraces';
 
 export const MAX_EVENT_LOG_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
 
@@ -16,17 +17,37 @@ const MAX_OTLP_RECORD_ISSUES = 50;
  */
 const NO_RECEIVE_TIME_SENTINEL_MS = -1;
 
-const OTLP_TRACES_MESSAGE = 'OTLP traces are not supported yet. Export the run as canonical JSONL V1.';
 const OTLP_METRICS_MESSAGE =
   'OTLP metrics are pre-aggregated counters and cannot be replayed as individual calls. Export the logs signal (resourceLogs) to replay usage, or send metrics to the server.';
 const OTLP_NO_USAGE_MESSAGE =
-  'The OTLP logs file was read, but no record mapped to a usable call (llm.usage or llm.failed). Check that telemetry was enabled for a Claude Code run.';
+  'The OTLP file was read, but no record mapped to a usable call (llm.usage or llm.failed). Check that telemetry was enabled for the run.';
+
+/**
+ * Translates the closed-vocabulary span rejection codes from the shared #97 traces mapper (`invalid_trace_id`,
+ * `no_timestamp`, `unmappable`, ...) into a sentence in the same style as the logs mapper's own rejection
+ * reasons. Never echoes an attribute value: the codes themselves never carry one.
+ */
+function tracesRejectionMessage(code: string): string {
+  switch (code) {
+    case 'invalid_trace_id':
+      return 'span rejected: missing or malformed traceId';
+    case 'invalid_span_id':
+      return 'span rejected: missing or malformed spanId';
+    case 'no_timestamp':
+      return 'span rejected: no usable start or end time';
+    case 'no_tool_name':
+      return 'tool span rejected: missing tool name';
+    case 'unmappable':
+      return 'span rejected: did not pass contract validation';
+    default:
+      return `span rejected: ${code}`;
+  }
+}
 
 export type EventLogIssueCode =
   | 'invalid-json'
   | 'invalid-event'
   | 'otlp-metrics-not-replayable'
-  | 'otlp-traces-not-supported'
   | 'otlp-record-skipped'
   | 'otlp-no-usage-records';
 
@@ -45,13 +66,16 @@ export interface EventLogParseIssue {
 export interface EventLogOtlpSummary {
   /** In this fixed order, only the signals actually found in the file. */
   signals: Array<'logs' | 'metrics' | 'traces'>;
-  /** Log records seen across every `resourceLogs` request found. */
+  /** Log records seen across every `resourceLogs` request found, plus spans seen across every `resourceSpans`
+   * request (issue #98): one counter shared by both signals, kept under its original #74 name for backward
+   * compatibility with the already-released `EventLogOtlpSummary` shape. */
   logRecords: number;
-  /** Records mapped to a canonical event. */
+  /** Records or spans mapped to a canonical event (a tool span that yields a started+completed pair still
+   * counts once here, matching `logRecords`). */
   converted: number;
-  /** Records the mapper answered `ignored` for (not an error). */
+  /** Records or spans the mapper answered `ignored` for (not an error). */
   skipped: number;
-  /** Records reported through an `otlp-record-skipped` issue (or counted past the cap). */
+  /** Records or spans reported through an `otlp-record-skipped` issue (or counted past the cap). */
   rejected: number;
 }
 
@@ -94,7 +118,8 @@ interface OtlpRequestEntry {
 
 /**
  * Runs every OTLP logs request found in the file through the shared #59 mapper (no second mapping
- * implementation, per issue #74), then folds the results, the fixed metrics/traces issues and the per-record
+ * implementation, per issue #74) and every OTLP traces request through the shared #97 mapper (issue #98, same
+ * rule: no second mapping implementation), then folds the results, the fixed metrics issue and the per-record
  * `otlp-record-skipped` issues (capped at `MAX_OTLP_RECORD_ISSUES`) into one result.
  */
 function buildOtlpResult(
@@ -118,7 +143,6 @@ function buildOtlpResult(
 
   for (const request of requests) {
     if (request.signals.metrics && firstMetricsLine === null) firstMetricsLine = request.lineNumber;
-    if (request.signals.traces && firstTracesLine === null) firstTracesLine = request.lineNumber;
 
     if (request.signals.logs) {
       if (firstLogsLine === null) firstLogsLine = request.lineNumber;
@@ -135,13 +159,26 @@ function buildOtlpResult(
         perRecordReasons.push({ line: request.lineNumber, error: reason });
       }
     }
+
+    if (request.signals.traces) {
+      if (firstTracesLine === null) firstTracesLine = request.lineNumber;
+      // Reuses the exact #97 mapper (`src/integrations/otlpTraces.ts`): the live receiver and this file-import
+      // path can never disagree about what a given trace export maps to (issue #98).
+      const mapped = mapOtlpTraces({ resourceSpans: request.signals.traces } as OtlpExportTraceServiceRequest);
+      const spansSeen = mapped.accepted + mapped.ignored + mapped.rejected.count;
+      logRecords += spansSeen;
+      converted += mapped.accepted;
+      skipped += mapped.ignored;
+      rejected += mapped.rejected.count;
+      events.push(...mapped.events);
+      for (const reason of mapped.rejected.reasons) {
+        perRecordReasons.push({ line: request.lineNumber, error: tracesRejectionMessage(reason) });
+      }
+    }
   }
 
   if (firstMetricsLine !== null) {
     issues.push({ line: firstMetricsLine, error: OTLP_METRICS_MESSAGE, code: 'otlp-metrics-not-replayable' });
-  }
-  if (firstTracesLine !== null) {
-    issues.push({ line: firstTracesLine, error: OTLP_TRACES_MESSAGE, code: 'otlp-traces-not-supported' });
   }
 
   const listed = perRecordReasons.slice(0, MAX_OTLP_RECORD_ISSUES);
@@ -158,8 +195,9 @@ function buildOtlpResult(
     });
   }
 
-  if (firstLogsLine !== null && logRecords > 0 && converted === 0) {
-    issues.push({ line: firstLogsLine, error: OTLP_NO_USAGE_MESSAGE, code: 'otlp-no-usage-records' });
+  if ((firstLogsLine !== null || firstTracesLine !== null) && logRecords > 0 && converted === 0) {
+    const line = firstLogsLine ?? firstTracesLine ?? 1;
+    issues.push({ line, error: OTLP_NO_USAGE_MESSAGE, code: 'otlp-no-usage-records' });
   }
 
   events.sort((a, b) => a.timestamp - b.timestamp);
@@ -180,9 +218,10 @@ function buildOtlpResult(
 
 /**
  * Parses a Canonical JSONL V1 file or text string into validated CanonicalEvent objects. OTLP logs files are
- * converted through the shared Claude Code mapper (issue #59); OTLP metrics and traces files are reported with
- * a clear issue instead of being silently dropped or misread as JSONL (issue #74). Invalid lines are captured
- * in `issues` without aborting the entire parse.
+ * converted through the shared Claude Code mapper (issue #59) and OTLP traces files through the shared GenAI
+ * spans mapper (issue #97/#98); OTLP metrics files are reported with a clear issue instead of being silently
+ * dropped or misread as JSONL (issue #74). Invalid lines are captured in `issues` without aborting the entire
+ * parse.
  */
 export async function parseEventLog(
   input: string | File | Blob

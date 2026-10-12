@@ -73,12 +73,18 @@ export const LiveTimelineSidebar: React.FC<LiveTimelineSidebarProps> = ({
   const [instructionText, setInstructionText] = useState('');
   const officeTranslate = React.useMemo(() => createOfficeTranslator({ locale }), [locale]);
 
-  // If selectedAgent changes, switch to inspector tab automatically
+  // Switch to the inspector tab on a genuinely new selection (a different agent id), not on every refresh of
+  // the same agent's data: selectedAgent is re-derived from a live-updating array (App.tsx), so it gets a new
+  // object reference on practically every incoming event even when the same agent stays selected. Keying on
+  // the object itself re-fired this effect on every such event, snapping the user back to Inspector and making
+  // it impossible to stay on the Live tab while events kept streaming in (issue #369).
+  const selectedAgentId = selectedAgent?.id;
   React.useEffect(() => {
-    if (selectedAgent) {
+    if (selectedAgentId) {
       setActiveTab('inspector');
     }
-  }, [selectedAgent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgentId]);
 
   const handleSendInstruction = (e: React.FormEvent) => {
     e.preventDefault();

@@ -11,7 +11,7 @@ import {
   LlmUsagePayloadSchema,
 } from '../src/integrations/canonicalContract';
 import type { AgentStatus } from '../src/types/agent';
-import { OTLP_LOGS_PATH, OTLP_METRICS_PATH } from '../src/integrations/otelConstants';
+import { OTLP_LOGS_PATH, OTLP_METRICS_PATH, OTLP_TRACES_PATH } from '../src/integrations/otelConstants';
 import { serverEventId } from './ids';
 import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
 import {
@@ -28,6 +28,7 @@ import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
 import type { RollupQuery, UsageFilters } from './usage/types';
 import { mapOtlpLogsRequest, looksLikeOtlpLogsRequest, countLogRecords } from '../src/integrations/otlp/claudeCodeLogs';
+import { mapOtlpTraces, looksLikeOtlpTracesRequest, countSpans } from '../src/integrations/otlpTraces';
 import { assertSafeBind, envHost, isLoopbackAddress, isLoopbackHost, isOpenModeAllowed, OpenApiRefusedError } from './network';
 import { createStreamTicketStore } from './stream-tickets';
 import { getPricingStore } from './pricing/store';
@@ -60,8 +61,10 @@ import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoin
 import {
   decodeExportLogsServiceRequest,
   decodeExportMetricsServiceRequest,
+  decodeExportTraceServiceRequest,
   encodeExportLogsServiceResponse,
   encodeExportMetricsServiceResponse,
+  encodeExportTraceServiceResponse,
   encodeStatus,
 } from './otlp/otlpProtobuf';
 import { parseRollupQuery, UsageFilterError } from './usage/rollup';
@@ -855,6 +858,153 @@ app.post(OTLP_METRICS_PATH, async (req, res) => {
     res.status(200).json({
       partialSuccess: {
         rejectedDataPoints: String(rejectedCount),
+        errorMessage,
+      },
+    });
+  }
+});
+
+// -------------------------------------------------------------
+// OTLP/HTTP GenAI traces receiver: POST /v1/traces (issue #97)
+//
+// Converts GenAI spans (OpenTelemetry's `gen_ai.*` semantic conventions) into `llm.usage`/`llm.failed` and
+// `tool.started`/`tool.completed`/`tool.failed` canonical events, through the pure mapper in
+// `src/integrations/otlpTraces.ts`. It does not store spans: only the derived events reach `store.appendBatch`,
+// the same append-then-broadcast shape `/v1/logs` above uses. See `docs/otlp.md` for the full mapping table.
+//
+// Same middleware order, body limits and record-count env vars as `/v1/logs`/`/v1/metrics` (one shared
+// `AGENT_VIEWER_OTLP_MAX_BODY`/`AGENT_VIEWER_OTLP_MAX_RECORDS` pair across all three OTLP routes, documented in
+// `docs/otlp.md`), rather than the separate `AGENT_VIEWER_OTLP_MAX_BODY_BYTES`/`AGENT_VIEWER_OTLP_MAX_SPANS`
+// names in the issue's original draft, which predates the shared limiter #59/#73 actually shipped.
+// -------------------------------------------------------------
+
+const OTLP_TRACES_UNSUPPORTED_MEDIA_MESSAGE =
+  `Agent Viewer accepts OTLP http/json or http/protobuf on ${OTLP_TRACES_PATH}, uncompressed or gzip. Set OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json or http/protobuf.`;
+const OTLP_TRACES_MALFORMED_BODY_MESSAGE = 'Expected an OTLP ExportTraceServiceRequest with resourceSpans';
+
+/** Per-process counters behind a future stats surface, the same shape as `otlpStats`/`otlpMetricsStats` above. */
+const otlpTracesStats = {
+  since: Date.now(),
+  requestsAccepted: 0,
+  requestsRejected: 0,
+  spansReceived: 0,
+  spansMapped: 0,
+  spansDuplicates: 0,
+  spansIgnored: 0,
+  spansRejected: 0,
+  warnings: 0,
+};
+
+app.use(OTLP_TRACES_PATH, rateLimiter);
+app.use(
+  OTLP_TRACES_PATH,
+  requireApiToken({
+    onUnauthorized: (res) => res.status(401).json(otlpErrorBody(16, 'Valid Bearer token required')),
+  })
+);
+app.use(OTLP_TRACES_PATH, otlpContentTypeGuard(() => (otlpTracesStats.requestsRejected += 1), OTLP_TRACES_UNSUPPORTED_MEDIA_MESSAGE));
+
+app.use(OTLP_TRACES_PATH, express.json({ type: 'application/json', limit: otlpMaxBodyLabel }));
+app.use(OTLP_TRACES_PATH, express.raw({ type: 'application/x-protobuf', limit: otlpMaxBodyLabel }));
+
+app.use(
+  OTLP_TRACES_PATH,
+  otlpBodyErrorHandler(
+    () => (otlpTracesStats.requestsRejected += 1),
+    `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} spans`,
+    OTLP_TRACES_UNSUPPORTED_MEDIA_MESSAGE,
+    OTLP_TRACES_MALFORMED_BODY_MESSAGE
+  )
+);
+
+app.post(OTLP_TRACES_PATH, async (req, res) => {
+  const isProtobufRequest = Buffer.isBuffer(req.body);
+  const respondStatus = (status: 400 | 413, message: string) => {
+    otlpTracesStats.requestsRejected += 1;
+    if (isProtobufRequest) {
+      res.status(status).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
+    } else {
+      res.status(status).json(otlpErrorBody(3, message));
+    }
+  };
+
+  let body: unknown;
+  if (isProtobufRequest) {
+    try {
+      body = decodeExportTraceServiceRequest(req.body as Buffer);
+    } catch (error) {
+      respondStatus(400, OTLP_TRACES_MALFORMED_BODY_MESSAGE);
+      return;
+    }
+  } else {
+    body = req.body ?? {};
+  }
+
+  if (!looksLikeOtlpTracesRequest(body)) {
+    respondStatus(400, OTLP_TRACES_MALFORMED_BODY_MESSAGE);
+    return;
+  }
+
+  const totalSpans = countSpans(body);
+  if (totalSpans > otlpMaxRecords) {
+    respondStatus(413, `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} spans`);
+    return;
+  }
+
+  const mapped = mapOtlpTraces(body);
+
+  let appendResult: AppendBatchResult;
+  try {
+    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp' });
+  } catch (error) {
+    otlpTracesStats.requestsRejected += 1;
+    if (isProtobufRequest) res.status(503).type('application/x-protobuf').send(Buffer.from(encodeStatus(14, 'Storage unavailable, retry')));
+    else res.status(503).json(otlpErrorBody(14, 'Storage unavailable, retry'));
+    return;
+  }
+
+  appendResult.acceptedEvents.forEach((event, index) => broadcastEvent(event, appendResult.acceptedSeqs[index] ?? null));
+
+  otlpTracesStats.requestsAccepted += 1;
+  otlpTracesStats.spansReceived += totalSpans;
+  otlpTracesStats.spansMapped += appendResult.accepted;
+  otlpTracesStats.spansDuplicates += appendResult.duplicates;
+  otlpTracesStats.spansIgnored += mapped.ignored;
+  otlpTracesStats.spansRejected += mapped.rejected.count + appendResult.conflicts;
+  otlpTracesStats.warnings += mapped.warnings;
+
+  // Debug header (issue #97): on every 200, so "why do I not see my spans" is answerable with `curl -i`.
+  // `accepted`/`duplicates` are the store's own post-dedup counts; `ignored`/`rejected`/`warnings` come straight
+  // from the mapper, which never touches the store.
+  const rejectedCount = mapped.rejected.count + appendResult.conflicts;
+  res.setHeader(
+    'X-Agent-Viewer-OTLP',
+    `accepted=${appendResult.accepted}; duplicates=${appendResult.duplicates}; ignored=${mapped.ignored}; rejected=${rejectedCount}; warnings=${mapped.warnings}`
+  );
+
+  if (rejectedCount === 0) {
+    if (isProtobufRequest) res.status(200).type('application/x-protobuf').send(Buffer.from(encodeExportTraceServiceResponse()));
+    else res.status(200).json({});
+    return;
+  }
+
+  const reasonCounts = new Map<string, number>();
+  for (const reason of mapped.rejected.reasons) reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+  if (appendResult.conflicts > 0) reasonCounts.set('conflicting_duplicate', (reasonCounts.get('conflicting_duplicate') ?? 0) + appendResult.conflicts);
+  const reasonSummary = Array.from(reasonCounts.entries())
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(', ');
+  const errorMessage = `rejected ${rejectedCount} of ${totalSpans} spans: ${reasonSummary}`.slice(0, 2000);
+
+  if (isProtobufRequest) {
+    res
+      .status(200)
+      .type('application/x-protobuf')
+      .send(Buffer.from(encodeExportTraceServiceResponse({ rejectedCount, errorMessage })));
+  } else {
+    res.status(200).json({
+      partialSuccess: {
+        rejectedSpans: String(rejectedCount),
         errorMessage,
       },
     });

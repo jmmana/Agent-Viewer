@@ -12,3 +12,10 @@ export const OTLP_LOGS_PATH = '/v1/logs';
  * `install claude-code --telemetry` is a follow-up to issue #60, not this constant's concern.
  */
 export const OTLP_METRICS_PATH = '/v1/metrics';
+
+/**
+ * Same role as `OTLP_LOGS_PATH`, for the OTLP/HTTP GenAI traces receiver (issue #97): any OpenTelemetry
+ * exporter configured with `OTEL_EXPORTER_OTLP_ENDPOINT` (or the signal-specific `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`)
+ * posts spans to this path, no extra configuration beyond the endpoint and token.
+ */
+export const OTLP_TRACES_PATH = '/v1/traces';

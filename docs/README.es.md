@@ -86,7 +86,7 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 5. **Un buen invitado en tu app.** No inyecta estilos, no usa selectores globales ni `localStorage`, no registra atajos de teclado globales y no ejecuta nada al importarse. Dos oficinas en la misma página nunca comparten estado.
 6. **Desconocido no es cero, en ningún lado.** El servidor, el portal, la CLI y los SDK nunca guardan ni muestran una cifra desconocida como cero, y nunca suman monedas distintas. Desconocido sigue siendo desconocido también para los presupuestos: un presupuesto con una llamada no contable es `unknown`, nunca un `ok` adivinado ([docs/budgets.md](budgets.md), en inglés). Semántica completa, campo por campo: [docs/usage-semantics.es.md](usage-semantics.es.md) ([english](../README.md)).
 
-**Lo que no es:** un backend de trazas, un almacén de logs ni un reemplazo de tu APM. Todavía no importa trazas OTLP, no llama a proveedores de modelos y los adaptadores de frameworks son ejemplos para adaptar, no integraciones empaquetadas. Mira la [tabla de madurez](#-conecta-tus-agentes).
+**Lo que no es:** un backend de trazas, un almacén de logs ni un reemplazo de tu APM. `POST /v1/traces` convierte spans GenAI en eventos, no guarda los spans ni ofrece un explorador de trazas, y todavía no importa un archivo de trazas guardado (eso sigue en la [hoja de ruta](#-hoja-de-ruta)). No llama a proveedores de modelos y los adaptadores de frameworks son ejemplos para adaptar, no integraciones empaquetadas. Mira la [tabla de madurez](#-conecta-tus-agentes).
 
 ---
 
@@ -495,7 +495,7 @@ Madurez honesta, para que sepas qué te llevas:
 | **AutoGen** | [`examples/autogen-adapter.py`](../examples/autogen-adapter.py) | 🧪 **Adaptador de ejemplo.** Agentes conversables y mensajes del group chat, herramientas y consumo. No se ejecuta en CI. |
 | **OpenAI Agents SDK** | [`examples/openai-agents-adapter.ts`](../examples/openai-agents-adapter.ts) | 🧪 **Adaptador de ejemplo.** Ejecuciones de agentes, traspasos (handoffs), herramientas y consumo. Verificado con el compilador en CI. |
 | **Google ADK** | [`examples/google-adk-adapter.ts`](../examples/google-adk-adapter.ts) | 🧪 **Adaptador de ejemplo.** Turnos de Gemini, llamadas a funciones y consumo. Verificado con el compilador en CI. |
-| **Trazas OTLP** | ninguno | ❌ **Todavía no.** `parseEventLog` lo dice en vez de adivinar. Está en la [hoja de ruta](#-hoja-de-ruta). |
+| **Trazas GenAI OTLP** | `POST /v1/traces` | ✅ **Receptor estable, http/json y http/protobuf, sin gRPC.** Convierte spans GenAI de OpenTelemetry (`gen_ai.*`, por ejemplo OpenLLMetry/Traceloop) en eventos `llm.usage`/`llm.failed` y `tool.*`; los spans nunca se guardan. Importar un archivo de trazas guardado en `parseEventLog` todavía no se admite (issue #98). Referencia (en inglés): [otlp.md](otlp.md#otlp-traces-post-v1traces). |
 
 <sub>✅ estable y probado · 🧪 código de ejemplo que conectas a los callbacks del framework (los adaptadores no importan los frameworks) · ❌ no disponible</sub>
 
@@ -981,7 +981,7 @@ Ya incluido en la [0.2.0](../CHANGELOG.md): la librería integrable, los modos p
 Planeado, todavía no disponible:
 
 - [ ] `GET /api/v1/usage/reconciliation`: comparar las métricas OTLP guardadas por `POST /v1/metrics` contra el ledger de consumo. El ledger en sí se publicó en la 0.4.0; este endpoint de comparación todavía no existe.
-- [ ] Importar trazas OTLP (OpenTelemetry).
+- [ ] Importar un archivo de trazas OTLP guardado (`resourceSpans`) en `parseEventLog`, reusando el mapeador del receptor en vivo `POST /v1/traces` (issue #98). El receptor en vivo en sí se publicó en la 0.7.0.
 - [ ] Más adaptadores, empaquetados y probados contra los frameworks reales.
 - [ ] Un servidor MCP, para que los agentes reporten directamente a la oficina.
 - [ ] Un web component para apps que no usan React.

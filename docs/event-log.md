@@ -45,7 +45,7 @@ Each signal is handled differently, because only one of them carries replayable 
 
 - **Logs (`resourceLogs`):** converted into `llm.usage` (and `llm.failed`) events through the same Claude Code mapper the live `POST /v1/logs` receiver uses (`docs/otlp.md`, `docs/claude-code.md`). A record missing a required field, or with no usable timestamp, is skipped and counted, never invented: the parser never substitutes the current time or a `0` for an unreported figure.
 - **Metrics (`resourceMetrics`):** never replayed as calls. Metrics are pre-aggregated counters: turning one into a per-call event would invent a figure nobody reported. `parseEventLog` returns no events and one issue per file explaining the alternative (export the logs signal, or send metrics to the server).
-- **Traces (`resourceSpans`):** not supported yet (tracked by a later item). `parseEventLog` returns no events and one issue per file, unchanged from earlier releases.
+- **Traces (`resourceSpans`):** file import is not supported yet (tracked by issue #98, which will reuse the live receiver's mapper, `src/integrations/otlpTraces.ts`). `parseEventLog` returns no events and one issue per file, unchanged from earlier releases. A *live* OTLP GenAI traces receiver, `POST /v1/traces`, already exists for runtimes that export over the network instead of to a file: see [otlp.md](otlp.md#otlp-traces-post-v1traces).
 
 A Collector configuration that writes Claude Code's OTLP/HTTP logs export to a file for later import:
 

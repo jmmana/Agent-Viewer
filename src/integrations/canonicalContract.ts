@@ -134,6 +134,13 @@ const usageTag = z
 export const UsageCorrelationSchema = z.object({
   /** Id of the trace or run in the caller's own tracing system (W3C trace id, `trace_...`, a root run id). */
   traceId: correlationId('traceId'),
+  /**
+   * Id of the span itself in the caller's own tracing system (issue #97: without it, a child span cannot be
+   * joined to its parent). Issue #64 shipped `traceId`/`parentId`/`toolCallId`/`meetingId`/`userId`/`tags` but
+   * not this field (see `server/usageLedger.ts` and `server/usage/types.ts` for where the ledger still lacks a
+   * column for it); added here by the OTLP traces receiver, which is the first sender that needs it.
+   */
+  spanId: correlationId('spanId'),
   /** Id of the span, run or step in the same tracing system that issued this model call. */
   parentId: correlationId('parentId'),
   /** The tool call during whose execution this model call was made. Same value space as `tool.*` payloads. */
@@ -161,7 +168,7 @@ export type UsageCorrelation = z.infer<typeof UsageCorrelationSchema>;
  */
 export function normalizeUsageCorrelation<T extends Partial<UsageCorrelation>>(payload: T): T {
   const result: Record<string, unknown> = { ...payload };
-  for (const field of ['traceId', 'parentId', 'toolCallId', 'meetingId', 'userId'] as const) {
+  for (const field of ['traceId', 'spanId', 'parentId', 'toolCallId', 'meetingId', 'userId'] as const) {
     if (result[field] === null || result[field] === undefined) {
       delete result[field];
     }
@@ -329,26 +336,42 @@ export const TaskBlockedPayloadSchema = z.object({
   reason: z.string().nullish().default('Blocked on dependency'),
 });
 
+/**
+ * `traceId`/`spanId`/`parentId` added by issue #97 (OTLP traces receiver), reusing the same opaque,
+ * content-free correlation ids `llm.usage`/`llm.failed` already carry (issue #64): a tool span's trace and span
+ * ids, and its parent span. `toolCallId` here keeps its original, more permissive validation (no length/control
+ * character checks) rather than switching to `correlationId('toolCallId')`, so existing senders of this field
+ * are unaffected.
+ */
 export const ToolStartedPayloadSchema = z.object({
   tool: z.string().min(1, 'Tool name is required'),
   toolCallId: z.string().nullish(),
   inputSummary: z.string().nullish(),
   category: z.string().nullish(),
-});
+  traceId: correlationId('traceId'),
+  spanId: correlationId('spanId'),
+  parentId: correlationId('parentId'),
+}).transform(normalizeUsageCorrelation);
 
 export const ToolCompletedPayloadSchema = z.object({
   tool: z.string().min(1, 'Tool name is required'),
   toolCallId: z.string().nullish(),
   outputSummary: z.string().nullish(),
   durationMs: z.number().int().nonnegative().nullish(),
-});
+  traceId: correlationId('traceId'),
+  spanId: correlationId('spanId'),
+  parentId: correlationId('parentId'),
+}).transform(normalizeUsageCorrelation);
 
 export const ToolFailedPayloadSchema = z.object({
   tool: z.string().min(1, 'Tool name is required'),
   toolCallId: z.string().nullish(),
   error: z.string().nullish(),
   durationMs: z.number().int().nonnegative().nullish(),
-});
+  traceId: correlationId('traceId'),
+  spanId: correlationId('spanId'),
+  parentId: correlationId('parentId'),
+}).transform(normalizeUsageCorrelation);
 
 export const MeetingRequestedPayloadSchema = z.object({
   meetingId: z.string().optional(),

@@ -1149,9 +1149,9 @@ export function createSqliteBudgetRegistry(db: DatabaseSync, options: SqliteBudg
 //    BudgetView[]` (issue #85 section 5). This section only wires HTTP and the per-request evaluation (window,
 //    ledger read, `aggregateBudgetCalls`, `evaluateBudget`); the configuration CRUD itself is section 5 above
 //    (#303) and the pure engine is sections 2-4 (#302). Live SSE transitions and the `onBudgetTransition` hook
-//    are sub-issue #305, not built here: every status below is computed fresh, from the ledger, on every request,
-//    and the registry's own evaluation cache (`getCachedStatus`/`setCachedStatus`) is left for a later
-//    performance pass rather than wired up speculatively in this sub-issue.
+//    are sub-issue #305, not built here. Issue #331 wired the registry's evaluation cache
+//    (`getCachedStatus`/`setCachedStatus`) into this read path and replaced the per-budget full-window rollup
+//    with one empty-range probe per request (`resolveBudgetLedgerScope`).
 // -------------------------------------------------------------
 
 /** What the HTTP layer needs from the running server to evaluate and serve budgets: the registry (memory or
@@ -1171,6 +1171,41 @@ export interface BudgetHttpDeps {
 /** Grouped by a throwaway single dimension whose groups are never read, exactly like `server/index.ts`'s own
  * `EXPORT_SCOPE_GROUP_BY`: only `asOf`/`coverage` from the response are used below. */
 const BUDGET_SCOPE_GROUP_BY: RollupQuery['groupBy'] = ['agent'];
+
+/** A `received_at` far past any real row, so the probe rollup below matches nothing: every one of its aggregate
+ * statements is an empty index range, never a scan. */
+const LEDGER_PROBE_TS = 8_640_000_000_000_000;
+
+/** The ledger position and coverage inputs every budget evaluation in one request shares (issue #331). `asOf` and
+ * the coverage inputs (`capComplete`, `purgedThrough`) are global to the store, not per query: only
+ * `coverage.complete` depends on the query, and only through `rangeReachesPurge(purgedThrough, from)`
+ * (`server/usage/rollup.ts`), which `historyTruncatedFor` re-applies per budget window. */
+export interface BudgetLedgerScope {
+  ledgerSeq: number;
+  capComplete: boolean;
+  purgedThrough: number | null;
+}
+
+/** One rollup over an empty range (`LEDGER_PROBE_TS`) instead of one full-window rollup per budget: with
+ * `from` past any purge cutoff, its `coverage.complete` is exactly the memory-mode cap flag (always `true` in
+ * SQLite). */
+export async function resolveBudgetLedgerScope(deps: BudgetHttpDeps): Promise<BudgetLedgerScope> {
+  const filters = emptyUsageFilters();
+  filters.from = LEDGER_PROBE_TS;
+  filters.to = LEDGER_PROBE_TS;
+  filters.timeBasis = 'received';
+  const probe = await deps.rollup({ groupBy: BUDGET_SCOPE_GROUP_BY, filters, sort: 'key', limit: 1, include: [] });
+  return {
+    ledgerSeq: probe.asOf.ledgerSeq ?? 0,
+    capComplete: probe.coverage.complete,
+    purgedThrough: probe.coverage.purgedThrough ?? null,
+  };
+}
+
+function historyTruncatedFor(scope: BudgetLedgerScope, window: BudgetWindow): boolean {
+  const reachesPurge = scope.purgedThrough !== null && window.start <= scope.purgedThrough;
+  return !scope.capComplete || reachesPurge;
+}
 
 /** The `UsageFilters` that select exactly the ledger rows a budget's scope and window cover (issue #85 section 2
  * rules 1-2): `timeBasis: 'received'` so a client-supplied `timestamp` can never move a call into or out of a
@@ -1217,36 +1252,79 @@ function filtersForBudget(budget: Pick<Budget, 'scope'>, window: BudgetWindow): 
  * or the pure engine itself) is rule 8: the budget is still returned, `unknown` with `evaluation_error`, logged
  * server side with the budget id, never thrown up to the route handler.
  */
-export async function evaluateBudgetView(budget: Budget, deps: BudgetHttpDeps): Promise<BudgetView> {
+export async function evaluateBudgetView(budget: Budget, deps: BudgetHttpDeps, scope?: BudgetLedgerScope): Promise<BudgetView> {
+  return (await evaluateBudgetViewKeyed(budget, deps, scope)).view;
+}
+
+/**
+ * `evaluateBudgetView` plus the exact cache key its status is valid for (`null` for a disabled budget or an
+ * evaluation error, neither of which may ever be served as a cache hit). Issue #331: the registry's evaluation
+ * cache is consulted first, keyed by (ledger write sequence, window start, budget revision); a hit skips the
+ * ledger read entirely. `scope` lets a caller evaluating many budgets resolve the ledger position once per
+ * request (`resolveBudgetLedgerScope`); every budget in that request is then read at the same `ledgerSeq`.
+ *
+ * A miss evaluates from the ledger and writes the result back only when it cannot disturb the live-transition
+ * baseline `evaluateBudgetLive` diffs against (`getLastStatus` reads the same single entry): there must already
+ * be a baseline, in the same window and the same state. Otherwise a plain read could swallow a transition (or a
+ * rollover) that the live check or the rollover watcher has yet to observe.
+ */
+async function evaluateBudgetViewKeyed(
+  budget: Budget,
+  deps: BudgetHttpDeps,
+  scope?: BudgetLedgerScope
+): Promise<{ view: BudgetView; key: BudgetEvalCacheKey | null }> {
   const now = (deps.now ?? Date.now)();
-  if (!budget.enabled) return { ...budget, status: null };
+  if (!budget.enabled) return { view: { ...budget, status: null }, key: null };
 
   const window = computeBudgetWindow(budget.period, budget.timezone, now);
   try {
+    const ledger = scope ?? (await resolveBudgetLedgerScope(deps));
+    const key: BudgetEvalCacheKey = { ledgerSeq: ledger.ledgerSeq, windowStart: window.start, revision: budget.revision };
+    const registry = deps.getRegistry();
+    const cached = registry.getCachedStatus(budget.id, key);
+    if (cached) return { view: { ...budget, status: cached }, key };
+
     const filters = filtersForBudget(budget, window);
-    const scope = await deps.rollup({ groupBy: BUDGET_SCOPE_GROUP_BY, filters, sort: 'key', limit: 1, include: [] });
-    const asOfSeq = scope.asOf.ledgerSeq ?? 0;
     const rows: UsageLedgerRow[] = [];
-    for await (const row of deps.iterateLedgerRows(filters, asOfSeq)) rows.push(row);
-    const aggregates: BudgetAggregates = { ...aggregateBudgetCalls(rows, budget, window), historyTruncated: !scope.coverage.complete };
+    for await (const row of deps.iterateLedgerRows(filters, ledger.ledgerSeq)) rows.push(row);
+    const aggregates: BudgetAggregates = { ...aggregateBudgetCalls(rows, budget, window), historyTruncated: historyTruncatedFor(ledger, window) };
     const status = evaluateBudget(budget, aggregates, now, window);
-    return { ...budget, status };
+
+    const last = registry.getLastStatus(budget.id);
+    if (last && last.state === status.state && last.window.start === status.window.start) {
+      registry.setCachedStatus(budget.id, key, status);
+    }
+    return { view: { ...budget, status }, key };
   } catch (error) {
     console.error(
       `[agent-viewer] budget evaluation failed for ${budget.id}: ${error instanceof Error ? error.message : String(error)}`
     );
-    return { ...budget, status: evaluationErrorStatus(window, now) };
+    return { view: { ...budget, status: evaluationErrorStatus(window, now) }, key: null };
   }
+}
+
+/** Evaluates `budgets` in order against one shared ledger scope (issue #331). A failure resolving that scope
+ * falls back to per-budget evaluation, so each budget still degrades to its own `evaluation_error` (rule 8)
+ * instead of failing the whole list. */
+async function evaluateBudgetViews(budgets: Budget[], deps: BudgetHttpDeps): Promise<BudgetView[]> {
+  let scope: BudgetLedgerScope | undefined;
+  if (budgets.some((budget) => budget.enabled)) {
+    try {
+      scope = await resolveBudgetLedgerScope(deps);
+    } catch {
+      scope = undefined;
+    }
+  }
+  const views: BudgetView[] = [];
+  for (const budget of budgets) views.push(await evaluateBudgetView(budget, deps, scope));
+  return views;
 }
 
 /** Every non-deleted budget, evaluated (issue #85 section 5): what `GET /api/v1/snapshot`'s `budgets` field and
  * the unfiltered `GET /api/v1/budgets` both need. Sequential, not `Promise.all`, so one slow ledger read never
  * starves the others of the event loop under load. */
 export async function listBudgetViews(deps: BudgetHttpDeps): Promise<BudgetView[]> {
-  const budgets = deps.getRegistry().list();
-  const views: BudgetView[] = [];
-  for (const budget of budgets) views.push(await evaluateBudgetView(budget, deps));
-  return views;
+  return evaluateBudgetViews(deps.getRegistry().list(), deps);
 }
 
 // ---- Validation (zod) for the write routes ---------------------------------
@@ -1358,8 +1436,7 @@ export function registerBudgetsRoutes(app: express.Express, deps: BudgetHttpDeps
       return true;
     });
 
-    const views: BudgetView[] = [];
-    for (const budget of candidates) views.push(await evaluateBudgetView(budget, deps));
+    const views = await evaluateBudgetViews(candidates, deps);
     // A disabled budget has no state (`status: null`), so a `state` filter always excludes it (issue #85
     // section 4's own rule).
     const filtered = stateFilter === undefined ? views : views.filter((view) => view.status !== null && view.status.state === stateFilter);
@@ -1669,12 +1746,11 @@ export interface BudgetLiveCheckResult {
  * before (nothing to diff against; the very first live check only establishes a baseline, it is never itself a
  * transition), or when the state did not change.
  *
- * The persisted key passed to `setCachedStatus` uses a synthetic `ledgerSeq: -1`: a real ledger sequence is always
- * `>= 0` (`server/store.ts`'s monotonic counter), so `-1` can never collide with one, which guarantees this write
- * can never produce a false hit for a future `getCachedStatus` exact-key lookup (the read-path performance cache
- * `server/budgets.ts`'s section 6 already left unwired; wiring it is #307's job). `windowStart`/`revision` are
- * still the real, current values, so a coincidental future hit (once something does start calling `getCachedStatus`
- * with a real `ledgerSeq`) would still be correct, never stale data served as fresh.
+ * The persisted key is the exact (ledger write sequence, window start, revision) the status was computed at, so
+ * the read path (`evaluateBudgetView`, issue #331) serves it as a cache hit until the ledger moves. An
+ * evaluation error is persisted under a synthetic `ledgerSeq: -1` instead: a real ledger sequence is always
+ * `>= 0` (`server/store.ts`'s monotonic counter), so that entry still works as a transition baseline but can
+ * never be served as a cache hit.
  *
  * `server/index.ts` is the only caller: once from its `onEventAccepted` listener (`trigger: 'ledger_event'`, for
  * every accepted `llm.usage`/`llm.failed` event, against every enabled budget) and once from
@@ -1690,10 +1766,10 @@ export async function evaluateBudgetLive(
 
   const registry = deps.getRegistry();
   const previousStatus = registry.getLastStatus(budget.id);
-  const view = await evaluateBudgetView(budget, deps);
+  const { view, key } = await evaluateBudgetViewKeyed(budget, deps);
   const status = view.status as BudgetStatus;
 
-  registry.setCachedStatus(budget.id, { ledgerSeq: -1, windowStart: status.window.start, revision: budget.revision }, status);
+  registry.setCachedStatus(budget.id, key ?? { ledgerSeq: -1, windowStart: status.window.start, revision: budget.revision }, status);
 
   const transition = previousStatus ? buildBudgetTransition(budget, previousStatus, status, trigger, now) : null;
   return { view, transition };

@@ -1,4 +1,4 @@
-import { Agent, PricingConfig, WorkspaceZone } from '../types/agent';
+import { Agent, WorkspaceZone } from '../types/agent';
 
 export interface RoomZone {
   id: WorkspaceZone | 'reception' | 'lounge';
@@ -699,14 +699,4 @@ export const INITIAL_AGENTS: Agent[] = [
     startedAt: Date.now() - 1000 * 60 * 20,
     speechBubble: null,
   },
-];
-
-export const DEFAULT_PRICING: PricingConfig[] = [
-  { provider: 'OpenAI', model: 'gpt-4o', inputPerMillion: 2.5, outputPerMillion: 10.0, cachedPerMillion: 1.25 },
-  { provider: 'OpenAI', model: 'gpt-4o-mini', inputPerMillion: 0.15, outputPerMillion: 0.6, cachedPerMillion: 0.075 },
-  { provider: 'Anthropic', model: 'claude-3-7-sonnet', inputPerMillion: 3.0, outputPerMillion: 15.0, cachedPerMillion: 0.3 },
-  { provider: 'Anthropic', model: 'claude-3-5-sonnet', inputPerMillion: 3.0, outputPerMillion: 15.0, cachedPerMillion: 0.3 },
-  { provider: 'Google Gemini', model: 'gemini-2.5-pro', inputPerMillion: 1.25, outputPerMillion: 5.0, cachedPerMillion: 0.3 },
-  { provider: 'Google Gemini', model: 'gemini-2.5-flash', inputPerMillion: 0.075, outputPerMillion: 0.3, cachedPerMillion: 0.02 },
-  { provider: 'Local (Ollama)', model: 'llama-3.3-70b', inputPerMillion: 0.0, outputPerMillion: 0.0, cachedPerMillion: 0.0 },
 ];

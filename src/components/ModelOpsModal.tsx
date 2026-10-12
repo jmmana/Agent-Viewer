@@ -16,6 +16,7 @@ import { MatrixTab } from './modelOps/MatrixTab';
 import { AgentsTab } from './modelOps/AgentsTab';
 import { FeedTab } from './modelOps/FeedTab';
 import { SimulatorTab } from './modelOps/SimulatorTab';
+import { PricingEditor } from './PricingEditor';
 import { BudgetsPanel } from './modelOps/BudgetsPanel';
 import { useServerApi } from '../integrations/useServerApi';
 import {
@@ -29,6 +30,7 @@ import {
   BarChart3,
   Zap,
   DollarSign,
+  Wallet,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -54,9 +56,9 @@ export interface ModelOpsModalProps {
 
 type MessageParams = Record<string, string | number>;
 
-type ModelOpsTab = 'matrix' | 'simulator' | 'agents' | 'feed' | 'budgets';
+type ModelOpsTab = 'matrix' | 'simulator' | 'agents' | 'feed' | 'pricing' | 'budgets';
 
-const TABS: readonly ModelOpsTab[] = ['matrix', 'simulator', 'agents', 'feed', 'budgets'];
+const TABS: readonly ModelOpsTab[] = ['matrix', 'simulator', 'agents', 'feed', 'pricing', 'budgets'];
 
 const TITLE_ID = 'av-modelops-title';
 const PANEL_ID = 'av-modelops-panel';
@@ -74,6 +76,7 @@ const TAB_KEYS: Record<ModelOpsTab, TranslationKey> = {
   simulator: 'ops.tab.simulator',
   agents: 'ops.tab.agents',
   feed: 'ops.tab.feed',
+  pricing: 'ops.tab.pricing',
   budgets: 'ops.tab.budgets',
 };
 
@@ -82,7 +85,8 @@ const TAB_ICONS: Record<ModelOpsTab, LucideIcon> = {
   simulator: Zap,
   agents: Users,
   feed: Activity,
-  budgets: DollarSign,
+  pricing: DollarSign,
+  budgets: Wallet,
 };
 
 const SimulatedBadgeTag: React.FC<{ label: string }> = ({ label }) => (
@@ -125,11 +129,11 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
   const ledgerState = useModelOpsLedger({ ledger, isOpen, events });
   const mode = ledgerState.mode;
-
-  // Budgets tab (issue #334): `ledger` already carries the exact `{ baseUrl, token, tokenResolved }` shape
-  // `useServerApi` expects (see useServerApi.ts's `LiveConnection`), so it is passed straight through. `null` in
-  // demo mode or while the token is still resolving: `BudgetsPanel` shows a dedicated message in that case.
-  const budgetsServerApi = useServerApi(ledger);
+  // Server pricing (issue #333) and budgets (issue #334) both talk to the same live server. `ledger` already
+  // carries the exact `{ baseUrl, token, tokenResolved }` shape `useServerApi` expects (see useServerApi.ts's
+  // `LiveConnection`), so it is passed straight through. `null` in demo mode or while the token is still
+  // resolving: `PricingEditor` and `BudgetsPanel` each show a dedicated message in that case.
+  const serverApi = useServerApi(ledger);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -463,7 +467,9 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
             />
           )}
 
-          {activeTab === 'budgets' && <BudgetsPanel locale={locale} serverApi={budgetsServerApi} events={events} />}
+          {activeTab === 'pricing' && <PricingEditor serverApi={serverApi} locale={locale} />}
+
+          {activeTab === 'budgets' && <BudgetsPanel locale={locale} serverApi={serverApi} events={events} />}
         </div>
 
         {/* MODAL FOOTER */}

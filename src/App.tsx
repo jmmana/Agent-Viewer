@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Agent, AgentStatus, PricingConfig, ViewerEvent } from './types/agent';
-import { DEFAULT_PRICING, INITIAL_AGENTS } from './engine/officeModel';
+import { Agent, AgentStatus, ViewerEvent } from './types/agent';
+import { INITIAL_AGENTS } from './engine/officeModel';
 import {
   createDemoSteps,
   createInitialSimulationState,
@@ -221,7 +221,6 @@ export default function App() {
   // Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
-  const [pricing, setPricing] = useState<PricingConfig[]>(DEFAULT_PRICING);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [locale, setLocale] = useState<Locale>(() => detectLocale());
   const officeTranslate = useMemo(() => createOfficeTranslator({ locale }), [locale]);
@@ -1016,8 +1015,7 @@ export default function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        pricing={pricing}
-        onUpdatePricing={(newPricing) => setPricing(newPricing)}
+        ledger={ledgerConnection}
         onResetSession={handleResetDemo}
         onExportSession={handleExportSession}
         ambientSocialEnabled={ambientSocialEnabled}
@@ -1063,7 +1061,6 @@ export default function App() {
         allAgents={simState.agents}
         tasks={simState.tasks}
         events={simState.events}
-        pricing={pricing}
         onClose={() => {
           setDetailModalAgentId(null);
           setDetailModalInitialTab(null);

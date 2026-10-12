@@ -1,0 +1,59 @@
+{
+  "name": "@warlockcode/agent-viewer-langgraph",
+  "version": "0.7.0",
+  "description": "LangGraph callback handler that reports node runs, tools and model usage to Agent Viewer",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jmmana/Agent-Viewer.git",
+    "directory": "packages/langgraph"
+  },
+  "homepage": "https://github.com/jmmana/Agent-Viewer/tree/main/packages/langgraph#readme",
+  "bugs": {
+    "url": "https://github.com/jmmana/Agent-Viewer/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "agent-observability",
+    "llm",
+    "langgraph",
+    "langchain",
+    "callbacks",
+    "agent-viewer"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "prepack": "npm run clean && npm run build"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.3.0 <2",
+    "@warlockcode/agent-viewer-sdk": ">=0.6.0"
+  },
+  "devDependencies": {
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.4.0"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "author": "Juan Manuel Castillo (https://github.com/jmmana)"
+}

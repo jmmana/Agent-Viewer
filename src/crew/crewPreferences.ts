@@ -1,3 +1,4 @@
+import { validateCrewAmbienceByRoom, type CrewAmbienceByRoom } from './crewAmbience';
 export const CREW_PREFERENCES_STORAGE_KEY = 'agent-viewer-crew-preferences-v1';
 
 export type CrewHudSize = 'compact' | 'standard' | 'large';
@@ -8,6 +9,8 @@ const CREW_ACCESSIBILITY_PRESETS: readonly CrewAccessibilityPreset[] = ['none', 
 
 export interface CrewPreferences {
   version: 1;
+  /** Decorative lighting override, isolated by Crew room. Missing rooms default to day. */
+  ambienceByRoom?: CrewAmbienceByRoom;
   reducedMotion: boolean;
   /**
    * Preferencia de audio propia de Crew (#157), separada del interruptor global
@@ -51,6 +54,7 @@ export function validateCrewPreferences(value: unknown): CrewPreferences {
   if (record.version !== 1) return fallback;
   return {
     version: 1,
+    ...(record.ambienceByRoom === undefined ? {} : { ambienceByRoom: validateCrewAmbienceByRoom(record.ambienceByRoom) }),
     reducedMotion: record.reducedMotion === true,
     muted: record.muted === undefined ? fallback.muted : record.muted === true,
     volume: clampVolume(record.volume, fallback.volume),

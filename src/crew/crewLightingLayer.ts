@@ -2,8 +2,8 @@ import type { CrewRoomDefinition } from './crewModel';
 
 /**
  * Capa de iluminación del renderer Crew 2.5D: centraliza los tonos planos que
- * simulan una luz cenital fija sobre piso, paredes, puertas y props. No hay fuentes
- * de luz dinámicas, sombras proyectadas ni ciclo día/noche; es una paleta compartida
+ * simulan una luz cenital sobre piso, paredes, puertas y props. El ciclo día/noche
+ * usa `crewAmbience` y `crewAmbienceLayer`; esta es la paleta base compartida
  * para que escena y props queden sombreadas de forma consistente y se pueda testear
  * por separado de la geometría que la consume.
  */

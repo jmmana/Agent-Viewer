@@ -1,0 +1,54 @@
+{
+  "name": "@warlockcode/agent-viewer-sdk",
+  "version": "0.5.0",
+  "description": "Minimal client SDK for sending canonical events to Agent Viewer from any Node runtime: no framework, no React, no zod, no runtime dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jmmana/Agent-Viewer.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/jmmana/Agent-Viewer/tree/main/packages/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/jmmana/Agent-Viewer/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "agent-observability",
+    "sdk",
+    "llm-usage",
+    "telemetry",
+    "langgraph"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "check:package": "publint --strict && attw --pack . --profile esm-only"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "author": "Juan Manuel Castillo (https://github.com/jmmana)",
+  "contributors": [
+    "María Alejandra (https://github.com/Alejagop12)"
+  ]
+}

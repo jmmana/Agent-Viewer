@@ -234,6 +234,102 @@ export function decodeExportMetricsServiceRequest(buf: Uint8Array): JsonExportMe
 }
 
 // -------------------------------------------------------------
+// Traces: ExportTraceServiceRequest (issue #97)
+// -------------------------------------------------------------
+
+export interface JsonStatus {
+  message?: string;
+  /** `0` UNSET, `1` OK, `2` ERROR (OTLP/JSON leaves the enum as a plain integer, same as `kind` below). */
+  code?: number;
+}
+
+export interface JsonSpan {
+  /** Lowercase hex, decoded from the wire's raw `bytes` field (never base64: that is the JSON wire shape only
+   * for `bytes`, and this decoder always normalizes to the OTLP/JSON *string* convention used by trace/span
+   * ids specifically, which real exporters and the JSON examples in `docs/otlp.md` both send as hex). */
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  name?: string;
+  kind?: number;
+  startTimeUnixNano?: string;
+  endTimeUnixNano?: string;
+  attributes?: JsonKeyValue[];
+  status?: JsonStatus;
+}
+
+export interface JsonScopeSpans {
+  spans?: JsonSpan[];
+}
+
+export interface JsonResourceSpans {
+  resource?: { attributes: JsonKeyValue[] };
+  scopeSpans?: JsonScopeSpans[];
+}
+
+export interface JsonExportTraceServiceRequest {
+  resourceSpans?: JsonResourceSpans[];
+}
+
+/** Raw `bytes` (wire type 2) rendered as lowercase hex, OTLP/JSON's convention for `trace_id`/`span_id`. */
+function hexBytes(bytes: Uint8Array | undefined): string | undefined {
+  return bytes && bytes.length > 0 ? Buffer.from(bytes).toString('hex') : undefined;
+}
+
+function decodeStatus(bytes: Uint8Array, depth: number): JsonStatus {
+  const fields = decodeMessage(bytes, depth);
+  const code = firstVarint(fields, 3);
+  return {
+    message: firstString(fields, 2),
+    ...(code !== undefined ? { code: Number(code) } : {}),
+  };
+}
+
+/**
+ * Only the fields any mapper in this codebase reads (`src/integrations/otlpTraces.ts`): `events` (field 11) and
+ * `links` (field 13) are deliberately never decoded, not even into the generic `FieldMap`, so prompt/completion
+ * content some instrumentations attach as span events can never reach a mapper or a log line (issue #97,
+ * "Privacy by construction"). They are skipped at the wire level by `decodeMessage` itself, the same as any
+ * other field number this function does not ask for.
+ */
+function decodeSpan(bytes: Uint8Array, depth: number): JsonSpan {
+  const fields = decodeMessage(bytes, depth);
+  const statusBytes = firstBytes(fields, 15);
+  const kind = firstVarint(fields, 6);
+  return {
+    traceId: hexBytes(firstBytes(fields, 1)),
+    spanId: hexBytes(firstBytes(fields, 2)),
+    parentSpanId: hexBytes(firstBytes(fields, 4)),
+    name: firstString(fields, 5),
+    ...(kind !== undefined ? { kind: Number(kind) } : {}),
+    startTimeUnixNano: decimalString(firstFixed64(fields, 7)),
+    endTimeUnixNano: decimalString(firstFixed64(fields, 8)),
+    attributes: decodeAttributes(fields, 9, depth + 1),
+    ...(statusBytes ? { status: decodeStatus(statusBytes, depth + 1) } : {}),
+  };
+}
+
+function decodeScopeSpans(bytes: Uint8Array, depth: number): JsonScopeSpans {
+  const fields = decodeMessage(bytes, depth);
+  return { spans: allBytes(fields, 2).map((b) => decodeSpan(b, depth + 1)) };
+}
+
+function decodeResourceSpans(bytes: Uint8Array, depth: number): JsonResourceSpans {
+  const fields = decodeMessage(bytes, depth);
+  const resourceBytes = firstBytes(fields, 1);
+  return {
+    ...(resourceBytes ? { resource: decodeResource(resourceBytes, depth + 1) } : {}),
+    scopeSpans: allBytes(fields, 2).map((b) => decodeScopeSpans(b, depth + 1)),
+  };
+}
+
+/** Decodes a binary `ExportTraceServiceRequest` into the same OTLP/JSON shape `src/integrations/otlpTraces.ts` reads. */
+export function decodeExportTraceServiceRequest(buf: Uint8Array): JsonExportTraceServiceRequest {
+  const fields = decodeMessage(buf, 0);
+  return { resourceSpans: allBytes(fields, 1).map((b) => decodeResourceSpans(b, 1)) };
+}
+
+// -------------------------------------------------------------
 // Responses: ExportLogsServiceResponse / ExportMetricsServiceResponse / google.rpc.Status
 // -------------------------------------------------------------
 
@@ -264,6 +360,12 @@ export function encodeExportLogsServiceResponse(partial?: OtlpPartialSuccess): U
 }
 
 export function encodeExportMetricsServiceResponse(partial?: OtlpPartialSuccess): Uint8Array {
+  return encodeExportResponse(partial);
+}
+
+/** `ExportTraceServiceResponse` (issue #97): same shape as the logs/metrics responses above, field 1
+ * `partial_success`, whose own field 1 is `rejected_spans` (int64) and field 2 `error_message` (string). */
+export function encodeExportTraceServiceResponse(partial?: OtlpPartialSuccess): Uint8Array {
   return encodeExportResponse(partial);
 }
 

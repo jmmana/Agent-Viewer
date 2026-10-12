@@ -424,6 +424,29 @@ class TestPythonSDK(unittest.TestCase):
         self.assertEqual(failed["payload"]["toolCallId"], "call_failed")
         self.assertNotIn("toolCallId", plain["payload"])
 
+    def test_tool_completed_and_failed_forward_duration_ms_but_tool_started_never_sends_it(self):
+        viewer = CapturingViewer(url="http://localhost:8787")
+        agent = viewer.agent("coder")
+        agent.tool_started("git.commit")
+        agent.tool_completed("git.commit", duration_ms=420)
+        agent.tool_failed("git.commit", duration_ms=17)
+        agent.tool_completed("git.push")
+        started, completed, failed, plain = [e for e in viewer.captured if e["type"].startswith("tool.")]
+        self.assertNotIn("durationMs", started["payload"])
+        self.assertEqual(completed["payload"]["durationMs"], 420)
+        self.assertEqual(failed["payload"]["durationMs"], 17)
+        self.assertNotIn("durationMs", plain["payload"])
+
+    def test_emit_honors_a_per_event_session_id_and_timestamp_ms_over_the_client_default(self):
+        viewer = CapturingViewer(url="http://localhost:8787", session_id="client-default-session")
+        viewer.emit("tool.started", "a", {"tool": "a"})
+        viewer.emit("tool.started", "b", {"tool": "b"}, session_id="thread-override", timestamp_ms=1700000000000)
+        defaulted, overridden = viewer.captured
+        self.assertEqual(defaulted["sessionId"], "client-default-session")
+        self.assertNotEqual(defaulted["timestamp"], 1700000000000)
+        self.assertEqual(overridden["sessionId"], "thread-override")
+        self.assertEqual(overridden["timestamp"], 1700000000000)
+
     def test_usage_correlation_id_vectors_match_the_shared_fixture(self):
         viewer = CapturingViewer(url="http://localhost:8787")
         agent = viewer.agent("coder")

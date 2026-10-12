@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build workspace packages (packages/sdk, packages/openai-agents)
+        run: npm run build:packages
+
       - name: Security audit
         run: npm audit --omit=dev
 
@@ -89,6 +92,37 @@ jobs:
 
       - name: Check package (publint + attw)
         run: npm run check:package
+
+      - name: Check packages/sdk package (publint + attw)
+        run: npm run check:package:sdk
+
+      - name: packages/sdk smoke test from a packed tarball
+        run: |
+          cd packages/sdk
+          npm pack --ignore-scripts
+          mkdir -p /tmp/sdk-smoke && cd /tmp/sdk-smoke
+          npm init -y >/dev/null
+          npm pkg set type=module
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE"/packages/sdk/warlockcode-agent-viewer-sdk-*.tgz
+          node -e "import('@warlockcode/agent-viewer-sdk').then(({ AgentViewer, verifyWebhookSignature }) => { if (typeof AgentViewer !== 'function' || typeof verifyWebhookSignature !== 'function') throw new Error('SDK import did not resolve the expected exports'); console.log('packages/sdk import OK'); });"
+          rm -f "$GITHUB_WORKSPACE"/packages/sdk/warlockcode-agent-viewer-sdk-*.tgz
+
+      - name: Check packages/openai-agents package (publint + attw)
+        run: npm run check:package:openai-agents
+
+      # packages/openai-agents depends on packages/sdk, unpublished to the real npm registry today (#346):
+      # both local tarballs are installed explicitly so npm never tries to fetch
+      # @warlockcode/agent-viewer-sdk from the registry. @openai/agents is the one real peer dependency.
+      - name: packages/openai-agents smoke test from a packed tarball
+        run: |
+          cd packages/sdk && npm pack --ignore-scripts && mv warlockcode-agent-viewer-sdk-*.tgz /tmp/
+          cd "$GITHUB_WORKSPACE"/packages/openai-agents && npm pack --ignore-scripts
+          mkdir -p /tmp/openai-agents-smoke && cd /tmp/openai-agents-smoke
+          npm init -y >/dev/null
+          npm pkg set type=module
+          npm install --no-audit --no-fund /tmp/warlockcode-agent-viewer-sdk-*.tgz "$GITHUB_WORKSPACE"/packages/openai-agents/warlockcode-agent-viewer-openai-agents-*.tgz @openai/agents@^0.20.0
+          node -e "import('@warlockcode/agent-viewer-openai-agents').then(({ AgentViewerTracingProcessor, instrumentOpenAIAgents }) => { if (typeof AgentViewerTracingProcessor !== 'function' || typeof instrumentOpenAIAgents !== 'function') throw new Error('openai-agents import did not resolve the expected exports'); console.log('packages/openai-agents import OK'); });"
+          rm -f /tmp/warlockcode-agent-viewer-sdk-*.tgz "$GITHUB_WORKSPACE"/packages/openai-agents/warlockcode-agent-viewer-openai-agents-*.tgz
 
       - name: Docker Build (office + API image, the published default)
         run: docker build -f docker/Dockerfile -t agent-viewer-app:ci .

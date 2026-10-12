@@ -45,9 +45,10 @@ stripped attributes, so removing them changes nothing about what is being tested
 - `mixed.ndjson`: four physical lines exercising every signal and canonical JSONL in one file: a canonical
   `agent.registered` line, an `ExportLogsServiceRequest` line (the full-figures record plus the non-usage
   sentinel record above), the `claude-code-metrics.json` request, and a minimal `ExportTraceServiceRequest`
-  with no spans. `parseEventLog` must return `format: 'otlp'`, the canonical event, the one converted
-  `llm.usage` event, one `otlp-metrics-not-replayable` issue and one `otlp-traces-not-supported` issue, with
-  `otlp.signals` equal to `['logs', 'metrics', 'traces']`.
+  with no spans (issue #98: an empty `resourceSpans` entry converts to nothing and reports no issue, same as a
+  logs request with zero records). `parseEventLog` must return `format: 'otlp'`, the canonical event, the one
+  converted `llm.usage` event, and one `otlp-metrics-not-replayable` issue, with `otlp.signals` equal to
+  `['logs', 'metrics', 'traces']`.
 
 No prompt, tool, file or account text from a real Claude Code session appears in any of these four files
 beyond the one invented sentinel string above, which exists only to prove it is dropped.

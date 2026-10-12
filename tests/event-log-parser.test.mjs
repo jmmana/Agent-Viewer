@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEventLog, MAX_EVENT_LOG_SIZE_BYTES } from '../src/integrations/eventLogParser.ts';
+import { mapOtlpTraces } from '../src/integrations/otlpTraces.ts';
 import { SessionReplayPlayer } from '../src/integrations/replayEngine.ts';
 import { createLiveSimulationState } from '../src/engine/simulationEngine.ts';
 
@@ -327,28 +328,126 @@ test('Event log parser: a metrics-only file converts no events and reports the d
   assert.deepEqual(res.otlp.signals, ['metrics']);
 });
 
-test('Event log parser: a traces-only file converts no events and keeps the unchanged "not supported yet" message', async () => {
+test('Event log parser: a traces file with zero spans converts no events and reports no issue (issue #98)', async () => {
   const body = {
     resourceSpans: [{ resource: { attributes: [] }, scopeSpans: [] }],
   };
   const res = await parseEventLog(JSON.stringify(body));
   assert.equal(res.format, 'otlp');
   assert.equal(res.events.length, 0);
-  assert.equal(res.issues.length, 1);
-  assert.equal(res.issues[0].code, 'otlp-traces-not-supported');
-  assert.equal(res.issues[0].error, 'OTLP traces are not supported yet. Export the run as canonical JSONL V1.');
+  assert.equal(res.issues.length, 0);
   assert.deepEqual(res.otlp.signals, ['traces']);
 });
 
-test('Event log parser: a mixed file returns logs and canonical events plus one metrics and one traces issue', async () => {
+test('Event log parser: a mixed file returns logs and canonical events plus one metrics issue; the empty traces entry reports nothing', async () => {
   const res = await parseEventLog(readOtlpFixture('mixed.ndjson'));
   assert.equal(res.format, 'otlp');
   assert.ok(res.events.length >= 2, 'expects the canonical line and the converted logs event');
   assert.deepEqual(res.otlp.signals, ['logs', 'metrics', 'traces']);
   const metricsIssues = res.issues.filter((i) => i.code === 'otlp-metrics-not-replayable');
-  const tracesIssues = res.issues.filter((i) => i.code === 'otlp-traces-not-supported');
   assert.equal(metricsIssues.length, 1);
-  assert.equal(tracesIssues.length, 1);
+  const spanIssues = res.issues.filter((i) => i.error.includes('span'));
+  assert.equal(spanIssues.length, 0, 'the mixed fixture\'s resourceSpans entry has zero spans to report');
+});
+
+// -------------------------------------------------------------
+// Issue #98: OTLP trace file import, through the shared #97 mapper
+// -------------------------------------------------------------
+
+function chatSpan({ traceId, spanId, withUsage = true, inputTokens = 10, outputTokens = 5 } = {}) {
+  return {
+    traceId,
+    spanId,
+    name: 'chat claude-sonnet-5',
+    startTimeUnixNano: '1760000000000000000',
+    endTimeUnixNano: '1760000000940000000',
+    attributes: [
+      { key: 'gen_ai.operation.name', value: { stringValue: 'chat' } },
+      { key: 'gen_ai.provider.name', value: { stringValue: 'anthropic' } },
+      { key: 'gen_ai.request.model', value: { stringValue: 'claude-sonnet-5' } },
+      ...(withUsage ? [{ key: 'gen_ai.usage.input_tokens', value: { intValue: inputTokens } }] : []),
+      ...(withUsage ? [{ key: 'gen_ai.usage.output_tokens', value: { intValue: outputTokens } }] : []),
+    ],
+    status: { code: 1 },
+  };
+}
+
+function tracesBody(spans, { serviceName = 'test-service' } = {}) {
+  return {
+    resourceSpans: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: serviceName } }] }, scopeSpans: [{ spans }] }],
+  };
+}
+
+test('Event log parser: a single-line OTLP traces file with one chat span converts to one llm.usage event (issue #98)', async () => {
+  const body = tracesBody([chatSpan({ traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) })]);
+  const res = await parseEventLog(JSON.stringify(body));
+  assert.equal(res.format, 'otlp');
+  assert.equal(res.issues.length, 0);
+  assert.equal(res.events.length, 1);
+  assert.equal(res.events[0].type, 'llm.usage');
+  assert.equal(res.events[0].payload.inputTokens, 10);
+  assert.equal(res.events[0].payload.outputTokens, 5);
+  assert.deepEqual(res.otlp.signals, ['traces']);
+  assert.equal(res.otlp.logRecords, 1);
+  assert.equal(res.otlp.converted, 1);
+  assert.equal(res.otlp.skipped, 0);
+  assert.equal(res.otlp.rejected, 0);
+});
+
+test('Event log parser: equivalence with the live #97 receiver for the same chat span body', async () => {
+  const body = tracesBody([chatSpan({ traceId: 'c'.repeat(32), spanId: 'd'.repeat(16) })]);
+  const res = await parseEventLog(JSON.stringify(body));
+  const direct = mapOtlpTraces(body);
+  assert.deepEqual(res.events, direct.events);
+});
+
+test('Event log parser: a pretty-printed OTLP traces document is parsed as one request', async () => {
+  const body = tracesBody([chatSpan({ traceId: 'e'.repeat(32), spanId: 'f'.repeat(16) })]);
+  const res = await parseEventLog(JSON.stringify(body, null, 2));
+  assert.equal(res.format, 'otlp');
+  assert.equal(res.events.length, 1);
+});
+
+test('Event log parser: a GenAI chat span with no usage tokens is rejected, not invented as zero, and reports otlp-no-usage-records (issue #98)', async () => {
+  const body = tracesBody([chatSpan({ traceId: '1'.repeat(32), spanId: '2'.repeat(16), withUsage: false })]);
+  const res = await parseEventLog(JSON.stringify(body));
+  assert.equal(res.events.length, 0);
+  assert.equal(res.otlp.converted, 0);
+  assert.equal(res.otlp.rejected, 1);
+  const noUsage = res.issues.find((i) => i.code === 'otlp-no-usage-records');
+  assert.ok(noUsage, 'expected an otlp-no-usage-records issue');
+  const skipped = res.issues.find((i) => i.code === 'otlp-record-skipped');
+  assert.ok(skipped, 'expected an otlp-record-skipped issue for the rejected span');
+  assert.match(skipped.error, /span rejected/);
+  assert.equal(skipped.raw, undefined);
+});
+
+test('Event log parser: a tool span converts to a tool.started + tool.completed pair counted as one converted span (issue #98)', async () => {
+  const toolSpan = {
+    traceId: '3'.repeat(32),
+    spanId: '4'.repeat(16),
+    name: 'execute_tool read_file',
+    startTimeUnixNano: '1760000000000000000',
+    endTimeUnixNano: '1760000000500000000',
+    attributes: [{ key: 'gen_ai.tool.name', value: { stringValue: 'read_file' } }],
+    status: { code: 1 },
+  };
+  const res = await parseEventLog(JSON.stringify(tracesBody([toolSpan])));
+  assert.equal(res.events.length, 2);
+  assert.deepEqual(
+    res.events.map((e) => e.type).sort(),
+    ['tool.completed', 'tool.started'],
+  );
+  assert.equal(res.otlp.converted, 1);
+  assert.equal(res.issues.length, 0);
+});
+
+test('Event log parser: prompt/completion content in trace span attributes never reaches events or issues (issue #98)', async () => {
+  const leakySpan = chatSpan({ traceId: '5'.repeat(32), spanId: '6'.repeat(16) });
+  leakySpan.attributes.push({ key: 'gen_ai.prompt', value: { stringValue: 'SENTINEL_TRACE_PROMPT_DO_NOT_LEAK' } });
+  const res = await parseEventLog(JSON.stringify(tracesBody([leakySpan])));
+  const dump = JSON.stringify(res);
+  assert.equal(dump.includes('SENTINEL_TRACE_PROMPT_DO_NOT_LEAK'), false);
 });
 
 test('Event log parser: a logs file whose records all map to nothing reports otlp-no-usage-records; zero records reports nothing', async () => {

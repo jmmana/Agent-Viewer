@@ -130,6 +130,67 @@ jobs:
           fi
           npm publish --provenance --access public --ignore-scripts
 
+  # Publishes packages/openai-agents (@warlockcode/agent-viewer-openai-agents, issue #361) after the main
+  # package above, same skip-without-NPM_TOKEN pattern. Kept version-lockstep with the main package.json by a
+  # direct string comparison here rather than extending scripts/release-rules.mjs's check-versions, which
+  # today only knows about the root package.json and sdk/python/pyproject.toml (issue #99/#346's own
+  # packages/sdk publish wiring is a separate, not-yet-done piece; this package still depends on
+  # @warlockcode/agent-viewer-sdk, currently unpublished, so this publish step will itself fail to resolve
+  # that dependency from the registry until #346 ships it, same documented gap as packages/sdk's own release
+  # wiring).
+  release-openai-agents:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build workspace packages (packages/sdk, packages/openai-agents)
+        run: npm run build:packages
+
+      - name: Check packages/openai-agents version is in lockstep with the main package
+        run: |
+          main_version=$(node -p "require('./package.json').version")
+          oa_version=$(node -p "require('./packages/openai-agents/package.json').version")
+          if [ "$main_version" != "$oa_version" ]; then
+            echo "::error title=version lockstep broken::packages/openai-agents is at $oa_version but the main package is at $main_version. Bump both together." >> /dev/stderr
+            exit 1
+          fi
+
+      - name: Check package (publint + attw)
+        run: npm run check:package:openai-agents
+
+      - name: Publish packages/openai-agents to npm
+        continue-on-error: true
+        working-directory: packages/openai-agents
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          IS_PRERELEASE: ${{ needs.release.outputs.is_prerelease }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "Prerelease tag ($TAG): skipping packages/openai-agents npm publish (dry run)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error title=npm publish blocked::NPM_TOKEN is not configured. Configure npm trusted publishing or the NPM_TOKEN secret before tagging a real (non-prerelease) release." >> /dev/stderr
+            echo "packages/openai-agents npm publish blocked: NPM_TOKEN is missing on a real release tag ($TAG)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          npm publish --provenance --access public --ignore-scripts
+
   pypi:
     needs: release
     runs-on: ubuntu-latest

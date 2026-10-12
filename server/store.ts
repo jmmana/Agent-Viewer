@@ -667,6 +667,11 @@ export interface EventStore {
    * memory mode has no handle, so `server/index.ts` falls back to `createMemoryBudgetRegistry()` when this is
    * `undefined`. */
   getDatabaseHandle?(): DatabaseSync | undefined;
+  /** The SQLite file path backing this store (issue #106), for a caller that needs its own, separate connection
+   * (the audit verifier opens a read-only one rather than sharing the writer's). Optional, the same way
+   * `getDatabaseHandle` is; memory mode has no file. `:memory:` is a real, valid return value (no durable file
+   * exists), distinct from `undefined` (no SQLite store at all). */
+  getDatabasePath?(): string | undefined;
   /** Usage aggregates of every accepted `llm.usage` and `llm.failed` event. */
   usageSummary(): Promise<UsageSummary>;
   /** Counts and time bounds of the usage ledger (issue #65), never a sum of tokens or cost. */
@@ -2081,7 +2086,11 @@ export class SQLiteEventStore implements EventStore {
   /** Set by `close()`. The rebuild loop checks it before every SQL statement after an `await`, so a close mid-rebuild never throws on a closed connection. */
   private closed = false;
 
+  /** Issue #106: the path this instance was opened with, verbatim (including `:memory:`), for `getDatabasePath`. */
+  private readonly filePath: string;
+
   constructor(filePath = './data/agent-viewer.db', options: SQLiteStoreOptions = {}) {
+    this.filePath = filePath;
     const backup = sqliteBackupMode(options.backup ?? process.env.AGENT_VIEWER_SQLITE_BACKUP);
     this.getPricingSnapshot = options.getPricingSnapshot ?? (() => NO_PRICING_SNAPSHOT);
     this.getPricingVersionSnapshot = options.getPricingVersionSnapshot ?? (() => null);
@@ -2412,6 +2421,11 @@ export class SQLiteEventStore implements EventStore {
    * run synchronously in the constructor (`runMigrations` above), before this instance is ever returned. */
   getDatabaseHandle(): DatabaseSync | undefined {
     return this.db as DatabaseSync;
+  }
+
+  /** Issue #106: see the `EventStore.getDatabasePath` doc comment. */
+  getDatabasePath(): string | undefined {
+    return this.filePath;
   }
 
   /** Inserts the row and returns the `seq` it was given (issue #54): the same durable counter #52 already uses

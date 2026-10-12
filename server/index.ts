@@ -24,6 +24,7 @@ import {
 } from './store';
 import { parseRetentionConfig, startRetention, usageRetentionWarning, type RetentionConfig, type RetentionJobHandle } from './retention';
 import { readPackageVersion } from './version';
+import { verifyChain } from './audit/verify';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
 import type { RollupQuery, UsageFilters } from './usage/types';
@@ -1979,6 +1980,63 @@ app.get('/api/v1/usage/ledger/status', async (_req, res) => {
 app.get('/api/v1/audit/chain', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json(await store.chainInfo());
+});
+
+/** Per-scope in-flight de-duplication (issue #106): concurrent `GET /api/v1/audit/verify` requests with the
+ * same `scope` share one walk instead of each opening their own read-only connection and re-walking the whole
+ * chain. Keyed by `dbPath` too, mostly for `tests/audit-verify.test.mjs`, which constructs several stores (and
+ * therefore several database files) within one process. */
+const auditVerifyInFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * Issue #106 (first sub-issue of the "formal audit" theme): walks the hash chain #105 added and reports the
+ * first broken link, if any. `?scope=full|recent` (default `full`); this slice has no signed checkpoints yet
+ * (#387), so `recent` always behaves like `full` and the report says so via `coverage.scope`. Memory storage,
+ * and a SQLite store whose schema predates migration 17, answer the same `{ enabled: false, ... }` shape
+ * `GET /api/v1/audit/chain` already uses (issue #105), not a `409`: this is a read about the chain's
+ * availability, not a write this server refuses to perform.
+ */
+app.get('/api/v1/audit/verify', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const scopeParam = req.query.scope;
+  if (scopeParam !== undefined && scopeParam !== 'full' && scopeParam !== 'recent') {
+    res.status(400).json({ error: 'validation_failed', message: 'scope must be "full" or "recent"' });
+    return;
+  }
+  const scope = (scopeParam as 'full' | 'recent' | undefined) ?? 'full';
+
+  // getDatabasePath is synchronous (unlike chainInfo), so the in-flight map below is checked and set with no
+  // await in between: two requests dispatched back to back always see the map in the state the first one left
+  // it in, never both starting their own walk (issue #106's "share one walk" requirement). chainInfo() itself
+  // only runs inside the cached promise, once.
+  const dbPath = store.getDatabasePath?.();
+  if (!dbPath) {
+    // Memory mode (or any future store with no backing file): the same disabled shape GET /api/v1/audit/chain
+    // already uses (issue #105), not a 409.
+    res.json(await store.chainInfo());
+    return;
+  }
+
+  const key = `${scope}\u0000${dbPath}`;
+  let promise = auditVerifyInFlight.get(key);
+  if (!promise) {
+    promise = (async () => {
+      const chainInfo = await store.chainInfo();
+      if (!chainInfo.enabled) return chainInfo;
+      return verifyChain({ dbPath, scope });
+    })();
+    auditVerifyInFlight.set(key, promise);
+    promise.finally(() => {
+      if (auditVerifyInFlight.get(key) === promise) auditVerifyInFlight.delete(key);
+    });
+  }
+  try {
+    const report = await promise;
+    res.json(report);
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/verify failed:', err);
+    res.status(503).json({ error: 'audit_verify_failed', message: 'The chain could not be read.' });
+  }
 });
 
 // -------------------------------------------------------------

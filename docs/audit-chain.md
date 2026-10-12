@@ -2,9 +2,10 @@
 
 Every event stored in SQLite mode joins a SHA-256 hash chain, written in the same transaction as its insert. A
 later edit, deletion or reordering of a chained row changes a hash that every later row already committed to,
-so the damage is detectable by recomputing the chain. This item only *produces* the chain: verifying it, signed
-checkpoints, named submitters, scoped keys, retention and an offline audit bundle are separate items (#106 to
-#111) that build on the format documented here.
+so the damage is detectable by recomputing the chain. This item only *produces* the chain: walking it to find a
+broken link (`GET /api/v1/audit/verify`, issue #106) is documented in its own section below; signed checkpoints,
+named submitters, scoped keys, retention and an offline audit bundle are separate items (#387 to #111) that
+build on the format documented here.
 
 ## Honest scope: what the chain does and does not prove
 
@@ -12,7 +13,7 @@ A hash chain alone is **tamper-evident**, not tamper-proof, against one specific
 stored row without being able to recompute every hash after it. It is **not** a defense against an attacker who
 has write access to the database file and is willing to rewrite the whole suffix of the chain consistently after
 their edit; that attacker can make an edited chain look perfectly valid on its own. Closing that gap needs an
-external anchor: a signed checkpoint copied off the server (#106), or the chain head (`GET /api/v1/audit/chain`)
+external anchor: a signed checkpoint copied off the server (#387), or the chain head (`GET /api/v1/audit/chain`)
 recorded somewhere the attacker cannot also write. Treat the chain as *evidence an editor left nothing to find by
 accident, or by editing without also rewriting everything after*, not as a guarantee against a determined
 attacker with full file access and no external witness.
@@ -229,6 +230,53 @@ Ingestion responses carry an optional receipt, SQLite mode only, absent for a du
 `POST /api/v1/events/batch`'s `results[]` gets the same shape. `GET /ready` adds `"chain": "enabled" |
 "disabled"`. Every existing field and status code is unchanged; all of this is additive.
 
+## Verification (`GET /api/v1/audit/verify`)
+
+Issue #106 (first sub-issue): walks the chain in one read-only pass and reports the first broken link, if any.
+Same auth and rate limit as the rest of `/api/v1`; `?scope=full|recent` (default `full`). There are no signed
+checkpoints yet (#387), so `scope=recent` always behaves like `full`, and a *consistent* rewrite (someone who
+edits a row and correctly recomputes every later hash) is undetectable by design, not a bug: the `no_checkpoints`
+warning says so on every clean report. The chain by itself only proves that nothing has changed *since the
+database was last read*, never that it was never tampered with before a signed checkpoint existed to prove
+otherwise.
+
+```json
+{
+  "ok": false,
+  "storage": "sqlite",
+  "instanceId": "b7f0c6a2-4d1e-4a56-9a1c-0d6d2f3b8e11",
+  "verifiedAt": 1791547300000,
+  "durationMs": 42,
+  "coverage": { "fromSeq": 1, "toSeq": 5321, "scope": "full" },
+  "chain": { "checked": 5320, "headSeq": 5321, "headHash": "c0de...42", "chainStartSeq": 1, "unchained": 0 },
+  "firstBreak": {
+    "kind": "hash_mismatch",
+    "seq": 4102,
+    "eventId": "evt_7c3a",
+    "expectedHash": "7c1e44...a901",
+    "storedHash": "03aa91...77de",
+    "message": "The stored hash does not match the event content at seq 4102."
+  },
+  "checkpoints": { "checked": 0, "valid": 0, "firstFailure": null },
+  "exported": null,
+  "keyTrust": "server-reported",
+  "warnings": [{ "code": "no_checkpoints", "message": "No signed checkpoint exists; a consistent rewrite of the entire chain would not be detected." }]
+}
+```
+
+A clean report has the same shape with `"ok": true` and `"firstBreak": null`. Every `BreakKind` this slice can
+produce: `hash_mismatch` (the event content changed), `link_mismatch` (a row was deleted, inserted or reordered,
+or the first chained row's link to the genesis checkpoint was tampered with), `unparseable_event` (`event_json`
+is not valid JSON), `column_mismatch` (an indexed column such as `agent_id` was edited directly, bypassing
+`event_json`; the message names the column, never its value), and `missing_hash` (a row past every recorded
+checkpoint's coverage has no hash at all). `seq_gap` is reserved for a later, checkpoint-aware slice; deleting a
+row is reported as `link_mismatch` instead. Legacy rows (before the chain started, or interleaved via a
+`resume` checkpoint) are counted in `chain.unchained` with a `legacy_rows` warning, never individually walked:
+their integrity is a separate, lighter guarantee (the genesis/resume digest), not this walk's job. `checkpoints`
+and `exported` stay empty until #387 ships signed checkpoints; `keyTrust` stays `server-reported` until #388's
+CLI can pin a public key. In memory mode: the same `{ "enabled": false, ... }` shape `GET /api/v1/audit/chain`
+already uses, not a `409` (this is a read about availability, not a write the server refuses).
+
 ## Upgrading to 0.8.0
 
 Back up the `.db` and the SQLite `-wal`/`-shm` files before upgrading, the same advice as any schema migration
@@ -240,6 +288,6 @@ take proportionally longer, one time, at the first 0.8.0 startup.
 
 Because a hash chain alone cannot detect a consistent rewrite by someone with full file access (see "Honest
 scope" above), the practical next step for real tamper evidence is to copy `GET /api/v1/audit/chain`'s `head`
-(or, once #106 lands, a signed checkpoint) somewhere the operator of the database cannot also write: a separate
-log, a ticket, a second system. Comparing a later chain walk against that recorded head is what actually proves
-nothing changed since the moment it was recorded.
+(or, once #387 lands, a signed checkpoint) somewhere the operator of the database cannot also write: a separate
+log, a ticket, a second system. Comparing a later chain walk (`GET /api/v1/audit/verify`, issue #106) against
+that recorded head is what actually proves nothing changed since the moment it was recorded.

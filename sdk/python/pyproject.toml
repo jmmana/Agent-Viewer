@@ -31,7 +31,12 @@ Changelog = "https://github.com/jmmana/Agent-Viewer/blob/main/CHANGELOG.md"
 dev = [
     "pytest>=7.0.0",
 ]
+# LangGraph callback handler (agent_viewer_langgraph.py, issue #345). The core SDK stays dependency-free.
+langgraph = [
+    "langchain-core>=0.3.0",
+    "langgraph>=0.2.0",
+]
 
 [tool.setuptools]
-# The SDK is a single module (agent_viewer.py), not a package.
-py-modules = ["agent_viewer"]
+# The SDK is two single-file modules (agent_viewer.py and the optional agent_viewer_langgraph.py), not a package.
+py-modules = ["agent_viewer", "agent_viewer_langgraph"]

@@ -115,6 +115,26 @@ event = json.loads(raw_body)
 
 `raw_body` must be the exact bytes (or string) the sender signed; re-encoding a parsed JSON body can reorder keys or change whitespace and would make a genuine signature fail to verify.
 
+## LangGraph callback handler (issue #345)
+
+```bash
+pip install "agent-viewer[langgraph]"
+```
+
+```python
+from agent_viewer_langgraph import AgentViewerCallbackHandler
+
+handler = AgentViewerCallbackHandler(url="http://localhost:8787", runtime_id="research-graph")
+graph.invoke(inputs, config={"callbacks": [handler]})
+print(handler.stats())  # enqueued, sent, dropped, failed, callback_errors
+```
+
+Each graph node becomes an agent (`agentId` is the node name, `sessionId` is the `thread_id`). Node start, end and error map to `agent.status.changed`; tool callbacks to `tool.started`/`tool.completed`/`tool.failed`; model calls to `llm.usage`/`llm.failed`. Event ids are deterministic, `lg:<runtimeId>:<runId>:<eventKind>`, so a replayed callback is an idempotent duplicate.
+
+Only names, token counts and timings are sent: prompts, completions, tool inputs and outputs and error messages never are. Callback metadata is limited to `langgraph_node`, `thread_id`, `ls_provider`, `ls_model_name` and `ls_model_type`.
+
+The handler never raises into the graph (`raise_error=False`). Events go through a bounded queue to a daemon thread; a full queue drops the event and counts it. Pass `on_error=lambda err, event: ...` to observe failures. Pending events are flushed at exit, or call `handler.flush(timeout)` / `handler.close()` yourself.
+
 ## Privacy
 
 Send only observable states, messages, tool metadata and reported usage. Never send API keys, private system prompts or model reasoning through the event stream.

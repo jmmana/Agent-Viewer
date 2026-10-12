@@ -39,6 +39,7 @@ Requires Node.js 22.13 or later (the package declares it in `engines`, so npm wa
 | `--demo` | off | Opens the office with the simulated demo team. Your events still arrive on top of it. |
 | `--no-open` | opens | Do not open the browser. |
 | `--record <file>` | off | Appends every event the server accepts while the CLI runs to a [canonical JSONL V1](event-log.md) file, one JSON line per event and no duplicates, ready to replay or export to video. A new file is created readable only by you (mode 0600), because events can carry summaries. Best effort: nothing from before the CLI started, no fsync, and a write error mid-run (full disk) stops the recording with one warning while the server keeps running. A path that cannot be written stops the CLI before it starts. |
+| `--metrics` | off | Enables `GET /metrics` (issue #103), a Prometheus text-exposition export. Still needs its own credential: set `AGENT_VIEWER_METRICS_TOKEN` for a stable one, or it falls back to the API token above (which the CLI regenerates every run unless `--token`/`AGENT_VIEWER_API_TOKEN` is set). This first slice exposes only `agent_viewer_build_info` and `agent_viewer_sse_clients`; the ledger-derived families (tokens, cost, calls, failures, latency) and the optional OTLP push ship in later sub-issues of #103. See the [README configuration table](../README.md#-configuration) for every `AGENT_VIEWER_METRICS*` variable. |
 
 ### Where the token travels
 

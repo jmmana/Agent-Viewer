@@ -11,7 +11,7 @@ import { CliUsageError, parseCliArgs, USAGE } from '../cli/args.ts';
 import { buildSendEvents } from '../cli/send.ts';
 import { normalizeStatus } from '../cli/statuses.ts';
 import { resolveConnection, writeSessionFile } from '../cli/connection.ts';
-import { createLaunchCodes, curlExample, displayHost, exposureWarning, launchUrl, officeUrl, resolveStartToken } from '../cli/start.ts';
+import { createLaunchCodes, curlExample, displayHost, exposureWarning, launchUrl, metricsHintLines, officeUrl, resolveStartToken } from '../cli/start.ts';
 import { validateCanonicalEvent } from '../src/integrations/canonicalContract.ts';
 import { MIGRATIONS } from '../server/db/migrations.ts';
 
@@ -22,7 +22,7 @@ const cliEntry = path.join(repoRoot, 'cli', 'index.ts');
 
 test('CLI args: start defaults are local, tokened and open the browser', () => {
   const start = parseCliArgs([], '/work', {});
-  assert.deepEqual(start, { command: 'start', port: 8787, host: '127.0.0.1', token: undefined, demo: false, open: true, record: undefined });
+  assert.deepEqual(start, { command: 'start', port: 8787, host: '127.0.0.1', token: undefined, demo: false, open: true, record: undefined, metrics: false });
   assert.deepEqual(parseCliArgs(['start', '--no-open'], '/work', {}).open, false);
 });
 
@@ -72,14 +72,40 @@ test('CLI start: launch codes work once and expire, and the browser URL carries 
 test('CLI start: the exposure warning says what stays public', () => {
   assert.match(exposureWarning('0.0.0.0', false), /\/api\/v1 needs the token.*office page and \/health are public/);
   assert.match(exposureWarning('0.0.0.0', true), /AGENT_VIEWER_WEBHOOK_SECRET signature instead of the token/);
+  // Issue #103: mentions /metrics only when --metrics is on.
+  assert.doesNotMatch(exposureWarning('0.0.0.0', false), /\/metrics/);
+  assert.match(exposureWarning('0.0.0.0', false, true), /\/metrics needs its own token/);
 });
 
 test('CLI args: start options', () => {
   const parsed = parseCliArgs(['--port', '4871', '--host', '0.0.0.0', '--token', 'abc', '--demo', '--no-open', '--record', 'runs/a.jsonl'], '/work');
   assert.deepEqual(parsed, {
-    command: 'start', port: 4871, host: '0.0.0.0', token: 'abc', demo: true, open: false, record: path.resolve('/work', 'runs/a.jsonl'),
+    command: 'start', port: 4871, host: '0.0.0.0', token: 'abc', demo: true, open: false, record: path.resolve('/work', 'runs/a.jsonl'), metrics: false,
   });
   assert.equal(parseCliArgs(['--port=0'], '/work').port, 0);
+});
+
+// Issue #103: the banner never prints the CLI's per-run generated API token as if it were a stable scrape
+// credential; it only hints at /metrics when a stable one (AGENT_VIEWER_METRICS_TOKEN, or an explicit/env API
+// token) is actually available.
+test('CLI start: the --metrics banner hint only appears with a stable credential', () => {
+  const generatedOnly = metricsHintLines('http://127.0.0.1:8787', {}, 'generated');
+  assert.ok(generatedOnly.join('\n').includes('no stable credential'));
+  assert.doesNotMatch(generatedOnly.join('\n'), /\/metrics \(needs/);
+
+  const withMetricsToken = metricsHintLines('http://127.0.0.1:8787', { AGENT_VIEWER_METRICS_TOKEN: 'mt' }, 'generated');
+  assert.match(withMetricsToken.join('\n'), /http:\/\/127\.0\.0\.1:8787\/metrics \(needs/);
+
+  const withFlagToken = metricsHintLines('http://127.0.0.1:8787', {}, 'flag');
+  assert.match(withFlagToken.join('\n'), /\/metrics \(needs/);
+});
+
+// Issue #103.
+test('CLI args: --metrics is parsed and appears in --help', () => {
+  assert.equal(parseCliArgs([], '/work').metrics, false);
+  assert.equal(parseCliArgs(['--metrics'], '/work').metrics, true);
+  assert.equal(parseCliArgs(['start', '--metrics'], '/work').metrics, true);
+  assert.match(USAGE, /--metrics\s+Enable GET \/metrics/);
 });
 
 test('CLI args: invalid input is a usage error', () => {

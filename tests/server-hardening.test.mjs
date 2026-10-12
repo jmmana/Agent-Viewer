@@ -530,6 +530,28 @@ test('Webhook: payloads that do not map to a known event shape are rejected with
   });
 });
 
+test('CORS preflight: PUT and DELETE are allowed, for the portal pricing/budgets writes (issue #88, sub-issue #332)', async () => {
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/budgets/bud_01HZ`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:3000',
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'authorization, idempotency-key',
+      },
+    });
+    assert.equal(response.status, 204);
+    const allowedMethods = response.headers.get('access-control-allow-methods');
+    assert.match(allowedMethods, /\bPUT\b/);
+    assert.match(allowedMethods, /\bDELETE\b/);
+    assert.match(allowedMethods, /\bGET\b/);
+    assert.match(allowedMethods, /\bPOST\b/);
+  } finally {
+    server.close();
+  }
+});
+
 test('Startup: dotenv does not print its banner when the server module loads', () => {
   const result = spawnSync(process.execPath, ['--import', 'tsx', '-e', "await import('./server/index.ts')"], {
     cwd: repoRoot,

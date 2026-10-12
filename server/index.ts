@@ -894,7 +894,11 @@ app.use((req, res, next) => {
   }
 
   res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, idempotency-key, last-event-id, x-agent-viewer-signature, x-agent-viewer-timestamp');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+  // PUT and DELETE added for the portal's pricing/budgets REST client (issue #88, sub-issue #332): the Model Ops
+  // pricing editor and budgets panel run on a different origin in dev (:3000 against the server's :8787) and
+  // need both verbs for `POST /api/v1/pricing/changes` (unaffected, still POST) and `PUT`/`DELETE
+  // /api/v1/budgets/:id`.
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   next();
 });
 

@@ -51,7 +51,8 @@ test('CORS preflight: OPTIONS answers 204 on the root, known routes and unknown 
     for (const path of ['/', '/api/v1/events', '/api/v1/agents/alice', '/not/a/route']) {
       const res = await fetch(`${baseUrl}${path}`, { method: 'OPTIONS' });
       assert.equal(res.status, 204, `OPTIONS ${path}`);
-      assert.equal(res.headers.get('access-control-allow-methods'), 'GET, POST, PATCH, OPTIONS');
+      // PUT and DELETE added for the portal's pricing/budgets REST client (issue #88, sub-issue #332).
+      assert.equal(res.headers.get('access-control-allow-methods'), 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
       assert.match(res.headers.get('access-control-allow-headers') ?? '', /idempotency-key/);
     }
   } finally {

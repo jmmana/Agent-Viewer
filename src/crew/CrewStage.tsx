@@ -395,7 +395,10 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
         }}>
         {(['auto', ...CREW_AMBIENCES] as const).map(mode => <option key={mode} value={mode}>{ambienceLabels[mode]}</option>)}
       </select>
-      <span role="status" data-testid={`${idPrefix}-ambience-status`} style={{ fontSize: 12 * hudScale }}>
+      {/* No role="status": a second live region here collided with the room-unavailable
+        notice (both resolve under getByRole('status')), and the select's own value plus
+        the caption on change already cover this; data-testid stays for programmatic reads. */}
+      <span data-testid={`${idPrefix}-ambience-status`} style={{ fontSize: 12 * hudScale }}>
         {isEs ? 'Ambiente visual' : 'Visual ambience'}: {ambienceLabels[ambience]}
       </span>
       <button type="button" onClick={() => setZoom(z => Math.max(.5, z / 1.2))} aria-label={isEs ? 'Alejar' : 'Zoom out'}>−</button>

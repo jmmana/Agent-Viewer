@@ -27,6 +27,9 @@
   "sideEffects": [
     "**/*.css"
   ],
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "agent-viewer": "./dist-cli/cli.js"
   },
@@ -55,13 +58,17 @@
     "build:cli": "node scripts/build-cli.mjs",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-lib dist-cli server.js",
+    "build:packages": "npm run build --workspaces --if-present",
+    "prelint": "npm run build:packages",
     "lint": "tsc --noEmit",
+    "pretest": "npm run build:packages",
     "test": "npm run test:node && npm run test:unit",
     "test:node": "tsx --test tests/*.test.mjs",
     "test:unit": "vitest run",
     "test:golden": "tsx --test tests/reconciliation.test.mjs",
     "test:golden-reliability": "tsx --test tests/reliability-golden.test.mjs",
     "check:package": "publint --strict && attw --pack . --profile esm-only --exclude-entrypoints ./style.css",
+    "check:package:sdk": "npm run check:package --workspace packages/sdk",
     "prepack": "npm run build:lib && npm run build:cli",
     "server": "tsx server/index.ts",
     "dev:full": "node scripts/dev-full.mjs",

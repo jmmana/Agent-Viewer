@@ -16,6 +16,7 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY packages/sdk/package.json packages/sdk/package.json
 RUN npm ci
 
 # Static build of the office. Vite inlines VITE_* variables when it bundles, so the API URL must be known

@@ -16,6 +16,8 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
+# npm ci needs every workspace manifest listed in the lockfile (`packages/*`, issue #343).
+COPY packages/sdk/package.json ./packages/sdk/
 RUN npm ci
 
 # Static build of the office. Vite inlines VITE_* variables when it bundles, so the API URL must be known
@@ -83,6 +85,7 @@ ENV NODE_ENV=production \
     AGENT_VIEWER_STORAGE=sqlite \
     AGENT_VIEWER_SQLITE_PATH=/app/data/agent-viewer.db
 COPY package.json package-lock.json ./
+COPY packages/sdk/package.json ./packages/sdk/
 RUN npm ci --omit=dev --omit=peer --ignore-scripts && npm cache clean --force
 COPY --from=cli-build /app/dist-cli ./dist-cli
 COPY docker/app-entrypoint.sh docker/healthcheck.mjs ./docker/

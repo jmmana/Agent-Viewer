@@ -19,6 +19,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@warlockcode/agent-viewer-sdk": [
+        "./packages/sdk/src/index.ts"
       ]
     },
     "allowImportingTsExtensions": true,

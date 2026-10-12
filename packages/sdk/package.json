@@ -1,0 +1,49 @@
+{
+  "name": "@warlockcode/agent-viewer-sdk",
+  "version": "0.6.0",
+  "description": "TypeScript SDK to send canonical events to Agent Viewer and read its usage, rollup and budget APIs",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jmmana/Agent-Viewer.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/jmmana/Agent-Viewer/tree/main/packages/sdk#readme",
+  "bugs": {
+    "url": "https://github.com/jmmana/Agent-Viewer/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "agent-observability",
+    "llm",
+    "sdk",
+    "agent-viewer"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "prepack": "npm run clean && npm run build"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "author": "Juan Manuel Castillo (https://github.com/jmmana)"
+}

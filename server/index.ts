@@ -58,7 +58,16 @@ import {
   RecomputeTooBroadError,
 } from './pricing/recompute';
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
-import { renderExposition, buildInProcessFamilies, METRICS_CONTENT_TYPE } from './metrics';
+import {
+  renderExposition,
+  buildInProcessFamilies,
+  METRICS_CONTENT_TYPE,
+  IngestionMetrics,
+  UNMATCHED_ROUTE,
+  normalizeRequestPath,
+  rejectionEndpoint,
+  type RejectionReason,
+} from './metrics';
 import {
   decodeExportLogsServiceRequest,
   decodeExportMetricsServiceRequest,
@@ -105,6 +114,69 @@ const app = express();
 // Express 5 defaults to the "simple" query parser. Keep the "extended" (qs) parser of Express 4 so query
 // strings such as `?type[a]=b` keep parsing the same way.
 app.set('query parser', 'extended');
+
+// -------------------------------------------------------------
+// In-process ingestion counters (issue #365). Mounted first, before every body parser, rate limiter and auth
+// check, so a request rejected anywhere (including a malformed or oversized JSON body) is still observed. Each
+// rejection site records its reason with `reject()`/`markRejection()`; this middleware reads it back once the
+// response finishes. Instrumentation must never break a request: every step is wrapped in its own try/catch.
+// -------------------------------------------------------------
+const ingestionMetrics = new IngestionMetrics();
+
+/** Request paths whose duration is not observed: `/metrics` itself, and the SSE stream (its "duration" is the
+ * life of the connection). */
+const DURATION_EXCLUDED_PATHS = new Set(['/metrics', '/api/v1/events/stream']);
+
+/** Records why `res` is being rejected, for `agent_viewer_events_rejected_total`. */
+function markRejection(res: express.Response, reason: RejectionReason): void {
+  res.locals.avRejection = reason;
+}
+
+/** Sends a JSON rejection and records its reason (issue #365). */
+function reject(res: express.Response, status: number, body: unknown, reason: RejectionReason): void {
+  markRejection(res, reason);
+  res.status(status).json(body);
+}
+
+/** Counts each result of a `store.append`/`appendBatch` call: accepted by event type, duplicates by kind. */
+function recordAppendResults(results: readonly AppendResult[], events: readonly CanonicalEvent[]): void {
+  try {
+    results.forEach((result, index) => {
+      if (result.outcome === 'accepted') ingestionMetrics.recordAccepted(events[index]?.type ?? 'unknown');
+      else if (result.outcome === 'duplicate') ingestionMetrics.recordDuplicate('identical');
+      else if (result.outcome === 'conflict') ingestionMetrics.recordDuplicate('conflicting');
+    });
+  } catch {
+    // Instrumentation never breaks ingestion.
+  }
+}
+
+app.use((req, res, next) => {
+  try {
+    const startedAt = process.hrtime.bigint();
+    res.on('finish', () => {
+      try {
+        const reason = res.locals.avRejection as RejectionReason | undefined;
+        if (reason) ingestionMetrics.recordRejected(rejectionEndpoint(req.originalUrl), reason);
+      } catch {
+        // Ignored on purpose, see above.
+      }
+      try {
+        if (DURATION_EXCLUDED_PATHS.has(normalizeRequestPath(req.originalUrl))) return;
+        const routePath: unknown = req.route?.path;
+        const route = typeof routePath === 'string' ? `${req.baseUrl ?? ''}${routePath}` : UNMATCHED_ROUTE;
+        const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+        ingestionMetrics.observeRequest(req.method, route, res.statusCode, seconds);
+      } catch {
+        // Ignored on purpose, see above.
+      }
+    });
+  } catch {
+    // Ignored on purpose, see above.
+  }
+  next();
+});
+
 const port = Number(process.env.PORT ?? 8787);
 const maxBatchSize = Number(process.env.AGENT_VIEWER_MAX_BATCH_SIZE ?? 100);
 const rateLimitMax = Number(process.env.AGENT_VIEWER_RATE_LIMIT ?? 1000);
@@ -320,7 +392,7 @@ function makeRateLimiter(limits: Map<string, { count: number; resetAt: number }>
       // Issue #59: every 429, on every route this limiter guards, carries Retry-After so OTLP exporters (and any
       // other well-behaved client) back off instead of retrying immediately. At least 1 second, rounded up.
       res.setHeader('Retry-After', String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))));
-      res.status(429).json({ error: 'rate_limit_exceeded', message: `Too many requests. Limit: ${rateLimitMax}/min` });
+      reject(res, 429, { error: 'rate_limit_exceeded', message: `Too many requests. Limit: ${rateLimitMax}/min` }, 'rate_limited');
       return;
     }
     next();
@@ -392,7 +464,7 @@ function otlpContentTypeGuard(onReject: () => void, unsupportedMediaMessage: str
     const contentType = (req.header('content-type') ?? '').split(';')[0].trim().toLowerCase();
     if (contentType !== '' && !OTLP_ACCEPTED_CONTENT_TYPES.has(contentType)) {
       onReject();
-      res.status(415).json(otlpErrorBody(3, unsupportedMediaMessage));
+      reject(res, 415, otlpErrorBody(3, unsupportedMediaMessage), 'unrecognized_payload');
       return;
     }
     next();
@@ -415,16 +487,16 @@ function otlpBodyErrorHandler(onReject: () => void, limitMessage: string, unsupp
 
     onReject();
     if (type === 'entity.too.large' || status === 413) {
-      res.status(413).json(otlpErrorBody(3, limitMessage));
+      reject(res, 413, otlpErrorBody(3, limitMessage), 'payload_too_large');
       return;
     }
     if (type === 'encoding.unsupported' || type === 'charset.unsupported' || status === 415) {
-      res.status(415).json(otlpErrorBody(3, unsupportedMediaMessage));
+      reject(res, 415, otlpErrorBody(3, unsupportedMediaMessage), 'unrecognized_payload');
       return;
     }
     // entity.parse.failed (malformed JSON), request.aborted, request.size.invalid, a corrupt gzip stream, or
     // anything else either route's parser can throw: all answered the same way as a malformed body (400).
-    res.status(400).json(otlpErrorBody(3, malformedMessage));
+    reject(res, 400, otlpErrorBody(3, malformedMessage), 'malformed_json');
   };
 }
 
@@ -492,9 +564,10 @@ function requireApiToken(options: {
         return;
       }
       res.setHeader('Cache-Control', 'no-store');
-      res.status(401).json({ error: 'invalid_stream_ticket' });
+      reject(res, 401, { error: 'invalid_stream_ticket' }, 'unauthorized');
       return;
     }
+    markRejection(res, 'unauthorized');
     options.onUnauthorized(res);
   };
 }
@@ -532,6 +605,7 @@ function rejectQueryToken(req: express.Request, res: express.Response, next: exp
     return;
   }
   res.setHeader('Cache-Control', 'no-store');
+  markRejection(res, 'unauthorized');
   res.status(401).json({
     error: 'query_token_not_supported',
     message: 'Send the token in an Authorization: Bearer header. EventSource clients use POST /api/v1/stream-tickets.',
@@ -558,7 +632,7 @@ function openModeGuard(req: express.Request, res: express.Response, next: expres
 
   if (!isLoopbackAddress(req.socket.remoteAddress)) {
     res.setHeader('Cache-Control', 'no-store');
-    res.status(403).json({ error: 'open_api_loopback_only' });
+    reject(res, 403, { error: 'open_api_loopback_only' }, 'unauthorized');
     return;
   }
 
@@ -568,7 +642,7 @@ function openModeGuard(req: express.Request, res: express.Response, next: expres
     : hostHeader.split(':')[0];
   if (!isLoopbackHost(hostOnly)) {
     res.setHeader('Cache-Control', 'no-store');
-    res.status(403).json({ error: 'open_api_host_not_allowed' });
+    reject(res, 403, { error: 'open_api_host_not_allowed' }, 'unauthorized');
     return;
   }
 
@@ -595,7 +669,7 @@ function openModeGuard(req: express.Request, res: express.Response, next: expres
       });
     if (!allowed) {
       res.setHeader('Cache-Control', 'no-store');
-      res.status(403).json({ error: 'open_api_origin_not_allowed' });
+      reject(res, 403, { error: 'open_api_origin_not_allowed' }, 'unauthorized');
       return;
     }
   }
@@ -634,6 +708,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
   const isProtobufRequest = Buffer.isBuffer(req.body);
   const respondStatus = (status: 400, message: string) => {
     otlpStats.requestsRejected += 1;
+    markRejection(res, 'unrecognized_payload');
     if (isProtobufRequest) {
       res.status(status).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
     } else {
@@ -660,6 +735,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
 
   if (countLogRecords(body) > otlpMaxRecords) {
     otlpStats.requestsRejected += 1;
+    markRejection(res, 'payload_too_large');
     const message = `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} log records`;
     if (isProtobufRequest) res.status(413).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
     else res.status(413).json(otlpErrorBody(3, message));
@@ -677,6 +753,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
   let appendResult: AppendBatchResult;
   try {
     appendResult = await store.appendBatch(mapped.events, { channel: 'otlp' });
+    recordAppendResults(appendResult.results, mapped.events);
   } catch (error) {
     otlpStats.requestsRejected += 1;
     if (isProtobufRequest) res.status(503).type('application/x-protobuf').send(Buffer.from(encodeStatus(14, 'Storage unavailable, retry')));
@@ -793,6 +870,7 @@ app.post(OTLP_METRICS_PATH, async (req, res) => {
       body = decodeExportMetricsServiceRequest(req.body as Buffer);
     } catch (error) {
       otlpMetricsStats.requestsRejected += 1;
+      markRejection(res, 'unrecognized_payload');
       res.status(400).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, OTLP_METRICS_MALFORMED_BODY_MESSAGE)));
       return;
     }
@@ -802,6 +880,7 @@ app.post(OTLP_METRICS_PATH, async (req, res) => {
 
   if (!looksLikeOtlpMetricsRequest(body)) {
     otlpMetricsStats.requestsRejected += 1;
+    markRejection(res, 'unrecognized_payload');
     if (isProtobufRequest) res.status(400).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, OTLP_METRICS_MALFORMED_BODY_MESSAGE)));
     else res.status(400).json(otlpErrorBody(3, OTLP_METRICS_MALFORMED_BODY_MESSAGE));
     return;
@@ -809,6 +888,7 @@ app.post(OTLP_METRICS_PATH, async (req, res) => {
 
   if (countMetricDataPoints(body) > otlpMaxRecords) {
     otlpMetricsStats.requestsRejected += 1;
+    markRejection(res, 'payload_too_large');
     const message = `OTLP request exceeds ${otlpMaxBodyLabel} or ${otlpMaxRecords} data points`;
     if (isProtobufRequest) res.status(413).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
     else res.status(413).json(otlpErrorBody(3, message));
@@ -932,6 +1012,7 @@ app.post(OTLP_TRACES_PATH, async (req, res) => {
   const isProtobufRequest = Buffer.isBuffer(req.body);
   const respondStatus = (status: 400 | 413, message: string) => {
     otlpTracesStats.requestsRejected += 1;
+    markRejection(res, status === 413 ? 'payload_too_large' : 'unrecognized_payload');
     if (isProtobufRequest) {
       res.status(status).type('application/x-protobuf').send(Buffer.from(encodeStatus(3, message)));
     } else {
@@ -967,6 +1048,7 @@ app.post(OTLP_TRACES_PATH, async (req, res) => {
   let appendResult: AppendBatchResult;
   try {
     appendResult = await store.appendBatch(mapped.events, { channel: 'otlp' });
+    recordAppendResults(appendResult.results, mapped.events);
   } catch (error) {
     otlpTracesStats.requestsRejected += 1;
     if (isProtobufRequest) res.status(503).type('application/x-protobuf').send(Buffer.from(encodeStatus(14, 'Storage unavailable, retry')));
@@ -1087,6 +1169,7 @@ function metricsAuthGuard(req: express.Request, res: express.Response, next: exp
   const expectedToken = getMetricsToken() ?? getApiToken();
   if (!expectedToken) {
     res.setHeader('Cache-Control', 'no-store');
+    markRejection(res, 'unauthorized');
     res.status(403).json({
       error: 'metrics_require_token',
       message: 'Set AGENT_VIEWER_METRICS_TOKEN or AGENT_VIEWER_API_TOKEN, or set AGENT_VIEWER_METRICS_AUTH=off',
@@ -1099,7 +1182,7 @@ function metricsAuthGuard(req: express.Request, res: express.Response, next: exp
     return;
   }
   res.setHeader('Cache-Control', 'no-store');
-  res.status(401).json({ error: 'unauthorized', message: 'Valid Bearer token required' });
+  reject(res, 401, { error: 'unauthorized', message: 'Valid Bearer token required' }, 'unauthorized');
 }
 
 app.use('/metrics', metricsMethodGuard);
@@ -1117,13 +1200,14 @@ function writeMetricsResponse(res: express.Response, body: string): void {
 }
 
 app.get('/metrics', (_req, res) => {
-  const body = renderExposition(
-    buildInProcessFamilies({
+  const body = renderExposition([
+    ...buildInProcessFamilies({
       version: SERVER_VERSION,
       storage: store.readiness().storage,
       sseClients: clients.size,
-    })
-  );
+    }),
+    ...ingestionMetrics.families(),
+  ]);
   writeMetricsResponse(res, body);
 });
 
@@ -1145,7 +1229,7 @@ app.use(
 // Malformed JSON handler
 app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (err instanceof SyntaxError && 'body' in err) {
-    res.status(400).json({ error: 'bad_request', message: 'Malformed JSON payload' });
+    reject(res, 400, { error: 'bad_request', message: 'Malformed JSON payload' }, 'malformed_json');
     return;
   }
   next(err);
@@ -1554,6 +1638,7 @@ app.post('/api/v1/events', async (req, res) => {
     // The header and the body id name the same event. When both are given and differ, nothing is stored.
     const bodyId: unknown = typeof body === 'object' && body !== null ? body.id : undefined;
     if (typeof bodyId === 'string' && bodyId.length > 0 && bodyId !== idempotencyKey) {
+      markRejection(res, 'validation');
       res.status(400).json({
         error: 'idempotency_key_mismatch',
         message: `Idempotency-Key "${idempotencyKey}" does not match the event id "${bodyId}".`,
@@ -1567,6 +1652,7 @@ app.post('/api/v1/events', async (req, res) => {
 
   const reserved = reservedBudgetAlertIssue(body);
   if (reserved) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'reserved_event_type',
       message: 'budget.alert is emitted by the server only',
@@ -1576,6 +1662,7 @@ app.post('/api/v1/events', async (req, res) => {
 
   const validation = validateCanonicalEvent(body);
   if (!validation.success || !validation.data) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'validation_failed',
       issues: validation.issues ?? [{ path: '', message: 'Invalid event payload' }],
@@ -1585,6 +1672,7 @@ app.post('/api/v1/events', async (req, res) => {
 
   const event = validation.data;
   const result = await store.append(event);
+  recordAppendResults([result], [event]);
 
   if (result.outcome === 'conflict') {
     // Same id, different content: not applied, not stored, not broadcast. The stored event stays as it was.
@@ -1633,6 +1721,7 @@ app.post('/api/v1/events/batch', async (req, res) => {
   const rawEvents: unknown = Array.isArray(req.body) ? req.body : req.body?.events;
 
   if (!Array.isArray(rawEvents)) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'invalid_batch',
       message: 'Expected JSON array of events or an object with "events" array',
@@ -1641,6 +1730,7 @@ app.post('/api/v1/events/batch', async (req, res) => {
   }
 
   if (rawEvents.length === 0) {
+    markRejection(res, 'empty_batch');
     res.status(400).json({
       error: 'empty_batch',
       message: 'Batch cannot be empty',
@@ -1649,6 +1739,7 @@ app.post('/api/v1/events/batch', async (req, res) => {
   }
 
   if (rawEvents.length > maxBatchSize) {
+    markRejection(res, 'batch_too_large');
     res.status(413).json({
       error: 'batch_too_large',
       message: `Batch contains ${rawEvents.length} events; limit is ${maxBatchSize}`,
@@ -1674,6 +1765,7 @@ app.post('/api/v1/events/batch', async (req, res) => {
   });
 
   if (errors.length > 0) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'validation_failed',
       message: `${errors.length} event(s) in batch failed validation`,
@@ -1685,6 +1777,7 @@ app.post('/api/v1/events/batch', async (req, res) => {
   const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(validatedEvents, {
     channel: 'events-batch',
   });
+  recordAppendResults(results, validatedEvents);
 
   acceptedEvents.forEach((event, index) => broadcastEvent(event, acceptedSeqs[index] ?? null));
 
@@ -2781,6 +2874,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     const timestampStr = req.header('x-agent-viewer-timestamp');
 
     if (!signature || !timestampStr) {
+      markRejection(res, 'signature');
       res.status(401).json({
         error: 'missing_webhook_signature',
         message: 'Headers X-Agent-Viewer-Signature and X-Agent-Viewer-Timestamp required',
@@ -2791,6 +2885,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     const timestamp = Number(timestampStr);
     // Replay protection, part 1: the timestamp must be within 5 minutes
     if (isNaN(timestamp) || Math.abs(now - timestamp) > webhookToleranceMs) {
+      markRejection(res, 'replay');
       res.status(401).json({
         error: 'replay_detected_or_clock_skew',
         message: 'Webhook timestamp is expired or too far in the future',
@@ -2802,6 +2897,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     const expected = crypto.createHmac('sha256', secret).update(`${timestampStr}.${rawBody}`).digest('hex');
 
     if (!safeEqual(signature, expected)) {
+      markRejection(res, 'signature');
       res.status(401).json({
         error: 'invalid_webhook_signature',
         message: 'HMAC signature verification failed',
@@ -2815,6 +2911,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   // Step 2: Parse and validate the webhook payload
   const parseResult = GenericWebhookPayloadSchema.safeParse(req.body ?? {});
   if (!parseResult.success) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'validation_failed',
       message: 'Invalid webhook payload structure',
@@ -2828,6 +2925,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
 
   const payload = parseResult.data;
   if (!payload.status && !payload.message && !payload.text && !payload.tool && !payload.usage) {
+    markRejection(res, 'unrecognized_payload');
     res.status(400).json({
       error: 'unrecognized_webhook_payload',
       message:
@@ -2841,6 +2939,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   const bodyKey = payload.idempotencyKey?.trim();
 
   if (bodyKey && !bodyKey.match(/^[\x20-\x7E]+$/)) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'invalid_idempotency_key',
       message: 'idempotencyKey must be 1-255 printable ASCII characters',
@@ -2849,6 +2948,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   }
 
   if (headerKey && !headerKey.match(/^[\x20-\x7E]+$/)) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'invalid_idempotency_key',
       message: 'Idempotency-Key header must be 1-255 printable ASCII characters',
@@ -2875,6 +2975,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   }
 
   if (headerKey && bodyKey && headerKey !== bodyKey && !secret) {
+    markRejection(res, 'validation');
     res.status(400).json({
       error: 'idempotency_key_mismatch',
       message: 'Idempotency-Key header and idempotencyKey body field differ',
@@ -2909,6 +3010,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     });
 
     if (!validatedEvent.success) {
+      markRejection(res, 'validation');
       res.status(400).json({
         error: 'validation_failed',
         message: 'Generated status event failed validation',
@@ -2937,6 +3039,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     });
 
     if (!validatedEvent.success) {
+      markRejection(res, 'validation');
       res.status(400).json({
         error: 'validation_failed',
         message: 'Generated message event failed validation',
@@ -2965,6 +3068,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     });
 
     if (!validatedEvent.success) {
+      markRejection(res, 'validation');
       res.status(400).json({
         error: 'validation_failed',
         message: 'Generated tool event failed validation',
@@ -2999,6 +3103,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     });
 
     if (!validatedEvent.success) {
+      markRejection(res, 'validation');
       res.status(400).json({
         error: 'validation_failed',
         message: 'Generated usage event failed validation',
@@ -3016,6 +3121,11 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     cacheResult = rememberWebhookSignature(verifiedSignature, now + webhookToleranceMs, now, generatedEvents.map(e => e.id));
     if (cacheResult) {
       // This is a duplicate of a previously accepted signed delivery
+      try {
+        ingestionMetrics.recordDuplicate('identical', generatedEvents.length);
+      } catch {
+        // Instrumentation never breaks ingestion.
+      }
       const isDuplicate = true;
       const results = generatedEvents.map((e, i) => ({
         id: e.id,
@@ -3048,6 +3158,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     ...appendOptions,
     channel: 'webhook',
   } as any);
+  recordAppendResults(results, generatedEvents);
 
   // Step 7: Record signature only after successful append
   if (verifiedSignature && accepted > 0) {
@@ -3218,6 +3329,7 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
   }
   // Express 5 throws on status codes that are not integers between 100 and 999.
   const status = Number.isInteger(err?.status) && err.status >= 100 && err.status <= 999 ? err.status : 500;
+  if (status === 413) markRejection(res, 'payload_too_large');
   res.status(status).json({
     error: err?.code || 'internal_server_error',
     message: err?.message ? String(err.message).slice(0, 200) : 'An internal error occurred',
@@ -3293,4 +3405,4 @@ if (isDirectRun && process.env.NODE_ENV !== 'test') {
   process.on('SIGINT', handleShutdownSignal);
 }
 
-export { app, serverInstance, store };
+export { app, serverInstance, store, ingestionMetrics };

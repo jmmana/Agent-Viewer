@@ -19,6 +19,7 @@ import { budgetAlertDeliveries } from './migrations/0016-budget-alert-deliveries
 import { eventHashChain } from './migrations/0017-event-hash-chain';
 import { auditMeta } from './migrations/0018-audit-meta';
 import { apiKeys } from './migrations/0019-api-keys';
+import { tombstonesLegalHold } from './migrations/0020-tombstones-legal-hold';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -49,6 +50,7 @@ export const MIGRATIONS: readonly Migration[] = [
   eventHashChain,
   auditMeta,
   apiKeys,
+  tombstonesLegalHold,
 ];
 
 export interface MigrationOptions {

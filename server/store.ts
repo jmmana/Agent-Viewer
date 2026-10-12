@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
-import type { CanonicalEvent } from '../src/integrations/canonicalContract';
+import type { CanonicalEvent, TombstoneInfo, TombstoneReason } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
 import type { BudgetAlertStoreInput, BudgetAlertRow, BudgetAlertDeliveryState } from './budgetAlerts';
 import { eventFingerprint } from './eventFingerprint';
@@ -367,6 +367,63 @@ export interface RetentionStatus {
   usageLedger: RetentionScopeStatus;
   lastRun: RetentionRunRecord | null;
   runs: RetentionRunRecord[];
+}
+
+/** Issue #109: who performed an audited destructive action. Only `'api'` exists in this slice. */
+export interface AuditActor {
+  kind: 'api';
+  name: string;
+}
+
+/** Issue #109: what `EventStore.tombstone` needs besides the ids. */
+export interface TombstoneRequestInfo {
+  reason: TombstoneReason;
+  /** Redaction rules version in force for this run, or `null` when unknown. */
+  rulesVersion: string | null;
+  actor: AuditActor;
+  /** Recorded as the audit event's `submitter_id` (issue #105). */
+  submitterId: string;
+  /** Rows per transaction (and per audit event). Default `AGENT_VIEWER_RETENTION_BATCH_SIZE`, else 5000. */
+  batchSize?: number;
+  /** Extra, content-free fields merged into every audit event's payload (for example the purge cutoff). */
+  context?: Record<string, unknown>;
+}
+
+export interface TombstoneResult {
+  /** Rows actually tombstoned across every committed batch. */
+  tombstoned: number;
+  /** Ids that were not eligible: unknown, already tombstoned, or an `audit.*` event. */
+  skipped: number;
+  /** Committed batches, one audit event each. */
+  batches: number;
+  auditEventIds: string[];
+  /** True when an active legal hold was found at the start of a batch; earlier batches stay committed. */
+  stoppedByHold: boolean;
+}
+
+/** Issue #109: one row of the `legal_holds` projection. The evidence is the chained `audit.legal_hold.changed`
+ * events; this row only makes "is a hold active right now" a cheap read. */
+export interface LegalHoldRecord {
+  id: number;
+  placedAt: number;
+  placedReason: string;
+  placedAuditSeq: number;
+  releasedAt: number | null;
+  releasedReason: string | null;
+  releasedAuditSeq: number | null;
+}
+
+export type LegalHoldChangeResult =
+  | { changed: true; hold: LegalHoldRecord; auditEventId: string }
+  | { changed: false; reason: 'already_active' | 'not_active'; hold: LegalHoldRecord | null };
+
+/** Issue #109: store-side part of `GET /api/v1/audit/retention`. */
+export interface AuditRetentionStatus {
+  legalHold: { active: boolean; current: LegalHoldRecord | null; history: number };
+  lastRun: { auditEventId: string; type: string; at: number; count: number } | null;
+  tombstones: { total: number; byReason: Record<TombstoneReason, number>; lastAt: number | null };
+  /** Stored rows grouped by `redaction_rules_version`; rows with no known version count under `'unknown'`. */
+  rowsByRedactionRulesVersion: Record<string, number>;
 }
 
 /**
@@ -787,6 +844,25 @@ export interface EventStore {
    * and by the optional ingestion receipt. */
   chainRecords(ids: readonly string[]): Promise<Record<string, ChainRecord>>;
 
+  /**
+   * Issue #109: replaces the content of every eligible event among `ids` (not already tombstoned, not `audit.*`)
+   * with `summary: '[removed]'`, `payload: {}`, destroys its content salt and records the tombstone. Never a
+   * physical delete, and never touches `seq`, the chain columns, `content_hash` or any header column. SQLite: in
+   * batches, each one `BEGIN IMMEDIATE` transaction that re-checks the legal hold first, then writes one chained
+   * audit event and the tombstones it describes; a hold found at the start of a batch stops the run cleanly
+   * (`stoppedByHold: true`). Memory: the same rewrite in RAM only, with no audit event and no chain.
+   */
+  tombstone(ids: readonly string[], info: TombstoneRequestInfo): Promise<TombstoneResult>;
+  /** Issue #109, SQLite only: the active legal hold, or `null`. */
+  activeLegalHold?(): Promise<LegalHoldRecord | null>;
+  /** Issue #109, SQLite only: places (`active: true`) or releases a legal hold, together with its chained
+   * `audit.legal_hold.changed` event, in one transaction. */
+  setLegalHold?(input: { active: boolean; reason: string; actor: AuditActor; submitterId: string }): Promise<LegalHoldChangeResult>;
+  /** Issue #109, SQLite only: ids of tombstone-eligible events received before `createdBefore`, oldest first. */
+  listTombstoneCandidates?(createdBefore: number, limit: number): Promise<string[]>;
+  /** Issue #109, SQLite only. */
+  auditRetentionStatus?(): Promise<AuditRetentionStatus>;
+
   close(): Promise<void>;
 }
 
@@ -979,6 +1055,65 @@ export const DEFAULT_RETENTION_BATCH_SIZE = 5000;
  * `retention_state` (SQLite) or the store's own counters (memory) precisely so pruning this loses nothing. */
 export const RETENTION_RUNS_MAX = 500;
 
+/** Issue #109: `AGENT_VIEWER_RETENTION_BATCH_SIZE`, an integer from 1 to 100000; unset or empty means 5000. Any
+ * other value throws, naming the variable, so a typo governing destruction is never silently guessed at. */
+export function parseRetentionBatchSize(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_RETENTION_BATCH_SIZE;
+  const trimmed = raw.trim();
+  const value = Number(trimmed);
+  if (!/^[1-9][0-9]{0,5}$/.test(trimmed) || value > 100000) {
+    throw new Error(
+      `[agent-viewer] AGENT_VIEWER_RETENTION_BATCH_SIZE must be an integer from 1 to 100000 (got ${JSON.stringify(raw)})`
+    );
+  }
+  return value;
+}
+
+/** Issue #109: the fixed replacement content of a tombstoned event. */
+export const TOMBSTONE_SUMMARY = '[removed]';
+
+function tombstoneBatchSize(info: TombstoneRequestInfo): number {
+  return info.batchSize && info.batchSize > 0 ? Math.trunc(info.batchSize) : DEFAULT_RETENTION_BATCH_SIZE;
+}
+
+/** The event as it reads after tombstoning: every header field kept, content replaced as a whole. */
+function tombstonedEvent(event: CanonicalEvent, tombstone: TombstoneInfo): CanonicalEvent {
+  return { ...event, summary: TOMBSTONE_SUMMARY, payload: {}, tombstone };
+}
+
+/** A server-built `audit.*` event (issue #109), shaped like `appendAuditKeyEvent`'s in `server/index.ts`. Its
+ * payload must stay content-free: ids, counts, hashes and reasons only, never a summary or payload. */
+function buildAuditEvent(type: string, at: number, payload: Record<string, unknown>): CanonicalEvent {
+  return {
+    schemaVersion: '1.0',
+    id: `evt_audit_${crypto.randomUUID()}`,
+    type: type as unknown as CanonicalEvent['type'],
+    timestamp: at,
+    source: 'server',
+    severity: 'normal',
+    summary: type,
+    payload,
+  };
+}
+
+function tombstoneAuditType(reason: TombstoneReason): string {
+  return reason === 'retention' ? 'audit.retention.purged' : 'audit.redaction.applied';
+}
+
+function legalHoldFromRow(row: any): LegalHoldRecord {
+  return {
+    id: Number(row.id),
+    placedAt: Number(row.placed_at),
+    placedReason: row.placed_reason,
+    placedAuditSeq: Number(row.placed_audit_seq),
+    releasedAt: row.released_at === null ? null : Number(row.released_at),
+    releasedReason: row.released_reason ?? null,
+    releasedAuditSeq: row.released_audit_seq === null ? null : Number(row.released_audit_seq),
+  };
+}
+
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 function telemetryPointKey(point: Pick<TelemetryPointInput, 'seriesKey' | 'startTimeUnixNano' | 'timeUnixNano'>): string {
   return `${point.seriesKey}|${point.startTimeUnixNano}|${point.timeUnixNano}`;
 }
@@ -1143,6 +1278,49 @@ export class MemoryEventStore implements EventStore {
   /** Issue #105: memory mode never chains anything. */
   async chainRecords(_ids: readonly string[]): Promise<Record<string, ChainRecord>> {
     return {};
+  }
+
+  /** Issue #109, memory mode: the same rewrite as SQLite, in RAM only. There is no chain and no legal hold here;
+   * the audit event is still appended to the window so every tombstone names an event that exists. */
+  async tombstone(ids: readonly string[], info: TombstoneRequestInfo): Promise<TombstoneResult> {
+    const result: TombstoneResult = { tombstoned: 0, skipped: 0, batches: 0, auditEventIds: [], stoppedByHold: false };
+    const unique = [...new Set(ids)];
+    const batchSize = tombstoneBatchSize(info);
+    for (let start = 0; start < unique.length; start += batchSize) {
+      if (start > 0) await yieldToEventLoop();
+      const wanted = new Set(unique.slice(start, start + batchSize));
+      const entries: RetainedEntry[] = [];
+      this.window.forEachNewestToOldest((entry) => {
+        const { event } = entry;
+        if (wanted.has(event.id) && !event.tombstone && !event.type.startsWith('audit.')) entries.push(entry);
+      });
+      result.skipped += wanted.size - entries.length;
+      if (entries.length === 0) continue;
+
+      const at = Date.now();
+      const audit = buildAuditEvent(tombstoneAuditType(info.reason), at, {
+        ...info.context,
+        actor: info.actor,
+        reason: info.reason,
+        rulesVersion: info.rulesVersion,
+        count: entries.length,
+        events: entries.map(({ event, seq }) => ({ id: event.id, seq, contentHash: this.eventHashes.get(event.id) ?? null })),
+      });
+      await this.append(audit, { submitterId: info.submitterId });
+      for (const entry of entries) {
+        entry.event = tombstonedEvent(entry.event, {
+          at,
+          reason: info.reason,
+          auditEventId: audit.id,
+          rulesVersion: info.rulesVersion,
+          contentHash: this.eventHashes.get(entry.event.id) ?? null,
+        });
+      }
+      result.tombstoned += entries.length;
+      result.batches++;
+      result.auditEventIds.push(audit.id);
+    }
+    return result;
   }
 
   /** Nothing to replay: a `MemoryEventStore` starts empty and is ready as soon as it is constructed. */
@@ -2079,6 +2257,9 @@ export class SQLiteEventStore implements EventStore {
    * `append`/`appendBatch` already hold the write lock for). `seq: 0` is used for "no chained row yet, prevHash
    * is the genesis checkpoint's own hash". */
   private chainHead: { seq: number; hash: string } | null = null;
+  /** Issue #109: the tombstone columns and `legal_holds` exist only once migration 20 has run. Without them,
+   * every destructive #109 operation refuses to run (and the #70 purge never sees a hold, since none can exist). */
+  private tombstonesEnabled = false;
   private readonly rebuildOptions: {
     pageSize: number;
     pageDelayMs: number;
@@ -2166,6 +2347,7 @@ export class SQLiteEventStore implements EventStore {
       this.ensureChainResumeCheckpoint();
       this.chainHead = this.readChainHead();
     }
+    this.tombstonesEnabled = this.tableExists('legal_holds');
     const countRow = this.db.prepare('SELECT COUNT(*) AS count FROM events WHERE duplicate_of IS NULL').get() as { count: number };
     this.eventsCountCache = countRow.count;
     const earliestRow = this.db.prepare('SELECT MIN(created_at) AS earliest FROM events WHERE duplicate_of IS NULL').get() as {
@@ -3723,6 +3905,11 @@ export class SQLiteEventStore implements EventStore {
     let deleted = 0;
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      // Issue #109: an active legal hold freezes every destruction path, checked under the same write lock.
+      if (this.readActiveLegalHold()) {
+        this.db.exec('COMMIT');
+        return 0;
+      }
       const rows = this.db
         .prepare(
           'DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE created_at < ? ORDER BY rowid LIMIT ?) RETURNING duplicate_of'
@@ -3752,6 +3939,10 @@ export class SQLiteEventStore implements EventStore {
     let deleted = 0;
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      if (this.readActiveLegalHold()) {
+        this.db.exec('COMMIT');
+        return 0;
+      }
       const result = this.db
         .prepare('DELETE FROM usage_ledger WHERE rowid IN (SELECT rowid FROM usage_ledger WHERE received_at < ? ORDER BY rowid LIMIT ?)')
         .run(cutoffMs, batchSize);
@@ -3771,6 +3962,230 @@ export class SQLiteEventStore implements EventStore {
       throw error;
     }
     return deleted;
+  }
+
+  /**
+   * Issue #109: runs `fn` inside one `BEGIN IMMEDIATE` transaction. `insertEvent` advances `nextSeq` and
+   * `chainHead` eagerly, so a rollback restores both; otherwise the next insert would skip a seq or chain onto a
+   * hash that was never committed. `fn` must be synchronous (`node:sqlite` is), so nothing else can interleave.
+   */
+  private inImmediateTransaction<T>(fn: () => T): T {
+    const savedSeq = this.nextSeq;
+    const savedHead = this.chainHead;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const value = fn();
+      this.db.exec('COMMIT');
+      return value;
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // Already rolled back.
+      }
+      this.nextSeq = savedSeq;
+      this.chainHead = savedHead;
+      throw error;
+    }
+  }
+
+  /** Issue #109: the active legal hold. Every destructive caller invokes this inside its own `BEGIN IMMEDIATE`
+   * transaction, so the answer cannot change between this read and that transaction's writes. */
+  private readActiveLegalHold(): LegalHoldRecord | null {
+    if (!this.tombstonesEnabled) return null;
+    const row = this.db.prepare('SELECT * FROM legal_holds WHERE released_at IS NULL ORDER BY id DESC LIMIT 1').get();
+    return row ? legalHoldFromRow(row) : null;
+  }
+
+  /** Issue #109: stores a server-built audit event inside the caller's transaction. Anything but `accepted`
+   * means a server-generated id was reused (a bug), and throwing rolls the whole transaction back with it. */
+  private insertAuditEventInTx(event: CanonicalEvent, submitterId: string, receivedAt: number): { seq: number; pending: PendingOutcome } {
+    const pending = this.classifyAndInsert(this.prepareLookup(), this.prepareInsert(), event, false, receivedAt, 'events', submitterId);
+    if (pending.result.outcome !== 'accepted' || pending.result.seq === null) {
+      throw new Error(`audit event ${event.id} was not stored (${pending.result.outcome})`);
+    }
+    return { seq: pending.result.seq, pending };
+  }
+
+  /** The post-commit half of `append`, for an audit event written by `insertAuditEventInTx`. */
+  private afterAuditCommit(pending: PendingOutcome): void {
+    this.recordOutcome(pending);
+    this.eventsCountCache++;
+    this.ensureTotalsSinceCache();
+    if (this.rebuild.state === 'done') applyEvent(this.state, pending.event, { skipUsage: pending.ledgerSkipped });
+  }
+
+  async tombstone(ids: readonly string[], info: TombstoneRequestInfo): Promise<TombstoneResult> {
+    if (!this.tombstonesEnabled) {
+      throw new Error('tombstoning needs migration 20 (tombstones-legal-hold); this database predates it');
+    }
+    const result: TombstoneResult = { tombstoned: 0, skipped: 0, batches: 0, auditEventIds: [], stoppedByHold: false };
+    const unique = [...new Set(ids)];
+    const batchSize = tombstoneBatchSize(info);
+    const auditType = tombstoneAuditType(info.reason);
+    const selectEligible = this.db.prepare(`
+      SELECT * FROM events
+      WHERE id IN (SELECT value FROM json_each(?)) AND tombstoned_at IS NULL AND type NOT LIKE 'audit.%'
+      ORDER BY seq
+    `);
+    const update = this.db.prepare(`
+      UPDATE events
+      SET summary = ?, payload = '{}', event_json = ?, content_salt = NULL,
+          tombstoned_at = ?, tombstone_reason = ?, tombstone_audit_seq = ?, tombstone_rules_version = ?
+      WHERE id = ? AND tombstoned_at IS NULL
+    `);
+
+    for (let start = 0; start < unique.length; start += batchSize) {
+      if (this.closed) break;
+      if (start > 0) await yieldToEventLoop();
+      const batchIds = unique.slice(start, start + batchSize);
+      const outcome = this.inImmediateTransaction(() => {
+        // Re-checked at the start of every batch, under the write lock: a hold placed mid-run stops the run here.
+        if (this.readActiveLegalHold()) return { kind: 'hold' as const };
+        const rows = selectEligible.all(JSON.stringify(batchIds)) as any[];
+        if (rows.length === 0) return { kind: 'empty' as const };
+
+        const at = Date.now();
+        const audit = buildAuditEvent(auditType, at, {
+          ...info.context,
+          actor: info.actor,
+          reason: info.reason,
+          rulesVersion: info.rulesVersion,
+          count: rows.length,
+          // The original row hash is committed here, by a chained event whose own hash stays recomputable, so a
+          // verifier can still account for a tombstoned row whose `event_json` no longer reproduces its hash.
+          events: rows.map((row) => ({
+            id: row.id,
+            seq: Number(row.seq),
+            hash: row.hash ?? null,
+            contentHash: row.content_hash ?? null,
+          })),
+        });
+        const { seq, pending } = this.insertAuditEventInTx(audit, info.submitterId, at);
+        for (const row of rows) {
+          const tombstone: TombstoneInfo = {
+            at,
+            reason: info.reason,
+            auditEventId: audit.id,
+            rulesVersion: info.rulesVersion,
+            contentHash: row.content_hash ?? null,
+          };
+          const rewritten = JSON.stringify(tombstonedEvent(this.rowToEvent(row), tombstone));
+          const changes = Number(
+            (update.run(TOMBSTONE_SUMMARY, rewritten, at, info.reason, seq, info.rulesVersion, row.id) as { changes?: number | bigint }).changes ?? 0
+          );
+          if (changes !== 1) throw new Error(`tombstone: event ${row.id} changed under the write lock`);
+        }
+        return { kind: 'done' as const, count: rows.length, skipped: batchIds.length - rows.length, auditId: audit.id, pending };
+      });
+
+      if (outcome.kind === 'hold') {
+        result.stoppedByHold = true;
+        break;
+      }
+      if (outcome.kind === 'empty') {
+        result.skipped += batchIds.length;
+        continue;
+      }
+      this.afterAuditCommit(outcome.pending);
+      result.tombstoned += outcome.count;
+      result.skipped += outcome.skipped;
+      result.batches++;
+      result.auditEventIds.push(outcome.auditId);
+    }
+    return result;
+  }
+
+  async activeLegalHold(): Promise<LegalHoldRecord | null> {
+    return this.readActiveLegalHold();
+  }
+
+  async setLegalHold(input: { active: boolean; reason: string; actor: AuditActor; submitterId: string }): Promise<LegalHoldChangeResult> {
+    if (!this.tombstonesEnabled) {
+      throw new Error('legal holds need migration 20 (tombstones-legal-hold); this database predates it');
+    }
+    const outcome = this.inImmediateTransaction(() => {
+      const current = this.readActiveLegalHold();
+      if (input.active && current) {
+        return { result: { changed: false, reason: 'already_active', hold: current } as LegalHoldChangeResult, pending: null };
+      }
+      if (!input.active && !current) {
+        return { result: { changed: false, reason: 'not_active', hold: null } as LegalHoldChangeResult, pending: null };
+      }
+      const at = Date.now();
+      const audit = buildAuditEvent('audit.legal_hold.changed', at, {
+        actor: input.actor,
+        action: input.active ? 'placed' : 'released',
+        reason: input.reason,
+        holdId: current ? current.id : null,
+      });
+      const { seq, pending } = this.insertAuditEventInTx(audit, input.submitterId, at);
+      let holdId: number;
+      if (input.active) {
+        const inserted = this.db
+          .prepare('INSERT INTO legal_holds (placed_at, placed_reason, placed_audit_seq) VALUES (?, ?, ?)')
+          .run(at, input.reason, seq) as { lastInsertRowid: number | bigint };
+        holdId = Number(inserted.lastInsertRowid);
+      } else {
+        holdId = current!.id;
+        this.db
+          .prepare('UPDATE legal_holds SET released_at = ?, released_reason = ?, released_audit_seq = ? WHERE id = ? AND released_at IS NULL')
+          .run(at, input.reason, seq, holdId);
+      }
+      const hold = legalHoldFromRow(this.db.prepare('SELECT * FROM legal_holds WHERE id = ?').get(holdId));
+      return { result: { changed: true, hold, auditEventId: audit.id } as LegalHoldChangeResult, pending };
+    });
+    if (outcome.pending) this.afterAuditCommit(outcome.pending);
+    return outcome.result;
+  }
+
+  async listTombstoneCandidates(createdBefore: number, limit: number): Promise<string[]> {
+    if (!this.tombstonesEnabled) return [];
+    const rows = this.db
+      .prepare(
+        "SELECT id FROM events WHERE created_at < ? AND tombstoned_at IS NULL AND type NOT LIKE 'audit.%' ORDER BY seq LIMIT ?"
+      )
+      .all(createdBefore, limit) as Array<{ id: string }>;
+    return rows.map(({ id }) => id);
+  }
+
+  async auditRetentionStatus(): Promise<AuditRetentionStatus> {
+    const status: AuditRetentionStatus = {
+      legalHold: { active: false, current: null, history: 0 },
+      lastRun: null,
+      tombstones: { total: 0, byReason: { retention: 0, redaction: 0 }, lastAt: null },
+      rowsByRedactionRulesVersion: {},
+    };
+    if (!this.tombstonesEnabled) return status;
+
+    const current = this.readActiveLegalHold();
+    const history = this.db.prepare('SELECT COUNT(*) AS n FROM legal_holds').get() as { n: number };
+    status.legalHold = { active: current !== null, current, history: Number(history.n) };
+
+    const last = this.db
+      .prepare(
+        `SELECT id, type, created_at, json_extract(payload, '$.count') AS count FROM events
+         WHERE type IN ('audit.retention.purged', 'audit.redaction.applied') ORDER BY seq DESC LIMIT 1`
+      )
+      .get() as { id: string; type: string; created_at: number; count: number | null } | undefined;
+    if (last) status.lastRun = { auditEventId: last.id, type: last.type, at: Number(last.created_at), count: Number(last.count ?? 0) };
+
+    const byReason = this.db
+      .prepare(
+        'SELECT tombstone_reason AS reason, COUNT(*) AS n, MAX(tombstoned_at) AS lastAt FROM events WHERE tombstoned_at IS NOT NULL GROUP BY tombstone_reason'
+      )
+      .all() as Array<{ reason: string; n: number; lastAt: number }>;
+    for (const row of byReason) {
+      if (row.reason === 'retention' || row.reason === 'redaction') status.tombstones.byReason[row.reason] = Number(row.n);
+      status.tombstones.total += Number(row.n);
+      status.tombstones.lastAt = Math.max(status.tombstones.lastAt ?? 0, Number(row.lastAt));
+    }
+
+    const versions = this.db
+      .prepare("SELECT COALESCE(redaction_rules_version, 'unknown') AS v, COUNT(*) AS n FROM events GROUP BY 1")
+      .all() as Array<{ v: string; n: number }>;
+    for (const row of versions) status.rowsByRedactionRulesVersion[row.v] = Number(row.n);
+    return status;
   }
 
   /** Runs one table's purge to completion: sets `purged_before` once (only if there is anything to delete), then

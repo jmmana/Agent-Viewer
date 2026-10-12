@@ -48,7 +48,16 @@ export type CanonicalEventType = (typeof CANONICAL_EVENT_TYPES)[number];
  * `onEventAccepted` listeners (so `--record` files stay canonical V1), and omitted from `GET /api/v1/events` and
  * the snapshot unless `includeAudit=true` or an explicit `type` filter asks for one.
  */
-export const AUDIT_EVENT_TYPES = ['audit.key.created', 'audit.key.revoked'] as const;
+export const AUDIT_EVENT_TYPES = [
+  'audit.key.created',
+  'audit.key.revoked',
+  /** Issue #109: one per retention batch; its payload lists every event id it tombstoned. */
+  'audit.retention.purged',
+  /** Issue #109: one per redaction batch; same shape as `audit.retention.purged`. */
+  'audit.redaction.applied',
+  /** Issue #109: a legal hold was placed or released. */
+  'audit.legal_hold.changed',
+] as const;
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
 /**
@@ -146,6 +155,25 @@ export interface ValidationResult<T> {
   error?: string;
 }
 
+export type TombstoneReason = 'retention' | 'redaction';
+
+/**
+ * Issue #109: present only on an event whose content the server removed (retention or redaction). The event's
+ * `summary` is then `'[removed]'` and its `payload` `{}`; `contentHash` is the event's original content
+ * fingerprint, kept so someone who still holds the original can prove what it was. Server-assigned only.
+ */
+export interface TombstoneInfo {
+  /** Milliseconds since the epoch. */
+  at: number;
+  reason: TombstoneReason;
+  /** Id of the chained `audit.retention.purged`/`audit.redaction.applied` event that removed the content. */
+  auditEventId: string;
+  /** Redaction rules version in force for the run, or `null` when unknown. */
+  rulesVersion: string | null;
+  /** Original content fingerprint, or `null` when the row never had one. */
+  contentHash: string | null;
+}
+
 export interface CanonicalEvent<T = Record<string, any>> {
   schemaVersion: '1.0';
   id: string;
@@ -159,6 +187,10 @@ export interface CanonicalEvent<T = Record<string, any>> {
   severity: EventSeverity;
   summary: string;
   payload: T;
+  /** Issue #109: server-assigned, never accepted from a client (ingest rejects it with `400 reserved_field`). */
+  tombstone?: TombstoneInfo;
+  /** Issue #109: server-assigned, never accepted from a client (ingest rejects it with `400 reserved_field`). */
+  redactionRulesVersion?: string;
 }
 
 /**
@@ -250,7 +282,7 @@ export function normalizeCanonicalEvent(input: any): CanonicalEvent {
     payload.errorKind = 'unknown';
   }
 
-  return {
+  const normalized: CanonicalEvent = {
     schemaVersion: '1.0',
     id,
     type,
@@ -264,4 +296,9 @@ export function normalizeCanonicalEvent(input: any): CanonicalEvent {
     summary,
     payload,
   };
+  // Issue #109: server-assigned fields, copied through so a host replaying server events keeps them. The server
+  // itself never normalizes client input with this function, and its ingest routes reject both fields outright.
+  if (input?.tombstone && typeof input.tombstone === 'object') normalized.tombstone = { ...input.tombstone };
+  if (typeof input?.redactionRulesVersion === 'string') normalized.redactionRulesVersion = input.redactionRulesVersion;
+  return normalized;
 }

@@ -683,8 +683,15 @@ export class AgentViewerTracingProcessor implements TracingProcessor {
         const chunk = items.slice(i, i + MAX_BATCH_SIZE);
         try {
           const result = await viewer.emitBatch(chunk.map((e) => e.input));
-          this.stats_.sent += result.accepted;
-          this.stats_.duplicates += result.duplicates;
+          // `emitBatch()` resolves with `EmitBatchQueuedResult` instead when the SDK's local durable queue
+          // (disabled by default, this package never enables it) takes over: every event was queued, not yet
+          // confirmed by the server, so there is no accepted/duplicate split to report yet.
+          if (typeof result.accepted === 'number') {
+            this.stats_.sent += result.accepted;
+            this.stats_.duplicates += result.duplicates;
+          } else {
+            this.stats_.sent += result.total;
+          }
         } catch (err) {
           this.stats_.dropped += chunk.length;
           for (const e of chunk) {

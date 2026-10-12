@@ -1,6 +1,6 @@
 {
   "name": "@warlockcode/agent-viewer-openai-agents",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "OpenAI Agents SDK tracing-processor adapter for Agent Viewer: plugs into @openai/agents's own tracing pipeline so every agent run, handoff, tool call and model generation is captured automatically.",
   "license": "MIT",
   "type": "module",

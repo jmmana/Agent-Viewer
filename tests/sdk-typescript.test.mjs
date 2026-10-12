@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { app } from '../server/index.ts';
-import { AgentViewer, AgentViewerError, toUsageFigures } from '../sdk/typescript/index.ts';
+import { AgentViewer, AgentViewerError, toUsageFigures, verifyWebhookSignature } from '../sdk/typescript/index.ts';
 
 const vectorsPath = fileURLToPath(new URL('./fixtures/usage-correlation-vectors.json', import.meta.url));
 const vectors = JSON.parse(readFileSync(vectorsPath, 'utf8'));
@@ -904,4 +905,100 @@ test('toUsageFigures: inputTokens/outputTokens/totalTokens are null when any cal
   assert.equal(figures.inputTokens, null);
   assert.equal(figures.outputTokens, 5);
   assert.equal(figures.totalTokens, null, 'totalTokens is null when either side is null');
+});
+
+// -------------------------------------------------------------
+// verifyWebhookSignature (issue #86, sub-issue #323): the receiver-side counterpart of the inbound HMAC
+// check `server/index.ts` already does for `/api/v1/webhooks/generic`. The expected signature is built
+// here with the same `${timestamp}.${rawBody}` HMAC-SHA256 scheme #321 signs with, so these tests do not
+// depend on #321 having merged.
+// -------------------------------------------------------------
+
+const WEBHOOK_TEST_SECRET = 'test-secret-only-for-tests';
+
+function signForTest(secret, timestamp, rawBody) {
+  return crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
+}
+
+test('verifyWebhookSignature: accepts a good signature', () => {
+  const timestamp = 1_700_000_000_000;
+  const rawBody = JSON.stringify({ type: 'budget.alert', id: 'evt_budget_abc' });
+  const signature = signForTest(WEBHOOK_TEST_SECRET, timestamp, rawBody);
+  assert.equal(
+    verifyWebhookSignature({ secret: WEBHOOK_TEST_SECRET, timestamp, rawBody, signature, nowMs: timestamp }),
+    true
+  );
+});
+
+test('verifyWebhookSignature: rejects a tampered body', () => {
+  const timestamp = 1_700_000_000_000;
+  const rawBody = JSON.stringify({ type: 'budget.alert', id: 'evt_budget_abc' });
+  const signature = signForTest(WEBHOOK_TEST_SECRET, timestamp, rawBody);
+  const tamperedBody = JSON.stringify({ type: 'budget.alert', id: 'evt_budget_xyz' });
+  assert.equal(
+    verifyWebhookSignature({ secret: WEBHOOK_TEST_SECRET, timestamp, rawBody: tamperedBody, signature, nowMs: timestamp }),
+    false
+  );
+});
+
+test('verifyWebhookSignature: rejects a stale timestamp beyond tolerance, accepts right at the boundary', () => {
+  const timestamp = 1_700_000_000_000;
+  const rawBody = JSON.stringify({ type: 'budget.alert' });
+  const signature = signForTest(WEBHOOK_TEST_SECRET, timestamp, rawBody);
+  assert.equal(
+    verifyWebhookSignature({ secret: WEBHOOK_TEST_SECRET, timestamp, rawBody, signature, nowMs: timestamp + 300_001 }),
+    false
+  );
+  assert.equal(
+    verifyWebhookSignature({ secret: WEBHOOK_TEST_SECRET, timestamp, rawBody, signature, nowMs: timestamp + 300_000 }),
+    true
+  );
+});
+
+test('verifyWebhookSignature: rejects a future timestamp beyond tolerance', () => {
+  const timestamp = 1_700_000_000_000;
+  const rawBody = JSON.stringify({ type: 'budget.alert' });
+  const signature = signForTest(WEBHOOK_TEST_SECRET, timestamp, rawBody);
+  assert.equal(
+    verifyWebhookSignature({ secret: WEBHOOK_TEST_SECRET, timestamp, rawBody, signature, nowMs: timestamp - 300_001 }),
+    false
+  );
+});
+
+test('verifyWebhookSignature: a wrong secret is rejected', () => {
+  const timestamp = 1_700_000_000_000;
+  const rawBody = JSON.stringify({ type: 'budget.alert' });
+  const signature = signForTest('another-secret', timestamp, rawBody);
+  assert.equal(
+    verifyWebhookSignature({ secret: WEBHOOK_TEST_SECRET, timestamp, rawBody, signature, nowMs: timestamp }),
+    false
+  );
+});
+
+test('verifyWebhookSignature: a signature of the wrong length is rejected, never thrown', () => {
+  const timestamp = 1_700_000_000_000;
+  const rawBody = JSON.stringify({ type: 'budget.alert' });
+  assert.doesNotThrow(() => {
+    assert.equal(
+      verifyWebhookSignature({ secret: WEBHOOK_TEST_SECRET, timestamp, rawBody, signature: 'too-short', nowMs: timestamp }),
+      false
+    );
+  });
+});
+
+test('verifyWebhookSignature: a custom toleranceMs is honored', () => {
+  const timestamp = 1_700_000_000_000;
+  const rawBody = JSON.stringify({ type: 'budget.alert' });
+  const signature = signForTest(WEBHOOK_TEST_SECRET, timestamp, rawBody);
+  assert.equal(
+    verifyWebhookSignature({
+      secret: WEBHOOK_TEST_SECRET,
+      timestamp,
+      rawBody,
+      signature,
+      toleranceMs: 1000,
+      nowMs: timestamp + 1001,
+    }),
+    false
+  );
 });

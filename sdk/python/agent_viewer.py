@@ -6,6 +6,8 @@ to Agent Viewer virtual office observability.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import random
@@ -200,6 +202,51 @@ def _append_repeatable(
 def _default_event_id() -> str:
     """Full 128-bit random id. Two distinct events never share an id by chance."""
     return f"evt_{uuid.uuid4().hex}"
+
+
+# -------------------------------------------------------------
+# Outbound webhook signature verification (issue #86, sub-issue #323)
+# -------------------------------------------------------------
+
+
+def verify_webhook_signature(
+    secret: str,
+    timestamp: Union[int, str],
+    raw_body: Union[str, bytes],
+    signature: str,
+    tolerance_ms: int = 300_000,
+    now_ms: Optional[Union[int, float]] = None,
+) -> bool:
+    """Verifies an outbound Agent Viewer webhook (for example a ``budget.alert`` delivery, issue #86's
+    sub-issue #321), the receiver-side counterpart of the inbound HMAC check ``server/index.ts`` already
+    does for ``POST /api/v1/webhooks/generic``. Same scheme: HMAC-SHA256 hex digest of
+    ``f"{timestamp}.{raw_body}"``. This function never sends anything and never builds or emits a
+    ``budget.alert`` event itself; that type is reserved to the server (issue #319). It is header-agnostic:
+    the caller extracts ``X-Agent-Viewer-Signature``/``X-Agent-Viewer-Timestamp`` (or whatever headers its
+    own transport uses) and passes their values in.
+
+    Returns ``False``, never raises, for every failure: a ``timestamp`` more than ``tolerance_ms``
+    milliseconds away from ``now_ms`` in either direction (older *or* newer, replay and clock-skew
+    protection alike), or a signature mismatch. ``now_ms`` defaults to ``time.time() * 1000`` when not
+    given. The comparison is constant-time (:func:`hmac.compare_digest`, never ``==`` on the hex strings),
+    so neither a wrong signature nor its length leaks through timing.
+
+    ``raw_body`` must be the exact bytes (or the exact string, encoded as UTF-8) the sender signed, before
+    any JSON re-serialization: re-encoding a parsed body can reorder keys or change whitespace and would
+    make a genuine signature fail to verify.
+    """
+    effective_now = now_ms if now_ms is not None else time.time() * 1000
+    try:
+        parsed_timestamp = float(timestamp)
+    except (TypeError, ValueError):
+        return False
+    if abs(effective_now - parsed_timestamp) > tolerance_ms:
+        return False
+
+    body_bytes = raw_body.encode("utf-8") if isinstance(raw_body, str) else raw_body
+    message = f"{timestamp}.".encode("utf-8") + body_bytes
+    expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 class AgentHandle:

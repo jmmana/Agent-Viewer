@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import http.server
 import importlib.util
 import json
@@ -15,7 +17,7 @@ import urllib.request
 
 sys.path.insert(0, ".")
 
-from sdk.python.agent_viewer import AgentViewer, AgentHandle, AgentViewerError
+from sdk.python.agent_viewer import AgentViewer, AgentHandle, AgentViewerError, verify_webhook_signature
 
 _VECTORS_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "usage-correlation-vectors.json")
 with open(_VECTORS_PATH, "r", encoding="utf-8") as _f:
@@ -881,6 +883,86 @@ class TestPythonSDK(unittest.TestCase):
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+class TestVerifyWebhookSignature(unittest.TestCase):
+    """Issue #86, sub-issue #323: the receiver-side counterpart of the inbound HMAC check `server/index.ts`
+    already does for `/api/v1/webhooks/generic`. The expected signature is built here with the same
+    ``${timestamp}.${rawBody}`` HMAC-SHA256 scheme #321 signs with, so these tests do not depend on #321
+    having merged.
+    """
+
+    SECRET = "test-secret-only-for-tests"
+
+    def _sign(self, timestamp, raw_body, secret=None):
+        message = f"{timestamp}.{raw_body}".encode("utf-8")
+        return hmac.new((secret or self.SECRET).encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+    def test_accepts_a_good_signature(self):
+        timestamp = 1_700_000_000_000
+        raw_body = '{"type":"budget.alert","id":"evt_budget_abc"}'
+        signature = self._sign(timestamp, raw_body)
+        self.assertTrue(
+            verify_webhook_signature(self.SECRET, timestamp, raw_body, signature, now_ms=timestamp)
+        )
+
+    def test_rejects_a_tampered_body(self):
+        timestamp = 1_700_000_000_000
+        raw_body = '{"type":"budget.alert","id":"evt_budget_abc"}'
+        signature = self._sign(timestamp, raw_body)
+        tampered_body = '{"type":"budget.alert","id":"evt_budget_xyz"}'
+        self.assertFalse(
+            verify_webhook_signature(self.SECRET, timestamp, tampered_body, signature, now_ms=timestamp)
+        )
+
+    def test_rejects_a_stale_timestamp_but_accepts_right_at_the_boundary(self):
+        timestamp = 1_700_000_000_000
+        raw_body = '{"type":"budget.alert"}'
+        signature = self._sign(timestamp, raw_body)
+        self.assertFalse(
+            verify_webhook_signature(
+                self.SECRET, timestamp, raw_body, signature, now_ms=timestamp + 300_001
+            )
+        )
+        self.assertTrue(
+            verify_webhook_signature(
+                self.SECRET, timestamp, raw_body, signature, now_ms=timestamp + 300_000
+            )
+        )
+
+    def test_rejects_a_future_timestamp_beyond_tolerance(self):
+        timestamp = 1_700_000_000_000
+        raw_body = '{"type":"budget.alert"}'
+        signature = self._sign(timestamp, raw_body)
+        self.assertFalse(
+            verify_webhook_signature(
+                self.SECRET, timestamp, raw_body, signature, now_ms=timestamp - 300_001
+            )
+        )
+
+    def test_rejects_wrong_secret(self):
+        timestamp = 1_700_000_000_000
+        raw_body = '{"type":"budget.alert"}'
+        signature = self._sign(timestamp, raw_body, secret="another-secret")
+        self.assertFalse(
+            verify_webhook_signature(self.SECRET, timestamp, raw_body, signature, now_ms=timestamp)
+        )
+
+    def test_custom_tolerance_ms_is_respected(self):
+        timestamp = 1_700_000_000_000
+        raw_body = '{"type":"budget.alert"}'
+        signature = self._sign(timestamp, raw_body)
+        self.assertFalse(
+            verify_webhook_signature(
+                self.SECRET, timestamp, raw_body, signature, tolerance_ms=1000, now_ms=timestamp + 1001
+            )
+        )
+
+    def test_now_ms_defaults_to_current_time(self):
+        timestamp = int(time.time() * 1000)
+        raw_body = '{"type":"budget.alert"}'
+        signature = self._sign(timestamp, raw_body)
+        self.assertTrue(verify_webhook_signature(self.SECRET, timestamp, raw_body, signature))
 
 
 class TestExampleAdapters(unittest.TestCase):

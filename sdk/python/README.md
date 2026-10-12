@@ -94,6 +94,27 @@ except AgentViewerError as err:
 
 `trace_id`, `parent_id`, `tool_call_id`, `meeting_id`, `user_id` and `tags` (on `usage()`, `llm_failed()` and `llm_usage()`) link a call to a trace, a tool call, a meeting or a user. Each is `None` by default, which means "not reported"; an id must be 1 to 128 characters with no control characters and no leading or trailing whitespace, and `tags` holds at most 20 items of 1 to 64 characters each. A value that breaks a rule raises `ValueError` naming the argument before anything is sent; a non-string id, or `tags` given as a `str` or `bytes` (which would otherwise be split into one tag per character), raises `TypeError`. `tool_call_id` on `tool_started`/`tool_completed`/`tool_failed` is sent as `payload.toolCallId`. These fields need a 0.4.0 or later Agent Viewer server to be kept: an older server accepts the event and silently drops them. Full rules: [docs/integration.md](../../docs/integration.md#correlation-and-attribution-fields-issue-64).
 
+### Verifying an outbound webhook (issue #86, sub-issue #323)
+
+If you receive Agent Viewer's outbound `budget.alert` webhook (issue #86's sub-issue #321), `verify_webhook_signature` checks it with the same HMAC-SHA256 scheme the server itself uses to verify an inbound webhook: a hex digest of `f"{timestamp}.{raw_body}"`. It returns a plain `bool`, never raises, and also rejects a timestamp more than `tolerance_ms` (default 300000, 5 minutes) away from now in either direction, so a replayed or clock-skewed delivery is refused too. It never builds or sends a `budget.alert` event itself: that type is reserved to the server.
+
+```python
+from agent_viewer import verify_webhook_signature
+
+# Inside your webhook endpoint, with the exact raw request body bytes (never re-serialized):
+signature = request.headers["X-Agent-Viewer-Signature"]
+timestamp = request.headers["X-Agent-Viewer-Timestamp"]
+raw_body = request.get_data()  # bytes, exactly as received
+
+if not verify_webhook_signature(WEBHOOK_SECRET, timestamp, raw_body, signature):
+    return "invalid signature", 401
+
+event = json.loads(raw_body)
+# ... handle event, e.g. event["type"] == "budget.alert"
+```
+
+`raw_body` must be the exact bytes (or string) the sender signed; re-encoding a parsed JSON body can reorder keys or change whitespace and would make a genuine signature fail to verify.
+
 ## Privacy
 
 Send only observable states, messages, tool metadata and reported usage. Never send API keys, private system prompts or model reasoning through the event stream.

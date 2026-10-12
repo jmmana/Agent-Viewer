@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { z } from 'zod';
 import type {
   CanonicalEvent,
@@ -467,6 +468,65 @@ export function toUsageFigures(
   const totalTokens = inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null;
 
   return { cost, currency, inputTokens, outputTokens, totalTokens };
+}
+
+// -------------------------------------------------------------
+// Outbound webhook signature verification (issue #86, sub-issue #323)
+// -------------------------------------------------------------
+
+/** Options for `verifyWebhookSignature()`. `toleranceMs` defaults to 300000 (5 minutes), the same window
+ * the server's own inbound HMAC check uses; `nowMs` defaults to `Date.now()`. */
+export interface VerifyWebhookSignatureOptions {
+  secret: string;
+  timestamp: number | string;
+  rawBody: string | Buffer;
+  signature: string;
+  toleranceMs?: number;
+  nowMs?: number;
+}
+
+/** Constant-time comparison of two hex strings. Hashing first (SHA-256) gives equal-length buffers, so a
+ * `signature` of any length, or any shape, never throws and never leaks its length through timing. Mirrors
+ * `safeEqual()` in `server/index.ts`, duplicated here rather than imported: importing from `server/index.ts`
+ * would pull in and start the whole Express app as a side effect of loading this SDK. */
+function constantTimeHexEqual(expectedHex: string, providedHex: string): boolean {
+  const a = crypto.createHash('sha256').update(expectedHex).digest();
+  const b = crypto.createHash('sha256').update(providedHex).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Verifies an outbound Agent Viewer webhook (for example a `budget.alert` delivery, issue #86's sub-issue
+ * #321), the receiver-side counterpart of the inbound HMAC check `server/index.ts` already does for
+ * `POST /api/v1/webhooks/generic`. Same scheme: HMAC-SHA256 hex digest of `${timestamp}.${rawBody}`. This
+ * function never sends anything and never builds or emits a `budget.alert` event itself; that type is
+ * reserved to the server (issue #319). It is header-agnostic: the caller extracts
+ * `X-Agent-Viewer-Signature`/`X-Agent-Viewer-Timestamp` (or whatever headers its own transport uses) and
+ * passes their values in.
+ *
+ * Returns `false`, never throws, for every failure: a `timestamp` more than `toleranceMs` milliseconds away
+ * from `nowMs` in either direction (older *or* newer, replay and clock-skew protection alike), or a
+ * signature mismatch, including one of the wrong length. The comparison is constant-time
+ * (`crypto.timingSafeEqual` over equal-length SHA-256 digests of the two hex strings, never a plain `===`),
+ * so neither a wrong signature nor its length leaks through timing.
+ *
+ * `rawBody` must be the exact bytes (or the exact string) the sender signed, before any JSON
+ * re-serialization: re-encoding a parsed body can reorder keys or change whitespace and would make a
+ * genuine signature fail to verify.
+ */
+export function verifyWebhookSignature(options: VerifyWebhookSignatureOptions): boolean {
+  const { secret, timestamp, rawBody, signature, toleranceMs = 300_000, nowMs } = options;
+  const effectiveNow = nowMs ?? Date.now();
+  const parsedTimestamp = Number(timestamp);
+  if (!Number.isFinite(parsedTimestamp) || Math.abs(effectiveNow - parsedTimestamp) > toleranceMs) {
+    return false;
+  }
+
+  const bodyBuffer = typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf-8') : rawBody;
+  const message = Buffer.concat([Buffer.from(`${timestamp}.`, 'utf-8'), bodyBuffer]);
+  const expected = crypto.createHmac('sha256', secret).update(message).digest('hex');
+
+  return constantTimeHexEqual(expected, signature);
 }
 
 export class AgentHandle {

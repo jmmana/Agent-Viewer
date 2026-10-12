@@ -501,11 +501,11 @@ Honest maturity, so you know what you are getting:
 | **LangGraph** | [`examples/langgraph-adapter.ts`](examples/langgraph-adapter.ts) | 🧪 **Example adapter.** Node, tool and usage callbacks mapped to SDK calls. Type-checked in CI, not run against LangGraph. |
 | **CrewAI** | [`examples/crewai-adapter.py`](examples/crewai-adapter.py) | 🧪 **Example adapter.** Crew agents, tasks, tools, messages and usage. Not run in CI. |
 | **AutoGen** | [`examples/autogen-adapter.py`](examples/autogen-adapter.py) | 🧪 **Example adapter.** Conversable agents and group chat messages, tools and usage. Not run in CI. |
-| **OpenAI Agents SDK** | [`examples/openai-agents-adapter.ts`](examples/openai-agents-adapter.ts) | 🧪 **Example adapter.** Agent runs, handoffs, tools and usage. Type-checked in CI. |
+| **OpenAI Agents SDK** | [`examples/openai-agents-adapter/`](examples/openai-agents-adapter/README.md) | 🧪 **Tracing-processor adapter, tested against the real SDK in CI.** Registers with `addTraceProcessor()`; agent runs, handoffs, tool calls and model usage are captured automatically from `@openai/agents`'s own tracing pipeline, no manual callbacks. Not a published package yet (pending the `packages/sdk` workspace extraction, issue #343). |
 | **Google ADK** | [`examples/google-adk-adapter.ts`](examples/google-adk-adapter.ts) | 🧪 **Example adapter.** Gemini turns, function calls and usage. Type-checked in CI. |
 | **OTLP traces** | none | ❌ **Not supported yet.** `parseEventLog` says so instead of guessing. On the [roadmap](#-roadmap). |
 
-<sub>✅ stable and tested · 🧪 example code you wire into the framework's own callbacks (the adapters do not import the frameworks) · ❌ not available</sub>
+<sub>✅ stable and tested · 🧪 example code you wire into the framework's own callbacks (the adapters do not import the frameworks), or (OpenAI Agents SDK only) a tracing processor tested against the real SDK but not yet a published package · ❌ not available</sub>
 
 Every adapter follows the same trust boundary: only observable states, messages and reported usage leave your runtime. Never send API keys or private system prompts through the event stream.
 

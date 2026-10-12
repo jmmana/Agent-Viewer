@@ -493,11 +493,11 @@ Madurez honesta, para que sepas qué te llevas:
 | **LangGraph** | [`examples/langgraph-adapter.ts`](../examples/langgraph-adapter.ts) | 🧪 **Adaptador de ejemplo.** Callbacks de nodos, herramientas y consumo traducidos a llamadas del SDK. Verificado con el compilador en CI, no ejecutado contra LangGraph. |
 | **CrewAI** | [`examples/crewai-adapter.py`](../examples/crewai-adapter.py) | 🧪 **Adaptador de ejemplo.** Agentes de la crew, tareas, herramientas, mensajes y consumo. No se ejecuta en CI. |
 | **AutoGen** | [`examples/autogen-adapter.py`](../examples/autogen-adapter.py) | 🧪 **Adaptador de ejemplo.** Agentes conversables y mensajes del group chat, herramientas y consumo. No se ejecuta en CI. |
-| **OpenAI Agents SDK** | [`examples/openai-agents-adapter.ts`](../examples/openai-agents-adapter.ts) | 🧪 **Adaptador de ejemplo.** Ejecuciones de agentes, traspasos (handoffs), herramientas y consumo. Verificado con el compilador en CI. |
+| **OpenAI Agents SDK** | [`examples/openai-agents-adapter/`](../examples/openai-agents-adapter/README.md) | 🧪 **Adaptador de tracing processor, probado contra el SDK real en CI.** Se registra con `addTraceProcessor()`; captura automáticamente ejecuciones de agentes, traspasos (handoffs), llamadas a herramientas y consumo de modelo desde el propio pipeline de tracing de `@openai/agents`, sin callbacks manuales. Aún no es un paquete publicado (pendiente de la extracción del workspace `packages/sdk`, issue #343). |
 | **Google ADK** | [`examples/google-adk-adapter.ts`](../examples/google-adk-adapter.ts) | 🧪 **Adaptador de ejemplo.** Turnos de Gemini, llamadas a funciones y consumo. Verificado con el compilador en CI. |
 | **Trazas OTLP** | ninguno | ❌ **Todavía no.** `parseEventLog` lo dice en vez de adivinar. Está en la [hoja de ruta](#-hoja-de-ruta). |
 
-<sub>✅ estable y probado · 🧪 código de ejemplo que conectas a los callbacks del framework (los adaptadores no importan los frameworks) · ❌ no disponible</sub>
+<sub>✅ estable y probado · 🧪 código de ejemplo que conectas a los callbacks del framework (los adaptadores no importan los frameworks), o (solo OpenAI Agents SDK) un tracing processor probado contra el SDK real pero aún no publicado como paquete · ❌ no disponible</sub>
 
 Todos los adaptadores respetan la misma frontera de confianza: de tu runtime solo salen estados observables, mensajes y consumo reportado. Nunca envíes claves de API ni prompts de sistema privados por el flujo de eventos.
 

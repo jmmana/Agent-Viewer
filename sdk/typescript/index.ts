@@ -129,6 +129,16 @@ export interface ToolCallOptions {
 }
 
 /**
+ * Options for `toolCompleted()`/`toolFailed()`: the contract (`ToolCompletedPayloadSchema`,
+ * `ToolFailedPayloadSchema`) accepts `durationMs` on those two only, not on `toolStarted()`, which has no
+ * end time yet. The adapter (issue #99) measures it itself with a monotonic clock; the SDK never times a
+ * call on its own.
+ */
+export interface ToolCallFinishOptions extends ToolCallOptions {
+  durationMs?: number;
+}
+
+/**
  * Validates one correlation id field with the same rules as the server: 1 to 128 UTF-16 code units, no
  * control characters, no leading or trailing whitespace. Zod-style `.length` counting is avoided on
  * purpose, since some validators count Unicode code points instead of UTF-16 code units for astral
@@ -238,6 +248,12 @@ export interface EmitEventInput {
   source?: string;
   target?: string;
   taskId?: string;
+  /**
+   * Overrides the client's own `sessionId` for this one event. A long-lived process that serves many
+   * sessions through one client (for example a LangGraph app with one handler per `thread_id` per run,
+   * issue #99) sets this per event instead of constructing a new `AgentViewer` per session.
+   */
+  sessionId?: string;
   agentId?: string;
   severity?: EventSeverity;
   summary?: string;
@@ -652,7 +668,7 @@ export class AgentHandle {
     });
   }
 
-  async toolCompleted(tool: string, outputSummary?: string, options: ToolCallOptions = {}): Promise<void> {
+  async toolCompleted(tool: string, outputSummary?: string, options: ToolCallFinishOptions = {}): Promise<void> {
     await this.ensureRegistered();
     await this.viewer.emit({
       type: 'tool.completed',
@@ -663,11 +679,12 @@ export class AgentHandle {
         tool,
         outputSummary,
         toolCallId: options.toolCallId,
+        durationMs: options.durationMs,
       },
     });
   }
 
-  async toolFailed(tool: string, errorSummary?: string, options: ToolCallOptions = {}): Promise<void> {
+  async toolFailed(tool: string, errorSummary?: string, options: ToolCallFinishOptions = {}): Promise<void> {
     await this.ensureRegistered();
     await this.viewer.emit({
       type: 'tool.failed',
@@ -679,6 +696,7 @@ export class AgentHandle {
         tool,
         error: errorSummary,
         toolCallId: options.toolCallId,
+        durationMs: options.durationMs,
       },
     });
   }
@@ -840,7 +858,7 @@ export class AgentViewer {
       type: input.type as CanonicalEventType,
       timestamp: input.timestamp ?? Date.now(),
       runtimeId: this.runtimeId,
-      sessionId: this.sessionId,
+      sessionId: input.sessionId ?? this.sessionId,
       source: input.source ?? this.source,
       agentId: input.agentId,
       taskId: input.taskId,
@@ -865,7 +883,7 @@ export class AgentViewer {
       type: input.type as CanonicalEventType,
       timestamp: input.timestamp ?? Date.now(),
       runtimeId: this.runtimeId,
-      sessionId: this.sessionId,
+      sessionId: input.sessionId ?? this.sessionId,
       source: input.source ?? this.source,
       agentId: input.agentId,
       taskId: input.taskId,

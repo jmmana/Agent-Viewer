@@ -375,6 +375,43 @@ test('TypeScript SDK usage: toolStarted, toolCompleted and toolFailed forward to
   assert.equal('toolCallId' in secondStarted.payload, false);
 });
 
+test('TypeScript SDK usage: toolCompleted and toolFailed forward durationMs when given, toolStarted never sends it', async (t) => {
+  const { requests } = stubFetch(t);
+  const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');
+
+  await agent.toolStarted('git.commit', 'committing');
+  await agent.toolCompleted('git.commit', 'done', { durationMs: 420 });
+  await agent.toolFailed('git.commit', 'failed', { durationMs: 17 });
+  await agent.toolCompleted('git.push');
+
+  const [started] = bodiesOf(requests, 'tool.started');
+  const [completed, completedNoDuration] = bodiesOf(requests, 'tool.completed');
+  const [failed] = bodiesOf(requests, 'tool.failed');
+  assert.equal('durationMs' in started.payload, false);
+  assert.equal(completed.payload.durationMs, 420);
+  assert.equal(failed.payload.durationMs, 17);
+  assert.equal('durationMs' in completedNoDuration.payload, false);
+});
+
+test('TypeScript SDK: emit() and emitBatch() honor a per-event sessionId over the client default', async (t) => {
+  const { requests } = stubFetch(t);
+  const viewer = new AgentViewer({ url: 'http://sdk.test', sessionId: 'client-default-session' });
+
+  await viewer.emit({ type: 'tool.started', payload: { tool: 'a' } });
+  await viewer.emit({ type: 'tool.started', sessionId: 'thread-override', payload: { tool: 'b' } });
+  await viewer.emitBatch([
+    { type: 'tool.started', payload: { tool: 'c' } },
+    { type: 'tool.started', sessionId: 'thread-override-2', payload: { tool: 'd' } },
+  ]);
+
+  const [defaulted, overridden] = requests.slice(0, 2).map((r) => r.body);
+  assert.equal(defaulted.sessionId, 'client-default-session');
+  assert.equal(overridden.sessionId, 'thread-override');
+  const [batchDefaulted, batchOverridden] = requests[2].body.events;
+  assert.equal(batchDefaulted.sessionId, 'client-default-session');
+  assert.equal(batchOverridden.sessionId, 'thread-override-2');
+});
+
 test('TypeScript SDK usage: an invalid correlation id rejects locally with AgentViewerError before any request', async (t) => {
   const { requests } = stubFetch(t);
   const agent = new AgentViewer({ url: 'http://sdk.test' }).agent('coder');

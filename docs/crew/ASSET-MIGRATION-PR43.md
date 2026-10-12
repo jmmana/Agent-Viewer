@@ -1,8 +1,8 @@
-# Crew — Matriz de migración de recursos del PR #43
+# Crew - Matriz de migración de recursos del PR #43
 
 Relacionado: [Epic #114](https://github.com/jmmana/Agent-Viewer/issues/114), [#172](https://github.com/jmmana/Agent-Viewer/issues/172), [#115](https://github.com/jmmana/Agent-Viewer/issues/115), [PR #43](https://github.com/jmmana/Agent-Viewer/pull/43).
 
-**Fecha:** 2026-10-08. **Fuente concreta:** `assets/asset-manifest.json` de rama `feat/visual-assets-v1` (PR #43; DRAFT). **No incluido en main.**
+**Fecha:** 2026-10-08. **Fuente concreta:** `assets/asset-manifest.json` de rama `feat/visual-assets-v1` (PR #43; DRAFT). **Estado histórico del 2026-10-08.** El banco se incorporó después a `main` mediante PR #194, conservando los 54 originales (53 recursos y una referencia). PR #43 permanece DRAFT sin fusionar. La conciliación de SHAs, licencias, salas, evidencia y trabajo local **INDETERMINADO** está en [ISSUE-115-ACCEPTANCE.md](ISSUE-115-ACCEPTANCE.md).
 
 ## Advertencias
 - El inventario tiene **53** entradas runtime, todas con `status: prototype` en la revisión consultada. No confundirse con assets `approved`.
@@ -96,7 +96,7 @@ Relacionado: [Epic #114](https://github.com/jmmana/Agent-Viewer/issues/114), [#1
 2. No cambiar `main` Caricatura para preparar Crew. Extraer recursos originales mediante directorio/módulo compartido y mantener rollback.
 3. Mostrar solo una escena `roomId` Crew; cámara `front/right/back/left` requiere artwork correcto de cada lado y puede mostrar placeholder etiquetado por falta de vista.
 4. Antes de cerrar #172 verificar visualmente los recursos importados en el motor nuevo y ausencia de regresiones legacy.
-5. La documentación no certifica implementación runtime: assets aún **candidatos**, no transferidos, salvo prueba explícita.
+5. La documentación no certifica arte final: los originales ya están transferidos al banco Crew, pero conservan estado **prototype/reference**. La integración runtime es específica por recurso; véase la [conciliación de #115](ISSUE-115-ACCEPTANCE.md).
 
 ## Próximos pasos automáticos
 - #166, #167, #170: completar motor y escena local independiente.

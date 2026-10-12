@@ -37,6 +37,9 @@ import {
 } from './crewCallTimeline';
 import { crewCallPulseValue, type CrewCallOverlayStyle } from './crewCallLayer';
 import { useCrewCallIcon } from './useCrewCallIcon';
+import { advanceCrewAlertTimeline, crewAlertOpacity, EMPTY_CREW_ALERT_TIMELINE, type CrewAlertTimelineState } from './crewAlertTimeline';
+import type { CrewAlertOverlayStyle } from './crewAlertLayer';
+import { useCrewAlertIcons } from './useCrewAlertIcons';
 import type { Agent, Meeting, Task } from '../types/agent';
 import { CREW_CAMERA_STORAGE_KEY, defaultCrewCamera, parseCrewCameraStore, validateCrewCameraStore, zoomCrewCameraAt, type CrewCamera, type CrewCameraByRoom } from './crewCamera';
 
@@ -280,6 +283,41 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presence.markers, callTimeline]);
 
+  // Alertas/severidad (#153): misma arquitectura de reloj inyectado y estado purgable de
+  // `crewCallTimeline` de arriba, pero derivada SIEMPRE del snapshot COMPLETO de agentes
+  // (`agents`, no `visibleAgents`), para que el estado de una alerta sobreviva un cambio
+  // de sala del agente; solo se dibuja dentro de la sala donde el agente se ve ahora
+  // mismo (ver `alertStyles`, que solo recorre `presence.markers` de la sala activa).
+  const [alertTimeline, setAlertTimeline] = useState<CrewAlertTimelineState>(EMPTY_CREW_ALERT_TIMELINE);
+  const [alertNow, setAlertNow] = useState(() => Date.now());
+  useEffect(() => {
+    const now = Date.now();
+    setAlertNow(now);
+    setAlertTimeline(prev => advanceCrewAlertTimeline(prev, agents, now));
+  }, [agents]);
+  const hasActiveAlerts = useMemo(() => Object.keys(alertTimeline.active).length > 0, [alertTimeline.active]);
+  useEffect(() => {
+    if (!hasActiveAlerts) return;
+    const id = setInterval(() => {
+      const now = Date.now();
+      setAlertNow(now);
+      setAlertTimeline(prev => advanceCrewAlertTimeline(prev, agentsRef.current, now));
+    }, 250);
+    return () => clearInterval(id);
+  }, [hasActiveAlerts]);
+  const alertIcons = useCrewAlertIcons();
+  const alertStyles = useMemo(() => {
+    const styles: Record<string, CrewAlertOverlayStyle> = {};
+    for (const marker of presence.markers) {
+      const record = alertTimeline.active[marker.id];
+      if (!record) continue;
+      const opacity = crewAlertOpacity(alertNow - record.shownAt, record.instance.duration, visualPreferences.reducedMotion);
+      if (opacity <= 0) continue;
+      styles[marker.id] = { descriptor: record.instance, opacity, icon: alertIcons.images[record.instance.icon] };
+    }
+    return styles;
+  }, [presence.markers, alertTimeline.active, alertNow, alertIcons.images, visualPreferences.reducedMotion]);
+
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -291,8 +329,8 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, workstationImage, seats: action.actions.flatMap(actor => actor.workstation ? [{ ...actor.workstation, actorId: actor.id }] : []), locale, highContrast: visualPreferences.highContrast, propImages: propImages.images, calls: callStyles, callIcon: callIcon.image });
-  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, action.actions, workstationImage, visualPreferences.highContrast, propImages.images, callStyles, callIcon.image]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, workstationImage, seats: action.actions.flatMap(actor => actor.workstation ? [{ ...actor.workstation, actorId: actor.id }] : []), locale, highContrast: visualPreferences.highContrast, propImages: propImages.images, calls: callStyles, callIcon: callIcon.image, alerts: alertStyles });
+  }, [room, camera, locale, presence, sprite.images, blink, walks, action.frames, action.actions, workstationImage, visualPreferences.highContrast, propImages.images, callStyles, callIcon.image, alertStyles]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -464,6 +502,12 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
           talking: isEs ? 'En llamada' : 'On call',
           ending: isEs ? 'Colgando' : 'Hanging up',
         }[crewCallPhase(callRecord, callNow, visualPreferences.reducedMotion)] : null;
+        // Texto equivalente de la alerta (#153): vive aparte de `alertStyles`/el canvas a
+        // propósito, para que `prefers-reduced-motion` desactive la animación del halo sin
+        // nunca ocultar el estado (requisito literal del issue). Siempre en texto, con o
+        // sin movimiento reducido; solo la superposición del canvas depende de la opacidad.
+        const alertRecord = alertTimeline.active[agent.id];
+        const alertLine = alertRecord ? (isEs ? alertRecord.instance.textoEs : alertRecord.instance.textoEn) : null;
         return <span key={agent.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <button type="button" disabled={!marker}
             aria-label={isEs ? `Enfocar a ${agent.name}` : `Focus ${agent.name}`}
@@ -476,6 +520,9 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
             <span>{agent.name}: {agent.status}</span>
             {agent.isWalking && <span>{isEs ? ' · En tránsito' : ' · In transit'}</span>}
             {activityLine && <span> · {activityLine}</span>}
+            {alertLine && <span data-testid={`${idPrefix}-alert-${agent.id}`} style={{ color: alertRecord!.instance.color, fontWeight: 600 }}>
+              {' · '}{alertLine}
+            </span>}
             {showCall && <span
               title={isEs
                 ? 'Duración detectada localmente por Crew desde que vio la llamada; no es una marca de tiempo real del proveedor de telefonía.'

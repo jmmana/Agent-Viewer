@@ -86,7 +86,7 @@ These are design rules, enforced in code, not marketing:
 5. **A good guest in your app.** No injected styles, no global selectors, no `localStorage`, no global keyboard shortcuts, nothing runs on import. Two offices on one page never share state.
 6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Unknown stays unknown for budgets too: a budget with an uncountable call is `unknown`, never a guessed `ok` ([docs/budgets.md](docs/budgets.md)). Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
-**What it is not:** a tracing backend, a log store or an APM replacement. It does not import OTLP traces yet, it does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
+**What it is not:** a tracing backend, a log store or an APM replacement. `POST /v1/traces` converts GenAI spans into events and does not store spans or offer a trace explorer; `parseEventLog` can replay a saved OTLP JSON trace export through that same mapper, but neither path is a tracing backend. It does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
 
 ---
 
@@ -497,13 +497,13 @@ Honest maturity, so you know what you are getting:
 | **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
 | **JSONL log replay** | [`parseEventLog`](docs/event-log.md) | ✅ **Stable.** Library API, and drag and drop in the demo app. |
-| **OTLP logs file import (Claude Code)** | [`parseEventLog`](docs/event-log.md#otlp-files) | ✅ **Stable.** Reads a saved OTLP/JSON export (pretty-printed, or one request per line from a Collector `file` exporter) and converts `resourceLogs` into `llm.usage`/`llm.failed` events through the same mapper as the live `POST /v1/logs` receiver. `resourceMetrics` returns one clear issue instead of inventing per-call figures; `resourceSpans` is not supported yet. |
+| **OTLP logs/traces file import** | [`parseEventLog`](docs/event-log.md#otlp-files) | ✅ **Stable.** Reads a saved OTLP/JSON export (pretty-printed, or one request per line from a Collector `file` exporter). `resourceLogs` (Claude Code) and `resourceSpans` (GenAI traces) both convert into canonical events through the exact same mappers their live receivers use (`POST /v1/logs`, `POST /v1/traces`). `resourceMetrics` returns one clear issue instead of inventing per-call figures. |
 | **LangGraph** | [`examples/langgraph-adapter.ts`](examples/langgraph-adapter.ts) | 🧪 **Example adapter.** Node, tool and usage callbacks mapped to SDK calls. Type-checked in CI, not run against LangGraph. |
 | **CrewAI** | [`examples/crewai-adapter.py`](examples/crewai-adapter.py) | 🧪 **Example adapter.** Crew agents, tasks, tools, messages and usage. Not run in CI. |
 | **AutoGen** | [`examples/autogen-adapter.py`](examples/autogen-adapter.py) | 🧪 **Example adapter.** Conversable agents and group chat messages, tools and usage. Not run in CI. |
 | **OpenAI Agents SDK** | [`examples/openai-agents-adapter/`](examples/openai-agents-adapter/README.md) | 🧪 **Tracing-processor adapter, tested against the real SDK in CI.** Registers with `addTraceProcessor()`; agent runs, handoffs, tool calls and model usage are captured automatically from `@openai/agents`'s own tracing pipeline, no manual callbacks. Not a published package yet (pending the `packages/sdk` workspace extraction, issue #343). |
 | **Google ADK** | [`examples/google-adk-adapter.ts`](examples/google-adk-adapter.ts) | 🧪 **Example adapter.** Gemini turns, function calls and usage. Type-checked in CI. |
-| **OTLP traces** | none | ❌ **Not supported yet.** `parseEventLog` says so instead of guessing. On the [roadmap](#-roadmap). |
+| **OTLP GenAI traces** | `POST /v1/traces` | ✅ **Stable receiver, http/json and http/protobuf, no gRPC.** Converts OpenTelemetry GenAI spans (`gen_ai.*`, for example OpenLLMetry/Traceloop) into `llm.usage`/`llm.failed` and `tool.*` events; spans are never stored. File import of a saved trace export is also supported, through the same mapper, via `parseEventLog` (see the row above). Reference: [docs/otlp.md](docs/otlp.md#otlp-traces-post-v1traces). |
 
 <sub>✅ stable and tested · 🧪 example code you wire into the framework's own callbacks (the adapters do not import the frameworks), or (OpenAI Agents SDK only) a tracing processor tested against the real SDK but not yet a published package · ❌ not available</sub>
 
@@ -659,6 +659,7 @@ flowchart LR
 |---|---|---|
 | `GET` | `/health` | Status, version, schema version, connected SSE clients, and current `auth` / `webhookAuth` mode. |
 | `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
+| `GET`/`HEAD` | `/metrics` | Opt-in (`AGENT_VIEWER_METRICS=1`), token-protected Prometheus text-exposition export (issue #103). `404` until enabled; `403 metrics_require_token` with no token configured and no explicit opt-out; its own rate-limit bucket and no CORS headers. This first slice exposes `agent_viewer_build_info`/`agent_viewer_sse_clients` only. |
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. Not the audit path: it returns whole events (including free text) and `afterId` cannot walk history; use `GET /api/v1/usage/calls` for that. |
@@ -901,6 +902,9 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_EXPORT_CONCURRENCY` | `2` | Concurrent `GET /api/v1/usage/export` requests this process serves at once; above it, `429 export_busy` with `Retry-After: 5`. Does not apply to `GET /api/v1/usage/export/totals` (a single read, not a long-running stream). |
 | `AGENT_VIEWER_PRICING_FILE` | `pricing.json` next to `AGENT_VIEWER_SQLITE_PATH` | Operator-editable, versioned pricing table. See [docs/pricing.md](docs/pricing.md). |
 | `AGENT_VIEWER_PRICING_HISTORY_FILE` | `pricing-history.jsonl` next to the pricing file | Append-only history of every pricing version. Never edit by hand. |
+| `AGENT_VIEWER_METRICS` | unset (off) | Set to exactly `1` (CLI: `--metrics`) to enable `GET /metrics`, a Prometheus text-exposition export outside `/api/v1`. Disabled by default: an unset or any-other-value server answers `404` identical to a truly unknown route. This first slice exposes `agent_viewer_build_info` and `agent_viewer_sse_clients` only; the ledger-derived token/cost/call/latency families and the optional OTLP push ship in later sub-issues of issue #103. |
+| `AGENT_VIEWER_METRICS_TOKEN` | empty (falls back to `AGENT_VIEWER_API_TOKEN`) | A metrics-only Bearer credential for `/metrics`, so a Prometheus scraper never holds a token that can also ingest events. When set, the API token is no longer accepted on `/metrics`. Blank counts as unset, same as every other token here. |
+| `AGENT_VIEWER_METRICS_AUTH` | unset (auth on) | Set to exactly `off` to serve `/metrics` with no credential check (private network, sidecar scrape); logs a one-line startup warning. Any other value keeps auth on. With neither a metrics token nor an API token configured, and this not set to `off`, `/metrics` answers `403 metrics_require_token` rather than serving open. |
 | `AGENT_VIEWER_PRICING_READONLY` | unset | `1` disables `POST /api/v1/pricing/changes` (file-only pricing management); `POST /api/v1/pricing/reload` still works. |
 | `AGENT_VIEWER_RECOMPUTE_MAX_ROWS` | `200000` | Hard cap on matched rows for one `POST /api/v1/pricing/recompute` run; above it, `413 filter_too_broad` before anything is written. `node:sqlite` is synchronous, so a run blocks the event loop for its duration. [Details](docs/integration.md#usage-ledger-cost-estimation-and-recompute-issues-84-296). |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
@@ -945,6 +949,7 @@ The defaults favor local development. Before you expose the server:
 | Retention | keeps everything forever | Set `AGENT_VIEWER_RETENTION_DAYS` for a production deployment that must bound how long prompts-adjacent metadata (summaries, payloads) stays on disk; set `AGENT_VIEWER_USAGE_RETENTION_DAYS` separately only if the audit record of tokens and cost must also expire. This is a honest baseline, not tamper-evident: see [docs/retention.md](docs/retention.md). |
 | Bulk export | With no token, `GET /api/v1/usage/export` and `/export/totals` require a loopback peer address, a loopback `Host` header and no cross-origin `Origin`, even when `AGENT_VIEWER_CORS_ORIGIN` is `*`; `token`/`api_key` in the query is always rejected (send `Authorization: Bearer` instead). A reverse proxy on the same host still looks loopback to this check, so it needs a token anyway; a Docker port mapping does not look loopback (the container sees the bridge address), so it always needs one. Set `AGENT_VIEWER_API_TOKEN` for any production deployment. **Until a scoped, read-only key ships (0.8.0), any holder of the API token can export the entire usage ledger**: treat the token as read access to your whole consumption history, not only write access to the event stream. See [docs/usage-export.md](docs/usage-export.md). |
 | Redaction | Built-in secret patterns, applied only to `GET /api/v1/usage/export` and `/export/totals` | Not yet applied at ingestion, to the live stream, to `GET /api/v1/events`, or to webhook replays: keep secrets out of event text rather than relying on redaction to scrub it later. See [docs/redaction.md](docs/redaction.md). |
+| Metrics | `GET /metrics` is off by default (`AGENT_VIEWER_METRICS` unset); once enabled it needs a Bearer token (a dedicated `AGENT_VIEWER_METRICS_TOKEN`, else the API token); `token`/`api_key` in the query never authenticates it | Set `AGENT_VIEWER_METRICS_TOKEN` to a value distinct from the API token, so a Prometheus scraper never holds write access to the event stream. `AGENT_VIEWER_METRICS_AUTH=off` removes the check entirely; use only on a private network. |
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).
 
@@ -959,11 +964,12 @@ Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showc
 Planned, not available yet:
 
 - [ ] `GET /api/v1/usage/reconciliation`: compare the OTLP metrics stored by `POST /v1/metrics` against the usage ledger. The ledger itself shipped in 0.4.0; this comparison endpoint is still not built.
-- [ ] Import OTLP (OpenTelemetry) traces.
 - [ ] More adapters, packaged and tested against the real frameworks.
 - [ ] An MCP server, so agents can report into the office directly.
 - [ ] A web component for apps that do not use React.
 - [ ] A hosted demo on GitHub Pages.
+
+The next releases (0.3.0 to 0.8.0) turn Agent Viewer into an observability and audit tool for the tokens and cost your agents consume, with the office as the hero view. See the full [observability and audit roadmap](docs/roadmap.md).
 
 Want one of these sooner? [Open an issue](https://github.com/jmmana/Agent-Viewer/issues/new) and say what you would use it for.
 

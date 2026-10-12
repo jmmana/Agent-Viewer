@@ -929,7 +929,7 @@ async function cargarEjecucion(file: File) {
 }
 ```
 
-El resultado es `{ events, issues, totalLines, format, otlp? }`. Las líneas inválidas se reportan en `issues` (`line`, `error`, `raw?`, `code?`, `path?`) sin detener la lectura. Los logs OTLP se convierten en eventos `llm.usage`/`llm.failed`; las métricas OTLP devuelven cero eventos y un aviso explicando que son contadores preagregados; las trazas OTLP aún no se admiten y también devuelven cero eventos más un aviso. `otlp` (presente cuando `format === "otlp"`) reporta qué señales se encontraron y los contadores por registro `logRecords`/`converted`/`skipped`/`rejected`. El componente no trae una zona para soltar archivos; conecta tu propio selector de archivos a `parseEventLog`.
+El resultado es `{ events, issues, totalLines, format, otlp? }`. Las líneas inválidas se reportan en `issues` (`line`, `error`, `raw?`, `code?`, `path?`) sin detener la lectura. Los logs OTLP se convierten en eventos `llm.usage`/`llm.failed`; las métricas OTLP devuelven cero eventos y un aviso explicando que son contadores preagregados; los archivos de trazas OTLP se convierten en eventos `llm.usage`/`llm.failed`/`tool.*` con el mismo mapeador exacto que usa el receptor en vivo `POST /v1/traces`, así que ambas rutas nunca pueden contradecirse sobre una ejecución (issue #97/#98; ver [otlp.md](otlp.md#otlp-traces-post-v1traces)). `otlp` (presente cuando `format === "otlp"`) reporta qué señales se encontraron y los contadores por registro `logRecords`/`converted`/`skipped`/`rejected` (`logRecords` también cuenta los spans de trazas). El componente no trae una zona para soltar archivos; conecta tu propio selector de archivos a `parseEventLog`.
 
 ## Exportar video
 

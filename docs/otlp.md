@@ -1,4 +1,4 @@
-# OTLP/HTTP receivers: logs and metrics
+# OTLP/HTTP receivers: logs, metrics and traces
 
 `POST /v1/logs` is a server-side OpenTelemetry logs receiver. It is the only documented way Claude Code
 reports per-request tokens and cost (see [Tokens and cost](claude-code.md#tokens-and-cost) for how to turn it
@@ -13,7 +13,13 @@ the same consumption as reported by a second, independent counter. The two are k
 point is never turned into a canonical event, never added to the ledger, the snapshot totals, SSE or any
 rollup. See [OTLP metrics](#otlp-metrics-post-v1metrics) below.
 
-Both routes accept `http/json` and, since issue #73, `http/protobuf` (see
+`POST /v1/traces` (issue #97) is a third, independent receiver: an OTLP/HTTP GenAI *traces* converter, for any
+runtime that already emits OpenTelemetry GenAI spans (`gen_ai.*` semantic conventions; OpenLLMetry/Traceloop and
+several vendor SDKs set these without custom code) instead of calling the SDK or the webhook by hand. It is a
+converter in front of the existing ingestion path, not a tracing backend: spans are never stored, only the
+`llm.usage`/`llm.failed`/`tool.*` events derived from them. See [OTLP traces](#otlp-traces-post-v1traces) below.
+
+All three routes accept `http/json` and, since issue #73, `http/protobuf` (see
 [http/protobuf](#httpprotobuf-issue-73)); gRPC is not supported.
 
 This is server-side ingestion only. The embeddable library is unaffected: it still never invents, sums or
@@ -24,6 +30,7 @@ prices usage, and keeps receiving figures from the host through props.
 ```
 POST /v1/logs
 POST /v1/metrics
+POST /v1/traces
 ```
 
 At the server root, not under `/api/v1`: this is the default OTLP/HTTP path, so
@@ -314,11 +321,130 @@ endpoint against a ledger accessor that does not exist would mean guessing its s
 in `server/telemetry.ts` is the metrics-side half that endpoint will consume once #65 lands; nothing about it
 should need to change to support that.
 
+## OTLP traces (`POST /v1/traces`)
+
+Converts OpenTelemetry GenAI spans into `llm.usage`/`llm.failed` and `tool.started`/`tool.completed`/
+`tool.failed` canonical events. Shares the exact middleware order, body parser, gzip handling, auth
+(`isRequestAuthorized`) and rate limiter as `/v1/logs`/`/v1/metrics` above (one shared per-IP counter and one
+shared `AGENT_VIEWER_OTLP_MAX_BODY`/`AGENT_VIEWER_OTLP_MAX_RECORDS` pair across all three OTLP routes, not the
+separate `_BYTES`/`AGENT_VIEWER_OTLP_MAX_SPANS` names the original proposal used before the shared limiter in
+#59/#73 existed). The pure mapper lives at `src/integrations/otlpTraces.ts` (`mapOtlpTraces`), exported at the
+top level of `src/integrations` (not under `src/integrations/otlp/`) so `parseEventLog`'s OTLP trace file import
+(issue #98) reuses it directly; it is excluded from the embeddable library bundle (`src/lib/index.ts` never
+imports it).
+
+**Pinned semantic convention version.** The attribute names below follow the OpenTelemetry GenAI semantic
+conventions as of the `1.37.0` release of `semantic-conventions` (`gen_ai.provider.name` replacing the older
+`gen_ai.system`, `gen_ai.usage.input_tokens`/`output_tokens` replacing `prompt_tokens`/`completion_tokens`).
+Deprecated aliases are still read as a fallback (see the table below). Checked against OpenLLMetry/Traceloop's
+instrumentation output; other instrumentations may use different attribute names or the vendor-specific
+namespaces below, which this receiver does not read.
+
+**What `inputTokens` means.** The receiver never adds or subtracts: whatever `gen_ai.usage.input_tokens`
+reports is stored verbatim as `inputTokens`. Whether that figure includes cache reads is up to the
+instrumentation and provider that set it, not something this receiver can verify; `cacheReadTokens`/
+`cacheWriteTokens` are always the separate, explicit attributes when present. This differs from the Claude Code
+OTLP *logs* receiver above, which folds `cache_read_tokens`/`cache_creation_tokens` into `inputTokens` itself
+because Claude Code's own `input_tokens` attribute is known to exclude them (see "Claude Code specifics"
+above); a GenAI trace span gets no such adjustment, since there is no single, verified rule across providers.
+
+**Required token counts (contract constraint).** `LlmUsagePayloadSchema` (issue #46) keeps `inputTokens` and
+`outputTokens` required, not nullable; only the cache/reasoning breakdown and `llm.failed`'s own counts are
+nullish. A non-failed GenAI span missing either required count (for example an embeddings call whose
+instrumentation never set `output_tokens`) cannot be represented as `llm.usage` and is rejected as `unmappable`
+rather than stored with an invented `0`. A failed span can omit both.
+
+**Which spans produce events:**
+
+| Span | Condition | Result |
+|---|---|---|
+| LLM call | `gen_ai.operation.name` is `chat`, `text_completion`, `generate_content` or `embeddings` | `llm.usage`, or `llm.failed` if the span failed |
+| Tool call | `gen_ai.operation.name` is `execute_tool` (fallback: no `operation.name` but `gen_ai.tool.name` is set) | `tool.started` + `tool.completed` or `tool.failed` |
+| Agent or workflow | `invoke_agent`, `create_agent`, anything else (including no `operation.name` and no tool name) | No event. Used only to resolve an agent name for descendant spans. |
+
+**LLM span mapping** (first attribute present wins; `unknown is not zero`: an absent or invalid value is
+omitted, never `0`, and an invalid-but-present value also increments `warnings`):
+
+| Field | Source attribute | If absent |
+|---|---|---|
+| `provider` | `gen_ai.provider.name`, `gen_ai.system` (deprecated) | `"unknown"` |
+| `model` | `gen_ai.response.model`, `gen_ai.request.model` | `"unknown"` |
+| `inputTokens` | `gen_ai.usage.input_tokens`, `gen_ai.usage.prompt_tokens` (deprecated) | span rejected as `unmappable` unless failed |
+| `outputTokens` | `gen_ai.usage.output_tokens`, `gen_ai.usage.completion_tokens` (deprecated) | span rejected as `unmappable` unless failed |
+| `cacheReadTokens` | `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_read_input_tokens` | omitted |
+| `cacheWriteTokens` | `gen_ai.usage.cache_creation.input_tokens`, `gen_ai.usage.cache_creation_input_tokens` | omitted |
+| `reasoningTokens` | `gen_ai.usage.reasoning.output_tokens` | omitted |
+| `latencyMs` | `round((end - start) / 1e6)`, computed with `BigInt` | omitted if end is missing/zero or before start |
+| `timestamp` | `endTimeUnixNano` in ms (falls back to start) | span rejected as `no_timestamp` if both are missing/zero |
+| `requestId` | `gen_ai.response.id` | omitted (cross-source dedup key with the SDK path, `(provider, requestId)`, issues #47/#48) |
+| `cost`/`costSource`/`currency` | `gen_ai.usage.cost` (an Agent Viewer convention, not part of the semconv), optional `gen_ai.usage.cost.source`/`.currency` | `cost: null`, `costSource: "unknown"` |
+| `traceId`/`spanId`/`parentId` | span `traceId`/`spanId`/`parentSpanId`, lowercased hex | `parentId` omitted if absent |
+| `sessionId` | `gen_ai.conversation.id`, `session.id` | omitted |
+| `agentId` | span `gen_ai.agent.id`, then `gen_ai.agent.name`, then the nearest ancestor span in the same request with either (bounded to 32 hops, cycle-safe), then resource `service.name` | `otlp:unknown_service` is used for `runtimeId`/`source` either way |
+
+Cost is read only when the span carries `gen_ai.usage.cost`; it is labeled `costSource: "estimated"` unless the
+span also sets `gen_ai.usage.cost.source` to `"provider-reported"`. Currency must match `^[A-Z]{3}$` or is left
+unset, never defaulted to USD. A span is failed when `status.code` is `ERROR` (`2` or the string
+`"STATUS_CODE_ERROR"`) or an `error.type` attribute is present; `errorKind` is a best-effort mapping from
+`error.type` to the closed `LlmErrorKind` vocabulary (issue #46 shipped this as a closed enum, not the free-text
+`errorType` field the original proposal assumed), stored as `providerErrorCode` alongside it. `status.message`
+is never read, since it can echo prompt fragments.
+
+**Tool span mapping.** `tool.started` and `tool.completed`/`tool.failed` share `toolCallId`
+(`gen_ai.tool.call.id`), `tool` (`gen_ai.tool.name`, else the span name without its `execute_tool ` prefix; the
+span is rejected as `no_tool_name` if neither resolves), `category` (`gen_ai.tool.type`, on `tool.started`
+only), and the same `traceId`/`spanId`/`parentId`/agent resolution as LLM spans. `tool.started` is stamped with
+the span start, the end event with the span end and `durationMs` (same `BigInt` rounding as `latencyMs`,
+omitted when not computable). A zero/missing start falls back to the end for both events. Neither event is ever
+filled from `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` or `status.message`.
+
+**Deterministic ids (idempotency).** LLM span: `otlp:{traceId}:{spanId}:llm` (the same id whether it resolves
+to `llm.usage` or `llm.failed`). Tool span: `otlp:{traceId}:{spanId}:tool.started` and
+`otlp:{traceId}:{spanId}:tool.end` (note `tool.end`, not `.completed`/`.failed`): both possible outcomes share
+one id, so a retry that disagrees about failure/success is a conflicting duplicate (#47), not two rows. A
+`traceId` must be 32 lowercase hex characters and a `spanId` 16, neither all zero (an uppercase JSON id is
+lowercased first, so it produces the same id); otherwise the span is rejected as `invalid_trace_id`/
+`invalid_span_id`.
+
+**Idempotency window in memory mode.** The in-memory event store evicts the oldest event past
+`maxEvents` (default 10000) and forgets that event's id along with it, so a retry for a span that old is
+counted again instead of recognized as a duplicate; `AGENT_VIEWER_STORAGE=sqlite` has no such window (ids are
+never forgotten). This is the same limit every other OTLP route already lives with, not something new to
+traces specifically.
+
+**Rejection reasons** are a closed set: `invalid_trace_id`, `invalid_span_id`, `no_timestamp`, `no_tool_name`,
+`unmappable`, `conflicting_duplicate` (the last one added by the store, #47, not the mapper). The
+`partialSuccess.errorMessage`/`X-Agent-Viewer-OTLP` response never repeats attribute values, only fixed text,
+reason codes and counts, for example `rejected 2 of 14 spans: invalid_span_id=1, no_timestamp=1`.
+
+**Ordering.** Events derived from one request are appended sorted by `(timestamp, started-before-end, id)`, so
+the agent status machine always ends in the status of the latest span regardless of span order on the wire.
+
+**Debug header.** Every `200` response carries `X-Agent-Viewer-OTLP: accepted=<n>; duplicates=<n>; ignored=<n>;
+rejected=<n>; warnings=<n>`. `accepted`/`duplicates` are the store's own post-dedup, per-*event* counts (a tool
+span yields two events); `ignored`/`rejected`/`warnings` are the mapper's own, per-*span* counts.
+
+**Privacy by construction.** Only the attributes named above are ever read (the one resource attribute read is
+`service.name`). Everything else a GenAI span can carry, including `gen_ai.prompt`, `gen_ai.completion`,
+`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, tool call arguments and
+results, span events, links, and any other resource attribute, is dropped before an event is built, and the
+protobuf decoder never materializes span `events`/`links` at the wire level in the first place.
+
+**Sampling and double instrumentation.** Head-based sampling drops spans before they reach this receiver, so an
+audit view built from traces alone can undercount; 100% sampling is recommended for GenAI spans specifically.
+`gen_ai.client.token.usage` (an aggregate histogram metric, not per-call data) is never converted into a
+`llm.usage` row by this item or by `/v1/metrics`: a runtime exporting both traces and that metric is counted
+once, from the trace. Sending the same call once through the SDK/webhook (`requestId`) and once through this
+receiver (`gen_ai.response.id`) is also counted once, via the shared `(provider, requestId)` dedup key.
+
+**Not covered.** Vendor-specific attribute namespaces that do not use `gen_ai.*` (OpenInference's
+`llm.token_count.*`, the Vercel AI SDK's `ai.*`, or a library's own `llm.usage.*`) are not read; spans using
+only those are counted as `ignored`. Adding alias tables for them is a separate item.
+
 ## Out of scope
 
 - gRPC transport (see [http/protobuf](#httpprotobuf-issue-73) above).
-- OTLP traces (`/v1/traces`).
-- Offline import of OTLP logs or metrics files in `parseEventLog` (issue #74).
+- Offline import of OTLP logs, metrics or trace files in `parseEventLog` (issues #74/#98).
 - Attribution per subagent, per prompt or per skill.
 - `GET /api/v1/usage/reconciliation` (see "Deferred" above; depends on issue #65).
 - Pricing or re-estimating cost on the server: the figures stored here are exactly what Claude Code reported.

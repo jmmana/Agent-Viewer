@@ -43,12 +43,6 @@ describe('getDropErrorKey', () => {
     ).toBe('drop.otlpMetrics');
   });
 
-  it('picks drop.otlpTraces for a traces-not-supported issue', () => {
-    expect(
-      getDropErrorKey({ events: [], issues: [{ line: 1, error: '', code: 'otlp-traces-not-supported' }] }),
-    ).toBe('drop.otlpTraces');
-  });
-
   it('picks drop.otlpNoUsage for a no-usage-records issue', () => {
     expect(
       getDropErrorKey({ events: [], issues: [{ line: 1, error: '', code: 'otlp-no-usage-records' }] }),
@@ -68,10 +62,10 @@ describe('getDropErrorKey', () => {
     expect(getDropErrorKey({ events: [], issues: [] })).toBe('drop.noEvents');
   });
 
-  it('ranks metrics above traces above no-usage above record-skipped when a file has several', () => {
+  it('ranks metrics above no-usage above record-skipped when a file has several', () => {
     const issues = [
       { line: 1, error: '', code: 'otlp-record-skipped' as const },
-      { line: 2, error: '', code: 'otlp-traces-not-supported' as const },
+      { line: 2, error: '', code: 'otlp-no-usage-records' as const },
       { line: 3, error: '', code: 'otlp-metrics-not-replayable' as const },
     ];
     expect(getDropErrorKey({ events: [], issues })).toBe('drop.otlpMetrics');

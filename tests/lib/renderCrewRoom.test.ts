@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CREW_ROOMS, type CrewRoomDefinition } from '../../src/crew/crewModel';
 import { crewGeometryBounds, crewIsoPoint, crewViewSize, renderCrewRoom } from '../../src/crew/renderCrewRoom';
+import { crewAlertDescriptor } from '../../src/crew/crewAlertBridge';
 
 describe('Crew native 2.5D renderer', () => {
   it('reproyecta el umbral de la puerta local al cambiar de cámara', () => {
@@ -157,6 +158,46 @@ describe('Crew native 2.5D renderer', () => {
       set() { return true; },
     });
     const markers = [{ id: 'in-call', name: 'In call', role: 'custom' as const, status: 'PHONE_CALL' as const, x: 2, y: 3, number: 1 }];
+    renderCrewRoom({ ctx, width: 900, height: 600, room: CREW_ROOMS[0], camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } }, markers });
+    expect(arcs).toHaveLength(0);
+  });
+
+  it('dibuja la superposición de alerta (#153) solo para el marcador con una entrada en `alerts`', () => {
+    const arcs: unknown[][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) { return key === 'arc' ? (...args: unknown[]) => arcs.push(args) : () => {}; },
+      set() { return true; },
+    });
+    const markers = [
+      { id: 'blocked-agent', name: 'Blocked', role: 'custom' as const, status: 'BLOCKED' as const, x: 2, y: 3, number: 1 },
+      { id: 'idle-agent', name: 'Idle', role: 'custom' as const, status: 'IDLE' as const, x: 4, y: 3, number: 2 },
+    ];
+    renderCrewRoom({ ctx, width: 900, height: 600, room: CREW_ROOMS[0],
+      camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } }, markers,
+      alerts: { 'blocked-agent': { descriptor: crewAlertDescriptor('blocked'), opacity: 1 } } });
+    // Fondo 2.5D no agrega arcos; la única fuente de `arc` aquí es la superposición de
+    // alerta (halo + glifo de respaldo, ver crewAlertLayer.test.ts), y solo para el
+    // marcador con una entrada real en `alerts`, nunca para el que no la tiene.
+    expect(arcs.length).toBeGreaterThan(0);
+
+    const onlyIdleArcs: unknown[][] = [];
+    const onlyIdleCtx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) { return key === 'arc' ? (...args: unknown[]) => onlyIdleArcs.push(args) : () => {}; },
+      set() { return true; },
+    });
+    renderCrewRoom({ ctx: onlyIdleCtx, width: 900, height: 600, room: CREW_ROOMS[0],
+      camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } }, markers: [markers[1]],
+      alerts: { 'blocked-agent': { descriptor: crewAlertDescriptor('blocked'), opacity: 1 } } });
+    expect(onlyIdleArcs).toHaveLength(0);
+  });
+
+  it('no dibuja ninguna alerta sin la prop `alerts`, aunque el status real tenga un kind mapeado', () => {
+    const arcs: unknown[][] = [];
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get(_target, key) { return key === 'arc' ? (...args: unknown[]) => arcs.push(args) : () => {}; },
+      set() { return true; },
+    });
+    const markers = [{ id: 'blocked-agent', name: 'Blocked', role: 'custom' as const, status: 'BLOCKED' as const, x: 2, y: 3, number: 1 }];
     renderCrewRoom({ ctx, width: 900, height: 600, room: CREW_ROOMS[0], camera: { view: 'front', zoom: 1, pan: { x: 0, y: 0 } }, markers });
     expect(arcs).toHaveLength(0);
   });

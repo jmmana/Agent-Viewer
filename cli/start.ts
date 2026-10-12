@@ -87,6 +87,26 @@ export function curlExample(baseUrl: string, token: string | undefined): string 
   return `curl -X POST ${baseUrl}/api/v1/webhooks/generic${auth} \\\n  -H "Content-Type: application/json" \\\n  -d '{"agent":"demo","status":"THINKING","message":"Hello from curl"}'`;
 }
 
+/**
+ * The `--metrics` banner hint (issue #103). The CLI generates a random, throwaway API token on every run
+ * (`resolveStartToken`'s `generated` source); printing that as a "scrape this with Prometheus" credential would
+ * suggest a long-lived secret where there is none. The hint only appears when the operator supplied a stable
+ * credential: an explicit `AGENT_VIEWER_METRICS_TOKEN`, or an API token that came from `--token` or the
+ * environment rather than being generated this run.
+ */
+export function metricsHintLines(baseUrl: string, env: NodeJS.ProcessEnv = process.env, apiTokenSource?: 'flag' | 'env' | 'legacy-env' | 'generated'): string[] {
+  const metricsTokenSet = Boolean(envToken(env, 'AGENT_VIEWER_METRICS_TOKEN'));
+  const stableCredential = metricsTokenSet || (apiTokenSource !== undefined && apiTokenSource !== 'generated');
+  if (!stableCredential) {
+    return [
+      '  Metrics  /metrics is enabled, but no stable credential is configured (the API token above is',
+      '           regenerated every run). Set AGENT_VIEWER_METRICS_TOKEN to scrape it with Prometheus.',
+      '',
+    ];
+  }
+  return [`  Metrics  ${baseUrl}/metrics (needs its own token; see README "Metrics")`, ''];
+}
+
 export function openBrowser(url: string): void {
   const [cmd, args] = process.platform === 'darwin'
     ? ['open', [url]]
@@ -139,6 +159,9 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
   process.env.AGENT_VIEWER_EMBEDDED = '1';
   process.env.AGENT_VIEWER_API_TOKEN = token;
   delete process.env.AGENT_VIEWER_API_KEY;
+  // Issue #103: --metrics is the only way to turn GET /metrics on under the CLI (AGENT_VIEWER_METRICS is not a
+  // documented CLI flag's env equivalent otherwise); the server module itself re-reads this same variable.
+  if (command.metrics) process.env.AGENT_VIEWER_METRICS = '1';
   // Issue #271: without this, the pricing store would default to `./data/pricing.json` relative to wherever
   // `npx agent-viewer` was run. Keep it under the same state folder as the session file and, in the Docker app
   // image, the same `/app/data` volume as the SQLite database.
@@ -174,7 +197,9 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
     }));
   }
   // Single page app: every other GET outside the API gets the office (or a note when it was not built).
-  app.get(/^\/(?!api\/|health$|ready$).*/, (_req, res) => {
+  // `metrics$` is excluded (issue #103) so a disabled or enabled GET /metrics always reaches the real route
+  // registered by server/index.ts instead of this fallback serving the office's index.html for it.
+  app.get(/^\/(?!api\/|health$|ready$|metrics$).*/, (_req, res) => {
     if (!hasViewer) {
       res.status(503).type('text/plain').send('The office is not built. Run "npm run build:cli" in the repository, then restart.');
       return;
@@ -249,9 +274,12 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
 }
 
 /** What a non-loopback bind exposes, for the start banner. */
-export function exposureWarning(host: string, webhookSecret: boolean): string {
+export function exposureWarning(host: string, webhookSecret: boolean, metricsEnabled = false): string {
   const webhooks = webhookSecret ? ' Webhooks accept a valid AGENT_VIEWER_WEBHOOK_SECRET signature instead of the token.' : '';
-  return `Warning: listening on ${host}, so other machines on the network can reach it. /api/v1 needs the token above.${webhooks} The office page and /health are public.`;
+  // Issue #103: /metrics is opt-in and needs its own credential (or the API token), so it is not covered by
+  // "the office page and /health are public" below.
+  const metrics = metricsEnabled ? ' /metrics needs its own token (or the API token) too.' : '';
+  return `Warning: listening on ${host}, so other machines on the network can reach it. /api/v1 needs the token above.${webhooks}${metrics} The office page and /health are public.`;
 }
 
 /** Runs `agent-viewer` (start). Resolves when the server stops. */
@@ -281,12 +309,13 @@ export async function runStart(command: StartCommand): Promise<number> {
     '  Or without JSON:  npx @warlockcode/agent-viewer send --agent demo --status working',
     '  Claude Code:      npx @warlockcode/agent-viewer install claude-code',
     '',
+    ...(command.metrics ? metricsHintLines(viewer.url, process.env, resolveStartToken(command.token).source) : []),
     '  Press Ctrl+C to stop.',
     '',
   ];
   console.log(lines.join('\n'));
   if (!LOOPBACK.has(command.host)) {
-    console.log(`  ${exposureWarning(command.host, Boolean(process.env.AGENT_VIEWER_WEBHOOK_SECRET))}\n`);
+    console.log(`  ${exposureWarning(command.host, Boolean(process.env.AGENT_VIEWER_WEBHOOK_SECRET), command.metrics)}\n`);
   }
   // The browser gets a single-use launch code, not the token: argv is visible to other local processes.
   if (command.open) openBrowser(launchUrl(viewer.url, viewer.issueLaunchCode(), command.demo));

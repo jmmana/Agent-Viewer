@@ -58,6 +58,7 @@ import {
   RecomputeTooBroadError,
 } from './pricing/recompute';
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
+import { renderExposition, buildInProcessFamilies, METRICS_CONTENT_TYPE } from './metrics';
 import {
   decodeExportLogsServiceRequest,
   decodeExportMetricsServiceRequest,
@@ -295,30 +296,40 @@ const sseCounters = { replaysSinceStart: 0, eventsReplayedSinceStart: 0, resyncs
 
 // Rate limiter storage
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
+/** Issue #103: `/metrics` gets its own bucket, same limiter code and `AGENT_VIEWER_RATE_LIMIT`, so a flood of
+ * failed scrape-token guesses against one IP never spends that IP's `/api/v1` ingestion budget and vice versa. */
+const metricsRateLimits = new Map<string, { count: number; resetAt: number }>();
 
-function rateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  const now = Date.now();
-  let entry = rateLimits.get(ip);
-  if (!entry && rateLimits.size >= rateLimitMaxTrackedClients) {
-    for (const [key, value] of rateLimits) {
-      if (value.resetAt <= now) rateLimits.delete(key);
+/** Shared rate-limiter logic, parameterized over which bucket map it reads and writes (issue #103). */
+function makeRateLimiter(limits: Map<string, { count: number; resetAt: number }>) {
+  return function rateLimiterMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    let entry = limits.get(ip);
+    if (!entry && limits.size >= rateLimitMaxTrackedClients) {
+      for (const [key, value] of limits) {
+        if (value.resetAt <= now) limits.delete(key);
+      }
     }
-  }
-  if (!entry || entry.resetAt <= now) {
-    entry = { count: 0, resetAt: now + rateLimitWindowMs };
-    rateLimits.set(ip, entry);
-  }
-  entry.count++;
-  if (entry.count > rateLimitMax) {
-    // Issue #59: every 429, on every route this limiter guards, carries Retry-After so OTLP exporters (and any
-    // other well-behaved client) back off instead of retrying immediately. At least 1 second, rounded up.
-    res.setHeader('Retry-After', String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))));
-    res.status(429).json({ error: 'rate_limit_exceeded', message: `Too many requests. Limit: ${rateLimitMax}/min` });
-    return;
-  }
-  next();
+    if (!entry || entry.resetAt <= now) {
+      entry = { count: 0, resetAt: now + rateLimitWindowMs };
+      limits.set(ip, entry);
+    }
+    entry.count++;
+    if (entry.count > rateLimitMax) {
+      // Issue #59: every 429, on every route this limiter guards, carries Retry-After so OTLP exporters (and any
+      // other well-behaved client) back off instead of retrying immediately. At least 1 second, rounded up.
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((entry.resetAt - now) / 1000))));
+      res.status(429).json({ error: 'rate_limit_exceeded', message: `Too many requests. Limit: ${rateLimitMax}/min` });
+      return;
+    }
+    next();
+  };
 }
+
+const rateLimiter = makeRateLimiter(rateLimits);
+/** Issue #103: separate bucket, mounted on `/metrics` only (see below). */
+const metricsRateLimiter = makeRateLimiter(metricsRateLimits);
 
 /** Builds a short, fixed-shape body for a `/v1/logs` error response. Never includes request content. */
 function otlpErrorBody(code: number, message: string): { code: number; message: string } {
@@ -1011,6 +1022,116 @@ app.post(OTLP_TRACES_PATH, async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------
+// GET /metrics (issue #103, first sub-issue): Prometheus text-exposition export. Mounted here, before the
+// global JSON body parser and the CORS middleware below, so it is never CORS-enabled (no
+// Access-Control-Allow-Origin header, ever) and a cross-origin page can never read it even when
+// AGENT_VIEWER_CORS_ORIGIN is unset or `*`. `OPTIONS /metrics` therefore never reaches `app.options('*')`
+// either; the method guard below answers it directly.
+//
+// This slice ships the endpoint's enabling, auth and rate-limit plumbing plus the two families
+// `server/index.ts` can compute without a ledger query (`agent_viewer_build_info`, `agent_viewer_sse_clients`).
+// Ledger-derived families (tokens, cost, calls, failures, latency) and the optional OTLP metrics push are later
+// sub-issues of #103, so an empty-looking scrape today is expected, not a bug; see `server/metrics.ts`.
+// -------------------------------------------------------------
+
+/** Opt-in (issue #103): disabled by default, so existing deployments see no new surface. CLI: `--metrics`. */
+function isMetricsEnabled(): boolean {
+  return process.env.AGENT_VIEWER_METRICS === '1';
+}
+
+/** A metrics-only token, read per request like every other token in this file. Blank counts as unset, so it can
+ * never silently turn into an empty, always-matching string. When unset, `/metrics` falls back to the API token;
+ * when set, the API token is no longer accepted on this route (issue #103: a scraper holds a credential that
+ * cannot ingest events). */
+function getMetricsToken(): string | undefined {
+  const token = process.env.AGENT_VIEWER_METRICS_TOKEN?.trim();
+  return token ? token : undefined;
+}
+
+/** Explicit auth opt-out (issue #103): serves `/metrics` with no credential check at all, for a private network
+ * or sidecar scrape. Any value other than exactly `off` leaves auth on. */
+function isMetricsAuthOff(): boolean {
+  return process.env.AGENT_VIEWER_METRICS_AUTH === 'off';
+}
+
+/** Runs first, independent of enabled/auth state, so a client sending the wrong method always gets a clear
+ * `405` instead of a `404` (disabled) or `401`/`403` (auth) that would suggest the method was the problem. */
+function metricsMethodGuard(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    next();
+    return;
+  }
+  res.setHeader('Allow', 'GET, HEAD');
+  res.status(405).json({ error: 'method_not_allowed', message: 'GET and HEAD only' });
+}
+
+/** `404`, identical for every disabled state, so a scan cannot tell "feature off" from "route does not exist". */
+function metricsEnabledGuard(_req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (isMetricsEnabled()) {
+    next();
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(404).json({ error: 'not_found', message: 'Not found' });
+}
+
+/** Issue #103's auth decision for `/metrics`: Bearer-only (no `?token=`/`?api_key=` support, since this
+ * middleware never reads the query string at all), `AGENT_VIEWER_METRICS_TOKEN` when set, else the API token,
+ * `403 metrics_require_token` when neither is set and auth is not explicitly off. */
+function metricsAuthGuard(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (isMetricsAuthOff()) {
+    next();
+    return;
+  }
+  const expectedToken = getMetricsToken() ?? getApiToken();
+  if (!expectedToken) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(403).json({
+      error: 'metrics_require_token',
+      message: 'Set AGENT_VIEWER_METRICS_TOKEN or AGENT_VIEWER_API_TOKEN, or set AGENT_VIEWER_METRICS_AUTH=off',
+    });
+    return;
+  }
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
+  if (bearerMatch && safeEqual(bearerMatch[1], expectedToken)) {
+    next();
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(401).json({ error: 'unauthorized', message: 'Valid Bearer token required' });
+}
+
+app.use('/metrics', metricsMethodGuard);
+app.use('/metrics', metricsEnabledGuard);
+app.use('/metrics', metricsRateLimiter);
+app.use('/metrics', metricsAuthGuard);
+
+function writeMetricsResponse(res: express.Response, body: string): void {
+  // A string body makes Express's `res.send()` run the existing Content-Type through `setCharset`, which
+  // re-serializes its parameters in sorted key order (`charset` before `version`); sending a Buffer instead
+  // skips that path entirely, so the header comes out byte for byte as the exposition format specifies.
+  res.setHeader('Content-Type', METRICS_CONTENT_TYPE);
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).send(Buffer.from(body, 'utf8'));
+}
+
+app.get('/metrics', (_req, res) => {
+  const body = renderExposition(
+    buildInProcessFamilies({
+      version: SERVER_VERSION,
+      storage: store.readiness().storage,
+      sseClients: clients.size,
+    })
+  );
+  writeMetricsResponse(res, body);
+});
+
+// HEAD must answer with the same headers as GET and no body (issue #103's "GET (and HEAD)" requirement).
+app.head('/metrics', (_req, res) => {
+  writeMetricsResponse(res, '');
+});
+
 // Body parsing with raw buffer capture for webhook HMAC
 app.use(
   express.json({
@@ -1129,6 +1250,15 @@ function warnIfApiOpen(portToListen: number, host?: string): void {
     tokenSet: currentAuthMode() === 'token',
   })) {
     console.warn(line);
+  }
+}
+
+/** One-line startup warning when `AGENT_VIEWER_METRICS_AUTH=off` serves `/metrics` without a credential check
+ * (issue #103), mirroring the wording style of the open-API warning above. A no-op unless `/metrics` is also
+ * enabled, since the off switch has no effect otherwise. */
+function warnIfMetricsAuthOff(): void {
+  if (isMetricsEnabled() && isMetricsAuthOff()) {
+    console.warn('[agent-viewer] WARNING: AGENT_VIEWER_METRICS_AUTH=off, so /metrics serves with no credential check.');
   }
 }
 
@@ -3118,7 +3248,10 @@ export function startServer(portToListen = port, host: string = envHost()): Serv
     console.error(`[agent-viewer] pricing store failed to initialize: ${error instanceof Error ? error.message : String(error)}`);
   }
   const server = app.listen(portToListen, host);
-  server.once('listening', () => warnIfApiOpen((server.address() as AddressInfo).port, host));
+  server.once('listening', () => {
+    warnIfApiOpen((server.address() as AddressInfo).port, host);
+    warnIfMetricsAuthOff();
+  });
   return server;
 }
 
@@ -3138,6 +3271,7 @@ if (isDirectRun && process.env.NODE_ENV !== 'test') {
     if (err) throw err;
     const address = serverInstance.address() as AddressInfo;
     warnIfApiOpen(address.port, directRunHost);
+    warnIfMetricsAuthOff();
     console.log(`Agent Viewer ingestion server listening on ${directRunHost}, port ${address.port} (${boundUrl(address)})`);
   });
 

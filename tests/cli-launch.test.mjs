@@ -12,7 +12,7 @@ delete process.env.AGENT_VIEWER_API_KEY;
 const { startViewer } = await import('../cli/start.ts');
 
 test('CLI start: the office trades a launch code for the token once, and a blank variable still gets a token', async () => {
-  const viewer = await startViewer({ command: 'start', port: 0, host: '127.0.0.1', demo: false, open: false });
+  const viewer = await startViewer({ command: 'start', port: 0, host: '127.0.0.1', demo: false, open: false, metrics: false });
   try {
     assert.match(viewer.token, /^av_/, 'a blank AGENT_VIEWER_API_TOKEN is treated as unset');
     assert.equal(JSON.parse(readFileSync(path.join(home, 'session.json'), 'utf8')).token, viewer.token);

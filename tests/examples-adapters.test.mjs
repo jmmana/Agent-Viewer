@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OpenAIAgentsViewerAdapter } from '../examples/openai-agents-adapter.ts';
 import { LangGraphViewerAdapter } from '../examples/langgraph-adapter.ts';
 import { GoogleADKViewerAdapter } from '../examples/google-adk-adapter.ts';
 
@@ -8,6 +7,11 @@ import { GoogleADKViewerAdapter } from '../examples/google-adk-adapter.ts';
  * Stubs `fetch` and records every request body, so each adapter test runs against a fake viewer instead
  * of a live server (issue #64: one test per example adapter, checking the trace/parent/tool-call-id
  * mapping table and the "omitted when not exposed" cases).
+ *
+ * The OpenAI Agents case that used to live here was removed by issue #100: the hand-wired
+ * `OpenAIAgentsViewerAdapter` callback class it tested was replaced by a real tracing-processor
+ * implementation (`examples/openai-agents-adapter/processor.ts`, registered on the real `@openai/agents`
+ * tracing pipeline) with its own, more thorough test suite at `tests/openai-agents-adapter.test.mjs`.
  */
 function stubFetch(t) {
   const requests = [];
@@ -23,44 +27,6 @@ function stubFetch(t) {
     bodiesOf: (type) => requests.map((r) => r.body).filter((body) => body.type === type),
   };
 }
-
-test('OpenAI Agents adapter: forwards call ids and usage correlation only when given', async (t) => {
-  const { bodiesOf } = stubFetch(t);
-  const adapter = new OpenAIAgentsViewerAdapter({ url: 'http://sdk.test' });
-
-  await adapter.onAgentStart({ id: 'researcher', name: 'Researcher' });
-  await adapter.onToolCall('web.search', 'query terms', 'call_abc');
-  await adapter.onToolResult('web.search', 'found 3 results', 'call_abc');
-  await adapter.onToolError('web.search', 'timeout', 'call_def');
-  await adapter.onToolCall('web.search'); // the framework gave no call id
-  await adapter.onUsage({
-    promptTokens: 1200,
-    completionTokens: 400,
-    traceId: 'trace_agents_run',
-    parentId: 'span_parent',
-    toolCallId: 'call_abc',
-    tags: ['env:prod', 'env:prod'],
-  });
-  await adapter.onUsage({ promptTokens: 10, completionTokens: 2 });
-
-  const [started, startedWithoutId] = bodiesOf('tool.started');
-  const [completed] = bodiesOf('tool.completed');
-  const [failed] = bodiesOf('tool.failed');
-  assert.equal(started.payload.toolCallId, 'call_abc');
-  assert.equal(completed.payload.toolCallId, 'call_abc');
-  assert.equal(failed.payload.toolCallId, 'call_def');
-  assert.equal('toolCallId' in startedWithoutId.payload, false);
-
-  const [withCorrelation, without] = bodiesOf('llm.usage');
-  assert.equal(withCorrelation.payload.traceId, 'trace_agents_run');
-  assert.equal(withCorrelation.payload.parentId, 'span_parent');
-  assert.equal(withCorrelation.payload.toolCallId, 'call_abc');
-  // The adapter sends tags exactly as given; the server deduplicates, not the SDK.
-  assert.deepEqual(withCorrelation.payload.tags, ['env:prod', 'env:prod']);
-  for (const field of ['traceId', 'parentId', 'toolCallId', 'tags']) {
-    assert.equal(field in without.payload, false, `${field} should be omitted when the framework gave none`);
-  }
-});
 
 test('LangGraph adapter: forwards tool_call.id, root run id and parentRunId only when given', async (t) => {
   const { bodiesOf } = stubFetch(t);

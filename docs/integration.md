@@ -1273,7 +1273,7 @@ Functional adapter implementations are available in `examples/`:
 - **LangGraph** (`examples/langgraph-adapter.ts`): Node start, tool callbacks, model usage, step completion.
 - **CrewAI** (`examples/crewai-adapter.py`): Crew agent registration, task delegation, step actions, token telemetry.
 - **AutoGen** (`examples/autogen-adapter.py`): ConversableAgent and GroupChat dialogues, tool returns, and token counts.
-- **OpenAI Agents SDK** (`examples/openai-agents-adapter.ts`): Agent runs, handoffs between agents, tools, usage.
+- **OpenAI Agents SDK** (`examples/openai-agents-adapter/`, see its [README](../examples/openai-agents-adapter/README.md)): a real tracing-processor adapter (`AgentViewerTracingProcessor`) registered via `addTraceProcessor()`, tested against the real `@openai/agents` package in CI. Agent runs, handoffs, tool calls and model usage are captured automatically from the SDK's own tracing pipeline, no manual callbacks.
 - **Google ADK** (`examples/google-adk-adapter.ts`): Gemini turns, function calling, grounding, token telemetry.
 
 All adapters adhere to the **Trust Boundary Principle**: Only observable states, dialogues, and telemetry are transmitted; internal chain-of-thought scratchpads are never leaked.

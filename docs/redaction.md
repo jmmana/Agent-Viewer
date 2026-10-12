@@ -144,5 +144,14 @@ ownSecrets })`), but not yet through server configuration; see "Where it runs to
 ingestion-time redaction ships, treat every event you send as if it will be stored and streamed verbatim,
 and keep secrets out of it in the first place.
 
+## Removing a stored event (issue #109)
+
+Stored events can now be redacted after the fact with `POST /api/v1/audit/redact` (`{ "eventIds": [...],
+"rulesVersion"?: "..." }`, bootstrap token, SQLite only). This is not the `[REDACTED:<rule>]` substitution above:
+the event is **tombstoned** as a whole (`summary` becomes `[removed]`, `payload` `{}`), never edited field by
+field, and a chained `audit.redaction.applied` event records which rows were removed and their original hashes.
+A legal hold blocks it (`423`). Selecting events by these regex rules is not implemented yet; only explicit ids.
+Details and the honest limits (the verifier and crypto-shredding): [docs/retention.md](retention.md#chain-compatible-tombstones-issue-109).
+
 See also [docs/retention.md](retention.md) for how long data (redacted or not) stays on disk, and
 [.github/SECURITY.md](../.github/SECURITY.md) for the production hardening checklist.

@@ -20,6 +20,7 @@ import { eventHashChain } from './migrations/0017-event-hash-chain';
 import { auditMeta } from './migrations/0018-audit-meta';
 import { apiKeys } from './migrations/0019-api-keys';
 import { apiKeyScopes } from './migrations/0020-api-key-scopes';
+import { tombstonesLegalHold } from './migrations/0021-tombstones-legal-hold';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -51,6 +52,7 @@ export const MIGRATIONS: readonly Migration[] = [
   auditMeta,
   apiKeys,
   apiKeyScopes,
+  tombstonesLegalHold,
 ];
 
 export interface MigrationOptions {

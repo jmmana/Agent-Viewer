@@ -127,3 +127,68 @@ Making deletion (and tampering) detectable and provable is deliberately out of s
 
 Until then, retention here is what it is for most products at this stage: a configuration a trusted operator
 turns on, not a control that survives an untrusted one.
+
+## Chain-compatible tombstones (issue #109)
+
+A chained row is never deleted by the routes below. It is **tombstoned**: its `summary` becomes `[removed]`, its
+`payload` `{}`, and its `event_json` is rewritten the same way plus a server-assigned `tombstone` object
+(`at`, `reason`, `auditEventId`, `rulesVersion`, `contentHash`). Content is removed as a whole, never field by
+field. `seq`, `hash`, `prev_hash`, `submitter_id`, `content_hash`, `created_at` and every header column
+(`type`, `timestamp`, `runtime_id`, `session_id`, `agent_id`, `task_id`, `severity`, the request-key columns)
+stay byte-identical, so the chain's links keep matching. `content_salt` is set to `NULL` (crypto-shredding; see
+the limits below). Migration 20 adds the columns (all nullable, `NULL` means unknown, never `0`), an index on
+`tombstoned_at`, the `legal_holds` table, and replaces the `events_immutable` trigger with one that allows
+exactly that transition and nothing else: an already-tombstoned row and every `audit.*` row stay frozen.
+
+Each batch (`AGENT_VIEWER_RETENTION_BATCH_SIZE` rows, default 5000) is one `BEGIN IMMEDIATE` transaction that:
+reads the legal hold, selects the eligible rows (`tombstoned_at IS NULL AND type NOT LIKE 'audit.%'`), appends one
+chained `audit.retention.purged` or `audit.redaction.applied` event whose payload lists every affected row's `id`,
+`seq`, original `hash` and `content_hash` (never its content), and tombstones those rows pointing back at that
+audit event's `seq` (`tombstone_audit_seq`). The event loop is yielded between batches.
+
+### Legal hold
+
+`POST /api/v1/audit/legal-hold` with `{ "action": "place" | "release", "reason": "..." }` writes a chained
+`audit.legal_hold.changed` event and its `legal_holds` row in one transaction. `legal_holds` is a convenience
+projection; the chained events are the evidence. While a hold is active, purge and redact answer `423
+legal_hold_active`, and the hold is re-read inside every batch's own write transaction: a hold placed mid-run
+stops the run cleanly (`stoppedByHold: true`; batches already committed stay). The scheduled #70 job also checks
+the hold inside each delete batch and deletes nothing while it is active.
+
+### Routes
+
+All under `/api/v1/audit`, checked in this order: `401` (no valid credential), `403 admin_token_required` (no
+`AGENT_VIEWER_API_TOKEN` configured: an open API never destroys anything), `403 admin_required` (a named key, not
+the bootstrap token), `409 audit_requires_sqlite`, `400` (bad body), then `423` (active hold; not for the hold
+route itself, since releasing must stay possible).
+
+- `GET /retention`: `storage`, `policy` (`eventsWindowDays`, `intervalMinutes`, `batchSize`, `scheduledJobMode`,
+  `destructiveRoutesEnabled`), `legalHold` (`active`, `current`, `history`), `lastRun`, `tombstones` (`total`,
+  `byReason`, `lastAt`), `redactionRulesVersion` (`null` until a rules engine exists) and
+  `rowsByRedactionRulesVersion` (`unknown` for rows with none). `409` in memory mode.
+- `POST /retention/purge` `{ "before": <ms epoch> }`: tombstones every eligible event received before `before`.
+- `POST /redact` `{ "eventIds": [...], "rulesVersion"?: "..." }`: tombstones the named events (`reason: redaction`).
+- `POST /legal-hold`: see above. `409 legal_hold_already_active` / `no_active_legal_hold` when nothing changes.
+
+Clients can never forge any of this: `POST /api/v1/events` and `/events/batch` answer `400 reserved_type` for any
+`audit.*` type and `400 reserved_field` for a body carrying `tombstone` or `redactionRulesVersion`, checked on the
+raw body before validation (a batch is refused whole).
+
+### Known limits and pending work
+
+- **`GET /api/v1/audit/verify` does not understand tombstones yet.** It recomputes each row's hash from
+  `event_json`, which a tombstone necessarily changes, so it reports `hash_mismatch` at the first tombstoned row.
+  The accounting a verifier needs is in place (links unchanged; the original `hash` and `content_hash` committed
+  by a chained, still-recomputable audit event that `tombstone_audit_seq` points to; see `tombstoneAwareWalk` in
+  `tests/audit-retention.test.mjs`), but `server/audit/verify.ts` itself is not changed by this item.
+- **Crypto-shredding is structural only.** The v1 chain (`server/chain.ts`) hashes the raw event and
+  `content_hash` is an unsalted fingerprint, so the stored hashes still commit to the removed content: low-entropy
+  content could be confirmed by guessing. `content_salt` exists and is destroyed on tombstone, but nothing writes
+  or uses a salt yet; real shredding needs a chain format that commits to a salted content hash (a new domain tag).
+- **The scheduled #70 job still deletes rows physically**, chained ones included (it now honors a legal hold).
+  Moving it onto tombstones is pending.
+- Derived in-memory state (agents, tasks, the SSE replay a client already received) is not scrubbed until the next
+  restart rebuilds it from the tombstoned rows.
+- Pattern-based redaction (selecting events by the `src/integrations/redaction.ts` rules) is not implemented; only
+  explicit ids. The `actor` on every audit event is fixed to `{ "kind": "api", "name": "api-token" }` for now.
+- Memory mode: `EventStore.tombstone` rewrites the RAM window only (no chain, no hold); the routes answer `409`.

@@ -17,6 +17,9 @@ import { serverEventId } from './ids';
 import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
 import {
   createEventStore,
+  parseRetentionBatchSize,
+  type AuditActor,
+  type TombstoneResult,
   type AppendResult,
   type AppendBatchResult,
   type EventSeq,
@@ -270,6 +273,7 @@ const PATCH_USAGE_MESSAGE =
 let store: EventStore;
 let sseReplayMax: number;
 let retentionConfig: RetentionConfig;
+let retentionBatchSize: number;
 let alertWebhookConfig: AlertWebhookConfig | null;
 try {
   store = createEventStore();
@@ -277,6 +281,8 @@ try {
   // Issue #70: validated once at startup, like every other env-derived config here. A bad value must never be
   // silently ignored or guessed at, since it governs permanent deletion.
   retentionConfig = parseRetentionConfig(process.env);
+  // Issue #109: rows per tombstone transaction (and per chained audit event). Same rule as above.
+  retentionBatchSize = parseRetentionBatchSize(process.env.AGENT_VIEWER_RETENTION_BATCH_SIZE);
   // Issue #86 (sub-issue #321): same rule, for the outbound budget alert webhook. `null` means the feature is off
   // (no `AGENT_VIEWER_ALERT_WEBHOOK_URL`); an invalid URL, a refused plain `http://` or an out-of-range numeric
   // value stops the server here, with a message that never echoes the URL.
@@ -1686,6 +1692,25 @@ function reservedBudgetAlertIssue(body: unknown): { path: 'type' | 'id'; message
 }
 
 /**
+ * Issue #109: every `audit.*` type is server-only, and `tombstone`/`redactionRulesVersion` are server-assigned.
+ * Checked on the raw body (before validation, which would otherwise just drop the unknown fields) so a client
+ * learns it tried to forge server state instead of having it silently ignored.
+ */
+function reservedAuditIssue(body: unknown): { error: 'reserved_type' | 'reserved_field'; path: string; message: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const candidate = body as Record<string, unknown>;
+  if (typeof candidate.type === 'string' && candidate.type.startsWith('audit.')) {
+    return { error: 'reserved_type', path: 'type', message: 'reserved_type: audit.* events are emitted by the server only' };
+  }
+  for (const field of ['tombstone', 'redactionRulesVersion']) {
+    if (Object.prototype.hasOwnProperty.call(candidate, field)) {
+      return { error: 'reserved_field', path: field, message: `reserved_field: ${field} is assigned by the server only` };
+    }
+  }
+  return null;
+}
+
+/**
  * Stores an event the server built itself and broadcasts it only when the store accepted it. Any other outcome
  * means a server-generated id was reused, which is a server bug: it is logged at error and answered with
  * `500 internal_id_collision` instead of being hidden. Returns false when the response was already sent.
@@ -1839,6 +1864,13 @@ app.post('/api/v1/events', async (req, res) => {
     }
   }
 
+  const reservedAudit = reservedAuditIssue(body);
+  if (reservedAudit) {
+    markRejection(res, 'validation');
+    res.status(400).json({ error: reservedAudit.error, path: reservedAudit.path, message: reservedAudit.message });
+    return;
+  }
+
   const reserved = reservedBudgetAlertIssue(body);
   if (reserved) {
     markRejection(res, 'validation');
@@ -1941,6 +1973,16 @@ app.post('/api/v1/events/batch', async (req, res) => {
       message: `Batch contains ${rawEvents.length} events; limit is ${maxBatchSize}`,
     });
     return;
+  }
+
+  // Issue #109: the whole batch is refused when any raw item forges a server-only type or field.
+  for (let index = 0; index < rawEvents.length; index++) {
+    const reservedAudit = reservedAuditIssue(rawEvents[index]);
+    if (reservedAudit) {
+      markRejection(res, 'validation');
+      res.status(400).json({ error: reservedAudit.error, index, path: reservedAudit.path, message: reservedAudit.message });
+      return;
+    }
   }
 
   const validatedEvents: CanonicalEvent[] = [];
@@ -2170,6 +2212,246 @@ app.get('/api/v1/audit/verify', async (req, res) => {
   } catch (err) {
     console.error('[agent-viewer] /api/v1/audit/verify failed:', err);
     res.status(503).json({ error: 'audit_verify_failed', message: 'The chain could not be read.' });
+  }
+});
+
+// -------------------------------------------------------------
+// Chain-compatible retention, redaction and legal hold (issue #109)
+// -------------------------------------------------------------
+
+/** Issue #109: fixed until scoped identities (#107/#108) are wired into audit events. */
+const AUDIT_API_ACTOR: AuditActor = { kind: 'api', name: 'api-token' };
+const MAX_HOLD_REASON_LENGTH = 500;
+const MAX_RULES_VERSION_LENGTH = 100;
+
+/** One destructive run at a time per process: every batch is atomic on its own, this only stops two operators
+ * from racing the same candidate list. */
+let auditDestructiveRunInFlight = false;
+
+/** Whether the store can tombstone with a chained audit trail (SQLite past migration 20). */
+function storeSupportsAuditRetention(): boolean {
+  return Boolean(store.getDatabasePath?.() && store.setLegalHold && store.activeLegalHold && store.listTombstoneCandidates && store.auditRetentionStatus);
+}
+
+/**
+ * The fixed, fail-closed order for every mutating `/api/v1/audit` route (issue #109): `401` already came from the
+ * `/api/v1` middleware; then `403 admin_token_required` when no API token is configured at all (open mode never
+ * destroys anything), `403 admin_required` for any credential but the bootstrap token, then `409
+ * audit_requires_sqlite`. The route itself then answers `400` for a bad body and `423` for an active hold.
+ * Returns `true` (response sent) when the request must stop here.
+ */
+function refuseAuditMutation(res: express.Response): boolean {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!getApiToken()) {
+    res.status(403).json({
+      error: 'admin_token_required',
+      message: 'Set AGENT_VIEWER_API_TOKEN: destructive audit operations never run on an open API.',
+    });
+    return true;
+  }
+  const submitter = res.locals.submitter as Submitter | undefined;
+  if (submitter?.kind !== 'bootstrap') {
+    res.status(403).json({ error: 'admin_required', message: 'Only the bootstrap token (AGENT_VIEWER_API_TOKEN) may run this.' });
+    return true;
+  }
+  if (!storeSupportsAuditRetention()) {
+    res.status(409).json({ error: 'audit_requires_sqlite', message: 'Tombstones and legal holds need SQLite storage.' });
+    return true;
+  }
+  return false;
+}
+
+function legalHoldLocked(res: express.Response): void {
+  res.status(423).json({ error: 'legal_hold_active', message: 'A legal hold is active; nothing can be removed until it is released.' });
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Shared tail of purge and redact: `423` when a hold stopped the run before anything was committed. */
+function sendTombstoneResult(res: express.Response, result: TombstoneResult): void {
+  if (result.stoppedByHold && result.batches === 0) {
+    legalHoldLocked(res);
+    return;
+  }
+  res.json(result);
+}
+
+/**
+ * Policy, legal hold and tombstone state. `409` in memory mode: nothing there is chained, so there is nothing
+ * auditable to report. Read-only, so it only needs the normal `/api/v1` credential.
+ */
+app.get('/api/v1/audit/retention', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!storeSupportsAuditRetention()) {
+    res.status(409).json({ error: 'audit_requires_sqlite', message: 'Tombstones and legal holds need SQLite storage.' });
+    return;
+  }
+  try {
+    const status = await store.auditRetentionStatus!();
+    res.json({
+      storage: 'sqlite',
+      policy: {
+        eventsWindowDays: retentionConfig.eventsDays,
+        intervalMinutes: retentionConfig.intervalMinutes,
+        batchSize: retentionBatchSize,
+        // The scheduled #70 job still deletes rows outright; only the routes below tombstone (see docs/retention.md).
+        scheduledJobMode: retentionConfig.eventsDays === null ? 'off' : 'delete',
+        destructiveRoutesEnabled: Boolean(getApiToken()),
+      },
+      legalHold: status.legalHold,
+      lastRun: status.lastRun,
+      tombstones: status.tombstones,
+      // No redaction rules engine exists yet, so no rules version is in force.
+      redactionRulesVersion: null,
+      rowsByRedactionRulesVersion: status.rowsByRedactionRulesVersion,
+    });
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/retention failed:', err);
+    res.status(503).json({ error: 'audit_retention_failed', message: 'Retention state could not be read.' });
+  }
+});
+
+/** Places or releases the legal hold. Never `423`: releasing is exactly what a hold must still allow. */
+app.post('/api/v1/audit/legal-hold', async (req, res) => {
+  if (refuseAuditMutation(res)) return;
+  const body = req.body;
+  const action = isPlainObject(body) ? body.action : undefined;
+  const reason = isPlainObject(body) ? body.reason : undefined;
+  if (
+    (action !== 'place' && action !== 'release')
+    || typeof reason !== 'string'
+    || reason.trim() === ''
+    || reason.length > MAX_HOLD_REASON_LENGTH
+  ) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: `Expected { action: "place" | "release", reason: non-empty string up to ${MAX_HOLD_REASON_LENGTH} characters }`,
+    });
+    return;
+  }
+  try {
+    const result = await store.setLegalHold!({
+      active: action === 'place',
+      reason,
+      actor: AUDIT_API_ACTOR,
+      submitterId: submitterIdForRequest(req, res),
+    });
+    if (!result.changed) {
+      res.status(409).json({
+        error: result.reason === 'already_active' ? 'legal_hold_already_active' : 'no_active_legal_hold',
+        legalHold: result.hold,
+      });
+      return;
+    }
+    res.json({ legalHold: result.hold, auditEventId: result.auditEventId });
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/legal-hold failed:', err);
+    res.status(500).json({ error: 'legal_hold_failed', message: 'The legal hold could not be changed.' });
+  }
+});
+
+/**
+ * Tombstones every eligible event received before `before` (ms epoch). Batches of `AGENT_VIEWER_RETENTION_BATCH_SIZE`,
+ * one chained `audit.retention.purged` event per batch; a hold placed mid-run stops it cleanly
+ * (`stoppedByHold: true`, committed batches stay).
+ */
+app.post('/api/v1/audit/retention/purge', async (req, res) => {
+  if (refuseAuditMutation(res)) return;
+  const before = isPlainObject(req.body) ? req.body.before : undefined;
+  if (typeof before !== 'number' || !Number.isSafeInteger(before) || before <= 0 || before > Date.now()) {
+    res.status(400).json({ error: 'validation_failed', message: 'Expected { before: integer ms epoch, not in the future }' });
+    return;
+  }
+  if (await store.activeLegalHold!()) {
+    legalHoldLocked(res);
+    return;
+  }
+  if (auditDestructiveRunInFlight) {
+    res.status(409).json({ error: 'run_in_progress', message: 'Another retention or redaction run is in progress.' });
+    return;
+  }
+  auditDestructiveRunInFlight = true;
+  const total: TombstoneResult = { tombstoned: 0, skipped: 0, batches: 0, auditEventIds: [], stoppedByHold: false };
+  try {
+    const submitterId = submitterIdForRequest(req, res);
+    while (true) {
+      const ids = await store.listTombstoneCandidates!(before, retentionBatchSize);
+      if (ids.length === 0) break;
+      const result = await store.tombstone(ids, {
+        reason: 'retention',
+        rulesVersion: null,
+        actor: AUDIT_API_ACTOR,
+        submitterId,
+        batchSize: retentionBatchSize,
+        context: { cutoff: before },
+      });
+      total.tombstoned += result.tombstoned;
+      total.skipped += result.skipped;
+      total.batches += result.batches;
+      total.auditEventIds.push(...result.auditEventIds);
+      if (result.stoppedByHold) {
+        total.stoppedByHold = true;
+        break;
+      }
+      // Candidates are re-read after every page; a page that tombstoned nothing would loop forever.
+      if (result.tombstoned === 0) break;
+    }
+    sendTombstoneResult(res, total);
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/retention/purge failed:', err);
+    res.status(500).json({ error: 'retention_purge_failed', message: 'The run failed; committed batches stay.', partial: total });
+  } finally {
+    auditDestructiveRunInFlight = false;
+  }
+});
+
+/**
+ * Tombstones explicitly named events (`reason: 'redaction'`), all or nothing per event: there is no field-level
+ * redaction. Pattern-based selection is not implemented yet (see docs/redaction.md).
+ */
+app.post('/api/v1/audit/redact', async (req, res) => {
+  if (refuseAuditMutation(res)) return;
+  const body = isPlainObject(req.body) ? req.body : {};
+  const eventIds = body.eventIds;
+  const rulesVersion = body.rulesVersion;
+  if (
+    !Array.isArray(eventIds)
+    || eventIds.length === 0
+    || eventIds.length > retentionBatchSize
+    || !eventIds.every((id) => typeof id === 'string' && id.length > 0)
+    || (rulesVersion !== undefined && (typeof rulesVersion !== 'string' || rulesVersion === '' || rulesVersion.length > MAX_RULES_VERSION_LENGTH))
+  ) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: `Expected { eventIds: 1 to ${retentionBatchSize} non-empty strings, rulesVersion?: string up to ${MAX_RULES_VERSION_LENGTH} characters }`,
+    });
+    return;
+  }
+  if (await store.activeLegalHold!()) {
+    legalHoldLocked(res);
+    return;
+  }
+  if (auditDestructiveRunInFlight) {
+    res.status(409).json({ error: 'run_in_progress', message: 'Another retention or redaction run is in progress.' });
+    return;
+  }
+  auditDestructiveRunInFlight = true;
+  try {
+    const result = await store.tombstone(eventIds as string[], {
+      reason: 'redaction',
+      rulesVersion: (rulesVersion as string | undefined) ?? null,
+      actor: AUDIT_API_ACTOR,
+      submitterId: submitterIdForRequest(req, res),
+      batchSize: retentionBatchSize,
+    });
+    sendTombstoneResult(res, result);
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/redact failed:', err);
+    res.status(500).json({ error: 'redaction_failed', message: 'The run failed; committed batches stay.' });
+  } finally {
+    auditDestructiveRunInFlight = false;
   }
 });
 

@@ -18,5 +18,6 @@
   [17, "event-hash-chain"],
   [18, "audit-meta"],
   [19, "api-keys"],
-  [20, "api-key-scopes"]
+  [20, "api-key-scopes"],
+  [21, "tombstones-legal-hold"]
 ]

@@ -62,6 +62,18 @@ export type LlmErrorKind =
   | 'network'
   | 'unknown';
 
+/** Issue #109: why a chained event's content was removed. */
+export type TombstoneReason = 'retention' | 'redaction';
+
+/** Issue #109: present only on an event whose content the server removed. */
+export interface TombstoneInfo {
+  at: number;
+  reason: TombstoneReason;
+  auditEventId: string;
+  rulesVersion: string | null;
+  contentHash: string | null;
+}
+
 export interface CanonicalEvent<T = Record<string, any>> {
   schemaVersion: '1.0';
   id: string;
@@ -75,6 +87,10 @@ export interface CanonicalEvent<T = Record<string, any>> {
   severity: EventSeverity;
   summary: string;
   payload: T;
+  /** Issue #109: server-assigned, never accepted from a client. */
+  tombstone?: TombstoneInfo;
+  /** Issue #109: server-assigned, never accepted from a client. */
+  redactionRulesVersion?: string;
 }
 
 // ---- Usage/tool payload shapes (mirror canonicalContract.ts's z.input types) ----

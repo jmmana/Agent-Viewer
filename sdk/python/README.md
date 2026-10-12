@@ -20,7 +20,7 @@ You can also build a wheel and install it elsewhere:
 
 ```bash
 python -m pip wheel ./sdk/python -w dist/
-pip install dist/agent_viewer-0.5.0-py3-none-any.whl
+pip install dist/agent_viewer-0.6.0-py3-none-any.whl
 ```
 
 ## Quick start
@@ -96,7 +96,7 @@ except AgentViewerError as err:
 
 ### Verifying an outbound webhook (issue #86, sub-issue #323)
 
-If you receive Agent Viewer's outbound `budget.alert` webhook (issue #86's sub-issue #321), `verify_webhook_signature` checks it with the same HMAC-SHA256 scheme the server itself uses to verify an inbound webhook: a hex digest of `f"{timestamp}.{raw_body}"`. It returns a plain `bool`, never raises, and also rejects a timestamp more than `tolerance_ms` (default 300000, 5 minutes) away from now in either direction, so a replayed or clock-skewed delivery is refused too. It never builds or sends a `budget.alert` event itself: that type is reserved to the server.
+If you receive Agent Viewer's outbound `budget.alert` webhook (issue #86's sub-issue #321), `verify_webhook_signature` checks it with the same HMAC-SHA256 scheme the server itself uses to verify an inbound webhook: a hex digest of `f"{timestamp}.{raw_body}"`. It returns a plain `bool`, never raises, and also rejects a timestamp more than `tolerance_ms` (default 300000, 5 minutes) away from now in either direction, so a replayed or clock-skewed delivery is refused too. It never builds or sends a `budget.alert` event itself: that type is reserved to the server. Full reference for both webhook directions: [docs/webhooks.md](../../docs/webhooks.md).
 
 ```python
 from agent_viewer import verify_webhook_signature

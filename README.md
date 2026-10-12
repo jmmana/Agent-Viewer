@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/jmmana/Agent-Viewer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/jmmana/Agent-Viewer/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white" alt="CI status" /></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.5.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.5.0" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.6.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.6.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" alt="MIT license" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer"><img src="https://img.shields.io/github/stars/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=a855f7&label=stars" alt="GitHub stars" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer/network/members"><img src="https://img.shields.io/github/forks/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=4c1d95&label=forks" alt="GitHub forks" /></a>
@@ -202,12 +202,12 @@ This starts the API on **:8787** with SQLite on a named volume, and the built de
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> in professional mode: a meeting where agents propose, object, agree and decide. Only the events passed to the component are drawn.</sub>
 </p>
 
-Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.5.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
+Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.6.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
 
 Publication on npm is coming soon. Until then, install it from the GitHub release asset (the package name and your imports stay the same when you switch to npm):
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.6.0/warlockcode-agent-viewer-0.6.0.tgz
 ```
 
 ### Minimal example
@@ -816,23 +816,10 @@ Each conflict also writes one `warn` log line with the id, type, source, agent a
 <summary><b>🔏 Signing webhooks (HMAC-SHA256)</b></summary>
 <br/>
 
-With `AGENT_VIEWER_WEBHOOK_SECRET` set, every webhook needs two headers:
-
-- `X-Agent-Viewer-Timestamp`: milliseconds since the epoch, at most 5 minutes off the server clock.
-- `X-Agent-Viewer-Signature`: hex HMAC-SHA256 of `${timestamp}.${rawBody}`.
-
-```ts
-import crypto from 'node:crypto';
-
-const rawBody = JSON.stringify({ agent: 'atlas', status: 'coding' });
-const timestamp = Date.now().toString();
-const signature = crypto
-  .createHmac('sha256', process.env.AGENT_VIEWER_WEBHOOK_SECRET!)
-  .update(`${timestamp}.${rawBody}`)
-  .digest('hex');
-```
-
-The signature is compared in constant time. Expired timestamps and bad signatures get HTTP 401.
+With `AGENT_VIEWER_WEBHOOK_SECRET` set, every inbound webhook needs `X-Agent-Viewer-Timestamp` (milliseconds since
+the epoch) and `X-Agent-Viewer-Signature` (hex HMAC-SHA256 of `${timestamp}.${rawBody}`, compared in constant
+time). Full reference, including every response status and `error` value, the replay cache, and sender/receiver
+code in Node and Python: [docs/webhooks.md](docs/webhooks.md).
 
 </details>
 
@@ -855,21 +842,13 @@ expose a read-only `budgets()`. Full reference, with every endpoint and a real c
 <summary><b>🔔 Budget alert webhook (outbound)</b></summary>
 <br/>
 
-An optional outbound webhook delivers every `budget.alert` event (a budget crossing its warning or critical threshold) to a destination you configure, signed with its own HMAC secret, never the inbound `AGENT_VIEWER_WEBHOOK_SECRET` above. Set `AGENT_VIEWER_ALERT_WEBHOOK_URL` (plus, optionally, `_SECRET`, `_ALLOW_HTTP`, `_MAX_ATTEMPTS`, `_TIMEOUT_MS`, see the Configuration table) to enable it; with no URL, nothing is ever sent, and every alert's delivery stays `skipped`.
-
-Each attempt is a `POST` with the full canonical event as the body, byte-identical on every retry, and these headers:
-
-| Header | Meaning |
-|---|---|
-| `X-Agent-Viewer-Event` | Always `budget.alert`. |
-| `X-Agent-Viewer-Delivery` | The alert id, stable across every retry: dedupe on it. |
-| `X-Agent-Viewer-Attempt` | `1` on the first try, incrementing on each retry. |
-| `X-Agent-Viewer-Timestamp` | Milliseconds since the epoch, fresh on every attempt. |
-| `X-Agent-Viewer-Signature` | Hex HMAC-SHA256 of `${timestamp}.${rawBody}` using `AGENT_VIEWER_ALERT_WEBHOOK_SECRET`; omitted entirely when no secret is set. |
-
-Retry policy: any `2xx` succeeds; a network error, a timeout, `5xx`, `408` or `429` retries; any other `4xx` and any redirect fail immediately, with no retry. Backoff is `min(5s * 2^(attempt-1), 1h)`, with jitter uniform in `[base/2, base]`; a `Retry-After` on `429`/`503` raises the floor, still capped at one hour. After `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` the delivery is left `failed` for good (a dead letter, never retried again), and one `warn` log line names only the alert id and the last HTTP status, never the secret or the URL.
-
-Delivery is **at least once**: dedupe on `X-Agent-Viewer-Delivery`. The destination is operator configuration, never taken from a client request, but the payload still carries budget names, scopes and spend figures, so treat it as a trusted destination. With `AGENT_VIEWER_STORAGE=sqlite`, a delivery still `pending` after a restart resumes automatically; in `memory` mode it is lost instead, the same documented restart limitation as the rest of this storage mode. A backfill alert (detected in an already-closed period) and any alert detected while no webhook URL was configured are written `skipped` and never delivered, even if the webhook is enabled afterward.
+An optional outbound webhook delivers every `budget.alert` event (a budget crossing its warning or exceeded
+threshold) to a destination you configure, signed with its own HMAC secret, never the inbound
+`AGENT_VIEWER_WEBHOOK_SECRET` above. Set `AGENT_VIEWER_ALERT_WEBHOOK_URL` (plus, optionally, `_SECRET`,
+`_ALLOW_HTTP`, `_MAX_ATTEMPTS`, `_TIMEOUT_MS`, see the Configuration table) to enable it; with no URL, nothing is
+ever sent, and every alert's delivery stays `skipped`. Full reference, including the exact headers, the payload
+shape, retry and backoff behavior, delivery idempotency, the target-URL restrictions and a receiver verification
+snippet: [docs/webhooks.md](docs/webhooks.md).
 
 </details>
 
@@ -973,7 +952,7 @@ Agent Viewer needs no model provider keys: usage figures come from your runtime.
 
 ## 🧭 Roadmap
 
-Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. Shipped in [0.5.0](CHANGELOG.md): per-agent usage badges and a per-call detail panel on the canvas, cost per meeting and per tool, Model Ops reconciling against the real ledger call by call, and the library guide's four usage privacy rules stated together in [docs/library.md](docs/library.md#usage-figures). See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
+Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. Shipped in [0.5.0](CHANGELOG.md): per-agent usage badges and a per-call detail panel on the canvas, cost per meeting and per tool, Model Ops reconciling against the real ledger call by call, and the library guide's four usage privacy rules stated together in [docs/library.md](docs/library.md#usage-figures). Shipped in [0.6.0](CHANGELOG.md), "Precios y control": a versioned server pricing table with a per-row cost estimate ([docs/pricing.md](docs/pricing.md)), budgets per agent, model, session, user or tag with server-computed state and signed outbound alerts ([docs/budgets.md](docs/budgets.md)), measured latency percentiles and failure rates per model, and one canonical webhook-signing guide for both directions ([docs/webhooks.md](docs/webhooks.md)). See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
 
 Planned, not available yet:
 

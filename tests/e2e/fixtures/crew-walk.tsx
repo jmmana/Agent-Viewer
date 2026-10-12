@@ -4,7 +4,11 @@ import {CrewStage} from '../../../src/crew/CrewStage';
 import {buildOfficeSnapshot} from '../../../src/lib/officeStore';
 import {builtInMessages} from '../../../src/content/officeMessages';
 import type {Agent} from '../../../src/types/agent';
-const initial=Object.freeze(buildOfficeSnapshot([],{now:0,agents:[{id:'walk-fixture',name:'Fixture CEO',workspace:'boss_office'}]}).agents
+// `workspace` defaults to the original 'boss_office' so every existing test URL (none of
+// which sets it) keeps placing the fixture agent in the CEO room exactly as before; issue
+// #129's navigation spec passes `?workspace=development` to exercise a real, longer walk.
+const fixtureWorkspace=new URLSearchParams(window.location.search).get('workspace')??'boss_office';
+const initial=Object.freeze(buildOfficeSnapshot([],{now:0,agents:[{id:'walk-fixture',name:'Fixture CEO',workspace:fixtureWorkspace}]}).agents
   .map(agent=>Object.freeze({...agent,role:'boss' as const,facing:'SE' as const,isWalking:true})));
 export type FixturePatch={walking?:boolean;mounted?:boolean;locale?:string;role?:Agent['role']};
 declare global {interface Window {__crewWalkFixture:(patch:FixturePatch)=>void}}

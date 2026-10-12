@@ -3,6 +3,7 @@ import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { CrewRoomSelector } from './CrewRoomSelector';
 import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
+import { useCrewAgentWalk } from './useCrewAgentWalk';
 import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
@@ -204,10 +205,12 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
   const visibleAgents = useMemo(() => crewAgentsInRoom(agents, roomId), [agents, roomId]);
   const action = useCrewActions(visibleAgents, room, view, visualPreferences.reducedMotion);
   const workstationImage = useCrewWorkstation(roomId === 'ceo' && action.actions.some(actor => !!actor.workstation), roomId);
-  const presence = useMemo(() => {
-    const projected = projectCrewPresence(agents, room);
-    return { ...projected, markers: crewActionMarkers(projected.markers, action.actions) };
-  }, [agents, room, action.actions]);
+  const rawPresence = useMemo(() => projectCrewPresence(agents, room), [agents, room]);
+  // Real local walking (#129): moves a walking marker along the room's own furniture-avoiding
+  // grid instead of snapping between slots. Resting markers pass through unchanged.
+  const walkAnimatedMarkers = useCrewAgentWalk(room, rawPresence.markers, visualPreferences.reducedMotion);
+  const presence = useMemo(() => ({ ...rawPresence, markers: crewActionMarkers(walkAnimatedMarkers, action.actions) }),
+    [rawPresence, walkAnimatedMarkers, action.actions]);
 
   const directions = presence.markers.map(marker => crewSpriteView(marker, view)).filter((direction): direction is CrewView => direction !== null);
   // La llamada se dibuja por actor en action.frames; la pose compartida es neutral.

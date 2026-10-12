@@ -3,7 +3,7 @@ import type { CrewRoomDefinition } from './crewModel';
 import type { CrewPresenceMarker } from './crewPresence';
 import { crewRoomForWorkspace } from './crewEvents';
 
-export type CrewActionId = 'turn' | 'sit' | 'stand' | 'typing' | 'think' | 'talk' | 'review';
+export type CrewActionId = 'turn' | 'sit' | 'stand' | 'typing' | 'think' | 'talk' | 'review' | 'call-pickup' | 'call' | 'call-hangup';
 export type CrewObservedAgent = Pick<Agent, 'id' | 'workspace' | 'role' | 'status' | 'x' | 'y' | 'targetX' | 'targetY' | 'isWalking' | 'facing'>;
 export interface CrewWorkstation { actorId?: string; deskId: string; chairId: string; x: number; y: number; facing: Agent['facing'] }
 export interface CrewActorAction {
@@ -88,8 +88,21 @@ export function updateCrewActorActions(agents: readonly CrewObservedAgent[], roo
     if (clip === 'sit' && now - startedAt >= CREW_ACTION_DURATION_MS) { clip = 'typing'; startedAt += CREW_ACTION_DURATION_MS; }
     if ((clip === 'stand' || clip === 'turn') && now - startedAt >= CREW_ACTION_DURATION_MS) clip = null;
     if (!seated && clip !== 'stand' && clip !== 'turn') {
-      const gesture = crewReportedGesture(agent);
-      if (clip !== gesture) { clip = gesture; startedAt = now; }
+      if (agent.status === 'PHONE_CALL' && !agent.isWalking) {
+        if (clip === 'call-pickup' && now - startedAt >= CREW_ACTION_DURATION_MS) {
+          clip = 'call'; startedAt += CREW_ACTION_DURATION_MS;
+        } else if (clip !== 'call-pickup' && clip !== 'call') {
+          clip = 'call-pickup'; startedAt = now;
+        }
+      } else if ((agent.status === 'IDLE' || agent.status === 'AVAILABLE') && !agent.isWalking
+        && (clip === 'call-pickup' || clip === 'call' || clip === 'call-hangup')) {
+        // Colgar es una transición visual local, nunca una orden al proveedor.
+        if (clip !== 'call-hangup') { clip = 'call-hangup'; startedAt = now; }
+        else if (now - startedAt >= CREW_ACTION_DURATION_MS) clip = null;
+      } else {
+        const gesture = crewReportedGesture(agent);
+        if (clip !== gesture) { clip = gesture; startedAt = now; }
+      }
     }
     if (agent.isWalking) { clip = null; turnFrom = undefined; }
     if (!seated && clip !== 'stand') workstation = undefined;

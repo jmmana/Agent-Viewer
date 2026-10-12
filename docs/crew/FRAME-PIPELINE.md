@@ -57,3 +57,7 @@ Validated on main `5560b2c`: 1,051 Node tests passed (one skipped), 740 Vitest, 
 ## Gesture extension (Refs #118)
 
 `gestures.v1.json` adds 12 prototype clips / 48 original frames for think, talk and review, using the existing action registry. Actual PNG dimensions are 1254 x 1254; logical presentation remains 256 x 352. See [provenance](../../assets/crew/origins/gestures-118/README.md) and [runtime evidence](evidence/gestures-280/README.md).
+
+## Phone extension (Refs #118/#145)
+
+`calls.v1.json` adds pickup, conversation and hangup across four facings: 32 new original drawings and 16 reused reverse-order pickup crops for hangup. Both selected PNGs measure 1254 x 1254 RGBA. See [source/prototype limits](../../assets/crew/origins/call-118/README.md) and [runtime evidence](evidence/call-316/README.md).

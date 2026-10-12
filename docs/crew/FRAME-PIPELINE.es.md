@@ -57,3 +57,7 @@ Validado sobre main `5560b2c`: 1.051 Node aprobados (uno omitido), 740 Vitest, 2
 ## Extensión de gestos (Refs #118)
 
 `gestures.v1.json` agrega 12 clips prototype / 48 cuadros originales para pensar, hablar y revisar, usando el registro de acciones existente. Los PNG reales miden 1254 x 1254; la presentación lógica sigue en 256 x 352. Ver [procedencia](../../assets/crew/origins/gestures-118/README.es.md) y [evidencia runtime](evidence/gestures-280/README.es.md).
+
+## Extensión de llamada (Refs #118/#145)
+
+`calls.v1.json` agrega coger, conversar y colgar en cuatro orientaciones: 32 dibujos originales nuevos y 16 recortes de coger reutilizados en orden inverso al colgar. Ambos PNG seleccionados miden 1254 x 1254 RGBA. Ver [origen/límites prototype](../../assets/crew/origins/call-118/README.es.md) y [evidencia runtime](evidence/call-316/README.es.md).

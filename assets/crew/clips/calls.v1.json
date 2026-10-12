@@ -1,0 +1,1041 @@
+{
+  "schemaVersion": 1,
+  "clips": [
+    {
+      "id": "ceo.call-pickup.front.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-pickup",
+      "facing": "front",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 176.0,
+            "y": 321
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "e915bd89be9e3356786979f6bfdef2acef42b4882d7a9aaaa351cb4381b41e8d"
+        },
+        {
+          "x": 314,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 172.0,
+            "y": 321
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "5f0d40595532a40061bb2a48594f06b6429aa33b5a44464cf2639d5258deaeb6"
+        },
+        {
+          "x": 627,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 161.5,
+            "y": 322
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "f516c6e0709d85dd0ff7da4ec4663d30604764d145705a55d5bce9cf069f6c4a"
+        },
+        {
+          "x": 940,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 144.0,
+            "y": 322
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "c210f58ce1e35f7b8861f3ec954ad7baafef8777dc2fb6c8d89a43dafda36a2e"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call-pickup.right.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-pickup",
+      "facing": "right",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 322,
+          "width": 314,
+          "height": 314,
+          "anchor": {
+            "x": 188.5,
+            "y": 314
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "26d16a85a69aea7403f120332ce1b7f977a316c2573505103e7fb824f2965683"
+        },
+        {
+          "x": 314,
+          "y": 322,
+          "width": 313,
+          "height": 314,
+          "anchor": {
+            "x": 182.0,
+            "y": 314
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "5e2fa4f1e028ff1a4d4dac0b9f235b9887b976bb881ea55d185c37586e1f3666"
+        },
+        {
+          "x": 627,
+          "y": 322,
+          "width": 313,
+          "height": 315,
+          "anchor": {
+            "x": 175.0,
+            "y": 315
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "609914e87905e6a21103edfa15d72fc7868831f51c8e73402cd384dd09a9281f"
+        },
+        {
+          "x": 940,
+          "y": 322,
+          "width": 314,
+          "height": 314,
+          "anchor": {
+            "x": 168.0,
+            "y": 314
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "c7a5be2126359e1e070661ae5cb87e442b0db5388cc7cb3a91632c3af9e1289e"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call-pickup.back.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-pickup",
+      "facing": "back",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 636,
+          "width": 314,
+          "height": 295,
+          "anchor": {
+            "x": 174.0,
+            "y": 295
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "41b4285e6f706a5e4c93d704f81e2ed0b5742427466a64984cf6f04e97e0bcff"
+        },
+        {
+          "x": 314,
+          "y": 636,
+          "width": 313,
+          "height": 295,
+          "anchor": {
+            "x": 169.0,
+            "y": 295
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "128f3524601ea29e8f1bfc9a45ebf5fc5223872e56c1ae56862de237653a8aa1"
+        },
+        {
+          "x": 627,
+          "y": 637,
+          "width": 313,
+          "height": 294,
+          "anchor": {
+            "x": 159.0,
+            "y": 294
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "964037615f892217855d06eca5008d3671057f000383e3d8ba6cbc5e34a10754"
+        },
+        {
+          "x": 940,
+          "y": 636,
+          "width": 314,
+          "height": 295,
+          "anchor": {
+            "x": 155.5,
+            "y": 295
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "51a694607f7828f468a2609b88761e0e41313178cba19599e856327fb62bdb8a"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call-pickup.left.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-pickup",
+      "facing": "left",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 931,
+          "width": 314,
+          "height": 323,
+          "anchor": {
+            "x": 172.0,
+            "y": 311
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "7e7efd2835292d264ee42562e0adbbc5683cb496f9562b47ef41c38f6ad88dbc"
+        },
+        {
+          "x": 314,
+          "y": 931,
+          "width": 313,
+          "height": 323,
+          "anchor": {
+            "x": 160.0,
+            "y": 312
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "bb28cc58e00bf6689e99dc7c2bd16084469f86251f8ce0146c550dc2df31d58d"
+        },
+        {
+          "x": 627,
+          "y": 931,
+          "width": 313,
+          "height": 323,
+          "anchor": {
+            "x": 156.5,
+            "y": 312
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "2f5ce8a81bdf14cea92eec8b14d808d12771395f5c7489252db87bf25e326164"
+        },
+        {
+          "x": 940,
+          "y": 931,
+          "width": 314,
+          "height": 323,
+          "anchor": {
+            "x": 149.5,
+            "y": 312
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "47f65d1b931f4d97fcc42a51cd3712fd6ec0bad54e9f3f1dc3d36ea8f1f680d2"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call.front.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call",
+      "facing": "front",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 314,
+          "height": 325,
+          "anchor": {
+            "x": 183.5,
+            "y": 321
+          },
+          "durationMs": 300,
+          "referenceHeight": 309,
+          "sha256": "1a25f10e94aab905da58a9434f0a0ea7523f7a3b41f9119b1c50578580e7abca"
+        },
+        {
+          "x": 314,
+          "y": 0,
+          "width": 313,
+          "height": 324,
+          "anchor": {
+            "x": 159.0,
+            "y": 321
+          },
+          "durationMs": 300,
+          "referenceHeight": 309,
+          "sha256": "6dc72f214a3e31d5f67b576e50ad12310da70ff38d53c5ec20b7f6cec74daa17"
+        },
+        {
+          "x": 627,
+          "y": 0,
+          "width": 313,
+          "height": 324,
+          "anchor": {
+            "x": 158.0,
+            "y": 321
+          },
+          "durationMs": 300,
+          "referenceHeight": 309,
+          "sha256": "d3f861a06de4bd4c0aa1fd00b96a2e93e201f430e1d0afc9d67ad95c8836142f"
+        },
+        {
+          "x": 940,
+          "y": 0,
+          "width": 314,
+          "height": 324,
+          "anchor": {
+            "x": 138.5,
+            "y": 321
+          },
+          "durationMs": 300,
+          "referenceHeight": 309,
+          "sha256": "7eec3d18bb0b7a01697664a93ed6afa334fb1fbbd7e500c5f361311ca31692b4"
+        }
+      ],
+      "sha256": "82c44c0147e26309ec04cbffd565ca48f3c9dafdc72aff95e0302b4fe4f5054e",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/call-v1.prompt.txt",
+        "promptSha256": "ba046c42207b1e1f42a2dce7a50be2eb55b51695c97d60df28091d6ae563e0f8",
+        "reference": "assets/crew/clips/ceo-call-pickup-v3.png",
+        "editTarget": null,
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call.right.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call",
+      "facing": "right",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 325,
+          "width": 314,
+          "height": 308,
+          "anchor": {
+            "x": 188.0,
+            "y": 307
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "866e7064868ec4db071f5d0e035e2836deb3c489f3311b13cac62d1c3527e3a5"
+        },
+        {
+          "x": 314,
+          "y": 324,
+          "width": 313,
+          "height": 309,
+          "anchor": {
+            "x": 168.5,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "18bedb36d9644400137b7ebec659879e9853c0357869efaaf0d07c59e83c6c3d"
+        },
+        {
+          "x": 627,
+          "y": 324,
+          "width": 313,
+          "height": 309,
+          "anchor": {
+            "x": 165.0,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "163d622d5ddbd7a736e7a480e07cd426722cfcc063dc91696ca74518b9a5b4c5"
+        },
+        {
+          "x": 940,
+          "y": 324,
+          "width": 314,
+          "height": 310,
+          "anchor": {
+            "x": 153.0,
+            "y": 310
+          },
+          "durationMs": 300,
+          "referenceHeight": 306,
+          "sha256": "855a3d6de16516094cfb5f5049a331123102d1aafb145878cbcb729e4723dffc"
+        }
+      ],
+      "sha256": "82c44c0147e26309ec04cbffd565ca48f3c9dafdc72aff95e0302b4fe4f5054e",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/call-v1.prompt.txt",
+        "promptSha256": "ba046c42207b1e1f42a2dce7a50be2eb55b51695c97d60df28091d6ae563e0f8",
+        "reference": "assets/crew/clips/ceo-call-pickup-v3.png",
+        "editTarget": null,
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call.back.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call",
+      "facing": "back",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 633,
+          "width": 314,
+          "height": 295,
+          "anchor": {
+            "x": 176.0,
+            "y": 294
+          },
+          "durationMs": 300,
+          "referenceHeight": 295,
+          "sha256": "08bc7efdb30ec3eb42512d69a9e428c55200ce61d3000c16d8884550dea0053b"
+        },
+        {
+          "x": 314,
+          "y": 633,
+          "width": 313,
+          "height": 296,
+          "anchor": {
+            "x": 169.0,
+            "y": 295
+          },
+          "durationMs": 300,
+          "referenceHeight": 295,
+          "sha256": "e16e7dbe732b406d099a8fb2467272786841d882fe653641f699b79e09f45b7d"
+        },
+        {
+          "x": 627,
+          "y": 633,
+          "width": 313,
+          "height": 296,
+          "anchor": {
+            "x": 160.5,
+            "y": 295
+          },
+          "durationMs": 300,
+          "referenceHeight": 295,
+          "sha256": "424eebb2027a457851cc077157875413d14bb8c740a13a9122f728e70bd2e59c"
+        },
+        {
+          "x": 940,
+          "y": 634,
+          "width": 314,
+          "height": 295,
+          "anchor": {
+            "x": 148.0,
+            "y": 294
+          },
+          "durationMs": 300,
+          "referenceHeight": 295,
+          "sha256": "277c80d69a27442583b0e34d134cf6339fff30b70033a373d87eb42cf0b5cee8"
+        }
+      ],
+      "sha256": "82c44c0147e26309ec04cbffd565ca48f3c9dafdc72aff95e0302b4fe4f5054e",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/call-v1.prompt.txt",
+        "promptSha256": "ba046c42207b1e1f42a2dce7a50be2eb55b51695c97d60df28091d6ae563e0f8",
+        "reference": "assets/crew/clips/ceo-call-pickup-v3.png",
+        "editTarget": null,
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call.left.v1",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call",
+      "facing": "left",
+      "version": 1,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-v1.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 3.3333333333333335,
+      "loop": true,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 0,
+          "y": 928,
+          "width": 314,
+          "height": 326,
+          "anchor": {
+            "x": 175.5,
+            "y": 310
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "a7fcd1dce279619ad96f20374850ee48be3b4c467b85158716606d10fe0a7fc7"
+        },
+        {
+          "x": 314,
+          "y": 929,
+          "width": 313,
+          "height": 325,
+          "anchor": {
+            "x": 163.5,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "7a2d824ce917dd9a006ef3882139b1b3208b38ba12b930744aacb98eacdde579"
+        },
+        {
+          "x": 627,
+          "y": 929,
+          "width": 313,
+          "height": 325,
+          "anchor": {
+            "x": 157.5,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "c3f6b2069b339479ff4083cf586335caef9de1dd21c6ec034b48937d7befe035"
+        },
+        {
+          "x": 940,
+          "y": 929,
+          "width": 314,
+          "height": 325,
+          "anchor": {
+            "x": 139.0,
+            "y": 309
+          },
+          "durationMs": 300,
+          "referenceHeight": 310,
+          "sha256": "94a33502578dec044bcc2c46a9404a40abf6a2e3ea3a288235a3a5c99d3e0108"
+        }
+      ],
+      "sha256": "82c44c0147e26309ec04cbffd565ca48f3c9dafdc72aff95e0302b4fe4f5054e",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/call-v1.prompt.txt",
+        "promptSha256": "ba046c42207b1e1f42a2dce7a50be2eb55b51695c97d60df28091d6ae563e0f8",
+        "reference": "assets/crew/clips/ceo-call-pickup-v3.png",
+        "editTarget": null,
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e"
+      }
+    },
+    {
+      "id": "ceo.call-hangup.front.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-hangup",
+      "facing": "front",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 940,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 144.0,
+            "y": 322
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "c210f58ce1e35f7b8861f3ec954ad7baafef8777dc2fb6c8d89a43dafda36a2e"
+        },
+        {
+          "x": 627,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 161.5,
+            "y": 322
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "f516c6e0709d85dd0ff7da4ec4663d30604764d145705a55d5bce9cf069f6c4a"
+        },
+        {
+          "x": 314,
+          "y": 0,
+          "width": 313,
+          "height": 322,
+          "anchor": {
+            "x": 172.0,
+            "y": 321
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "5f0d40595532a40061bb2a48594f06b6429aa33b5a44464cf2639d5258deaeb6"
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "width": 314,
+          "height": 322,
+          "anchor": {
+            "x": 176.0,
+            "y": 321
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "e915bd89be9e3356786979f6bfdef2acef42b4882d7a9aaaa351cb4381b41e8d"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e",
+        "playback": "Reverse original pickup frames; no pixel transformation"
+      }
+    },
+    {
+      "id": "ceo.call-hangup.right.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-hangup",
+      "facing": "right",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 940,
+          "y": 322,
+          "width": 314,
+          "height": 314,
+          "anchor": {
+            "x": 168.0,
+            "y": 314
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "c7a5be2126359e1e070661ae5cb87e442b0db5388cc7cb3a91632c3af9e1289e"
+        },
+        {
+          "x": 627,
+          "y": 322,
+          "width": 313,
+          "height": 315,
+          "anchor": {
+            "x": 175.0,
+            "y": 315
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "609914e87905e6a21103edfa15d72fc7868831f51c8e73402cd384dd09a9281f"
+        },
+        {
+          "x": 314,
+          "y": 322,
+          "width": 313,
+          "height": 314,
+          "anchor": {
+            "x": 182.0,
+            "y": 314
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "5e2fa4f1e028ff1a4d4dac0b9f235b9887b976bb881ea55d185c37586e1f3666"
+        },
+        {
+          "x": 0,
+          "y": 322,
+          "width": 314,
+          "height": 314,
+          "anchor": {
+            "x": 188.5,
+            "y": 314
+          },
+          "durationMs": 200,
+          "referenceHeight": 313,
+          "sha256": "26d16a85a69aea7403f120332ce1b7f977a316c2573505103e7fb824f2965683"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e",
+        "playback": "Reverse original pickup frames; no pixel transformation"
+      }
+    },
+    {
+      "id": "ceo.call-hangup.back.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-hangup",
+      "facing": "back",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 940,
+          "y": 636,
+          "width": 314,
+          "height": 295,
+          "anchor": {
+            "x": 155.5,
+            "y": 295
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "51a694607f7828f468a2609b88761e0e41313178cba19599e856327fb62bdb8a"
+        },
+        {
+          "x": 627,
+          "y": 637,
+          "width": 313,
+          "height": 294,
+          "anchor": {
+            "x": 159.0,
+            "y": 294
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "964037615f892217855d06eca5008d3671057f000383e3d8ba6cbc5e34a10754"
+        },
+        {
+          "x": 314,
+          "y": 636,
+          "width": 313,
+          "height": 295,
+          "anchor": {
+            "x": 169.0,
+            "y": 295
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "128f3524601ea29e8f1bfc9a45ebf5fc5223872e56c1ae56862de237653a8aa1"
+        },
+        {
+          "x": 0,
+          "y": 636,
+          "width": 314,
+          "height": 295,
+          "anchor": {
+            "x": 174.0,
+            "y": 295
+          },
+          "durationMs": 200,
+          "referenceHeight": 295,
+          "sha256": "41b4285e6f706a5e4c93d704f81e2ed0b5742427466a64984cf6f04e97e0bcff"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e",
+        "playback": "Reverse original pickup frames; no pixel transformation"
+      }
+    },
+    {
+      "id": "ceo.call-hangup.left.v3",
+      "role": "ceo",
+      "variant": "default",
+      "clip": "call-hangup",
+      "facing": "left",
+      "version": 3,
+      "status": "prototype",
+      "file": "assets/crew/clips/ceo-call-pickup-v3.png",
+      "width": 1254,
+      "height": 1254,
+      "fps": 5,
+      "loop": false,
+      "logicalResolution": {
+        "width": 256,
+        "height": 352
+      },
+      "anchor": {
+        "x": 0.5,
+        "y": 0.9375
+      },
+      "frames": [
+        {
+          "x": 940,
+          "y": 931,
+          "width": 314,
+          "height": 323,
+          "anchor": {
+            "x": 149.5,
+            "y": 312
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "47f65d1b931f4d97fcc42a51cd3712fd6ec0bad54e9f3f1dc3d36ea8f1f680d2"
+        },
+        {
+          "x": 627,
+          "y": 931,
+          "width": 313,
+          "height": 323,
+          "anchor": {
+            "x": 156.5,
+            "y": 312
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "2f5ce8a81bdf14cea92eec8b14d808d12771395f5c7489252db87bf25e326164"
+        },
+        {
+          "x": 314,
+          "y": 931,
+          "width": 313,
+          "height": 323,
+          "anchor": {
+            "x": 160.0,
+            "y": 312
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "bb28cc58e00bf6689e99dc7c2bd16084469f86251f8ce0146c550dc2df31d58d"
+        },
+        {
+          "x": 0,
+          "y": 931,
+          "width": 314,
+          "height": 323,
+          "anchor": {
+            "x": 172.0,
+            "y": 311
+          },
+          "durationMs": 200,
+          "referenceHeight": 312,
+          "sha256": "7e7efd2835292d264ee42562e0adbbc5683cb496f9562b47ef41c38f6ad88dbc"
+        }
+      ],
+      "sha256": "5922595d4a3c89aac68582ab1b4f48ddcb90863e7d0006a2fcdefb4fb6a074dd",
+      "license": "MIT (repository artwork)",
+      "provenance": {
+        "tool": "built-in image_gen",
+        "prompt": "assets/crew/origins/call-118/pickup-v3.prompt.txt",
+        "promptSha256": "770c2d18aa4ec3159f46da461ef452972949942ff4f6a9771044485faa146398",
+        "reference": "assets/crew/clips/ceo-talk-v1.png",
+        "editTarget": "assets/crew/origins/call-118/ceo-call-pickup-v2-rejected.png",
+        "sourceCommit": "42628328d925e3efb20184b980fc8883e2a69b0e",
+        "playback": "Reverse original pickup frames; no pixel transformation"
+      }
+    }
+  ]
+}

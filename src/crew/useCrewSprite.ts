@@ -10,8 +10,8 @@ import { crewSharedImageCache } from './crewAssetCache';
  * entradas, así que volver a una sala ya visitada no repite la decodificación.
  * `phoneCall` (issue #145) solo tiene efecto sobre la vista `front`: sustituye la pose
  * de pie por `ceo-phone-front` (sosteniendo el teléfono) mientras el agente reporta
- * `PHONE_CALL` real. Las otras tres vistas no tienen arte de teléfono todavía; conservan
- * su pose normal y dependen solo de la superposición genérica de anillo/icono.
+ * `PHONE_CALL` real. Esta opción estática se conserva por compatibilidad; CrewStage
+ * usa poses neutrales compartidas y los clips de llamada de useCrewActions por actor.
  */
 export function useCrewSprite(view: CrewView | null, phoneCall = false) {
   const [loaded, setLoaded] = useState<{view: CrewView; image: HTMLImageElement} | null>(null);

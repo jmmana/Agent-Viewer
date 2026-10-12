@@ -46,11 +46,11 @@ describe('acciones CEO desde snapshots', () => {
   });
 });
 describe('atlas originales de escritorio', () => {
-  it('declara 28 clips y 112 cuadros RGBA medidos con cuatro orientaciones', () => {
-    expect(CREW_ACTION_CLIPS).toHaveLength(28);
+  it('declara 40 clips y 160 recortes RGBA medidos con cuatro orientaciones', () => {
+    expect(CREW_ACTION_CLIPS).toHaveLength(40);
     for (const clip of CREW_ACTION_CLIPS) {
       expect(validateCrewClip(clip)).toBe(true); expect(clip.frames).toHaveLength(4);
-      expect(clip.loop).toBe(['typing', 'think', 'talk', 'review'].includes(clip.clip)); expect(clip.status).toBe('prototype');
+      expect(clip.loop).toBe(['typing', 'think', 'talk', 'review', 'call'].includes(clip.clip)); expect(clip.status).toBe('prototype');
       expect(crewClipSample(clip, 250, true)).toEqual({ index: 0, nextInMs: null });
     }
   });

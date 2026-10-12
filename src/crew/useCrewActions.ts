@@ -42,7 +42,8 @@ export function useCrewActions(agents: readonly Agent[], room: CrewRoomDefinitio
   const current = useMemo(() => state.roomId === room.id ? state.actions : [], [state, room.id]);
   const active = !reduced && !reducedMotion;
   const key = active ? [...new Set(current.flatMap(action => action.clip
-    ? ['sit', 'stand', 'typing'].includes(action.clip) ? ['sit', 'stand', 'typing'] : [action.clip] : []))].sort().join(',') : '';
+    ? ['sit', 'stand', 'typing'].includes(action.clip) ? ['sit', 'stand', 'typing']
+      : ['call-pickup', 'call', 'call-hangup'].includes(action.clip) ? ['call-pickup', 'call'] : [action.clip] : []))].sort().join(',') : '';
   useEffect(() => {
     setImages({}); setFailed(false);
     if (!key) return;
@@ -68,7 +69,7 @@ export function useCrewActions(agents: readonly Agent[], room: CrewRoomDefinitio
     const result: Record<string, CrewSpriteBlink | undefined> = {};
     if (active) for (const action of current) {
       const facing = crewSpriteView({ role: 'boss', facing: action.facing }, view);
-      const image = action.clip ? images[action.clip] : undefined;
+      const image = action.clip ? images[action.clip === 'call-hangup' ? 'call-pickup' : action.clip] : undefined;
       if (!action.clip || !facing || !image) continue;
       const from = action.turnFrom && crewSpriteView({ role: 'boss', facing: action.turnFrom }, view);
       const clip = action.clip === 'turn' && from ? crewTurnClip(from, facing) : crewActionClip(action.clip, facing);

@@ -207,12 +207,8 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
   }, [agents, room, action.actions]);
 
   const directions = presence.markers.map(marker => crewSpriteView(marker, view)).filter((direction): direction is CrewView => direction !== null);
-  // Pose del CEO sosteniendo el teléfono (#145): solo afecta la vista 'front', ligada al
-  // status real PHONE_CALL del propio agente, nunca a la sala ni a otra señal.
-  const frontPhoneCall = useMemo(() => presence.markers.some(marker =>
-    crewSpriteView(marker, view) === 'front' && agents.some(agent => agent.id === marker.id && crewInPhoneCall(agent))),
-    [presence.markers, view, agents]);
-  const sprite = useCrewSprites(directions, frontPhoneCall);
+  // La llamada se dibuja por actor en action.frames; la pose compartida es neutral.
+  const sprite = useCrewSprites(directions);
   const illustratedAgents = directions.filter(direction => !!sprite.images[direction]).length;
   const walkingMarkers = useMemo(()=>presence.markers.filter(marker=>agents.some(agent=>agent.id===marker.id && agent.isWalking)),[presence.markers,agents]);
   const blink = useCrewBlink(presence.markers.some(marker=>crewSpriteView(marker,view)==='front'

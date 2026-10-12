@@ -16,6 +16,8 @@ import { MatrixTab } from './modelOps/MatrixTab';
 import { AgentsTab } from './modelOps/AgentsTab';
 import { FeedTab } from './modelOps/FeedTab';
 import { SimulatorTab } from './modelOps/SimulatorTab';
+import { BudgetsPanel } from './modelOps/BudgetsPanel';
+import { useServerApi } from '../integrations/useServerApi';
 import {
   X,
   Server,
@@ -26,6 +28,7 @@ import {
   Radio,
   BarChart3,
   Zap,
+  DollarSign,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -51,9 +54,9 @@ export interface ModelOpsModalProps {
 
 type MessageParams = Record<string, string | number>;
 
-type ModelOpsTab = 'matrix' | 'simulator' | 'agents' | 'feed';
+type ModelOpsTab = 'matrix' | 'simulator' | 'agents' | 'feed' | 'budgets';
 
-const TABS: readonly ModelOpsTab[] = ['matrix', 'simulator', 'agents', 'feed'];
+const TABS: readonly ModelOpsTab[] = ['matrix', 'simulator', 'agents', 'feed', 'budgets'];
 
 const TITLE_ID = 'av-modelops-title';
 const PANEL_ID = 'av-modelops-panel';
@@ -71,6 +74,7 @@ const TAB_KEYS: Record<ModelOpsTab, TranslationKey> = {
   simulator: 'ops.tab.simulator',
   agents: 'ops.tab.agents',
   feed: 'ops.tab.feed',
+  budgets: 'ops.tab.budgets',
 };
 
 const TAB_ICONS: Record<ModelOpsTab, LucideIcon> = {
@@ -78,6 +82,7 @@ const TAB_ICONS: Record<ModelOpsTab, LucideIcon> = {
   simulator: Zap,
   agents: Users,
   feed: Activity,
+  budgets: DollarSign,
 };
 
 const SimulatedBadgeTag: React.FC<{ label: string }> = ({ label }) => (
@@ -120,6 +125,11 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
   const ledgerState = useModelOpsLedger({ ledger, isOpen, events });
   const mode = ledgerState.mode;
+
+  // Budgets tab (issue #334): `ledger` already carries the exact `{ baseUrl, token, tokenResolved }` shape
+  // `useServerApi` expects (see useServerApi.ts's `LiveConnection`), so it is passed straight through. `null` in
+  // demo mode or while the token is still resolving: `BudgetsPanel` shows a dedicated message in that case.
+  const budgetsServerApi = useServerApi(ledger);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -452,6 +462,8 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
               isLiveMode={isLiveMode}
             />
           )}
+
+          {activeTab === 'budgets' && <BudgetsPanel locale={locale} serverApi={budgetsServerApi} events={events} />}
         </div>
 
         {/* MODAL FOOTER */}

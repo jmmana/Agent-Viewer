@@ -32,6 +32,7 @@ const EN = {
   'ops.tab.simulator': 'LLM traffic simulator',
   'ops.tab.agents': 'Agent assignment ({count})',
   'ops.tab.feed': 'Inference feed',
+  'ops.tab.budgets': 'Budgets',
   'ops.quickBurst': 'Inject quick request (+1.9K t)',
 
   // Last simulated call notification
@@ -253,6 +254,83 @@ const EN = {
   'ops.empty.noCalls.naNote': 'Fields you leave out show as "n/a", never as zero.',
   'ops.empty.filtered': 'No calls match the current filters.',
   'ops.empty.clearFilters': 'Clear filters',
+
+  // Budgets tab (issue #334, sub-issue of #88): every figure here comes straight from the server's response.
+  // The panel never computes spent/limit or classifies a state; see src/components/modelOps/BudgetsPanel.tsx.
+  'ops.budgets.heading': 'Budgets',
+  'ops.budgets.subtitle': 'Spending limits and their live state, exactly as the server reports them.',
+  'ops.budgets.asOf': 'Data as of {time}',
+  'ops.budgets.stale': 'Showing the last known data: the most recent refresh failed.',
+  'ops.budgets.new': 'New budget',
+  'ops.budgets.empty': 'No budgets configured yet.',
+  'ops.budgets.loading': 'Loading budgets...',
+  'ops.budgets.loadError': 'Could not load budgets.',
+  'ops.budgets.retry': 'Retry',
+  'ops.budgets.requiresLive': 'Budgets require a live server connection.',
+
+  'ops.budgets.col.name': 'NAME',
+  'ops.budgets.col.scope': 'SCOPE',
+  'ops.budgets.col.period': 'PERIOD',
+  'ops.budgets.col.limit': 'LIMIT',
+  'ops.budgets.col.warnAt': 'WARN AT',
+  'ops.budgets.col.enabled': 'ENABLED',
+  'ops.budgets.col.spent': 'SPENT',
+  'ops.budgets.col.state': 'STATE',
+  'ops.budgets.col.asOf': 'AS OF',
+  'ops.budgets.col.actions': 'ACTIONS',
+
+  'ops.budgets.scope.all': 'Global',
+  'ops.budgets.scope.agent': 'Agent',
+  'ops.budgets.scope.model': 'Model',
+
+  'ops.budgets.period.day': 'Day',
+  'ops.budgets.period.week': 'Week',
+  'ops.budgets.period.month': 'Month',
+
+  'ops.budgets.basis.reported': 'reported',
+  'ops.budgets.basis.reported_plus_estimated': 'reported + estimated',
+
+  'ops.budgets.state.ok': 'OK',
+  'ops.budgets.state.warning': 'Warning',
+  'ops.budgets.state.exceeded': 'Exceeded',
+  'ops.budgets.state.unknown': 'Unknown',
+  'ops.budgets.state.noneYet': 'No state yet',
+
+  'ops.budgets.enabled.yes': 'Enabled',
+  'ops.budgets.enabled.no': 'Disabled',
+
+  'ops.budgets.spent.unknown': 'Unknown',
+  'ops.budgets.spent.unknownTitle': 'The server could not determine the amount spent for this budget yet.',
+
+  'ops.budgets.edit': 'Edit',
+  'ops.budgets.delete': 'Delete',
+  'ops.budgets.delete.confirmTitle': 'Delete "{name}"?',
+  'ops.budgets.delete.confirmBody': 'This cannot be undone.',
+  'ops.budgets.delete.confirm': 'Delete budget',
+  'ops.budgets.delete.cancel': 'Cancel',
+  'ops.budgets.delete.error': 'Could not delete the budget: {message}',
+
+  'ops.budgets.form.createTitle': 'New budget',
+  'ops.budgets.form.editTitle': 'Edit budget',
+  'ops.budgets.form.name': 'Name',
+  'ops.budgets.form.scopeType': 'Scope',
+  'ops.budgets.form.scopeValue': 'Scope value',
+  'ops.budgets.form.scopeValuePlaceholder': 'e.g. gpt-4o or agent-7',
+  'ops.budgets.form.period': 'Period',
+  'ops.budgets.form.limit': 'Limit',
+  'ops.budgets.form.currency': 'Currency',
+  'ops.budgets.form.warnAt': 'Warn at (0-1)',
+  'ops.budgets.form.costBasis': 'Cost basis',
+  'ops.budgets.form.enabled': 'Enabled',
+  'ops.budgets.form.save': 'Save',
+  'ops.budgets.form.saving': 'Saving...',
+  'ops.budgets.form.cancel': 'Cancel',
+  'ops.budgets.form.error.name': 'Name is required.',
+  'ops.budgets.form.error.limit': 'The limit must be greater than 0.',
+  'ops.budgets.form.error.warnAt': 'The warn threshold must be between 0 and 1, exclusive.',
+  'ops.budgets.form.error.scopeValue': 'A scope value is required for this scope.',
+  'ops.budgets.form.error.currency': 'Currency is required.',
+  'ops.budgets.form.error.submit': 'Could not save the budget: {message}',
 } as const satisfies Record<string, string>;
 
 const ES: Record<keyof typeof EN, string> = {
@@ -283,6 +361,7 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.tab.simulator': 'Simulador de tráfico LLM',
   'ops.tab.agents': 'Asignación a agentes ({count})',
   'ops.tab.feed': 'Flujo de inferencia',
+  'ops.tab.budgets': 'Presupuestos',
   'ops.quickBurst': 'Inyectar petición rápida (+1.9K t)',
 
   // Última llamada simulada
@@ -505,6 +584,83 @@ const ES: Record<keyof typeof EN, string> = {
   'ops.empty.noCalls.naNote': 'Los campos que omitas se muestran como "n/d", nunca como cero.',
   'ops.empty.filtered': 'Ninguna llamada coincide con los filtros actuales.',
   'ops.empty.clearFilters': 'Limpiar filtros',
+
+  // Pestaña Presupuestos (issue #334, sub-issue de #88): cada cifra viene directo de la respuesta del servidor.
+  // El panel nunca calcula spent/limit ni clasifica un estado; ver src/components/modelOps/BudgetsPanel.tsx.
+  'ops.budgets.heading': 'Presupuestos',
+  'ops.budgets.subtitle': 'Límites de gasto y su estado en vivo, tal como los reporta el servidor.',
+  'ops.budgets.asOf': 'Datos actualizados a las {time}',
+  'ops.budgets.stale': 'Mostrando los últimos datos conocidos: la actualización más reciente falló.',
+  'ops.budgets.new': 'Nuevo presupuesto',
+  'ops.budgets.empty': 'Todavía no hay presupuestos configurados.',
+  'ops.budgets.loading': 'Cargando presupuestos...',
+  'ops.budgets.loadError': 'No se pudieron cargar los presupuestos.',
+  'ops.budgets.retry': 'Reintentar',
+  'ops.budgets.requiresLive': 'Los presupuestos requieren una conexión en vivo al servidor.',
+
+  'ops.budgets.col.name': 'NOMBRE',
+  'ops.budgets.col.scope': 'ALCANCE',
+  'ops.budgets.col.period': 'PERIODO',
+  'ops.budgets.col.limit': 'LÍMITE',
+  'ops.budgets.col.warnAt': 'AVISO EN',
+  'ops.budgets.col.enabled': 'HABILITADO',
+  'ops.budgets.col.spent': 'GASTADO',
+  'ops.budgets.col.state': 'ESTADO',
+  'ops.budgets.col.asOf': 'ACTUALIZADO',
+  'ops.budgets.col.actions': 'ACCIONES',
+
+  'ops.budgets.scope.all': 'Global',
+  'ops.budgets.scope.agent': 'Agente',
+  'ops.budgets.scope.model': 'Modelo',
+
+  'ops.budgets.period.day': 'Día',
+  'ops.budgets.period.week': 'Semana',
+  'ops.budgets.period.month': 'Mes',
+
+  'ops.budgets.basis.reported': 'reportado',
+  'ops.budgets.basis.reported_plus_estimated': 'reportado + estimado',
+
+  'ops.budgets.state.ok': 'OK',
+  'ops.budgets.state.warning': 'Aviso',
+  'ops.budgets.state.exceeded': 'Excedido',
+  'ops.budgets.state.unknown': 'Desconocido',
+  'ops.budgets.state.noneYet': 'Sin estado todavía',
+
+  'ops.budgets.enabled.yes': 'Habilitado',
+  'ops.budgets.enabled.no': 'Deshabilitado',
+
+  'ops.budgets.spent.unknown': 'Desconocido',
+  'ops.budgets.spent.unknownTitle': 'El servidor todavía no pudo determinar el monto gastado para este presupuesto.',
+
+  'ops.budgets.edit': 'Editar',
+  'ops.budgets.delete': 'Eliminar',
+  'ops.budgets.delete.confirmTitle': '¿Eliminar "{name}"?',
+  'ops.budgets.delete.confirmBody': 'Esta acción no se puede deshacer.',
+  'ops.budgets.delete.confirm': 'Eliminar presupuesto',
+  'ops.budgets.delete.cancel': 'Cancelar',
+  'ops.budgets.delete.error': 'No se pudo eliminar el presupuesto: {message}',
+
+  'ops.budgets.form.createTitle': 'Nuevo presupuesto',
+  'ops.budgets.form.editTitle': 'Editar presupuesto',
+  'ops.budgets.form.name': 'Nombre',
+  'ops.budgets.form.scopeType': 'Alcance',
+  'ops.budgets.form.scopeValue': 'Valor del alcance',
+  'ops.budgets.form.scopeValuePlaceholder': 'ej. gpt-4o o agent-7',
+  'ops.budgets.form.period': 'Periodo',
+  'ops.budgets.form.limit': 'Límite',
+  'ops.budgets.form.currency': 'Moneda',
+  'ops.budgets.form.warnAt': 'Aviso en (0-1)',
+  'ops.budgets.form.costBasis': 'Base de costo',
+  'ops.budgets.form.enabled': 'Habilitado',
+  'ops.budgets.form.save': 'Guardar',
+  'ops.budgets.form.saving': 'Guardando...',
+  'ops.budgets.form.cancel': 'Cancelar',
+  'ops.budgets.form.error.name': 'El nombre es obligatorio.',
+  'ops.budgets.form.error.limit': 'El límite debe ser mayor que 0.',
+  'ops.budgets.form.error.warnAt': 'El umbral de aviso debe estar entre 0 y 1, exclusivo.',
+  'ops.budgets.form.error.scopeValue': 'Este alcance requiere un valor.',
+  'ops.budgets.form.error.currency': 'La moneda es obligatoria.',
+  'ops.budgets.form.error.submit': 'No se pudo guardar el presupuesto: {message}',
 };
 
 export const MODEL_OPS_MESSAGES = { en: EN, es: ES };

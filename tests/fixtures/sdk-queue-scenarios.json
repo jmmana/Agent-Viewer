@@ -1,0 +1,236 @@
+{
+  "$comment": "Shared test vectors for the SDK durable local queue (spool) contract, docs/sdk-queue.md (issue #101, companion #102). Loaded by tests/test_python_sdk_spool.py and (once #102 lands) its TypeScript equivalent, so the two implementations cannot drift on classification, eviction order, drain response handling or spool file naming.",
+
+  "transientClassification": {
+    "$comment": "Whether a failure should be queued (transient = true) or raised immediately and never stored (transient = false). 'kind: status' is an HTTP status code the server returned; 'kind: exception' names a local network-level failure category (each SDK maps its own runtime's exception/error types onto this category; see docs/sdk-queue.md's Enqueue rules).",
+    "cases": [
+      { "name": "connection refused", "kind": "exception", "category": "connection_refused", "transient": true },
+      { "name": "connection reset by peer", "kind": "exception", "category": "connection_reset", "transient": true },
+      { "name": "connection closed before a response was read", "kind": "exception", "category": "remote_disconnected", "transient": true },
+      { "name": "DNS / name resolution failure", "kind": "exception", "category": "dns_failure", "transient": true },
+      { "name": "connect or read timeout", "kind": "exception", "category": "timeout", "transient": true },
+      { "name": "HTTP 408 Request Timeout", "kind": "status", "status": 408, "transient": true },
+      { "name": "HTTP 429 Too Many Requests", "kind": "status", "status": 429, "transient": true },
+      { "name": "HTTP 500 Internal Server Error", "kind": "status", "status": 500, "transient": true },
+      { "name": "HTTP 502 Bad Gateway", "kind": "status", "status": 502, "transient": true },
+      { "name": "HTTP 503 Service Unavailable", "kind": "status", "status": 503, "transient": true },
+      { "name": "HTTP 504 Gateway Timeout", "kind": "status", "status": 504, "transient": true },
+      { "name": "HTTP 599 (upper 5xx bound used by the vectors, not a real status)", "kind": "status", "status": 599, "transient": true },
+      { "name": "HTTP 400 Bad Request", "kind": "status", "status": 400, "transient": false },
+      { "name": "HTTP 401 Unauthorized on a live send", "kind": "status", "status": 401, "transient": false },
+      { "name": "HTTP 403 Forbidden on a live send", "kind": "status", "status": 403, "transient": false },
+      { "name": "HTTP 404 Not Found", "kind": "status", "status": 404, "transient": false },
+      { "name": "HTTP 409 Conflict (conflicting_duplicate)", "kind": "status", "status": 409, "transient": false },
+      { "name": "HTTP 410 Gone", "kind": "status", "status": 410, "transient": false },
+      { "name": "HTTP 413 Payload Too Large on a live (non-batch-replay) send", "kind": "status", "status": 413, "transient": false },
+      { "name": "HTTP 422 Unprocessable Entity", "kind": "status", "status": 422, "transient": false }
+    ]
+  },
+
+  "overflowEvictionOrder": {
+    "$comment": "Each case lists the spool's current rows oldest-first (seq 1 is oldest) before one new row arrives that needs `bytesNeeded` bytes of headroom to fit under the cap. `policy` drop_oldest evicts rows in `expectedEvictedSeqs` order (oldest non-usage first, then oldest usage); drop_newest never evicts and instead refuses the incoming row.",
+    "cases": [
+      {
+        "name": "drop_oldest evicts non-usage before usage even though a usage row is older",
+        "policy": "drop_oldest",
+        "existingRows": [
+          { "seq": 1, "type": "llm.usage", "sizeBytes": 200 },
+          { "seq": 2, "type": "agent.status.changed", "sizeBytes": 100 },
+          { "seq": 3, "type": "tool.started", "sizeBytes": 100 }
+        ],
+        "incoming": { "sizeBytes": 150 },
+        "bytesNeeded": 150,
+        "expectedEvictedSeqs": [2],
+        "expectedIncomingStored": true
+      },
+      {
+        "name": "drop_oldest exhausts all non-usage rows before touching the oldest usage row",
+        "policy": "drop_oldest",
+        "existingRows": [
+          { "seq": 1, "type": "llm.usage", "sizeBytes": 200 },
+          { "seq": 2, "type": "agent.status.changed", "sizeBytes": 50 },
+          { "seq": 3, "type": "tool.started", "sizeBytes": 50 }
+        ],
+        "incoming": { "sizeBytes": 250 },
+        "bytesNeeded": 250,
+        "expectedEvictedSeqs": [2, 3, 1],
+        "expectedIncomingStored": true
+      },
+      {
+        "name": "drop_oldest evicts the oldest usage row first among usage-only backlog",
+        "policy": "drop_oldest",
+        "existingRows": [
+          { "seq": 1, "type": "llm.usage", "sizeBytes": 100 },
+          { "seq": 2, "type": "llm.usage", "sizeBytes": 100 }
+        ],
+        "incoming": { "sizeBytes": 100 },
+        "bytesNeeded": 100,
+        "expectedEvictedSeqs": [1],
+        "expectedIncomingStored": true
+      },
+      {
+        "name": "drop_newest never evicts anything and refuses the incoming row",
+        "policy": "drop_newest",
+        "existingRows": [
+          { "seq": 1, "type": "agent.status.changed", "sizeBytes": 100 },
+          { "seq": 2, "type": "llm.usage", "sizeBytes": 100 }
+        ],
+        "incoming": { "sizeBytes": 50 },
+        "bytesNeeded": 50,
+        "expectedEvictedSeqs": [],
+        "expectedIncomingStored": false
+      },
+      {
+        "name": "a single event larger than spool_max_bytes can never fit under either policy and is refused",
+        "policy": "drop_oldest",
+        "existingRows": [],
+        "incoming": { "sizeBytes": 999999999 },
+        "bytesNeeded": 999999999,
+        "expectedEvictedSeqs": [],
+        "expectedIncomingStored": false,
+        "oversizedSingleEvent": true
+      }
+    ]
+  },
+
+  "drainResponseHandling": {
+    "$comment": "One drain pass sending `chunkSeqs` (spool rows by seq) to POST /api/v1/events/batch. `response` is the server's status and (abbreviated) body. `expectedAction` and `expectedState` describe what the drainer must do; `expectedDeletedSeqs` are rows removed from `spool` after the response, `expectedRejectedSeqs` rows moved to `rejected`.",
+    "cases": [
+      {
+        "name": "202 with all accepted deletes every id and counts them as replayed",
+        "chunkSeqs": [1, 2, 3],
+        "response": { "status": 202, "body": { "results": [ { "id": "evt_1", "status": "accepted", "duplicate": false }, { "id": "evt_2", "status": "accepted", "duplicate": false }, { "id": "evt_3", "status": "accepted", "duplicate": false } ] } },
+        "expectedAction": "delete_acknowledged",
+        "expectedState": "idle",
+        "expectedDeletedSeqs": [1, 2, 3],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": { "replayed_total": 3, "duplicates_acked_total": 0 }
+      },
+      {
+        "name": "202 with some duplicates still deletes them and counts duplicates_acked_total separately",
+        "chunkSeqs": [1, 2],
+        "response": { "status": 202, "body": { "results": [ { "id": "evt_1", "status": "duplicate", "duplicate": true }, { "id": "evt_2", "status": "accepted", "duplicate": false } ] } },
+        "expectedAction": "delete_acknowledged",
+        "expectedState": "idle",
+        "expectedDeletedSeqs": [1, 2],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": { "replayed_total": 1, "duplicates_acked_total": 1 }
+      },
+      {
+        "name": "503 keeps every row and backs off",
+        "chunkSeqs": [1, 2],
+        "response": { "status": 503, "body": { "error": "service_unavailable" } },
+        "expectedAction": "retry_with_backoff",
+        "expectedState": "server_down",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {}
+      },
+      {
+        "name": "429 without Retry-After uses the normal exponential backoff",
+        "chunkSeqs": [1],
+        "response": { "status": 429, "headers": {}, "body": { "error": "rate_limit_exceeded" } },
+        "expectedAction": "retry_with_backoff",
+        "expectedState": "server_down",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {},
+        "retryAfterSeconds": null
+      },
+      {
+        "name": "429 with Retry-After honors the header value, capped at spool_max_probe_interval",
+        "chunkSeqs": [1],
+        "response": { "status": 429, "headers": { "Retry-After": "5" }, "body": { "error": "rate_limit_exceeded" } },
+        "expectedAction": "retry_with_backoff",
+        "expectedState": "server_down",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {},
+        "retryAfterSeconds": 5
+      },
+      {
+        "name": "413 halves the chunk size and retries the same backlog",
+        "chunkSeqs": [1, 2, 3, 4],
+        "response": { "status": 413, "body": { "error": "batch_too_large" } },
+        "expectedAction": "halve_chunk_and_retry",
+        "expectedState": "draining",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {},
+        "nextChunkSize": 2
+      },
+      {
+        "name": "413 at chunk size 1 dead-letters that one event",
+        "chunkSeqs": [1],
+        "response": { "status": 413, "body": { "error": "batch_too_large" } },
+        "expectedAction": "reject_single_event",
+        "expectedState": "draining",
+        "expectedDeletedSeqs": [1],
+        "expectedRejectedSeqs": [1],
+        "counterDeltas": { "rejected_total": 1 },
+        "rejectReasonContains": "413"
+      },
+      {
+        "name": "400 with errors[index] rejects exactly the listed events and keeps the rest",
+        "chunkSeqs": [1, 2, 3],
+        "response": { "status": 400, "body": { "error": "validation_failed", "errors": [ { "index": 1, "issues": [ { "path": "payload.inputTokens", "message": "Expected number, received string" } ] } ] } },
+        "expectedAction": "reject_listed_and_resend_rest",
+        "expectedState": "draining",
+        "expectedDeletedSeqs": [2],
+        "expectedRejectedSeqs": [2],
+        "counterDeltas": { "rejected_total": 1 },
+        "rejectReasonContains": "inputTokens"
+      },
+      {
+        "name": "400 without an errors array bisects the chunk to isolate the offender",
+        "chunkSeqs": [1, 2],
+        "response": { "status": 400, "body": { "error": "validation_failed", "message": "1 event(s) in batch failed validation" } },
+        "expectedAction": "bisect",
+        "expectedState": "draining",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {},
+        "nextChunkSize": 1
+      },
+      {
+        "name": "401 enters auth_failed and keeps every row",
+        "chunkSeqs": [1, 2],
+        "response": { "status": 401, "body": { "error": "unauthorized" } },
+        "expectedAction": "stop_auth_failed",
+        "expectedState": "auth_failed",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {}
+      },
+      {
+        "name": "403 enters auth_failed and keeps every row",
+        "chunkSeqs": [1, 2],
+        "response": { "status": 403, "body": { "error": "forbidden" } },
+        "expectedAction": "stop_auth_failed",
+        "expectedState": "auth_failed",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {}
+      },
+      {
+        "name": "network error (connection refused) keeps every row and backs off",
+        "chunkSeqs": [1, 2],
+        "response": { "status": null, "networkError": "connection_refused" },
+        "expectedAction": "retry_with_backoff",
+        "expectedState": "server_down",
+        "expectedDeletedSeqs": [],
+        "expectedRejectedSeqs": [],
+        "counterDeltas": {}
+      }
+    ]
+  },
+
+  "spoolFileNaming": {
+    "$comment": "spool-<sha256(url + '|' + runtimeId)[:12]>.sqlite3. runtimeId is the empty string when not set. Hashes computed with Python's hashlib.sha256 on the UTF-8 encoding of `url + '|' + runtimeId`; both SDKs must reproduce the same hex prefix for the same inputs.",
+    "cases": [
+      { "url": "http://localhost:8787", "runtimeId": "my-crew", "expectedHashPrefix": "f5013df80561" },
+      { "url": "http://localhost:8787", "runtimeId": "", "expectedHashPrefix": "b1c6d368d206" },
+      { "url": "https://agent-viewer.example.com", "runtimeId": "prod-runtime-1", "expectedHashPrefix": "0ab74cec9432" }
+    ]
+  }
+}

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Durable local queue in the Python SDK (#101, v0.7.0 milestone)**: optional, bounded, on-disk spool (`spool_dir=...`, stdlib `sqlite3` only, no third-party dependency) so a transient failure (connection down, reset, timeout, `408`, `429`, any `5xx`) after the normal retries never raises into the host agent. Events are written to disk with their original `id` and `timestamp` and replayed in enqueue order once the server returns, through `POST /api/v1/events/batch`, so the server's own idempotency by `id` keeps totals honest. New `AgentViewer` arguments (`spool_dir`, `spool_max_events`, `spool_max_bytes`, `spool_overflow`, `spool_batch_size`, `spool_background`, `spool_probe_interval`, `spool_max_probe_interval`) and methods (`flush()`, `spool_stats()`, `spool_rejected()`, `close()`, usable as a context manager, plus an `atexit` final flush). A size cap evicts the oldest non-usage events before usage events (`drop_oldest`, the default) or refuses the new event (`drop_newest`); every drop and every server-side rejection is counted in `SpoolStats`, never silently lost, and the spool never sums, prices or defaults usage (a missing `cost` stays absent, never `0`). Also fixes transient-failure classification with the spool disabled: a raw `OSError`/`http.client.HTTPException` and HTTP `408` are now retried instead of escaping or failing immediately. New `docs/sdk-queue.md` (shared contract with the TypeScript SDK, #102) and `tests/fixtures/sdk-queue-scenarios.json` (shared test vectors). New `tests/test_python_sdk_spool.py` (34 tests: outages, restart persistence, overflow matrix, poison events, `413`/`429`/`401` handling, corrupt/newer-schema spool files, permissions, fork safety, a seeded randomized concurrency test). CI now runs both Python SDK test files and adds a Python 3.9 job to exercise the SDK's declared minimum version.
+
 ## [0.6.0] - 2026-10-11
 
 "Precios y control" (pricing and control): a versioned, auditable server pricing table (#83) with a per-row,

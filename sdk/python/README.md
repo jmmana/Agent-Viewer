@@ -70,7 +70,7 @@ except AgentViewerError as err:
 
 ## API overview
 
-`AgentViewer(url=..., token=..., runtime_id=..., session_id=..., source=..., timeout=10.0, max_retries=3, auto_register=True)`
+`AgentViewer(url=..., token=..., runtime_id=..., session_id=..., source=..., timeout=10.0, max_retries=3, auto_register=True, spool_dir=None, spool_max_events=10_000, spool_max_bytes=50*1024*1024, spool_overflow="drop_oldest", spool_batch_size=50, spool_background=True, spool_probe_interval=2.0, spool_max_probe_interval=60.0)`. The `spool_*` arguments configure the optional durable queue, see [below](#durable-queue); `spool_dir=None` (the default) disables it and keeps every other behavior unchanged.
 
 - `viewer.agent(id, name=None, role_title=None, provider=None, model=None, workspace=None)` returns an `AgentHandle`.
 - `viewer.emit(event_type, summary, payload, ...)` and `viewer.emit_batch(events)` send canonical events directly.
@@ -114,6 +114,34 @@ event = json.loads(raw_body)
 ```
 
 `raw_body` must be the exact bytes (or string) the sender signed; re-encoding a parsed JSON body can reorder keys or change whitespace and would make a genuine signature fail to verify.
+
+## Durable queue
+
+By default (`spool_dir=None`), a transient failure after the normal retries raises `AgentViewerError` into your code, exactly as in 0.2.x (the only change is that a connection reset, a closed-early response and HTTP `408` are now correctly retried instead of escaping as a raw exception or failing with no retry at all, issue #101). Pass `spool_dir` (or set `AGENT_VIEWER_SPOOL_DIR`) to add an optional, bounded, on-disk spool backed by `sqlite3` from the standard library, no third-party dependency:
+
+```python
+viewer = AgentViewer(
+    url="http://localhost:8787",
+    token=os.getenv("AGENT_VIEWER_API_TOKEN"),
+    runtime_id="my-crew",
+    spool_dir="/var/lib/my-crew/agent-viewer-spool",
+)
+```
+
+With the spool enabled, a transient failure (the server down, `408`, `429`, any `5xx`) never raises: `emit()`/`emit_batch()` return `{"accepted": False, "queued": True, ...}` instead, the event is written to disk with its original `id` and `timestamp`, and a background thread replays it once the server returns, in the original order, through `POST /api/v1/events/batch`. The server's own idempotency by `id` means a replay is delivered at least once and counted exactly once. A conclusive rejection (any other `4xx`) still raises immediately and is never queued, since replaying it could never succeed.
+
+```python
+viewer.flush(timeout=30.0)   # FlushResult(delivered, remaining, rejected, timed_out, state); drains now, never raises
+stats = viewer.spool_stats() # SpoolStats: pending_events, pending_bytes, every drop/replay counter, state, ...
+dead_letters = viewer.spool_rejected(limit=100)  # events the server rejected outright during replay, newest first
+viewer.close(timeout=5.0)    # final bounded flush attempt; also usable as `with AgentViewer(...) as viewer:`
+```
+
+A short-lived script gets one last delivery attempt at interpreter exit (`atexit`); anything still queued stays on disk for the next run to pick up. Every counter in `SpoolStats` is an event count, never a token or money figure: the spool never sums, prices or defaults usage, and it stores each event's JSON exactly as the SDK built it (a missing `cost` stays absent, never `0`). When the backlog hits `spool_max_events`/`spool_max_bytes`, `spool_overflow="drop_oldest"` (the default) evicts the oldest non-`llm.usage` row first and only touches usage rows once nothing else is left; `"drop_newest"` refuses the incoming event instead. Every drop and every server-side rejection is counted, never silent; a poison event (the server answers `400` for just that one item during a batch replay) is isolated into a 100-row dead letter (`spool_rejected()`) instead of blocking the events behind it.
+
+**The spool holds your event data in clear text on disk**: the same summaries, messages and tags the SDK would otherwise have sent over the network, nothing more, and never the API token (headers are rebuilt from the live client at send time). Treat the spool directory (`0700`, files `0600`) like any other local credential-adjacent data: on `/var/lib/...` on a server, with its own file permissions, not in a repo. One caveat: an in-memory server (`AGENT_VIEWER_STORAGE=memory`, the default without `AGENT_VIEWER_DB_PATH`) forgets ids past 10000 events, so replaying a very long outage against a memory-mode server could in principle double-count a very old id; SQLite-mode servers have no such limit.
+
+Full cross-language contract (shared with the TypeScript SDK): [docs/sdk-queue.md](../../docs/sdk-queue.md).
 
 ## Privacy
 

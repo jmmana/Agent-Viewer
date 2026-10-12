@@ -129,6 +129,8 @@ agent.done("Documentation analyzed")
 usage = viewer.usage_summary()
 ```
 
+Pass `spool_dir=...` to `AgentViewer(...)` for an optional, bounded, on-disk durable queue (issue #101): a transient failure (server down, `429`, `5xx`) is queued and replayed in order instead of raising. See [sdk/python/README.md#durable-queue](../sdk/python/README.md#durable-queue) and the full cross-language contract, [docs/sdk-queue.md](sdk-queue.md).
+
 ---
 
 ### Option C: Generic Webhook (cURL / Zero Code)
@@ -620,6 +622,17 @@ A new event id that reports an already-used `(provider, requestId)` is accepted 
 `id` is always the id the figure is held under (the original for a `request_id` duplicate), `submittedId` is the id the client actually sent (present only when it differs from `id`), and `matchesOriginal` appears only for a `request_id` duplicate: whether its usage-relevant fields (`model`, every token field, `cost`, `currency`, `costSource`) match the original's, compared null-safe (`null` equals `null`, a field absent on both sides is equal, but `null` never equals `0`: unknown is never zero). A mismatch writes one `warn` log line with both event ids, the provider and a request id truncated to 80 characters, never payload text. `POST /api/v1/events/batch` applies both keys in input order, so two items of the same batch can resolve against each other; `GET /api/v1/usage/duplicates` lists every reference, and `GET /api/v1/snapshot`'s `usageDuplicates` gives the running counts (`unverified` is a reference migrated from a database written before this existed, whose legacy content was never compared).
 
 This should be the provider's own request or response id, the same one that appears on the provider side or in an invoice or usage export, never a synthetic counter such as `"1"` reused across sessions: the server would then treat two different calls as the same one and drop the second from the figures.
+
+### SDK-side replay: the durable local queue (issue #101)
+
+Everything above describes what the server does when the *same* event id or `(provider, requestId)` arrives more than once; this section is about why it ever would. The Python SDK's optional spool (`spool_dir=...`, [sdk/python/README.md#durable-queue](../sdk/python/README.md#durable-queue), full contract [docs/sdk-queue.md](sdk-queue.md)) is what actually produces those replays: when the normal retries are exhausted on a transient failure, the event is written to disk with its original `id` and `timestamp` and resent later, unchanged, through `POST /api/v1/events/batch`. The rules above are exactly what makes that safe:
+
+- The spool never regenerates an id or a timestamp, so a replay is always the *same id, same fingerprint* case: HTTP `200`, `duplicate: true`, nothing double-counted.
+- A `413` (the batch, or one event alone, is too large) shrinks the replay chunk and, at chunk size 1, dead-letters that single event rather than resending it forever.
+- A `400` with `errors: [{ index, ... }]` isolates exactly the listed events into the SDK's own dead letter (`spool_rejected()`) and keeps replaying the rest of the backlog; a poison event never blocks the events behind it.
+- A `401`/`403` on a replay request stops the drain entirely and keeps every event, since resending with a bad token can never succeed and the server never even gets to apply the idempotency rules above.
+
+The TypeScript SDK's own queue (#102) is designed to mirror this behavior over the same endpoints.
 
 ---
 

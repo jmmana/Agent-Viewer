@@ -731,6 +731,9 @@ class TestPythonSDK(unittest.TestCase):
         with self.assertRaises(TypeError):
             viewer.usage_rollup("agent", not_a_real_filter="x")
 
+    @unittest.skipUnless(
+        os.path.exists("./node_modules/.bin/tsx"), "needs Node (tsx) to start the live TypeScript server"
+    )
     def test_live_server_integration(self):
         port = get_free_port()
         env = os.environ.copy()

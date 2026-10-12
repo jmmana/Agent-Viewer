@@ -486,7 +486,7 @@ Madurez honesta, para que sepas qué te llevas:
 | **Métricas de Claude Code (métricas OTLP)** | `POST /v1/metrics` | ✅ **Ingesta estable.** Guarda `claude_code.token.usage`/`claude_code.cost.usage` como evidencia propia, separada a propósito del ledger, el snapshot, SSE y cualquier agregado: es una segunda medición independiente del mismo consumo, pensada para una futura verificación cruzada. El endpoint `GET /api/v1/usage/reconciliation` que compara ambas fuentes todavía no existe (necesita un accesor al ledger de consumo que sigue en desarrollo). Referencia (en inglés): [otlp.md](otlp.md#otlp-metrics-post-v1metrics). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](cli.md) | ✅ **Estable.** Servidor y oficina en un comando, y `send` para eventos rápidos. Prueba de punta a punta en CI. |
 | **Webhook genérico** | `POST /api/v1/webhooks/generic` | ✅ **Estable.** Cuerpo plano, firma HMAC-SHA256 opcional con ventana anti repetición de 5 minutos. |
-| **SDK de Python** | [`sdk/python/`](../sdk/python/agent_viewer.py) | ✅ **Estable.** Solo biblioteca estándar, probado contra un servidor real en CI. `pip install agent-viewer`. |
+| **SDK de Python** | [`sdk/python/`](../sdk/python/agent_viewer.py) | ✅ **Estable.** Solo biblioteca estándar, probado contra un servidor real en CI. `pip install agent-viewer`. Cola local durable opcional para cortes de servicio (issue #101, `spool_dir=...`). |
 | **SDK de TypeScript** | [`sdk/typescript/`](../sdk/typescript/index.ts) | ✅ **Estable.** Probado en CI. Aún no es un paquete aparte: impórtalo desde una copia del repositorio. |
 | **Repetición de logs JSONL** | [`parseEventLog`](event-log.md) | ✅ **Estable.** API de la librería, y arrastrar y soltar en la app de demostración. |
 | **Importar archivos de logs OTLP (Claude Code)** | [`parseEventLog`](event-log.md#otlp-files) | ✅ **Estable.** Lee una exportación OTLP/JSON guardada (con formato legible, o un request por línea desde un exportador `file` del Collector) y convierte `resourceLogs` en eventos `llm.usage`/`llm.failed` con el mismo mapeador que usa el receptor en vivo `POST /v1/logs`. `resourceMetrics` devuelve un aviso claro en vez de inventar cifras por llamada; `resourceSpans` todavía no se admite. |
@@ -528,6 +528,8 @@ Lee las llamadas detrás de una cifra con `list_calls()` (una página) o `iter_c
 for call in viewer.iter_calls(agent_id="analyst", cost_source="unknown"):
     print(call["requestId"], call["tokens"]["input"], call["status"])
 ```
+
+Pasa `spool_dir="/var/lib/mi-crew/agent-viewer-spool"` para activar una cola local durable y acotada, opcional (issue #101, solo `sqlite3` de la biblioteca estándar): una falla transitoria (servidor caído, `429`, `5xx`) nunca lanza una excepción en tu agente, el evento se guarda en disco y se reenvía en orden cuando el servidor vuelve, y todo lo que la cola tiene que descartar se cuenta, nunca se pierde en silencio. Ver [sdk/python/README.md](../sdk/python/README.md#durable-queue) y el contrato compartido [docs/sdk-queue.md](sdk-queue.md) (en inglés).
 
 ### SDK de TypeScript
 

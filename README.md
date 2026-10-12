@@ -494,7 +494,7 @@ Honest maturity, so you know what you are getting:
 | **Claude Code metrics (OTLP metrics)** | `POST /v1/metrics` | ✅ **Stable ingestion.** Stores `claude_code.token.usage`/`claude_code.cost.usage` as their own evidence, kept apart from the ledger, the snapshot, SSE and every rollup on purpose: a second, independent measurement of the same consumption for a future cross-check. The `GET /api/v1/usage/reconciliation` endpoint that compares the two is not built yet (needs a usage ledger accessor still in progress). Reference: [docs/otlp.md](docs/otlp.md#otlp-metrics-post-v1metrics). |
 | **CLI** | [`npx @warlockcode/agent-viewer`](docs/cli.md) | ✅ **Stable.** Server and office in one command, `send` for quick events. End-to-end test in CI. |
 | **Generic webhook** | `POST /api/v1/webhooks/generic` | ✅ **Stable.** Flat body, optional HMAC-SHA256 with a 5 minute replay window. |
-| **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. |
+| **Python SDK** | [`sdk/python/`](sdk/python/agent_viewer.py) | ✅ **Stable.** Standard library only, tested against a live server in CI. `pip install agent-viewer`. Optional durable local queue for outages (issue #101, `spool_dir=...`). |
 | **TypeScript SDK** | [`sdk/typescript/`](sdk/typescript/index.ts) | ✅ **Stable.** Tested in CI. Not a separate package yet: import it from a checkout. |
 | **JSONL log replay** | [`parseEventLog`](docs/event-log.md) | ✅ **Stable.** Library API, and drag and drop in the demo app. |
 | **OTLP logs file import (Claude Code)** | [`parseEventLog`](docs/event-log.md#otlp-files) | ✅ **Stable.** Reads a saved OTLP/JSON export (pretty-printed, or one request per line from a Collector `file` exporter) and converts `resourceLogs` into `llm.usage`/`llm.failed` events through the same mapper as the live `POST /v1/logs` receiver. `resourceMetrics` returns one clear issue instead of inventing per-call figures; `resourceSpans` is not supported yet. |
@@ -536,6 +536,8 @@ Read the calls behind a figure with `list_calls()` (one page) or `iter_calls()` 
 for call in viewer.iter_calls(agent_id="analyst", cost_source="unknown"):
     print(call["requestId"], call["tokens"]["input"], call["status"])
 ```
+
+Pass `spool_dir="/var/lib/my-crew/agent-viewer-spool"` to add an optional, bounded, on-disk durable queue (issue #101, stdlib `sqlite3` only): a transient failure (connection down, `429`, `5xx`) never raises into your agent, the event is persisted and replayed in order once the server returns, and anything the spool has to give up is counted, never silently dropped. See [sdk/python/README.md](sdk/python/README.md#durable-queue) and the shared [docs/sdk-queue.md](docs/sdk-queue.md) contract.
 
 ### TypeScript SDK
 

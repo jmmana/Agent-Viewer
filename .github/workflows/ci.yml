@@ -55,7 +55,7 @@ jobs:
         run: npm test
 
       - name: Python SDK Tests
-        run: python3 tests/test_python_sdk.py
+        run: python3 -m unittest discover -s tests -p "test_python_sdk*.py" -v
 
       - name: Python SDK wheel (build, install, import)
         run: |
@@ -170,6 +170,31 @@ jobs:
           curl -fsS -H "Authorization: Bearer ci-token" "http://127.0.0.1:4871/api/v1/events?agentId=ci" | grep -q '"agentId":"ci"'
           kill "$CLI_PID"
           cat cli.log
+
+  # sdk/python/pyproject.toml declares Python >= 3.9 (issue #101), but every other job runs 3.11: exercise
+  # the declared minimum directly. No `npm ci` here, so the live-server tests (which need Node's tsx) are
+  # skipped automatically; the scripted-server spool and SDK tests, which are the bulk of the coverage,
+  # still run in full.
+  python-39-sdk-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Use Python 3.9
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.9'
+
+      - name: Python SDK tests on the declared minimum version
+        run: python3 -m unittest discover -s tests -p "test_python_sdk*.py" -v
+
+      - name: Python SDK wheel (build, install, import) on Python 3.9
+        run: |
+          python -m pip wheel ./sdk/python -w /tmp/wheels-py39
+          pip install /tmp/wheels-py39/*.whl
+          cd /tmp && python -c "import agent_viewer; print(agent_viewer.__file__)"
 
   crew-browser:
     runs-on: ubuntu-latest

@@ -2,7 +2,7 @@
 
 `@warlockcode/agent-viewer` lleva la oficina de Agent Viewer a tu propia app React. La oficina es una escena Canvas2D que se dibuja solo con los eventos que le pasas: los agentes que registra tu runtime, sus estados, las herramientas que usan, los mensajes que envían y las reuniones que hacen.
 
-Esta guía cubre la versión **0.5.0**. Read in English: [library.md](library.md).
+Esta guía cubre la versión **0.6.0**. Read in English: [library.md](library.md).
 
 ## Contenido
 
@@ -41,7 +41,7 @@ Las dependencias de ejecución son `lucide-react` (iconos), `zod` (validación e
 La publicación en npm llegará pronto. Mientras tanto, instala el paquete desde el archivo de la release de GitHub:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.6.0/warlockcode-agent-viewer-0.6.0.tgz
 ```
 
 El nombre del paquete es `@warlockcode/agent-viewer` en ambos casos, así que tus importaciones no cambian cuando pases al registro de npm.
@@ -221,7 +221,7 @@ El agente de un evento es `agentId`; si falta, `payload.agentId`; luego `payload
 
 Más detalles:
 
-- **Los presupuestos nunca se evalúan aquí.** `budget.alert` (issue #86) es un evento que solo emite el servidor: el motor de presupuestos decide cuándo el gasto cruza un umbral de alerta o de excedido, nunca la oficina. La librería ignora todo `budget.alert` que recibe salvo que el host pase `trackUsage: true` a `applyExternalEvent`, igual que `<AgentOffice>` embebido (siempre `trackUsage: false`): un `budget.alert` descartado no se aplica a ningún agente, tarea ni reunión, y nunca se agrega a `events`. Un host que sí pase `trackUsage: true` (típicamente un portal respaldado por el servidor, no la oficina embebida) conserva el evento crudo en su propio historial, pero la librería sigue sin renderizar su `summary` ni su `payload`: aquí no hay marcador en el escritorio ni lista de alertas, solo el [estado de presupuesto](#estado-de-presupuesto) que tu app decide y pasa explícitamente.
+- **Los presupuestos nunca se evalúan aquí.** `budget.alert` (issue #86) es un evento que solo emite el servidor: el motor de presupuestos decide cuándo el gasto cruza un umbral de alerta o de excedido, nunca la oficina. La librería ignora todo `budget.alert` que recibe salvo que el host pase `trackUsage: true` a `applyExternalEvent`, igual que `<AgentOffice>` embebido (siempre `trackUsage: false`): un `budget.alert` descartado no se aplica a ningún agente, tarea ni reunión, y nunca se agrega a `events`. Un host que sí pase `trackUsage: true` (típicamente un portal respaldado por el servidor, no la oficina embebida) conserva el evento crudo en su propio historial, pero la librería sigue sin renderizar su `summary` ni su `payload`: aquí no hay marcador en el escritorio ni lista de alertas, solo el [estado de presupuesto](#estado-de-presupuesto) que tu app decide y pasa explícitamente. La entrega saliente de este mismo evento por webhook se documenta aparte: [docs/webhooks.md](webhooks.md) (en inglés).
 
 - **Estados.** `OFFLINE`, `IDLE`, `AVAILABLE`, `THINKING`, `READING`, `RESEARCHING`, `CODING`, `WRITING`, `TESTING`, `USING_TOOL`, `WAITING`, `WAITING_APPROVAL`, `BLOCKED`, `DELEGATING`, `PHONE_CALL`, `WALKING`, `IN_MEETING`, `COFFEE_BREAK`, `CHATTING`, `REVIEWING`, `DELIVERING`, `DONE`, `ERROR`.
 - **Agentes que la oficina aún no conoce.** Un evento de un agente desconocido lo agrega con un perfil por defecto (su id como nombre). Un `agentId` explícito siempre nombra a un agente, sea cual sea el `source`. Un evento con `source` `runtime:` y sin `agentId` habla del runtime mismo y no agrega agentes. Registrar primero a los agentes (con `agent.registered` o con la prop `agents`) les da su nombre real, su cargo y su espacio de trabajo.

@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/jmmana/Agent-Viewer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/jmmana/Agent-Viewer/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white" alt="CI status" /></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.5.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.5.0" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.6.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.6.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" alt="MIT license" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer"><img src="https://img.shields.io/github/stars/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=a855f7&label=stars" alt="GitHub stars" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer/network/members"><img src="https://img.shields.io/github/forks/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=4c1d95&label=forks" alt="GitHub forks" /></a>
@@ -202,12 +202,12 @@ This starts the API on **:8787** with SQLite on a named volume, and the built de
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> in professional mode: a meeting where agents propose, object, agree and decide. Only the events passed to the component are drawn.</sub>
 </p>
 
-Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.5.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
+Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.6.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
 
 Publication on npm is coming soon. Until then, install it from the GitHub release asset (the package name and your imports stay the same when you switch to npm):
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.6.0/warlockcode-agent-viewer-0.6.0.tgz
 ```
 
 ### Minimal example
@@ -501,11 +501,11 @@ Honest maturity, so you know what you are getting:
 | **LangGraph** | [`examples/langgraph-adapter.ts`](examples/langgraph-adapter.ts) | 🧪 **Example adapter.** Node, tool and usage callbacks mapped to SDK calls. Type-checked in CI, not run against LangGraph. |
 | **CrewAI** | [`examples/crewai-adapter.py`](examples/crewai-adapter.py) | 🧪 **Example adapter.** Crew agents, tasks, tools, messages and usage. Not run in CI. |
 | **AutoGen** | [`examples/autogen-adapter.py`](examples/autogen-adapter.py) | 🧪 **Example adapter.** Conversable agents and group chat messages, tools and usage. Not run in CI. |
-| **OpenAI Agents SDK** | [`examples/openai-agents-adapter.ts`](examples/openai-agents-adapter.ts) | 🧪 **Example adapter.** Agent runs, handoffs, tools and usage. Type-checked in CI. |
+| **OpenAI Agents SDK** | [`examples/openai-agents-adapter/`](examples/openai-agents-adapter/README.md) | 🧪 **Tracing-processor adapter, tested against the real SDK in CI.** Registers with `addTraceProcessor()`; agent runs, handoffs, tool calls and model usage are captured automatically from `@openai/agents`'s own tracing pipeline, no manual callbacks. Not a published package yet (pending the `packages/sdk` workspace extraction, issue #343). |
 | **Google ADK** | [`examples/google-adk-adapter.ts`](examples/google-adk-adapter.ts) | 🧪 **Example adapter.** Gemini turns, function calls and usage. Type-checked in CI. |
 | **OTLP GenAI traces** | `POST /v1/traces` | ✅ **Stable receiver, http/json and http/protobuf, no gRPC.** Converts OpenTelemetry GenAI spans (`gen_ai.*`, for example OpenLLMetry/Traceloop) into `llm.usage`/`llm.failed` and `tool.*` events; spans are never stored. File import of a saved trace export in `parseEventLog` is not supported yet (issue #98). Reference: [docs/otlp.md](docs/otlp.md#otlp-traces-post-v1traces). |
 
-<sub>✅ stable and tested · 🧪 example code you wire into the framework's own callbacks (the adapters do not import the frameworks) · ❌ not available</sub>
+<sub>✅ stable and tested · 🧪 example code you wire into the framework's own callbacks (the adapters do not import the frameworks), or (OpenAI Agents SDK only) a tracing processor tested against the real SDK but not yet a published package · ❌ not available</sub>
 
 Every adapter follows the same trust boundary: only observable states, messages and reported usage leave your runtime. Never send API keys or private system prompts through the event stream.
 
@@ -659,6 +659,7 @@ flowchart LR
 |---|---|---|
 | `GET` | `/health` | Status, version, schema version, connected SSE clients, and current `auth` / `webhookAuth` mode. |
 | `GET` | `/ready` | Storage readiness and the `ingestion` counters (conflicts rejected, legacy rows matched by id only). SQLite also returns the database schema version and latest migration time. |
+| `GET`/`HEAD` | `/metrics` | Opt-in (`AGENT_VIEWER_METRICS=1`), token-protected Prometheus text-exposition export (issue #103). `404` until enabled; `403 metrics_require_token` with no token configured and no explicit opt-out; its own rate-limit bucket and no CORS headers. This first slice exposes `agent_viewer_build_info`/`agent_viewer_sse_clients` only. |
 | `POST` | `/api/v1/events` | Ingest one event. Honors the `Idempotency-Key` header. A true retry is a `200` duplicate; the same id with different content is a `409`. |
 | `POST` | `/api/v1/events/batch` | Ingest up to 100 events (configurable). Each item reports `accepted`, `duplicate` or `conflict`; only accepted items are stored and streamed. |
 | `GET` | `/api/v1/events` | Query with `limit`, `since`, `afterId`, `runtimeId`, `sessionId`, `agentId`, `type`. Not the audit path: it returns whole events (including free text) and `afterId` cannot walk history; use `GET /api/v1/usage/calls` for that. |
@@ -816,23 +817,10 @@ Each conflict also writes one `warn` log line with the id, type, source, agent a
 <summary><b>🔏 Signing webhooks (HMAC-SHA256)</b></summary>
 <br/>
 
-With `AGENT_VIEWER_WEBHOOK_SECRET` set, every webhook needs two headers:
-
-- `X-Agent-Viewer-Timestamp`: milliseconds since the epoch, at most 5 minutes off the server clock.
-- `X-Agent-Viewer-Signature`: hex HMAC-SHA256 of `${timestamp}.${rawBody}`.
-
-```ts
-import crypto from 'node:crypto';
-
-const rawBody = JSON.stringify({ agent: 'atlas', status: 'coding' });
-const timestamp = Date.now().toString();
-const signature = crypto
-  .createHmac('sha256', process.env.AGENT_VIEWER_WEBHOOK_SECRET!)
-  .update(`${timestamp}.${rawBody}`)
-  .digest('hex');
-```
-
-The signature is compared in constant time. Expired timestamps and bad signatures get HTTP 401.
+With `AGENT_VIEWER_WEBHOOK_SECRET` set, every inbound webhook needs `X-Agent-Viewer-Timestamp` (milliseconds since
+the epoch) and `X-Agent-Viewer-Signature` (hex HMAC-SHA256 of `${timestamp}.${rawBody}`, compared in constant
+time). Full reference, including every response status and `error` value, the replay cache, and sender/receiver
+code in Node and Python: [docs/webhooks.md](docs/webhooks.md).
 
 </details>
 
@@ -857,21 +845,13 @@ and a real captured request/response: [docs/budgets.md](docs/budgets.md).
 <summary><b>🔔 Budget alert webhook (outbound)</b></summary>
 <br/>
 
-An optional outbound webhook delivers every `budget.alert` event (a budget crossing its warning or critical threshold) to a destination you configure, signed with its own HMAC secret, never the inbound `AGENT_VIEWER_WEBHOOK_SECRET` above. Set `AGENT_VIEWER_ALERT_WEBHOOK_URL` (plus, optionally, `_SECRET`, `_ALLOW_HTTP`, `_MAX_ATTEMPTS`, `_TIMEOUT_MS`, see the Configuration table) to enable it; with no URL, nothing is ever sent, and every alert's delivery stays `skipped`.
-
-Each attempt is a `POST` with the full canonical event as the body, byte-identical on every retry, and these headers:
-
-| Header | Meaning |
-|---|---|
-| `X-Agent-Viewer-Event` | Always `budget.alert`. |
-| `X-Agent-Viewer-Delivery` | The alert id, stable across every retry: dedupe on it. |
-| `X-Agent-Viewer-Attempt` | `1` on the first try, incrementing on each retry. |
-| `X-Agent-Viewer-Timestamp` | Milliseconds since the epoch, fresh on every attempt. |
-| `X-Agent-Viewer-Signature` | Hex HMAC-SHA256 of `${timestamp}.${rawBody}` using `AGENT_VIEWER_ALERT_WEBHOOK_SECRET`; omitted entirely when no secret is set. |
-
-Retry policy: any `2xx` succeeds; a network error, a timeout, `5xx`, `408` or `429` retries; any other `4xx` and any redirect fail immediately, with no retry. Backoff is `min(5s * 2^(attempt-1), 1h)`, with jitter uniform in `[base/2, base]`; a `Retry-After` on `429`/`503` raises the floor, still capped at one hour. After `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` the delivery is left `failed` for good (a dead letter, never retried again), and one `warn` log line names only the alert id and the last HTTP status, never the secret or the URL.
-
-Delivery is **at least once**: dedupe on `X-Agent-Viewer-Delivery`. The destination is operator configuration, never taken from a client request, but the payload still carries budget names, scopes and spend figures, so treat it as a trusted destination. With `AGENT_VIEWER_STORAGE=sqlite`, a delivery still `pending` after a restart resumes automatically; in `memory` mode it is lost instead, the same documented restart limitation as the rest of this storage mode. A backfill alert (detected in an already-closed period) and any alert detected while no webhook URL was configured are written `skipped` and never delivered, even if the webhook is enabled afterward.
+An optional outbound webhook delivers every `budget.alert` event (a budget crossing its warning or exceeded
+threshold) to a destination you configure, signed with its own HMAC secret, never the inbound
+`AGENT_VIEWER_WEBHOOK_SECRET` above. Set `AGENT_VIEWER_ALERT_WEBHOOK_URL` (plus, optionally, `_SECRET`,
+`_ALLOW_HTTP`, `_MAX_ATTEMPTS`, `_TIMEOUT_MS`, see the Configuration table) to enable it; with no URL, nothing is
+ever sent, and every alert's delivery stays `skipped`. Full reference, including the exact headers, the payload
+shape, retry and backoff behavior, delivery idempotency, the target-URL restrictions and a receiver verification
+snippet: [docs/webhooks.md](docs/webhooks.md).
 
 </details>
 
@@ -922,6 +902,9 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_EXPORT_CONCURRENCY` | `2` | Concurrent `GET /api/v1/usage/export` requests this process serves at once; above it, `429 export_busy` with `Retry-After: 5`. Does not apply to `GET /api/v1/usage/export/totals` (a single read, not a long-running stream). |
 | `AGENT_VIEWER_PRICING_FILE` | `pricing.json` next to `AGENT_VIEWER_SQLITE_PATH` | Operator-editable, versioned pricing table. See [docs/pricing.md](docs/pricing.md). |
 | `AGENT_VIEWER_PRICING_HISTORY_FILE` | `pricing-history.jsonl` next to the pricing file | Append-only history of every pricing version. Never edit by hand. |
+| `AGENT_VIEWER_METRICS` | unset (off) | Set to exactly `1` (CLI: `--metrics`) to enable `GET /metrics`, a Prometheus text-exposition export outside `/api/v1`. Disabled by default: an unset or any-other-value server answers `404` identical to a truly unknown route. This first slice exposes `agent_viewer_build_info` and `agent_viewer_sse_clients` only; the ledger-derived token/cost/call/latency families and the optional OTLP push ship in later sub-issues of issue #103. |
+| `AGENT_VIEWER_METRICS_TOKEN` | empty (falls back to `AGENT_VIEWER_API_TOKEN`) | A metrics-only Bearer credential for `/metrics`, so a Prometheus scraper never holds a token that can also ingest events. When set, the API token is no longer accepted on `/metrics`. Blank counts as unset, same as every other token here. |
+| `AGENT_VIEWER_METRICS_AUTH` | unset (auth on) | Set to exactly `off` to serve `/metrics` with no credential check (private network, sidecar scrape); logs a one-line startup warning. Any other value keeps auth on. With neither a metrics token nor an API token configured, and this not set to `off`, `/metrics` answers `403 metrics_require_token` rather than serving open. |
 | `AGENT_VIEWER_PRICING_READONLY` | unset | `1` disables `POST /api/v1/pricing/changes` (file-only pricing management); `POST /api/v1/pricing/reload` still works. |
 | `AGENT_VIEWER_RECOMPUTE_MAX_ROWS` | `200000` | Hard cap on matched rows for one `POST /api/v1/pricing/recompute` run; above it, `413 filter_too_broad` before anything is written. `node:sqlite` is synchronous, so a run blocks the event loop for its duration. [Details](docs/integration.md#usage-ledger-cost-estimation-and-recompute-issues-84-296). |
 | `VITE_AGENT_VIEWER_API_URL` | none | Demo app: server to stream from. Without it, only live mode connects (to `http://localhost:8787`). |
@@ -966,6 +949,7 @@ The defaults favor local development. Before you expose the server:
 | Retention | keeps everything forever | Set `AGENT_VIEWER_RETENTION_DAYS` for a production deployment that must bound how long prompts-adjacent metadata (summaries, payloads) stays on disk; set `AGENT_VIEWER_USAGE_RETENTION_DAYS` separately only if the audit record of tokens and cost must also expire. This is a honest baseline, not tamper-evident: see [docs/retention.md](docs/retention.md). |
 | Bulk export | With no token, `GET /api/v1/usage/export` and `/export/totals` require a loopback peer address, a loopback `Host` header and no cross-origin `Origin`, even when `AGENT_VIEWER_CORS_ORIGIN` is `*`; `token`/`api_key` in the query is always rejected (send `Authorization: Bearer` instead). A reverse proxy on the same host still looks loopback to this check, so it needs a token anyway; a Docker port mapping does not look loopback (the container sees the bridge address), so it always needs one. Set `AGENT_VIEWER_API_TOKEN` for any production deployment. **Until a scoped, read-only key ships (0.8.0), any holder of the API token can export the entire usage ledger**: treat the token as read access to your whole consumption history, not only write access to the event stream. See [docs/usage-export.md](docs/usage-export.md). |
 | Redaction | Built-in secret patterns, applied only to `GET /api/v1/usage/export` and `/export/totals` | Not yet applied at ingestion, to the live stream, to `GET /api/v1/events`, or to webhook replays: keep secrets out of event text rather than relying on redaction to scrub it later. See [docs/redaction.md](docs/redaction.md). |
+| Metrics | `GET /metrics` is off by default (`AGENT_VIEWER_METRICS` unset); once enabled it needs a Bearer token (a dedicated `AGENT_VIEWER_METRICS_TOKEN`, else the API token); `token`/`api_key` in the query never authenticates it | Set `AGENT_VIEWER_METRICS_TOKEN` to a value distinct from the API token, so a Prometheus scraper never holds write access to the event stream. `AGENT_VIEWER_METRICS_AUTH=off` removes the check entirely; use only on a private network. |
 
 Agent Viewer needs no model provider keys: usage figures come from your runtime. Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/jmmana/Agent-Viewer/security/advisories/new) or `jmmana@gmail.com`, never in a public issue. Full policy: [SECURITY.md](.github/SECURITY.md).
 
@@ -975,7 +959,7 @@ Agent Viewer needs no model provider keys: usage figures come from your runtime.
 
 ## 🧭 Roadmap
 
-Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. Shipped in [0.5.0](CHANGELOG.md): per-agent usage badges and a per-call detail panel on the canvas, cost per meeting and per tool, Model Ops reconciling against the real ledger call by call, and the library guide's four usage privacy rules stated together in [docs/library.md](docs/library.md#usage-figures). See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
+Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. Shipped in [0.5.0](CHANGELOG.md): per-agent usage badges and a per-call detail panel on the canvas, cost per meeting and per tool, Model Ops reconciling against the real ledger call by call, and the library guide's four usage privacy rules stated together in [docs/library.md](docs/library.md#usage-figures). Shipped in [0.6.0](CHANGELOG.md), "Precios y control": a versioned server pricing table with a per-row cost estimate ([docs/pricing.md](docs/pricing.md)), budgets per agent, model, session, user or tag with server-computed state and signed outbound alerts ([docs/budgets.md](docs/budgets.md)), measured latency percentiles and failure rates per model, and one canonical webhook-signing guide for both directions ([docs/webhooks.md](docs/webhooks.md)). See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
 
 Planned, not available yet:
 
@@ -985,6 +969,8 @@ Planned, not available yet:
 - [ ] An MCP server, so agents can report into the office directly.
 - [ ] A web component for apps that do not use React.
 - [ ] A hosted demo on GitHub Pages.
+
+The next releases (0.3.0 to 0.8.0) turn Agent Viewer into an observability and audit tool for the tokens and cost your agents consume, with the office as the hero view. See the full [observability and audit roadmap](docs/roadmap.md).
 
 Want one of these sooner? [Open an issue](https://github.com/jmmana/Agent-Viewer/issues/new) and say what you would use it for.
 

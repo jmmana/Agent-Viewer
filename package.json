@@ -1,6 +1,6 @@
 {
   "name": "@warlockcode/agent-viewer",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Open-source visual observability for AI agents in an interactive animated virtual office, with a one-command CLI and a Claude Code adapter",
   "license": "MIT",
   "type": "module",
@@ -85,6 +85,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
+    "@openai/agents": "^0.20.0",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",

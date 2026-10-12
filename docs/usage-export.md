@@ -57,7 +57,7 @@ from `/1`.
 | 32 | `estimatedCostSource` | the constant `estimated`, or empty | not estimable | no (validated enum) |
 | 33 | `pricingVersion` | integer | no price table version was checked (no table loaded at all) | no (numeric) |
 | 34 | `estimateStatus` | enum, see below | never empty | no (validated enum) |
-| 35 | `estimateRevision` | integer | never empty, always `0` today | no (numeric) |
+| 35 | `estimateRevision` | integer | never empty, `0` unless a recompute run changed this row | no (numeric) |
 | 36 | `estimatedAt` | epoch ms | not estimable | no (numeric) |
 
 A value that was never reported is an empty CSV cell or a JSON `null`, never `0`. A reported `0` is written as
@@ -71,7 +71,9 @@ existed). Every estimate cell is empty for any status other than `estimated`, ex
 `estimateRevision` (always `0` until the recompute endpoint of a later issue ships real revision history).
 `estimatedCostSource` exists only so a consumer can never confuse it with `costSource`: it is the literal string
 `estimated` when `estimatedCost` is not empty, and empty otherwise. See the **Estimate basis** section below for
-the `estimates`/`estimateRevision` request parameters both export routes share with calls and rollup.
+the `estimates`/`estimateRevision` request parameters both export routes share with calls and rollup, and
+[docs/pricing.md](pricing.md#re-estimating-after-a-table-change) for how a recompute (issue #296) changes this
+column.
 
 ### `summary` is always empty right now
 
@@ -163,7 +165,7 @@ with per-`(currency, costSource)` cost buckets, per-token-kind sums, and `byStat
 | `estimates=original` | Revision 0, the ingestion-time figure, regardless of any later recompute. |
 | `estimateRevision=N` | The highest revision `<= N` (what a price table said when run `N` was newest). |
 
-`estimates` and `estimateRevision` are mutually exclusive (`400 invalid_filter` otherwise). Every response echoes `estimateBasis: { mode, revision, revisionsUsed }`. Only revision 0 exists until the pricing recompute endpoint (a separate issue) ships, so every mode reads the same data today and every row's own `estimateRevision` is always `0`; the parameter is accepted and validated now so this contract never has to change shape later. For CSV, which has no per-request metadata record, `estimateBasis` is echoed as the `X-Agent-Viewer-Estimate-Basis` response header instead (JSON-encoded, also in `Access-Control-Expose-Headers`); JSONL carries it on the trailing `summary` record, same as every other response.
+`estimates` and `estimateRevision` are mutually exclusive (`400 invalid_filter` otherwise). Every response echoes `estimateBasis: { mode, revision, revisionsUsed }`. Before any `POST /api/v1/pricing/recompute` run (issue #296) touches a row, only revision 0 exists, so every mode reads the same data and `estimateRevision` is `0`; once a recompute run writes a new revision for a row, `estimates=latest` (the default) reads that newest revision, `estimates=original` keeps reading revision 0 regardless, and `estimateRevision=N` reads the highest revision at or below `N`. For CSV, which has no per-request metadata record, `estimateBasis` is echoed as the `X-Agent-Viewer-Estimate-Basis` response header instead (JSON-encoded, also in `Access-Control-Expose-Headers`); JSONL carries it on the trailing `summary` record, same as every other response.
 
 To reconcile against a provider invoice: match each `(currency, costSource)` bucket against the matching line on
 the invoice, one currency and one cost source at a time. There is never a cross-currency total and never a total
@@ -245,7 +247,9 @@ version, so a consumer can safely assume a given version's column list never shi
 ## Out of scope for this item
 
 Parquet, XLSX, scheduled or emailed exports, gzip of the stream, and SDK/CLI `export` helpers are all out of scope
-here (see the issue's own "Out of scope" section). Cost estimation/pricing columns (issue #295) shipped later and
-are documented above; pricing recompute and revision history (a separate, still-open issue) stay out of scope:
-`estimateRevision` is always `0` until that lands. The portal's own export dialog, when it ships, will be a thin
+here (see the issue's own "Out of scope" section). Cost estimation/pricing columns (issue #295) and pricing
+recompute (issue #296, `POST /api/v1/pricing/recompute`, [docs/integration.md](integration.md#usage-ledger-cost-estimation-and-recompute-issues-84-296))
+shipped later and are documented above and there: `estimateRevision` is `0` for a row that was never recomputed,
+and the highest revision a matching recompute run wrote otherwise, selected per request with
+`estimates=latest|original` / `estimateRevision=N`. The portal's own export dialog, when it ships, will be a thin
 client over exactly these two endpoints: it will never sum, convert or price anything itself.

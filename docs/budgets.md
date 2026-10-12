@@ -388,7 +388,98 @@ Both call `GET /api/v1/budgets`, forward the Bearer token the client was built w
 TypeScript SDK also exports the `Budget`, `BudgetView`, `BudgetStatus`, `BudgetScope`, `BudgetScopeType`,
 `BudgetPeriod`, `BudgetBasis`, `BudgetState`, `BudgetUnknownReason`, `BudgetWindow` and `BudgetCallCounts` types.
 
-## Limits of memory mode
+## Alerts delivery (#86)
+
+A `budget.alert` canonical event is emitted, server side only, the moment a budget's live evaluation transitions
+into `warning` or `exceeded` (never into `ok` or `unknown`): see [`onBudgetTransition`](#live-updates-the-event-budget-sse-frame-and-onbudgettransition) above, which this feature subscribes to directly, with no HTTP or SSE in
+between. There is exactly one alert per threshold crossing per period: a budget that stays `exceeded` across many
+more calls in the same period does not re-fire, and it re-arms only once the period rolls over or the state
+genuinely changes again. A crossing detected for an already-closed period (`backfill: true`, for example from a
+re-imported history) is recorded but **never** queued for delivery.
+
+**Delivery** is an optional outbound webhook: set `AGENT_VIEWER_ALERT_WEBHOOK_URL` to enable it; with no URL, the
+feature is off and every alert's delivery stays `skipped`. Every attempt is signed with its own secret
+(`AGENT_VIEWER_ALERT_WEBHOOK_SECRET`, independent of the inbound `AGENT_VIEWER_WEBHOOK_SECRET`), retried on a
+network error, a timeout, `429` or a `5xx` with exponential backoff capped at one hour, and left `failed` for good
+after `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` (default 6). Delivery is **at least once**, so a receiver must
+treat the alert id (`X-Agent-Viewer-Delivery`) as an idempotency key. Full reference, including every header, the
+exact payload shape, the retry and backoff rule, the target-URL restrictions and a receiver verification snippet
+in Node and Python: **[docs/webhooks.md](webhooks.md)**.
+
+**Payload.** Metadata only, never a prompt, a tool argument or a secret: `alertId`, `budgetId`, `budgetName`,
+`scope`, `period`, `state` (`warning` or `exceeded`), `threshold` (the crossed ratio), `limit`, `currency`,
+`knownSpent`, `spendIsLowerBound`, `calls` (the same `BudgetCallCounts` shape as a `BudgetStatus`),
+`containsEstimates`, `pricingVersions` and `detectedAt`. These are exactly the `BudgetStatus` fields this
+document already defines above; the alert never invents a second vocabulary for the same figures.
+
+**Reading alerts back.** `GET /api/v1/budget-alerts[?budgetId=&since=&limit=]` and
+`GET /api/v1/budget-alerts/:alertId` (same `/api/v1` auth as every other route) list every detected alert with its
+own `delivery: { status, attempts, lastStatus, deliveredAt }` and a `webhook: { configured, signed }` summary
+derived only from whether the URL/secret are set, never the URL or the secret itself. There is no create, edit or
+manual redeliver endpoint: an alert is a pure, read-only consequence of spend crossing a threshold.
+
+## Portal (#88)
+
+The demo app's Model Ops console gets a **Budgets** tab (the server-driven list: create, edit, enable/disable and
+delete a budget, with its live state) and a **Pricing** tab (the price table editor described in
+[docs/pricing.md](pricing.md)), both built on the typed REST client in `src/integrations/serverApi.ts`. Every
+figure shown there is read, not computed: the portal never sums a budget's spend or decides a threshold itself,
+it only renders the `BudgetView`/`BudgetStatus` this document already defines, exactly as the server returns it,
+including an `unknown` state drawn as neutral, never as a guessed `ok`. The embedded office canvas (not the
+portal) also reads this same state through the library's host-provided `showBudget`/`budgetStateByAgent` props;
+see [Library](#library-87) below for how little the office itself is told.
+
+> Screenshots of the Budgets and Pricing screens, in English and Spanish, are expected at
+> `docs/assets/budgets-en.png`, `budgets-es.png`, `pricing-en.png` and `pricing-es.png`. They are not included in
+> this change; capturing them against a running portal with sample data is tracked as a follow-up so this guide
+> does not block on image generation.
+
+## Library (#87)
+
+The embeddable library never evaluates a budget, never sums spend and never compares against a limit: it only
+ever draws a verdict your host already computed and passed in through `budgetStateByAgent`, hidden unless you set
+`showBudget` (off by default, exactly like `showUsage`). The prop shape is intentionally thin:
+
+```ts
+type AgentBudgetState = { state: 'ok' | 'warning' | 'exceeded' | 'unknown'; label?: string };
+```
+
+There is no `limit`, `spent`, `percent`, `currency` or `threshold` field on this type, on purpose: the office
+cannot compare spend against a limit because it is never given either number. An `unknown` state draws a neutral
+grey marker with a `?` glyph and a dashed outline, never green and never the quiet "nothing to show" of a healthy
+`ok` budget: an incomplete figure must never look the same as a confirmed healthy one. Full reference, with every
+drawn state, the accessible text equivalent and the exact message keys in English and Spanish:
+[docs/library.md#budget-state](library.md#budget-state) ([español](library.es.md#estado-de-presupuesto)).
+
+## Latency and errors (#89)
+
+Alongside cost, the same usage ledger backs measured call latency percentiles and failure rates, read with
+`GET /api/v1/usage/rollup?groupBy=provider,model&include=latency,failures`. Percentiles (p50, p95) are computed by
+the nearest-rank method over every reported `latencyMs` value for that group; a call with no reported latency is
+excluded from the percentile but still counted in the group's own sample size, so `n = 1,102, 78 without latency`
+means exactly that, never a silently smaller denominator. With zero latency samples the figure reads "No latency
+reported", never `0`; with zero attempts at all it reads "No data". The failure rate comes from `llm.failed`
+events (issue #46) divided by total attempts for that group, with the same "never a bare `0.0%` for a real but
+tiny rate" rule the rest of this project applies (a rate strictly between 0% and 0.05% reads "< 0.1 %" instead of
+rounding down to a misleading zero). There is no separate budgets-specific reliability API: this is the same
+rollup endpoint budgets themselves read for cost, with two additional opt-in fields. Full reference, including the
+minimum sample size below which a percentile is flagged as low-confidence rather than hidden, and the golden
+fixture that hand-checks the math: [docs/integration.md](integration.md#usage-rollup-get-apiv1usagerollup-issue-66),
+under "Latency and failure rates".
+
+## Limits and honesty notes
+
+**Budgets are monitoring, not a gate.** Agent Viewer is not a proxy: it never sits between your runtime and a
+model provider, so a budget can never block, delay or reject a call, however far over its limit it already is.
+Exceeding a budget changes what this product shows and, with alerts configured, what it sends you; it changes
+nothing about whether the next call happens.
+
+**Alerts depend on events arriving.** A budget's state, and therefore whether an alert fires, is only ever as
+current as the usage ledger it reads. A runtime that reports a call late, or out of order, can move a budget's
+state backward after the fact (a call that arrives after its period's alert already fired can still raise a
+budget that briefly looked `ok` back to `warning` or `exceeded`, after the fact, with no further alert if that
+combination already fired once for that period) or raise a state that had settled back down. This is the usage
+ledger's own ordering guarantee (issue #65), not a budgets-specific limitation.
 
 In `AGENT_VIEWER_STORAGE=memory`, budgets, their revisions and the last evaluated state all live in `Map`s and are
 lost on restart, the same limitation the rest of memory mode already has. More importantly, the memory store caps

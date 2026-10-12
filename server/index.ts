@@ -24,6 +24,7 @@ import {
 } from './store';
 import { parseRetentionConfig, startRetention, usageRetentionWarning, type RetentionConfig, type RetentionJobHandle } from './retention';
 import { readPackageVersion } from './version';
+import { createMetricsHandler, createMetricsRegistry, METRICS_PATH } from './metrics';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
 import type { RollupQuery, UsageFilters } from './usage/types';
@@ -860,6 +861,23 @@ app.post(OTLP_METRICS_PATH, async (req, res) => {
     });
   }
 });
+
+// Prometheus /metrics (issue #350): opt-in, mounted before the global body parser and CORS with its own rate
+// limit and auth (see server/metrics.ts). Collectors are read on every scrape, never cached.
+const metricsRegistry = createMetricsRegistry();
+metricsRegistry.register({
+  name: 'agent_viewer_build_info',
+  help: 'Agent Viewer build information. Always 1.',
+  type: 'gauge',
+  collect: () => [{ labels: { version: SERVER_VERSION, storage: store.readiness().storage }, value: 1 }],
+});
+metricsRegistry.register({
+  name: 'agent_viewer_sse_clients',
+  help: 'Open SSE connections to /api/v1/events/stream.',
+  type: 'gauge',
+  collect: () => clients.size,
+});
+app.all(METRICS_PATH, createMetricsHandler({ registry: metricsRegistry, getApiToken, safeEqual }));
 
 // Body parsing with raw buffer capture for webhook HMAC
 app.use(

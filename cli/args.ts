@@ -20,6 +20,8 @@ export interface StartCommand {
   demo: boolean;
   open: boolean;
   record?: string;
+  /** Set only by `--metrics`: serve the Prometheus `/metrics` endpoint (sets AGENT_VIEWER_METRICS=1). */
+  metrics?: true;
 }
 
 export interface SendCommand {
@@ -80,6 +82,7 @@ Start options:
   --demo               Open the office with the simulated demo team; your events still show up
   --no-open            Do not open the browser
   --record <file>      Append every accepted event to a canonical JSONL V1 file
+  --metrics            Serve Prometheus metrics at /metrics (same as AGENT_VIEWER_METRICS=1)
 
 send and claude-hook:
   --url <url>          Server URL (default: the running viewer, or http://${DEFAULT_HOST}:${DEFAULT_PORT})
@@ -240,6 +243,7 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
     demo: { type: 'boolean', default: false },
     open: { type: 'boolean', default: true },
     record: { type: 'string' },
+    metrics: { type: 'boolean', default: false },
   });
   if (positionals.length > 0) {
     throw new CliUsageError(`Unknown command "${positionals[0]}". Run agent-viewer --help`);
@@ -256,5 +260,7 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
     demo: Boolean(values.demo),
     open: values.open !== false,
     record: record ? path.resolve(cwd, record) : undefined,
+    // Only present when set, so a plain start keeps the same shape as before.
+    ...(values.metrics ? { metrics: true as const } : {}),
   };
 }

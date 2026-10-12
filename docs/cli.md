@@ -39,6 +39,7 @@ Requires Node.js 22.13 or later (the package declares it in `engines`, so npm wa
 | `--demo` | off | Opens the office with the simulated demo team. Your events still arrive on top of it. |
 | `--no-open` | opens | Do not open the browser. |
 | `--record <file>` | off | Appends every event the server accepts while the CLI runs to a [canonical JSONL V1](event-log.md) file, one JSON line per event and no duplicates, ready to replay or export to video. A new file is created readable only by you (mode 0600), because events can carry summaries. Best effort: nothing from before the CLI started, no fsync, and a write error mid-run (full disk) stops the recording with one warning while the server keeps running. A path that cannot be written stops the CLI before it starts. |
+| `--metrics` | off (`AGENT_VIEWER_METRICS`) | Serves Prometheus metrics at `GET /metrics` (text format 0.0.4), the same as setting `AGENT_VIEWER_METRICS=1`. Scrapers send `Authorization: Bearer <token>`, with `AGENT_VIEWER_METRICS_TOKEN` if set, else the API token; a token in the query string is ignored. The route has its own rate limit (`AGENT_VIEWER_METRICS_RATE_LIMIT`, 120 per minute per client by default), separate from `/api/v1`. When off, `/metrics` is a plain 404. |
 
 ### Where the token travels
 

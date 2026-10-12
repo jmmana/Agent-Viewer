@@ -139,6 +139,8 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
   process.env.AGENT_VIEWER_EMBEDDED = '1';
   process.env.AGENT_VIEWER_API_TOKEN = token;
   delete process.env.AGENT_VIEWER_API_KEY;
+  // Issue #350: `--metrics` opts into the Prometheus endpoint; an existing AGENT_VIEWER_METRICS is kept otherwise.
+  if (command.metrics) process.env.AGENT_VIEWER_METRICS = '1';
   // Issue #271: without this, the pricing store would default to `./data/pricing.json` relative to wherever
   // `npx agent-viewer` was run. Keep it under the same state folder as the session file and, in the Docker app
   // image, the same `/app/data` volume as the SQLite database.
@@ -174,7 +176,7 @@ export async function startViewer(command: StartCommand): Promise<RunningViewer>
     }));
   }
   // Single page app: every other GET outside the API gets the office (or a note when it was not built).
-  app.get(/^\/(?!api\/|health$|ready$).*/, (_req, res) => {
+  app.get(/^\/(?!api\/|health$|ready$|metrics$).*/, (_req, res) => {
     if (!hasViewer) {
       res.status(503).type('text/plain').send('The office is not built. Run "npm run build:cli" in the repository, then restart.');
       return;

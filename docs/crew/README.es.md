@@ -82,6 +82,12 @@ geométricos cambian con la fase y la selección se conserva al recargar. Consul
 [Ambientes por sala](AMBIENCE.md) para horarios, persistencia y límites del arte
 prototipo.
 
+Las lámparas de escritorio, techo, pared y recepción de cada sala tienen su
+propio interruptor manual On/Off/Auto, por clic/toque en el canvas o desde el
+panel accesible por teclado **Luces de la oficina**; Auto sigue el ambiente de
+la sala. Consulta [Lámparas](LAMPS.md) para persistencia, aislamiento y
+límites del arte prototipo.
+
 ## 4. Personajes: qué es personalizable hoy, y qué sigue siendo marcador de posición
 
 Crew define 6 arquetipos cosméticos (CEO, Planner, Developer, Analyst,

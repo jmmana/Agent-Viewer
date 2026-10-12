@@ -77,6 +77,11 @@ or follows the local clock in **Auto**. Windows, skyline, room colors and geomet
 monitor brightness follow the chosen phase, including after reloading. See
 [Room ambience](AMBIENCE.md) for the schedule, persistence and prototype-art limits.
 
+Each room's desk, ceiling, wall and reception fixtures have their own manual
+On/Off/Auto switch, by click/tap on the canvas or from the keyboard-reachable
+**Office lights** panel; Auto follows the room's ambience. See
+[Lamps](LAMPS.md) for persistence, isolation and prototype-art limits.
+
 ## 4. Characters: what is customizable today, and what is still placeholder
 
 Crew defines 6 cosmetic archetypes (CEO, Planner, Developer, Analyst,

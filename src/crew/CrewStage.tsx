@@ -1,4 +1,6 @@
 import { CREW_AMBIENCES, CREW_AMBIENCE_LABELS, resolveCrewAmbience, type CrewAmbienceMode } from './crewAmbience';
+import { CREW_LAMPS_BY_ROOM, CREW_LAMP_MODES, crewLampIsOn, crewLampVisible, nextCrewLampMode, type CrewLamp, type CrewLampMode } from './crewLamps';
+import { hitCrewLamp, CrewLampTap } from './crewLampHitTest';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CREW_ROOMS, CREW_VIEWS, type CrewView } from './crewModel';
 import { CrewRoomSelector } from './CrewRoomSelector';
@@ -88,6 +90,7 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
   };
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gestures = useRef(new CrewGestures());
+  const lampTap = useRef(new CrewLampTap());
   const frameRef = useRef<number>(0);
   const [localRoomId, setLocalRoomId] = useState(CREW_ROOMS[0].id);
   const requestedRoom = selectedRoomId ?? localRoomId;
@@ -154,7 +157,7 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
   const setZoom = (fn: (prev: number) => number) => updateCamera(current => zoomCrewCameraAt(current, fn(current.zoom), { x: 0, y: 0 }));
   useEffect(() => {
     const canvas = canvasRef.current;
-    const reset = () => gestures.current.clear();
+    const reset = () => { gestures.current.clear(); lampTap.current.clear(); };
     reset();
     window.addEventListener('blur', reset);
     const wheel = (event: WheelEvent) => {
@@ -175,9 +178,28 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
     const bounds = event.currentTarget.getBoundingClientRect();
     return { x: event.clientX - bounds.left - bounds.width / 2, y: event.clientY - bounds.top - bounds.height / 2 };
   };
-  const endPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    gestures.current.end(event.pointerId);
+  // Top-left relative, matching crewLampHitTest's screen-space projection (not gesture-centered).
+  const lampPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+  };
+  const releaseCapture = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const endPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const tapped = lampTap.current.end(event.pointerId, lampPoint(event));
+    gestures.current.end(event.pointerId);
+    releaseCapture(event);
+    if (!tapped) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const hit = hitCrewLamp(lampPoint(event), lamps, room, camera, { width: bounds.width, height: bounds.height });
+    if (hit) toggleLamp(hit);
+  };
+  // A pinch, dropped pointer or lost capture must discard the candidate without ever toggling a light.
+  const cancelPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    lampTap.current.cancel(event.pointerId);
+    gestures.current.end(event.pointerId);
+    releaseCapture(event);
   };
   useEffect(() => {
     if (!persistCamera || typeof window === 'undefined') return;
@@ -197,6 +219,23 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
   }, [ambienceMode]);
   const ambience = resolveCrewAmbience(ambienceMode, localHour);
   const ambienceLabels = CREW_AMBIENCE_LABELS[isEs ? 'es' : 'en'];
+  const lamps = CREW_LAMPS_BY_ROOM[roomId] ?? [];
+  const lampModes = visualPreferences.lampsByRoom?.[roomId] ?? {};
+  const lampModeLabels: Record<CrewLampMode, string> = isEs
+    ? { on: 'Encendida', off: 'Apagada', auto: 'Automática' } : { on: 'On', off: 'Off', auto: 'Auto' };
+  const setLampMode = (lampId: string, mode: CrewLampMode) => {
+    changePreferences({ ...visualPreferences, lampsByRoom: { ...visualPreferences.lampsByRoom, [roomId]: { ...lampModes, [lampId]: mode } } });
+  };
+  const toggleLamp = (lamp: CrewLamp) => {
+    const mode = nextCrewLampMode(lampModes[lamp.id]);
+    setLampMode(lamp.id, mode);
+    pushCaption(`${lamp.label[isEs ? 'es' : 'en']}: ${lampModeLabels[mode]}`);
+  };
+  const setAllLamps = (mode: CrewLampMode) => {
+    changePreferences({ ...visualPreferences, lampsByRoom: {
+      ...visualPreferences.lampsByRoom, [roomId]: Object.fromEntries(lamps.map(lamp => [lamp.id, mode])) } });
+    pushCaption(`${isEs ? 'Luces de la sala' : 'Room lights'}: ${lampModeLabels[mode]}`);
+  };
   // Motor de audio propio de Crew (#150): una instancia por montaje de CrewStage,
   // sincronizada con la sala activa y con mute/volumen (#157). Nunca se autoinicia.
   const audio = useCrewAudio({ roomId, muted: visualPreferences.muted, volume: visualPreferences.volume });
@@ -304,8 +343,8 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, workstationImage, seats: action.actions.flatMap(actor => actor.workstation ? [{ ...actor.workstation, actorId: actor.id }] : []), locale, ambience, highContrast: visualPreferences.highContrast, propImages: propImages.images, calls: callStyles, callIcon: callIcon.image });
-  }, [room, camera, locale, ambience, presence, sprite.images, blink, walks, action.frames, action.actions, workstationImage, visualPreferences.highContrast, propImages.images, callStyles, callIcon.image]);
+    renderCrewRoom({ ctx, width: bounds.width, height: bounds.height, room, camera: constrainCrewPan(camera, bounds), markers: presence.markers, sprites: sprite.images, blink, walks, actions: action.frames, workstationImage, seats: action.actions.flatMap(actor => actor.workstation ? [{ ...actor.workstation, actorId: actor.id }] : []), locale, ambience, lampModes, highContrast: visualPreferences.highContrast, propImages: propImages.images, calls: callStyles, callIcon: callIcon.image });
+  }, [room, camera, locale, ambience, lampModes, presence, sprite.images, blink, walks, action.frames, action.actions, workstationImage, visualPreferences.highContrast, propImages.images, callStyles, callIcon.image]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -380,6 +419,7 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
       </select>
       <button type="button" onClick={() => {
         gestures.current.clear();
+        lampTap.current.clear();
         setCameraByRoom({});
         changePreferences(defaultCrewPreferences());
         setRoomId(CREW_ROOMS[0].id);
@@ -457,6 +497,33 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
           ? 'Motor de audio de Crew (#150): música sintetizada, nunca se reproduce sola. Hoy solo la sala de descanso tiene pista; ver origen y licencia en docs/crew/AUDIO_LICENSES.md.'
           : 'Crew audio engine (#150): synthesized music, never autoplays. Only the lounge has a track today; see origin and license in docs/crew/AUDIO_LICENSES.md.'}
       </p>
+    </details>
+    {/* Lámparas Crew (#149): interruptor manual por lámpara más un control global de
+      sala. Los botones son nativamente operables con teclado (Tab/Enter/Espacio) y
+      duplican el tap sobre el canvas; ninguno de los dos cambia el estado de luces
+      del legado ni ilumina fuera del radio local de cada lámpara. */}
+    <details style={{ padding: `0 ${12 * hudScale}px` }}>
+      <summary style={{ cursor: 'pointer', fontSize: 13 * hudScale, padding: `${4 * hudScale}px 0` }}>
+        {isEs ? 'Luces de la oficina' : 'Office lights'}
+      </summary>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 * hudScale, alignItems: 'center', padding: `${4 * hudScale}px 0`, fontSize: 13 * hudScale }}>
+        <span id={`${idPrefix}-lamps-all-label`}>{isEs ? 'Todas:' : 'All:'}</span>
+        {CREW_LAMP_MODES.map(mode => <button key={mode} type="button" data-testid={`${idPrefix}-lamps-all-${mode}`}
+          aria-describedby={`${idPrefix}-lamps-all-label`} onClick={() => setAllLamps(mode)}>
+          {lampModeLabels[mode]}
+        </button>)}
+      </div>
+      <div role="group" aria-label={isEs ? 'Lámparas de esta oficina' : 'Lamps in this office'}
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 8 * hudScale, padding: `${4 * hudScale}px 0`, fontSize: 13 * hudScale }}>
+        {lamps.filter(lamp => crewLampVisible(lamp, room, view)).map(lamp => {
+          const mode = lampModes[lamp.id] ?? 'auto';
+          const on = crewLampIsOn(mode, ambience);
+          return <button key={lamp.id} type="button" data-testid={`${idPrefix}-lamp-${lamp.id}`}
+            aria-pressed={on} onClick={() => toggleLamp(lamp)}>
+            {lamp.label[isEs ? 'es' : 'en']}: {lampModeLabels[mode]}
+          </button>;
+        })}
+      </div>
     </details>
     {/* aria-live sin role explícito, igual que el listado de agentes de abajo:
       evita chocar con el único role="status" del aviso de sala inexistente.
@@ -544,14 +611,16 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
         event.currentTarget.focus({ preventScroll: true });
         event.currentTarget.setPointerCapture(event.pointerId);
         gestures.current.start(event.pointerId, pointerPoint(event));
+        lampTap.current.start(event.pointerId, lampPoint(event));
       }}
       onPointerMove={event => {
         const update = gestures.current.move(event.pointerId, pointerPoint(event));
         if (update) updateCamera(update);
+        lampTap.current.move(event.pointerId, lampPoint(event));
       }}
       onPointerUp={endPointer}
-      onPointerCancel={endPointer}
-      onLostPointerCapture={event => gestures.current.end(event.pointerId)}
+      onPointerCancel={cancelPointer}
+      onLostPointerCapture={cancelPointer}
     />
     <p aria-live="polite" data-testid="crew-art-status" style={{ padding: '4px 12px', margin: 0, fontSize: 12 }}>
       {isEs ? `Ilustraciones: ${illustratedAgents}.` : `Illustrations: ${illustratedAgents}.`}

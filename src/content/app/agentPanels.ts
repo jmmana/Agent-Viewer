@@ -31,6 +31,19 @@ const EN = {
   'agentPanels.artifactType.schema': 'Schema',
   'agentPanels.artifactType.architecture': 'Architecture',
 
+  // Budget rows (issue #335), shown as plain text in both the side inspector and the detail modal: no ratio or
+  // percentage is computed anywhere near these strings, only the server's own limit/spent figures.
+  'agentPanels.budget.heading': 'Budget',
+  'agentPanels.budget.limit': 'Limit: {amount} {currency}',
+  'agentPanels.budget.spent': 'Spent: {amount} {currency}',
+  'agentPanels.budget.spentUnknown': 'Spent: unknown',
+  'agentPanels.budget.disabledTag': 'Disabled',
+  'agentPanels.budget.period.day': 'Daily',
+  'agentPanels.budget.period.week': 'Weekly',
+  'agentPanels.budget.period.month': 'Monthly',
+  'agentPanels.budget.basis.reported': 'Reported costs only',
+  'agentPanels.budget.basis.reported_plus_estimated': 'Reported + estimated costs',
+
   // Agent detail modal
   'agentDetail.copyId': 'Copy agent ID',
   'agentDetail.copyIdLabel': 'Copy agent ID {id}',
@@ -219,6 +232,20 @@ const ES: Record<keyof typeof EN, string> = {
   'agentPanels.artifactType.test_run': 'Ejecución de pruebas',
   'agentPanels.artifactType.schema': 'Esquema',
   'agentPanels.artifactType.architecture': 'Arquitectura',
+
+  // Filas de presupuesto (issue #335), mostradas como texto plano tanto en el inspector lateral como en la
+  // ventana de detalle: ninguna proporción o porcentaje se calcula cerca de estos textos, solo las cifras de
+  // límite/gastado que entrega el servidor.
+  'agentPanels.budget.heading': 'Presupuesto',
+  'agentPanels.budget.limit': 'Límite: {amount} {currency}',
+  'agentPanels.budget.spent': 'Gastado: {amount} {currency}',
+  'agentPanels.budget.spentUnknown': 'Gastado: desconocido',
+  'agentPanels.budget.disabledTag': 'Deshabilitado',
+  'agentPanels.budget.period.day': 'Diario',
+  'agentPanels.budget.period.week': 'Semanal',
+  'agentPanels.budget.period.month': 'Mensual',
+  'agentPanels.budget.basis.reported': 'Solo costos reportados',
+  'agentPanels.budget.basis.reported_plus_estimated': 'Costos reportados + estimados',
 
   // Ventana de detalle del agente
   'agentDetail.copyId': 'Copiar ID del agente',

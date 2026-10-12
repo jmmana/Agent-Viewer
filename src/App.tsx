@@ -51,6 +51,9 @@ import { rebuildFromSnapshot, type LiveSnapshot } from './integrations/snapshotR
 import { loadLiveHistory, parseHistoryLimit } from './integrations/historyLoader';
 import { loadLiveToken, resolveLiveConnection, takeLiveCredentials } from './integrations/liveConnection';
 import { useServerAuthState } from './integrations/serverHealth';
+import { useServerApi } from './integrations/useServerApi';
+import { useBudgetState } from './integrations/useBudgetState';
+import { agentBudgetRows, reduceBudgetStateByAgent } from './integrations/budgetByAgent';
 import { clearSession, loadSession, saveSession, createThrottledSessionWriter } from './engine/sessionStorage';
 import { parseEventLog } from './integrations/eventLogParser';
 import { getDropErrorKey } from './integrations/dropErrorKey';
@@ -157,6 +160,16 @@ export default function App() {
     saveUsageWindow(typeof window !== 'undefined' ? window.localStorage : undefined, option);
   };
   const ledgerUsage = useLedgerAgentUsage({ ledger: ledgerConnection, window: usageWindow, events: simState.events });
+
+  // Office budget tinting + agent panel budget rows (issue #335, sub-issue of #88). A separate `useServerApi`/
+  // `useBudgetState` instance from the Budgets tab's own (`BudgetsPanel.tsx`), the same way every other ledger
+  // consumer in this file (usage badges, Model Ops, the inspector) makes its own hook call with the shared
+  // `ledgerConnection` rather than reading from a context (see `useServerApi.ts`'s doc comment). `isOpen: true`:
+  // the office view is the app's default/always-mounted surface, unlike the Budgets tab which only fetches while
+  // open.
+  const budgetServerApi = useServerApi(ledgerConnection);
+  const budgetState = useBudgetState({ serverApi: budgetServerApi, isOpen: true, events: simState.events });
+  const budgetByAgent = useMemo(() => reduceBudgetStateByAgent(budgetState.budgets), [budgetState.budgets]);
   // Kept across a loading/error refetch so the badges and top-bar total never flash back to the (misleading)
   // locally summed figures while the ledger is merely re-fetching; cleared only when the server tells us the
   // ledger truly is not available (`unavailable`/`unauthorized`), when the previous figures would be wrong to
@@ -881,6 +894,7 @@ export default function App() {
                     isInspectorOpen={isSidebarOpen}
                     isSidebarOpen={isSidebarOpen}
                     onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+                    budgetByAgent={budgetByAgent}
                   />
                   {overflowReservations.length > 0 && (
                     <button
@@ -993,6 +1007,7 @@ export default function App() {
             usageFigures={officeLedgerUsage?.byAgent?.[selectedAgent.id]}
             ledgerReady={Boolean(officeLedgerUsage)}
             isStale={isUsageStale}
+            budgetRows={agentBudgetRows(budgetState.budgets, selectedAgent.id)}
           />
         )}
       </main>
@@ -1066,6 +1081,7 @@ export default function App() {
         isStale={isUsageStale}
         usageWindow={usageWindow}
         maskSecrets={maskSecrets}
+        budgetRows={detailModalAgentId ? agentBudgetRows(budgetState.budgets, detailModalAgentId) : []}
         initialTab={detailModalInitialTab ?? undefined}
       />
     </div>

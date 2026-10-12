@@ -10,6 +10,8 @@ import { AgentCallsTable } from './usage/AgentCallsTable';
 import { createOfficeTranslator } from '../content/officeMessages';
 import { formatCost, formatTokens, type UsageFigures } from '../lib/usage';
 import type { UsageWindowOption } from '../integrations/usageWindow';
+import type { BudgetView } from '../integrations/serverApi';
+import { budgetStateChipClasses, formatBudgetAmount } from './budgetRowFormat';
 import {
   X,
   Copy,
@@ -63,6 +65,11 @@ interface AgentDetailModalProps {
   usageWindow?: UsageWindowOption;
   /** Display preference (issue #78): shortens `requestId` in the call list and hides free-text fields. */
   maskSecrets?: boolean;
+  /** This agent's budget row(s) (issue #335), already filtered by the caller to `scope.type === 'agent'` and
+   * `scope.value === agent.id` (see `src/integrations/budgetByAgent.ts`'s `agentBudgetRows`). Shown as plain
+   * text in the overview tab, read straight from the server: no ratio or percentage is computed here. Empty
+   * when no budget targets this agent, or in demo mode (no server connection). */
+  budgetRows?: BudgetView[];
   /** Which tab to land on the next time the modal opens (issue #78's "View calls" from the inspector). The
    * modal keeps its own `activeTab` state across opens, so this only applies on the open edge or while already
    * open if it changes. */
@@ -104,6 +111,7 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
   isStale = false,
   usageWindow = 'all',
   maskSecrets = true,
+  budgetRows = [],
   initialTab,
 }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
@@ -602,6 +610,60 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* Budget (issue #335): the agent-scoped budget row(s) that match this agent, read as is from
+                  the server. No limit/spent ratio is computed here; see src/integrations/budgetByAgent.ts. */}
+              {budgetRows.length > 0 && (
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3 md:col-span-2">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-amber-400" aria-hidden="true" />
+                    {t(locale, 'agentPanels.budget.heading')}
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {budgetRows.map((budget) => (
+                      <div key={budget.id} className="bg-slate-900/80 p-3 rounded-lg border border-slate-800/80 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-slate-200 truncate">{budget.name}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold border shrink-0 ${budgetStateChipClasses(
+                              budget.status?.state ?? null
+                            )}`}
+                          >
+                            {officeTranslate(`budget.state.${budget.status?.state ?? 'unknown'}`)}
+                          </span>
+                        </div>
+                        <div className="text-slate-400 text-[11px]">
+                          {t(locale, `agentPanels.budget.period.${budget.period}` as TranslationKey)}
+                          {' · '}
+                          {t(locale, `agentPanels.budget.basis.${budget.basis}` as TranslationKey)}
+                          {!budget.enabled && (
+                            <>
+                              {' · '}
+                              {t(locale, 'agentPanels.budget.disabledTag')}
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between font-mono text-[11px] text-slate-300">
+                          <span>
+                            {t(locale, 'agentPanels.budget.limit', {
+                              amount: formatBudgetAmount(budget.limit, intlLocale),
+                              currency: budget.currency,
+                            })}
+                          </span>
+                          <span>
+                            {budget.status && budget.status.spent !== null
+                              ? t(locale, 'agentPanels.budget.spent', {
+                                  amount: formatBudgetAmount(budget.status.spent, intlLocale),
+                                  currency: budget.currency,
+                                })
+                              : t(locale, 'agentPanels.budget.spentUnknown')}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

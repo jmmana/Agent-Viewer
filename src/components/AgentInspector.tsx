@@ -6,6 +6,8 @@ import type { LedgerConnection } from './modelOps/useModelOpsLedger';
 import { ToolSpendTooltip } from './usage/ToolSpendTooltip';
 import { createOfficeTranslator } from '../content/officeMessages';
 import { formatCost, formatTokens, type UsageFigures } from '../lib/usage';
+import type { BudgetView } from '../integrations/serverApi';
+import { budgetStateChipClasses, formatBudgetAmount } from './budgetRowFormat';
 import {
   X,
   Send,
@@ -42,6 +44,11 @@ interface AgentInspectorProps {
   /** `true` when the last ledger refetch failed but earlier figures are kept: the telemetry block is then shown
    * dimmed with a note, instead of looking identical to a confirmed-fresh reading. */
   isStale?: boolean;
+  /** This agent's budget row(s) (issue #335), already filtered by the caller to `scope.type === 'agent'` and
+   * `scope.value === agent.id` (see `src/integrations/budgetByAgent.ts`'s `agentBudgetRows`). Shown as plain
+   * text, read straight from the server: no ratio or percentage is computed here. Empty when no budget targets
+   * this agent, or in demo mode (no server connection). */
+  budgetRows?: BudgetView[];
 }
 
 /** Statuses the operator can set from the inspector select (option values stay raw). */
@@ -60,6 +67,7 @@ export const AgentInspector: React.FC<AgentInspectorProps> = ({
   usageFigures,
   ledgerReady = false,
   isStale = false,
+  budgetRows = [],
 }) => {
   const [instructionText, setInstructionText] = useState('');
   const statusSelectId = useId();
@@ -273,6 +281,52 @@ export const AgentInspector: React.FC<AgentInspectorProps> = ({
             </button>
           )}
         </div>
+
+        {/* Budget (issue #335): the agent-scoped budget row(s) that match this agent, read as is from the
+            server. No limit/spent ratio is computed here; see src/integrations/budgetByAgent.ts. */}
+        {budgetRows.length > 0 && (
+          <div className="space-y-2">
+            <h3 className="text-slate-400 font-medium">{t(locale, 'agentPanels.budget.heading')}</h3>
+            <div className="space-y-2">
+              {budgetRows.map((budget) => (
+                <div key={budget.id} className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-slate-200 truncate">{budget.name}</span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold border shrink-0 ${budgetStateChipClasses(
+                        budget.status?.state ?? null
+                      )}`}
+                    >
+                      {officeTranslate(`budget.state.${budget.status?.state ?? 'unknown'}`)}
+                    </span>
+                  </div>
+                  <div className="text-slate-400 text-[11px]">
+                    {t(locale, `agentPanels.budget.period.${budget.period}` as TranslationKey)}
+                    {' · '}
+                    {t(locale, `agentPanels.budget.basis.${budget.basis}` as TranslationKey)}
+                    {!budget.enabled && (
+                      <>
+                        {' · '}
+                        {t(locale, 'agentPanels.budget.disabledTag')}
+                      </>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between font-mono text-[11px] text-slate-300">
+                    <span>{t(locale, 'agentPanels.budget.limit', { amount: formatBudgetAmount(budget.limit, intlLocale), currency: budget.currency })}</span>
+                    <span>
+                      {budget.status && budget.status.spent !== null
+                        ? t(locale, 'agentPanels.budget.spent', {
+                            amount: formatBudgetAmount(budget.status.spent, intlLocale),
+                            currency: budget.currency,
+                          })
+                        : t(locale, 'agentPanels.budget.spentUnknown')}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Operator Controls (PRD Section 85) */}
         <div className="space-y-2">

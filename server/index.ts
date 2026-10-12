@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
@@ -31,6 +32,13 @@ import { readPackageVersion } from './version';
 import { verifyChain } from './audit/verify';
 import { AuditCheckpointService, auditCheckpointsSupported, parseCheckpointScheduleConfig } from './audit/checkpoints';
 import { loadSigningKey } from './audit/signingKey';
+import {
+  streamAuditBundle,
+  parseAuditBundleQuery,
+  AuditBundleRangeError,
+  AuditBundleUnsupportedError,
+  type AuditBundleRawQuery,
+} from './audit/bundle';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
 import type { RollupQuery, UsageFilters } from './usage/types';
@@ -2247,6 +2255,126 @@ app.get('/api/v1/audit/verify', async (req, res) => {
   } catch (err) {
     console.error('[agent-viewer] /api/v1/audit/verify failed:', err);
     res.status(503).json({ error: 'audit_verify_failed', message: 'The chain could not be read.' });
+  }
+});
+
+/** Concurrent `GET /api/v1/audit/bundle` exports this process serves at once (issue #400). A bundle export holds
+ * a read transaction open for a potentially long streamed response, so it gets its own cap, separate from
+ * `AGENT_VIEWER_EXPORT_CONCURRENCY` (the usage-ledger CSV/JSONL export). */
+function getAuditBundleConcurrencyMax(): number {
+  return Number(process.env.AGENT_VIEWER_AUDIT_MAX_CONCURRENT ?? 2);
+}
+let activeAuditBundleExports = 0;
+
+/**
+ * Issue #400 (first sub-issue of #110, "offline-verifiable audit bundle"): streams a single NDJSON file an
+ * auditor can save and verify later, without trusting this server again. SQLite + hash chain only; memory mode
+ * (or a schema predating migration 17) answers `409 audit_requires_chain`. The standalone verifier (#401) and the
+ * `agent-viewer audit` CLI (#402) are separate sub-issues; this route only produces the bundle.
+ */
+app.get('/api/v1/audit/bundle', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  const dbPath = store.getDatabasePath?.();
+  if (!dbPath) {
+    res.status(409).json({ error: 'audit_requires_chain', message: 'Audit bundles need AGENT_VIEWER_STORAGE=sqlite with the hash chain enabled' });
+    return;
+  }
+
+  let requested: ReturnType<typeof parseAuditBundleQuery>;
+  try {
+    requested = parseAuditBundleQuery(req.query as AuditBundleRawQuery);
+  } catch (error) {
+    if (error instanceof AuditBundleRangeError) {
+      res.status(400).json({ error: 'invalid_range', message: error.message });
+      return;
+    }
+    throw error;
+  }
+
+  if (activeAuditBundleExports >= getAuditBundleConcurrencyMax()) {
+    res.setHeader('Retry-After', '5');
+    res.status(503).json({ error: 'audit_export_busy', message: 'Too many audit bundle exports are already running; try again shortly.' });
+    return;
+  }
+
+  const gzip = req.query.gzip === '1';
+  activeAuditBundleExports++;
+  let released = false;
+  const releaseSlot = () => {
+    if (!released) {
+      released = true;
+      activeAuditBundleExports--;
+    }
+  };
+  res.on('close', releaseSlot);
+  res.on('finish', releaseSlot);
+
+  try {
+    let aborted = false;
+    req.on('close', () => {
+      aborted = true;
+    });
+
+    const filename = `agent-viewer-audit-${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}.avbundle.jsonl${gzip ? '.gz' : ''}`;
+    res.status(200);
+    res.setHeader('Content-Type', gzip ? 'application/gzip' : 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    let gzipStream: zlib.Gzip | null = null;
+    if (gzip) {
+      gzipStream = zlib.createGzip();
+      gzipStream.on('error', () => {
+        if (!res.destroyed) res.destroy();
+      });
+      gzipStream.pipe(res);
+    }
+
+    async function writeChunk(chunk: string): Promise<void> {
+      if (res.destroyed || res.writableEnded) return;
+      const target = gzipStream ?? res;
+      const canContinue = target.write(chunk);
+      if (!canContinue) {
+        await new Promise<void>((resolve) => target.once('drain', resolve));
+      }
+    }
+
+    let result: Awaited<ReturnType<typeof streamAuditBundle>>;
+    try {
+      result = await streamAuditBundle(
+        {
+          dbPath,
+          checkpoints: auditCheckpoints,
+          pricingStore: getPricingStore(),
+          write: writeChunk,
+          isAborted: () => aborted || res.destroyed,
+        },
+        requested
+      );
+    } catch (error) {
+      if (error instanceof AuditBundleUnsupportedError) {
+        res.status(409).json({ error: 'audit_requires_chain', message: error.message });
+        return;
+      }
+      console.error('[agent-viewer] /api/v1/audit/bundle failed mid-stream:', error);
+      res.destroy();
+      return;
+    }
+
+    if (result.aborted || res.destroyed || res.writableEnded) {
+      if (gzipStream) gzipStream.end();
+      return;
+    }
+    // The resolved range is only known once streamAuditBundle finishes, by which point the response headers are
+    // already flushed; it is carried in the bundle's own `header` line (`range.fromSeq`/`range.toSeq`) instead.
+    if (gzipStream) {
+      gzipStream.end();
+    } else {
+      res.end();
+    }
+  } finally {
+    releaseSlot();
   }
 });
 

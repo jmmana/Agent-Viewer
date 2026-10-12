@@ -193,14 +193,32 @@ export class AuditCheckpointService {
 
   /** Signs a checkpoint over the current chain head, unless the head has not advanced (see the class doc). */
   createCheckpoint(reason: CheckpointReason): CreateCheckpointResult {
+    const head = this.chainHead();
+    return this.createCheckpointAt(head ? head.seq : null, reason);
+  }
+
+  /**
+   * Signs a checkpoint pinned to `targetSeq` rather than the live chain head (issue #400: the audit bundle
+   * exporter needs to anchor its tail to the `toSeq` of a requested range, which may be behind the live head at
+   * export time). `targetSeq === null` behaves like an empty chain. `createCheckpoint` is the common case of this
+   * (`targetSeq` is always the live head), kept as its own method so most callers never need to think about
+   * pinning. A `targetSeq` that is not itself a chained row (no `hash`), or that falls behind the latest existing
+   * checkpoint's `headSeq`, is refused exactly like a stale live head would be: this can never be used to sign a
+   * checkpoint "backwards" past one that already exists.
+   */
+  createCheckpointAt(targetSeq: number | null, reason: CheckpointReason): CreateCheckpointResult {
     const result = this.transaction((): CreateCheckpointResult => {
       const latest = this.latestRow();
       const latestSigned = latest ? rowToSigned(latest) : null;
       if (this.activeKeyId() !== this.key.keyId) {
         return { created: false, checkpoint: latestSigned, skipped: 'key_not_active' };
       }
-      const head = this.chainHead();
-      if (!head) return { created: false, checkpoint: latestSigned, skipped: 'chain_empty' };
+      if (targetSeq === null) return { created: false, checkpoint: latestSigned, skipped: 'chain_empty' };
+      const targetRow = this.db.prepare('SELECT seq, hash FROM events WHERE seq = ? AND hash IS NOT NULL').get(targetSeq) as
+        | { seq: number; hash: string }
+        | undefined;
+      if (!targetRow) return { created: false, checkpoint: latestSigned, skipped: 'chain_empty' };
+      const head = { seq: Number(targetRow.seq), hash: targetRow.hash };
       if (latest && head.seq === Number(latest.head_seq)) return { created: false, checkpoint: latestSigned, skipped: 'head_unchanged' };
       if (latest && head.seq < Number(latest.head_seq)) return { created: false, checkpoint: latestSigned, skipped: 'head_behind_checkpoint' };
 

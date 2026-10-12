@@ -73,7 +73,7 @@ It is open source (MIT), runs on your machine, needs no model API key, and drops
 | 📡 **Ingestion server** | Express API on port 8787: single and batch ingestion with idempotency, a Server-Sent Events stream that resumes from the last event, a generic webhook with HMAC signatures, in-memory or SQLite storage. |
 | 🐍 **SDKs and adapters** | Python and TypeScript clients, plus example adapters for LangGraph, CrewAI, AutoGen, OpenAI Agents SDK and Google ADK. |
 | 🎬 **Replay and export** | Load a JSONL V1 log, replay it at its original pace with seek and speed, and record it to WebM or MP4 in the browser. |
-| 📊 **Model Ops console** | In the demo app: Matrix, Agents and Feed read the server's usage ledger (`GET /api/v1/usage/rollup` and `/usage/calls`), so figures reconcile call by call; a value the ledger never reported shows as "n/a", never as zero. Each model card also shows measured latency percentiles (p50/p95, nearest-rank, from real reported `latencyMs` values only) and failure rate with the sample size next to every figure (`n = 1,102, 78 without latency`); with no samples it reads "No latency reported" and with no attempts "No data", never `0`. A separate Simulator tab stays, clearly labelled, with no effect on real data. Without a connected server, Model Ops falls back to a labelled, simulated view over the local demo state. |
+| 📊 **Model Ops console** | In the demo app: Matrix, Agents and Feed read the server's usage ledger (`GET /api/v1/usage/rollup` and `/usage/calls`), so figures reconcile call by call; a value the ledger never reported shows as "n/a", never as zero. Each model card also shows measured latency percentiles (p50/p95, nearest-rank, from real reported `latencyMs` values only) and failure rate with the sample size next to every figure (`n = 1,102, 78 without latency`); with no samples it reads "No latency reported" and with no attempts "No data", never `0`. A separate Simulator tab stays, clearly labelled, with no effect on real data. Two more tabs manage server-owned state directly: **Pricing** edits the versioned price table (`GET`/`POST /api/v1/pricing*`) with per-row save, an add-model form and a version-history drawer; **Budgets** lists, creates, edits and deletes server-owned budgets (`GET`/`POST`/`PUT`/`DELETE /api/v1/budgets*`), with each one's live `spent`/`ratio`/`state` read straight from the server. Neither tab computes a price or a budget verdict in the browser: prices and limits live on the server, never invented or recomputed by the portal. Without a connected server, Model Ops falls back to a labelled, simulated view over the local demo state, and the Pricing/Budgets tabs show a demo-mode explanation instead of editable fields. |
 
 ## 🧠 Principles
 
@@ -833,8 +833,10 @@ and `limit`. The server alone evaluates it against the usage ledger, on every re
 `ok`, `warning`, `exceeded` or `unknown`, the last one whenever the figure is incomplete (a missing cost, a
 mismatched currency, truncated history) rather than ever guessed as `ok`. `GET /api/v1/snapshot` carries the same
 computed state in its `budgets` field, and a state change pushes a named `event: budget` SSE frame. Both SDKs
-expose a read-only `budgets()`. Full reference, with every endpoint and a real captured request/response:
-[docs/budgets.md](docs/budgets.md).
+expose a read-only `budgets()`. The demo app's Model Ops **Budgets** tab is the portal's own UI for this: it
+lists every budget with its live `spent`/`ratio`/`state`, and lets you create, edit and delete one, reading every
+figure straight from the server, never computing a ratio or a verdict itself. Full reference, with every endpoint
+and a real captured request/response: [docs/budgets.md](docs/budgets.md).
 
 </details>
 
@@ -909,7 +911,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 
 ## 🎮 Demo app
 
-`npm run dev` runs the full living office: a simulated team, a scripted demonstration, ambient office life, a task board, meeting rooms, an activity timeline and the Model Ops console. It is the showroom; the embeddable library is the product you ship.
+`npm run dev` runs the full living office: a simulated team, a scripted demonstration, ambient office life, a task board, meeting rooms, an activity timeline and the Model Ops console (including its Pricing and Budgets tabs over the server's own catalog and limits). It is the showroom; the embeddable library is the product you ship.
 
 | Action | Control |
 |---|---|

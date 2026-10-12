@@ -1324,3 +1324,46 @@ The Meetings panel and the tool chip tooltips (issue #81) are thin, read-only vi
 **What a tool chip's tooltip shows.** It fetches the `tool` group scoped to that chip's agent (and task, for a per-task tool chip) and looks for the row whose resolved `tool` name matches the chip. A chip with no matching row reads "no figures from the server", never `0`: that is different from a real zero-call tool, which would still have its own row.
 
 **Demo mode.** With no server connected (`VITE_AGENT_VIEWER_MODE` unset and no `?mode=live`), the Meetings panel keeps its simulated `tokensAccumulated`/`costAccumulated` figures, tagged "Simulated", and no tool tooltip makes a request.
+
+## 💲 13. Pricing and Budgets from the portal (`src/integrations/serverApi.ts`)
+
+The Model Ops **Pricing** and **Budgets** tabs (issue #88, sub-issues #332-#335) are the only places in the portal that write to the server's pricing table or budget configuration. Both go through one typed client, `createServerApi` in `src/integrations/serverApi.ts`, which every method of this section refers to by name. It is an adaptation of issue #88's own illustrative endpoint sketch to the real, shipped server: a price is written with `POST /api/v1/pricing/changes` (not a per-model `PUT`), and a budget's live state is embedded in `GET /api/v1/budgets`'s own response (there is no separate `GET /budgets/state`).
+
+### Auth and error handling
+
+Every request sends `Authorization: Bearer <token>` when a token is configured; a `token` query parameter never authenticates, the same rule every other `/api/v1` route follows. `getToken()` is awaited before the request fires, so a caller whose token is still resolving never sends one with a stale or missing value. `POST`/`PUT`/`DELETE` writes also carry an `Idempotency-Key` header (auto-generated with `crypto.randomUUID()` unless the caller supplies one), so a double click or a retry of the same logical write can never create a duplicate budget or re-apply a stale price change.
+
+Every method returns `{ ok: true, data }` or `{ ok: false, kind, status?, code?, issues?, currentVersion?, message? }`, never throwing for an HTTP or network failure. `kind` is one of `unauthorized | forbidden | not_found | conflict | invalid | network | contract`: a bare 5xx folds into `network` (no dedicated "server error" bucket), the same treatment an unreachable server gets, so the UI keeps the last good data with a stale marker in both cases. A response whose body does not validate against the expected zod schema at all is `'contract'`, distinct from every HTTP-status-derived kind. A numeric field that is `null` on the wire (`spent`, `ratio`, `limitRemaining`, every price field) is kept `null`, never coerced to `0`; an unrecognized `BudgetStatus.state` is mapped to `'unknown'` (logging a `console.warn`), never to `'ok'`.
+
+### CORS: `PUT` and `DELETE` now allowed
+
+`server/index.ts`'s CORS preflight response now sets `Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS` (it only allowed `GET, POST, PATCH, OPTIONS` before #332). The Model Ops pricing editor and budgets panel run on a different origin in dev (the demo app's `:3000` calling the server's `:8787`), and the budgets editor needs both verbs: `PUT /api/v1/budgets/:id` to replace a budget and `DELETE /api/v1/budgets/:id` to soft-delete one. `POST /api/v1/pricing/changes` (the only pricing write) was already a `POST` and is unaffected by this change.
+
+### Pricing methods
+
+| `serverApi` method | Request | Response schema (fields only, see `serverApi.ts` for exact zod shapes) |
+|---|---|---|
+| `getPricing()` | `GET /api/v1/pricing` | `{ schema, status, issues, pricingVersion, contentHash, createdAt, estimated, starter: { bundledAsOf, appliedAsOf, updateAvailable }, readonly, fileInSync, entries: PriceEntry[] }` |
+| `putPricingChanges({ expectedVersion, reason, actor?, upserts?, removals? })` | `POST /api/v1/pricing/changes` | `{ changed, pricingVersion, parentVersion?, contentHash?, createdAt?, fileInSync? }`; a `409` carries `error: "version_conflict"` and `currentVersion`, surfaced as `{ ok: false, kind: 'conflict', currentVersion }` |
+| `getPricingVersions({ limit?, beforeVersion? })` | `GET /api/v1/pricing/versions[?limit=&beforeVersion=]` | `{ versions: PricingVersionSummary[] }` (`pricingVersion`, `createdAt`, `origin`, `reason`, `actor`, `entryCount`, `contentHash` per entry) |
+| `getPricingVersionDiff(version, against)` | `GET /api/v1/pricing/versions/:version/diff?against=:against` | `{ added: PriceEntry[], removed: PriceEntry[], changed: { key, before, after }[] }` |
+
+`PriceEntry`/`PriceEntryInput`/`PriceEntryKey` come from the shared, isomorphic `src/integrations/pricingContract.ts` that `server/pricing/api.ts` itself imports; `serverApi.ts` validates every pricing response against `PriceEntrySchema` from that same module, so the portal and the server agree on the shape by construction. The `PricingEditor` component (`src/components/PricingEditor.tsx`) is the only consumer: per-row save with optimistic concurrency (a successful write's own `pricingVersion` becomes the next write's `expectedVersion`), a `409` keeps the operator's typed values and offers a "Reapply" action, a `403` switches the editor read-only without discarding loaded data, and demo mode (`serverApi === null`) shows an explanation with zero editable fields and zero requests.
+
+### Budgets methods
+
+| `serverApi` method | Request | Response schema (fields only) |
+|---|---|---|
+| `getBudgets({ state?, scopeType?, scopeValue? })` | `GET /api/v1/budgets[?state=&scopeType=&scopeValue=]` | `{ schemaVersion, generatedAt, count, budgets: BudgetView[] }` |
+| `getBudget(id)` | `GET /api/v1/budgets/:id` | one `BudgetView` |
+| `createBudget({ id?, name, scope, period, timezone?, currency, basis, limit, warningRatio?, enabled? })` | `POST /api/v1/budgets` | one `BudgetView` |
+| `putBudget(id, input)` | `PUT /api/v1/budgets/:id` | one `BudgetView` |
+| `deleteBudget(id)` | `DELETE /api/v1/budgets/:id` | `null` (`204 No Content`) |
+| `getBudgetRevisions(id)` | `GET /api/v1/budgets/:id/revisions` | `BudgetRevision[]` (`revision`, `action`, `changedAt`, `actor`, `auth`, `config`) |
+
+A `BudgetView` is `{ id, name, scope: { type, value }, period, timezone, currency, basis, limit, warningRatio, enabled, revision, createdAt, updatedAt, status: BudgetStatus | null }`. **`scope.type`**, not `scope.kind`, is one of `all | agent | model | session | user | tag` (`scope.value` is the agent/model/session/user/tag id, or `null` for `all`); the Budgets tab's own create/edit form only ever offers `all | agent | model`, the wider set is reachable only through a direct API call. `status` is `null` exactly when the budget is disabled or has never been evaluated; when present it is a full `BudgetStatus` (`state`, `window`, `spent`, `spentComplete`, `knownSpent`, `breakdown`, `containsEstimates`, `limitRemaining`, `ratio`, `calls`, `unknownReasons`, `pricingVersions`, `evaluatedAt`), read by `getBudgets` alone: there is no separate "budget state" endpoint, `GET /api/v1/budgets` is both "list budgets" and "read budget state" at once.
+
+Two portal layers consume these methods:
+
+- `src/integrations/useBudgetState.ts` owns every fetch the Budgets tab needs: `getBudgets()` on connect, on tab open, after a write (the panel's `refresh()`), on a 30s timer, and on a throttled trailing refresh (at most once per 5s) after a new `llm.usage` event. A failed refresh never clears the last good list, only sets `stale: true`.
+- `src/integrations/budgetByAgent.ts`'s `reduceBudgetStateByAgent(budgets)` reduces that flat list to one verdict per agent id for the office canvas (only `enabled: true`, `scope.type === 'agent'` budgets count; the most severe state wins, `exceeded > warning > unknown > ok`; an agent whose most severe state is `unknown` is left out of the map entirely, never written as `{ state: 'ok' }`). `agentBudgetRows(budgets, agentId)` instead returns every budget (enabled or not) scoped to that agent id, verbatim, for the `AgentInspector`/`AgentDetailModal` panels. Neither function talks to the network; both operate on the list `useBudgetState` already fetched.

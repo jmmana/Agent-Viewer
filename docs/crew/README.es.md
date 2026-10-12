@@ -46,7 +46,12 @@ buscable y operable por teclado. Elegir una sala monta **solo esa sala**: sus
 propias paredes, piso, mobiliario y agentes. Ninguna otra sala renderiza sus
 sprites, y ninguna otra sala pierde sus eventos mientras está oculta (issue
 [#169](https://github.com/jmmana/Agent-Viewer/issues/169)); volver a ella la
-restaura exactamente como estaba.
+restaura exactamente como estaba. Un marcador reportado en tránsito se mueve
+por el piso real de esa sala, rodeando su mobiliario, en vez de saltar
+directo a su destino (issue
+[#129](https://github.com/jmmana/Agent-Viewer/issues/129), contrato en
+[NAVIGATION.md](NAVIGATION.md)); nunca camina entre salas ni rodea a otros
+agentes, solo el mobiliario de la sala que se muestra.
 
 ## 3. Cámara: zoom, pan, orientación y reset
 

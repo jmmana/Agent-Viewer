@@ -11,6 +11,7 @@ export interface CrewPresenceMarker extends CrewLocalPoint {
   number: number;
   role?: Agent['role'];
   facing?: Agent['facing'];
+  isWalking?: boolean;
 }
 
 /** Proyección determinista de un snapshot. No genera eventos ni simula desplazamientos. */
@@ -31,7 +32,7 @@ export function projectCrewPresence(agents: readonly PresenceAgent[], room: Crew
     let index = arrivalIndex >= 0 ? arrivalIndex : hash % slots.length;
     while (occupied.has(index)) index = (index+1)%slots.length;
     occupied.add(index);
-    markers.push({...slots[index], id:agent.id, name:agent.name,status:agent.status,...(agent.role ? {role:agent.role} : {}),...(agent.facing !== undefined ? {facing:agent.facing} : {}),number:markers.length+1});
+    markers.push({...slots[index], id:agent.id, name:agent.name,status:agent.status,...(agent.role ? {role:agent.role} : {}),...(agent.facing !== undefined ? {facing:agent.facing} : {}),...(agent.isWalking ? {isWalking:true} : {}),number:markers.length+1});
   }
   return {markers,unplaced};
 }

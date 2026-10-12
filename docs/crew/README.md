@@ -45,7 +45,11 @@ keyboard-operable dropdown. Picking a room mounts **only that room**: its own
 walls, floor, furniture and agents. No other room's sprites render, and no
 other room's events are lost while it is hidden (issue
 [#169](https://github.com/jmmana/Agent-Viewer/issues/169)); switching back
-restores it exactly as it was.
+restores it exactly as it was. A marker reported as walking moves across that
+room's real floor, around its furniture, instead of jumping straight to its
+destination (issue [#129](https://github.com/jmmana/Agent-Viewer/issues/129),
+contract in [NAVIGATION.md](NAVIGATION.md)); it never walks between rooms, or
+around other agents, only around furniture within the one room shown.
 
 ## 3. Camera: zoom, pan, facing and reset
 

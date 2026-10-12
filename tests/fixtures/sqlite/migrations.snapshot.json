@@ -17,5 +17,6 @@
   [16, "budget-alert-deliveries"],
   [17, "event-hash-chain"],
   [18, "audit-meta"],
-  [19, "api-keys"]
+  [19, "api-keys"],
+  [20, "api-key-scopes"]
 ]

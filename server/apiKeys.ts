@@ -11,6 +11,7 @@
  */
 import crypto from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import { DEFAULT_SCOPES, parseScopes, parseStoredScopes, ScopeValidationError, type Scope } from './auth/scopes';
 
 /** `avk_<12 hex id>.<43 char base64url secret>`. Distinct from the CLI session token prefix `av_`. */
 export const API_KEY_TOKEN_PATTERN = /^avk_([0-9a-f]{12})\.([A-Za-z0-9_-]{43})$/;
@@ -31,6 +32,8 @@ export interface ApiKeyRecord {
   lastUsedAt: number | null;
   revokedAt: number | null;
   revokedBy: string | null;
+  /** Issue #108: granted scopes, canonical order. Implied scopes are not listed here. */
+  scopes: Scope[];
   eventCount: number;
   firstEventAt: number | null;
   lastEventAt: number | null;
@@ -44,6 +47,7 @@ export interface ApiKeyCreated {
   createdAt: number;
   createdBy: string;
   expiresAt: number | null;
+  scopes: Scope[];
 }
 
 export class ApiKeyValidationError extends Error {
@@ -63,6 +67,24 @@ export class ApiKeyNameTakenError extends Error {
   }
 }
 
+/** Issue #108: revoking or removing `admin` from the last active named `admin` key while no bootstrap token
+ * (`AGENT_VIEWER_API_TOKEN`) is configured would leave no credential able to manage keys. The routes map this to
+ * `409 last_admin`. */
+export class LastAdminError extends Error {
+  constructor() {
+    super('This is the last active admin key and no AGENT_VIEWER_API_TOKEN is configured; create another admin key first.');
+    this.name = 'LastAdminError';
+  }
+}
+
+/** Issue #108: scopes cannot be changed on a revoked key (it can never authenticate again anyway). */
+export class ApiKeyRevokedError extends Error {
+  constructor() {
+    super('This key is revoked; its scopes can no longer be changed.');
+    this.name = 'ApiKeyRevokedError';
+  }
+}
+
 /** Thrown by every `ApiKeyStore` method when the store is `createUnsupportedApiKeyStore()` (memory mode). The
  * routes map this to `501 keys_require_sqlite`. */
 export class KeysUnsupportedError extends Error {
@@ -77,6 +99,14 @@ export interface CreateApiKeyInput {
   /** Epoch ms. Mutually exclusive with nothing else here: the route resolves `expiresIn` to this before calling. */
   expiresAt?: number | null;
   createdBy: string;
+  /** Issue #108: validated with `parseScopes`; omitted means `DEFAULT_SCOPES` (`["ingest"]`). */
+  scopes?: unknown;
+}
+
+/** Issue #108: whether a bootstrap token is configured right now. When it is, it is always an implicit admin, so
+ * the last-admin rule does not apply. */
+export interface AdminGuardOptions {
+  envTokenConfigured: boolean;
 }
 
 /** Fully synchronous, mirroring `BudgetRegistry` (`server/budgets.ts`): `node:sqlite` is itself synchronous, so
@@ -85,12 +115,19 @@ export interface CreateApiKeyInput {
 export interface ApiKeyStore {
   create(input: CreateApiKeyInput): ApiKeyCreated;
   /** `null` for raw plumbing used only by the fast auth-time lookup; never exposed over the API. */
-  findForAuth(id: string): { id: string; secretHash: string; status: ApiKeyStatus; name: string } | null;
+  findForAuth(id: string): { id: string; secretHash: string; status: ApiKeyStatus; name: string; scopes: Scope[] } | null;
   get(id: string): ApiKeyRecord | null;
   list(): ApiKeyRecord[];
   /** Idempotent: a second call on an already-revoked key returns the same record (original `revokedAt`), and
-   * writes no second audit trail entry (the caller decides whether to append one, based on `alreadyRevoked`). */
-  revoke(id: string, revokedBy: string): { record: ApiKeyRecord; alreadyRevoked: boolean } | null;
+   * writes no second audit trail entry (the caller decides whether to append one, based on `alreadyRevoked`).
+   * Throws `LastAdminError` (issue #108) instead of revoking the last active admin key while no bootstrap token
+   * is configured. */
+  revoke(id: string, revokedBy: string, guard?: AdminGuardOptions): { record: ApiKeyRecord; alreadyRevoked: boolean } | null;
+  /** Issue #108: replaces a key's granted scopes. `null` for an unknown id. Throws `ApiKeyValidationError` for an
+   * invalid list, `ApiKeyRevokedError` on a revoked key, `LastAdminError` when it would demote the last active
+   * admin key while no bootstrap token is configured. Who may call this (admin only, never on the caller's own
+   * key) is the route's decision. */
+  setScopes(id: string, scopes: unknown, guard: AdminGuardOptions): { record: ApiKeyRecord; previous: Scope[] } | null;
   /** Best effort, at most once per 60s per key; must never throw. */
   touchLastUsed(id: string): void;
 }
@@ -152,6 +189,7 @@ export function createUnsupportedApiKeyStore(): ApiKeyStore {
     get: fail,
     list: fail,
     revoke: fail,
+    setScopes: fail,
     touchLastUsed: () => {
       // Best effort and silent everywhere, including here: nothing to touch in memory mode.
     },
@@ -185,15 +223,47 @@ export function createSqliteApiKeyStore(db: DatabaseSync, options: SqliteApiKeyS
       lastUsedAt: row.last_used_at === null ? null : Number(row.last_used_at),
       revokedAt,
       revokedBy: row.revoked_by ?? null,
+      scopes: parseStoredScopes(row.scopes),
       eventCount: Number(eventStats.c),
       firstEventAt: eventStats.first === null ? null : Number(eventStats.first),
       lastEventAt: eventStats.last === null ? null : Number(eventStats.last),
     };
   }
 
+  function validateScopes(input: unknown): Scope[] {
+    if (input === undefined) return [...DEFAULT_SCOPES];
+    try {
+      return parseScopes(input);
+    } catch (error) {
+      if (error instanceof ScopeValidationError) throw new ApiKeyValidationError('scopes', error.message);
+      throw error;
+    }
+  }
+
+  function isActiveRow(row: { expires_at: number | null; revoked_at: number | null }, current: number): boolean {
+    const expiresAt = row.expires_at === null ? null : Number(row.expires_at);
+    const revokedAt = row.revoked_at === null ? null : Number(row.revoked_at);
+    return statusOf({ expiresAt, revokedAt }, current) === 'active';
+  }
+
+  /** Throws `LastAdminError` when `row` is an active admin key, no bootstrap token is configured, and no other
+   * active admin key exists. Synchronous end to end (like every `node:sqlite` call here), so nothing in this
+   * process can interleave between this check and the caller's write. */
+  function assertNotLastAdmin(row: any, guard: AdminGuardOptions | undefined): void {
+    if (!guard || guard.envTokenConfigured) return;
+    const current = now();
+    if (!isActiveRow(row, current) || !parseStoredScopes(row.scopes).includes('admin')) return;
+    const others = db
+      .prepare('SELECT id, scopes, expires_at, revoked_at FROM api_keys WHERE id != ? AND revoked_at IS NULL')
+      .all(row.id) as Array<{ id: string; scopes: string; expires_at: number | null; revoked_at: number | null }>;
+    const otherActiveAdmin = others.some((other) => isActiveRow(other, current) && parseStoredScopes(other.scopes).includes('admin'));
+    if (!otherActiveAdmin) throw new LastAdminError();
+  }
+
   return {
     create(input) {
       const name = validateName(input.name);
+      const scopes = validateScopes(input.scopes);
       if (input.expiresAt !== undefined && input.expiresAt !== null) {
         if (!Number.isFinite(input.expiresAt) || input.expiresAt <= now()) {
           throw new ApiKeyValidationError('expiresAt', 'must be an integer timestamp in the future');
@@ -209,9 +279,9 @@ export function createSqliteApiKeyStore(db: DatabaseSync, options: SqliteApiKeyS
         if (collision) continue;
         const createdAt = now();
         db.prepare(
-          `INSERT INTO api_keys (id, name, name_norm, prefix, secret_hash, created_at, created_by, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(material.id, name, nameNorm, material.prefix, material.secretHash, createdAt, input.createdBy, input.expiresAt ?? null);
+          `INSERT INTO api_keys (id, name, name_norm, prefix, secret_hash, created_at, created_by, expires_at, scopes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(material.id, name, nameNorm, material.prefix, material.secretHash, createdAt, input.createdBy, input.expiresAt ?? null, JSON.stringify(scopes));
         return {
           id: material.id,
           name,
@@ -220,14 +290,15 @@ export function createSqliteApiKeyStore(db: DatabaseSync, options: SqliteApiKeyS
           createdAt,
           createdBy: input.createdBy,
           expiresAt: input.expiresAt ?? null,
+          scopes,
         };
       }
       throw new Error('Could not generate a unique API key id after 5 attempts');
     },
 
     findForAuth(id) {
-      const row = db.prepare('SELECT id, secret_hash, expires_at, revoked_at, name FROM api_keys WHERE id = ?').get(id) as
-        | { id: string; secret_hash: string; expires_at: number | null; revoked_at: number | null; name: string }
+      const row = db.prepare('SELECT id, secret_hash, expires_at, revoked_at, name, scopes FROM api_keys WHERE id = ?').get(id) as
+        | { id: string; secret_hash: string; expires_at: number | null; revoked_at: number | null; name: string; scopes: string }
         | undefined;
       if (!row) return null;
       return {
@@ -235,6 +306,7 @@ export function createSqliteApiKeyStore(db: DatabaseSync, options: SqliteApiKeyS
         secretHash: row.secret_hash,
         status: statusOf({ expiresAt: row.expires_at === null ? null : Number(row.expires_at), revokedAt: row.revoked_at === null ? null : Number(row.revoked_at) }, now()),
         name: row.name,
+        scopes: parseStoredScopes(row.scopes),
       };
     },
 
@@ -249,16 +321,30 @@ export function createSqliteApiKeyStore(db: DatabaseSync, options: SqliteApiKeyS
       return rows.map((row) => rowToRecord(row, current));
     },
 
-    revoke(id, revokedBy) {
+    revoke(id, revokedBy, guard) {
       const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id) as any;
       if (!row) return null;
       if (row.revoked_at !== null) {
         return { record: rowToRecord(row, now()), alreadyRevoked: true };
       }
+      assertNotLastAdmin(row, guard);
       const revokedAt = now();
       db.prepare('UPDATE api_keys SET revoked_at = ?, revoked_by = ? WHERE id = ?').run(revokedAt, revokedBy, id);
       const updated = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
       return { record: rowToRecord(updated, now()), alreadyRevoked: false };
+    },
+
+    setScopes(id, input, guard) {
+      // `undefined` is not "use the default" here: a PATCH must say which scopes it wants.
+      const scopes = validateScopes(input === undefined ? null : input);
+      const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id) as any;
+      if (!row) return null;
+      if (row.revoked_at !== null) throw new ApiKeyRevokedError();
+      const previous = parseStoredScopes(row.scopes);
+      if (!scopes.includes('admin')) assertNotLastAdmin(row, guard);
+      db.prepare('UPDATE api_keys SET scopes = ? WHERE id = ?').run(JSON.stringify(scopes), id);
+      const updated = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
+      return { record: rowToRecord(updated, now()), previous };
     },
 
     touchLastUsed(id) {

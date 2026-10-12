@@ -1,4 +1,4 @@
-# Named API keys (issue #107)
+# Named API keys (issue #107) and scopes (issue #108)
 
 Replaces trusting one shared secret for every client with named, revocable credentials: every accepted event
 and the hash chain (#105) record *which* credential submitted it, not just "someone with the token."
@@ -13,16 +13,69 @@ revocable, and every stored event records the id of the key that submitted it.
 ## The bootstrap token
 
 `AGENT_VIEWER_API_TOKEN` (and the deprecated `AGENT_VIEWER_API_KEY` alias) still works exactly as before and is
-now called the **bootstrap token**: it is the only credential that can create, list or revoke keys (`GET
-/api/v1/whoami` is the one exception every credential may call). It is the break-glass credential: keep it out
-of agent runtimes and CI jobs, and create a named key for each of those instead.
+now called the **bootstrap token**. It is always an implicit `admin` (see [Scopes](#scopes-issue-108)), and so is
+the CLI session token `agent-viewer start` generates (it is exported as `AGENT_VIEWER_API_TOKEN`). It is the
+break-glass credential: keep it out of agent runtimes and CI jobs, and create a named key for each of those
+instead.
+
+## Scopes (issue #108)
+
+Every named key carries a list of granted scopes. A route needs exactly one scope; holding a scope that implies it
+is enough.
+
+| Scope | Allows | Implies |
+|---|---|---|
+| `ingest` | Writing events: `POST /events`, `/events/batch`, `/agents`, `PATCH /agents/:id`, `POST /runtimes`, the generic webhook (Bearer mode), OTLP `/v1/logs`, `/v1/metrics`, `/v1/traces`. | nothing |
+| `read` | The live view: `GET /events`, `/events/stream` (and `POST /stream-tickets`), `/snapshot`, `/runtimes`, `/sessions*`, `/usage`, `/usage/calls*`, `/usage/rollup`, `/usage/duplicates`, `/usage/ledger/status`, `/otlp/stats`. | nothing |
+| `audit` | Read-only evidence: `GET /usage/export`, `/usage/export/totals`, `/audit/chain`, `/audit/verify`, `/audit/checkpoints*`, `/audit/bundle`, `/keys`, `/keys/:id`. | `read` |
+| `admin` | Everything else: creating, revoking and re-scoping keys, pricing, budgets, alert delivery, retention, redaction rules, creating a signed checkpoint, **and any route not listed above**. | `ingest`, `read`, `audit` |
+
+`audit` is the read-only auditor role: it can read and export everything but can neither write an event nor
+change any configuration. `ingest` deliberately does not imply `read`: a CI token that only sends events cannot
+read the log back. `GET /api/v1/whoami` and `GET /api/v1/auth/whoami` accept any valid credential.
+
+**Default deny.** The policy lives in one table (`server/auth/routePolicy.ts`) enforced for all of `/api/v1` by a
+single middleware, so a route nobody remembered to classify needs `admin`, never less. The order is: rate limit,
+then authentication (`401`), then scope (`403`), then the route's own body validation (`400`).
+
+**`401` vs `403`.** A missing, unknown or wrong credential is `401`. A valid credential without the scope is:
+
+```http
+HTTP/1.1 403 Forbidden
+WWW-Authenticate: Bearer error="insufficient_scope", scope="read"
+
+{ "error": "insufficient_scope", "message": "...", "required": "read", "granted": ["ingest"] }
+```
+
+**Implicit principals.** The bootstrap/CLI session token is `{ keyId: "env-token", source: "env", granted:
+["admin"] }`; its scopes cannot be set. With no token configured at all (open API), a request without a key is
+`anonymous` with `admin`, exactly as open as before this issue. A named key presented in open mode is still held to
+its own scopes. A redeemed stream ticket carries only `read` (minting one already requires `read`).
+
+**Escalation rules.**
+
+- Only `admin` creates keys or changes scopes; an admin may create another admin key.
+- A key cannot change its own scopes (`403 cannot_modify_own_scopes`), even an admin one.
+- While no bootstrap token is configured, the last active named `admin` key can be neither revoked nor demoted
+  (`409 last_admin`); create another admin key first. With a bootstrap token configured the rule does not apply,
+  since that token is always admin.
+- Scopes cannot be changed on a revoked key (`409 key_revoked`).
+
+**Query-string credentials.** No key, whatever its scopes, is ever accepted as `?token=`/`?api_key=` on `/api/v1`:
+that was already rejected for every credential since issue #71 (`401 query_token_not_supported`), which more than
+covers the "never in the query string for `audit`/`admin`" rule.
+
+**Upgrading.** Migration 20 adds `api_keys.scopes` (a JSON array, default `["ingest"]`). Every key created under
+#107 becomes `["ingest"]`, the least-privileged scope. **A #107 key that was also used to read** (dashboards,
+scripts calling `GET /events`) now gets `403 insufficient_scope` and needs `PATCH /api/v1/keys/:id` with
+`{"scopes": ["ingest", "read"]}` from an admin credential. A key created without `scopes` also gets `["ingest"]`.
 
 ## Creating and using a key
 
 ```bash
 curl -s -X POST http://127.0.0.1:8787/api/v1/keys \
   -H "Authorization: Bearer $AGENT_VIEWER_API_TOKEN" -H "Content-Type: application/json" \
-  -d '{"name": "ci-pipeline", "expiresIn": 2592000}'
+  -d '{"name": "ci-pipeline", "scopes": ["ingest"], "expiresIn": 2592000}'
 ```
 
 ```json
@@ -33,7 +86,8 @@ curl -s -X POST http://127.0.0.1:8787/api/v1/keys \
   "token": "avk_3f9a1c7e02ab.q8Yv...",
   "createdAt": 1767225600000,
   "createdBy": "bootstrap",
-  "expiresAt": 1769817600000
+  "expiresAt": 1769817600000,
+  "scopes": ["ingest"]
 }
 ```
 
@@ -54,11 +108,13 @@ without named keys.
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| `POST` | `/api/v1/keys` | Create a key. Body: `{ "name": string, "expiresAt"?: number, "expiresIn"?: number }` (`expiresAt` epoch ms, `expiresIn` seconds, 60 to 31536000; mutually exclusive). Bootstrap only. |
-| `GET` | `/api/v1/keys` | List every key (never the token or the hash), with `status`, `eventCount`, `firstEventAt`, `lastEventAt`. Bootstrap only. |
-| `GET` | `/api/v1/keys/:id` | One key by id. `404 key_not_found` for an unknown id. Bootstrap only. |
-| `POST` | `/api/v1/keys/:id/revoke` | Revoke a key. Idempotent: a second call returns the same record, with the original `revokedAt`. The row is never deleted. Bootstrap only. |
+| `POST` | `/api/v1/keys` | Create a key. Body: `{ "name": string, "scopes"?: string[], "expiresAt"?: number, "expiresIn"?: number }` (`scopes` non-empty, distinct, known names, default `["ingest"]`; `expiresAt` epoch ms, `expiresIn` seconds, 60 to 31536000; mutually exclusive). `admin`. |
+| `GET` | `/api/v1/keys` | List every key (never the token or the hash), with `status`, `scopes`, `eventCount`, `firstEventAt`, `lastEventAt`. `audit`. |
+| `GET` | `/api/v1/keys/:id` | One key by id. `404 key_not_found` for an unknown id. `audit`. |
+| `PATCH` | `/api/v1/keys/:id` | Replace a key's scopes. Body: exactly `{ "scopes": string[] }`. `admin`, never on the caller's own key; `409 last_admin` / `409 key_revoked` as above; `400 env_token_scopes_immutable` for `env-token`. |
+| `POST` | `/api/v1/keys/:id/revoke` | Revoke a key. Idempotent: a second call returns the same record, with the original `revokedAt`. The row is never deleted. `admin`; `409 last_admin` as above. |
 | `GET` | `/api/v1/whoami` | The identity the current credential authenticates as: `{ kind, id, name? }`. Any valid credential. |
+| `GET` | `/api/v1/auth/whoami` | What the current credential may do: `{ keyId, name, source, scopes, effectiveScopes }`, plus `open: true` when no bootstrap token is configured. Any valid credential. |
 
 A key name is unique (case-insensitively, across active and revoked keys), 1 to 64 characters after trimming,
 with no control or format characters; a duplicate answers `409 key_name_taken`.
@@ -114,7 +170,9 @@ on `type=audit.key.created` (or `audit.key.revoked`) explicitly, to see them.
 ## CLI
 
 ```bash
-agent-viewer keys create ci-pipeline --expires-in 30d
+agent-viewer keys create ci-pipeline --expires-in 30d            # scopes default to ingest
+agent-viewer keys create auditor --scope audit
+agent-viewer keys create dashboard --scope ingest,read
 agent-viewer keys list
 agent-viewer keys revoke key_3f9a1c7e02ab
 agent-viewer keys whoami
@@ -132,9 +190,15 @@ session file of a running `agent-viewer start`. See [cli.md](cli.md) for the ful
 - **Credential, not identity.** A named key proves "whoever holds this key", not a specific person: it can be
   shared, copied or leaked like any secret. Treat `submittedBy` as attribution to a credential, which a compromised
   machine can still misuse until the key is revoked.
-- **Scopes are not here yet.** Every named key can ingest and read exactly like the bootstrap token today; it
-  cannot (yet) create, list or revoke other keys. Role-based scopes (`ingest`/`read`/`audit`/`admin`) and a
-  read-only auditor role are issue #108.
+- **Scope changes are not in the hash-chained audit trail yet.** `audit.key.created` records the initial
+  `scopes`, but a later `PATCH /api/v1/keys/:id` appends no event: adding an `audit.key.scopes_changed` type
+  touches the shared event contract and is left for a follow-up.
+- **`/metrics` (Prometheus) does not accept named keys** at all; it keeps its own `AGENT_VIEWER_METRICS_TOKEN` /
+  bootstrap-token check (issue #103).
+- **Malformed JSON is still a `400` before authentication** on `/api/v1`: the global body parser runs before the
+  auth middleware (pre-existing). Well-formed but invalid bodies are validated after the scope check.
+- **`GET /events?includeAudit=true` is `read`**, so a `read` key can see `audit.key.*` events (names, prefixes,
+  scopes; never a token or hash).
 - **Pre-upgrade history is never attributed.** Events stored before this migration read back `submittedBy: null`
   forever; there is no way to reconstruct who submitted them.
 - **Rate limiting stays per IP**, not per key, in this item.

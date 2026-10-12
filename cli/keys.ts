@@ -36,9 +36,10 @@ async function call(
 
 function describeError(status: number, json: any): string {
   if (status === 501) return 'the viewer is not running with AGENT_VIEWER_STORAGE=sqlite (named keys need SQLite)';
-  if (status === 403) return 'only the bootstrap token (AGENT_VIEWER_API_TOKEN) may manage keys';
+  if (status === 403) return json?.message || 'this credential lacks the scope required (key management needs admin)';
   if (status === 404) return 'no key with that id';
-  if (status === 409) return 'a key with that name already exists';
+  if (status === 409) return json?.error === 'last_admin' ? json.message : 'a key with that name already exists';
+  if (status === 400 && json?.issues?.[0]) return `${json.issues[0].path}: ${json.issues[0].message}`;
   if (status === 401) return 'the server wants a valid token: pass --token, or set AGENT_VIEWER_API_TOKEN';
   return json?.message || json?.error || `server answered ${status}`;
 }
@@ -75,6 +76,7 @@ export async function runKeys(command: KeysCommand): Promise<number> {
     const { status, json } = await call(connection, 'POST', '/api/v1/keys', {
       name: command.name,
       ...(expiresIn !== undefined ? { expiresIn } : {}),
+      ...(command.scopes !== undefined ? { scopes: command.scopes } : {}),
     });
     if (status !== 201) {
       console.error(`agent-viewer: could not create the key: ${describeError(status, json)}`);

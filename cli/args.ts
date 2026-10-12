@@ -70,6 +70,8 @@ export interface KeysCommand {
   id?: string;
   /** `create` only: raw `<n>m|<n>h|<n>d` (minutes/hours/days), converted to `expiresIn` seconds for the API. */
   expiresIn?: string;
+  /** `create` only (issue #108): comma-separated scopes, for example `ingest,read`; the server validates them. */
+  scopes?: string[];
   json: boolean;
   url?: string;
   token?: string;
@@ -98,7 +100,8 @@ export const USAGE = `Usage:
   agent-viewer otel-headers --url <office-url>
                                           Print the bearer header for that office as JSON (used by Claude
                                           Code's otelHeadersHelper, not meant to be run by people)
-  agent-viewer keys create <name> [--expires-in <n>m|<n>h|<n>d] [--json] [--url <url>] [--token <token>]
+  agent-viewer keys create <name> [--scope ingest,read,audit,admin] [--expires-in <n>m|<n>h|<n>d] [--json]
+                                 [--url <url>] [--token <token>]
   agent-viewer keys list [--json] [--url <url>] [--token <token>]
   agent-viewer keys revoke <id> [--json] [--url <url>] [--token <token>]
   agent-viewer keys whoami [--json] [--url <url>] [--token <token>]
@@ -264,11 +267,12 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
     }
     const { values, positionals } = parse(actionRest, {
       'expires-in': { type: 'string' },
+      scope: { type: 'string' },
       json: { type: 'boolean', default: false },
       url: { type: 'string' },
       token: { type: 'string' },
     });
-    const common: Omit<KeysCommand, 'name' | 'id' | 'expiresIn'> = {
+    const common: Omit<KeysCommand, 'name' | 'id' | 'expiresIn' | 'scopes'> = {
       command: 'keys',
       action,
       json: Boolean(values.json),
@@ -279,7 +283,9 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
       const [name, ...extra] = positionals;
       rejectPositionals(extra, 'keys create');
       if (!name) throw new CliUsageError('keys create needs a name (for example: agent-viewer keys create ci-pipeline)');
-      return { ...common, name, expiresIn: values['expires-in'] as string | undefined };
+      const scopeFlag = values.scope as string | undefined;
+      const scopes = scopeFlag === undefined ? undefined : scopeFlag.split(',').map((s) => s.trim()).filter((s) => s !== '');
+      return { ...common, name, expiresIn: values['expires-in'] as string | undefined, ...(scopes ? { scopes } : {}) };
     }
     if (action === 'revoke') {
       const [id, ...extra] = positionals;

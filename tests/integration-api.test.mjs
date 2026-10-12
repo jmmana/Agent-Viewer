@@ -91,10 +91,11 @@ test('REST API: /ready includes schema info only when SQLite is the active store
       // 10 (usage-ledger-summary, issue #69), 11 (rollup-attribution, issue #80), 12 (usage-ledger-estimates,
       // issue #84), 13 (pricing-recompute, issue #296), 14 (budgets, issue #303), 15 (budget-alerts, issue #319),
       // 16 (budget-alert-deliveries, issue #321), 17 (event-hash-chain, issue #105, the hash-chain columns and
-      // the chain_checkpoints table), 18 (audit-meta, issue #106, the audit instance id table) and 19
-      // (api-keys, issue #107): the latest, adding the api_keys table and the submitter_id index.
-      schemaVersion: 19,
-      latestKnownSchemaVersion: 19,
+      // the chain_checkpoints table), 18 (audit-meta, issue #106, the audit instance id table), 19 (api-keys,
+      // issue #107, the api_keys table and the submitter_id index) and 20 (api-key-scopes, issue #108): the
+      // latest, adding api_keys.scopes.
+      schemaVersion: 20,
+      latestKnownSchemaVersion: 20,
       appliedAt: ready.database.appliedAt,
     });
     assert.equal(typeof ready.database.appliedAt, 'number');

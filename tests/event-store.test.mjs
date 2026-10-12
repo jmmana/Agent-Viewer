@@ -939,6 +939,7 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
       'event-hash-chain',
       'audit-meta',
       'api-keys',
+      'api-key-scopes',
     ]);
     const db = new DatabaseSync(file);
     const rows = db.prepare('SELECT id, event_json, content_hash FROM events ORDER BY rowid').all();

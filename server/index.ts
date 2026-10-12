@@ -59,9 +59,19 @@ import {
   createUnsupportedApiKeyStore,
   ApiKeyValidationError,
   ApiKeyNameTakenError,
+  ApiKeyRevokedError,
+  LastAdminError,
   API_KEY_TOKEN_PATTERN,
   verifyKeySecret,
 } from './apiKeys';
+import {
+  type Principal,
+  ENV_TOKEN_PRINCIPAL,
+  OPEN_MODE_PRINCIPAL,
+  STREAM_TICKET_PRINCIPAL,
+  makePrincipal,
+} from './auth/scopes';
+import { describePrincipal, enforceRoutePolicy, principalOf, requireScope } from './auth/routePolicy';
 import { parseAlertWebhookConfig, startAlertDeliveryWorker, type AlertWebhookConfig, type AlertDeliveryWorkerHandle } from './budgetAlertDelivery';
 import {
   parseRecomputeRequest,
@@ -551,8 +561,9 @@ export type Submitter =
   | { kind: 'webhook'; id: 'webhook' }
   | { kind: 'anonymous'; id: 'anonymous' };
 
+/** `principal` (issue #108) is what the request may do; `submitter` stays the identity recorded on events. */
 type AuthResolution =
-  | { ok: true; submitter: Submitter }
+  | { ok: true; submitter: Submitter; principal: Principal }
   | { ok: false; reason: 'unauthorized' | 'key_revoked' | 'key_expired' };
 
 /**
@@ -593,16 +604,21 @@ function resolveAuth(req: express.Request): AuthResolution {
           if (found.status === 'revoked') return { ok: false, reason: 'key_revoked' };
           if (found.status === 'expired') return { ok: false, reason: 'key_expired' };
           apiKeyStore.touchLastUsed(id);
-          return { ok: true, submitter: { kind: 'key', id, name: found.name } };
+          return {
+            ok: true,
+            submitter: { kind: 'key', id, name: found.name },
+            principal: makePrincipal({ keyId: id, name: found.name, source: 'named', granted: found.scopes }),
+          };
         }
       }
     }
+    // Issue #108: the bootstrap token (also the CLI session token `agent-viewer start` exports) is always admin.
     if (expectedToken && safeEqual(presented, expectedToken)) {
-      return { ok: true, submitter: { kind: 'bootstrap', id: 'bootstrap' } };
+      return { ok: true, submitter: { kind: 'bootstrap', id: 'bootstrap' }, principal: ENV_TOKEN_PRINCIPAL };
     }
   }
 
-  if (!expectedToken) return { ok: true, submitter: { kind: 'anonymous', id: 'anonymous' } };
+  if (!expectedToken) return { ok: true, submitter: { kind: 'anonymous', id: 'anonymous' }, principal: OPEN_MODE_PRINCIPAL };
   return { ok: false, reason: 'unauthorized' };
 }
 
@@ -648,12 +664,14 @@ function requireApiToken(options: {
     const resolution = resolveAuth(req);
     if (resolution.ok) {
       res.locals.submitter = resolution.submitter;
+      res.locals.principal = resolution.principal;
       next();
       return;
     }
     if (options.streamTicketRoute && req.method === 'GET' && req.path === options.streamTicketRoute && 'ticket' in req.query) {
       const ticketValue = req.query.ticket;
       if (typeof ticketValue === 'string' && streamTicketStore.consume(ticketValue)) {
+        res.locals.principal = STREAM_TICKET_PRINCIPAL;
         next();
         return;
       }
@@ -680,6 +698,10 @@ function currentTokenFingerprint(): string {
 }
 
 const streamTicketStore = createStreamTicketStore({ tokenFingerprint: currentTokenFingerprint });
+
+/** Issue #108: a `403 insufficient_scope` counts as an auth rejection in the request metrics, like the
+ * open-mode `403`s below. */
+const scopeGuardOptions = { onReject: (res: express.Response) => markRejection(res, 'unauthorized') };
 
 /**
  * Rejects any `/api/v1` request carrying `token` or `api_key` in the query string, including the `token[]=`
@@ -785,6 +807,8 @@ app.use(
     onUnauthorized: (res) => res.status(401).json(otlpErrorBody(16, 'Valid Bearer token required')),
   })
 );
+// Issue #108: OTLP export is ingestion. Checked before the body parser, like the token itself.
+app.use(OTLP_LOGS_PATH, requireScope('ingest', scopeGuardOptions));
 
 app.use(OTLP_LOGS_PATH, otlpContentTypeGuard(() => (otlpStats.requestsRejected += 1), OTLP_UNSUPPORTED_MEDIA_MESSAGE));
 
@@ -948,6 +972,7 @@ app.use(
     onUnauthorized: (res) => res.status(401).json(otlpErrorBody(16, 'Valid Bearer token required')),
   })
 );
+app.use(OTLP_METRICS_PATH, requireScope('ingest', scopeGuardOptions));
 app.use(OTLP_METRICS_PATH, otlpContentTypeGuard(() => (otlpMetricsStats.requestsRejected += 1), OTLP_METRICS_UNSUPPORTED_MEDIA_MESSAGE));
 
 app.use(OTLP_METRICS_PATH, express.json({ type: 'application/json', limit: otlpMaxBodyLabel }));
@@ -1095,6 +1120,7 @@ app.use(
     onUnauthorized: (res) => res.status(401).json(otlpErrorBody(16, 'Valid Bearer token required')),
   })
 );
+app.use(OTLP_TRACES_PATH, requireScope('ingest', scopeGuardOptions));
 app.use(OTLP_TRACES_PATH, otlpContentTypeGuard(() => (otlpTracesStats.requestsRejected += 1), OTLP_TRACES_UNSUPPORTED_MEDIA_MESSAGE));
 
 app.use(OTLP_TRACES_PATH, express.json({ type: 'application/json', limit: otlpMaxBodyLabel }));
@@ -1522,6 +1548,19 @@ app.use(
         error: 'unauthorized',
         message: 'Valid Bearer token required',
       }),
+  })
+);
+
+// Issue #108: default-deny scope policy. Runs after authentication (401) and before every route handler (so
+// before its body validation, 400): each method+path needs the scope `server/auth/routePolicy.ts` declares for
+// it, `admin` for anything not declared, `403 insufficient_scope` otherwise. The HMAC-signed webhook is the one
+// request that legitimately arrives here without a principal (`requireApiToken`'s `webhookBypass`); its route
+// verifies the signature itself.
+app.use(
+  '/api/v1',
+  enforceRoutePolicy({
+    ...scopeGuardOptions,
+    selfAuthenticated: (req) => req.path.startsWith('/webhooks') && Boolean(process.env.AGENT_VIEWER_WEBHOOK_SECRET),
   })
 );
 
@@ -3168,7 +3207,10 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   const submitterId = secret
     ? (() => {
         const resolution = resolveAuth(req);
-        return resolution.ok && resolution.submitter.kind === 'key' ? resolution.submitter.id : 'webhook';
+        // Issue #108: only a key that could have ingested this itself may claim the attribution.
+        return resolution.ok && resolution.submitter.kind === 'key' && resolution.principal.effective.has('ingest')
+          ? resolution.submitter.id
+          : 'webhook';
       })()
     : submitterIdForRequest(req, res);
 
@@ -3497,13 +3539,20 @@ async function appendAuditKeyEvent(type: AuditEventType, actorId: string, payloa
   }
 }
 
-/** `true` and already responded `403 admin_required` when the caller is not the bootstrap submitter; `false`
- * (nothing sent) otherwise. Key management stays bootstrap-only until scoped keys (#108) replace this rule. */
-function requireBootstrap(res: express.Response): boolean {
-  const submitter = res.locals.submitter as Submitter | undefined;
-  if (submitter?.kind === 'bootstrap') return false;
-  res.status(403).json({ error: 'admin_required', message: 'Only the bootstrap token (AGENT_VIEWER_API_TOKEN) may manage API keys.' });
-  return true;
+// Issue #108: key management needs `admin`, listing and reading keys needs `audit`. The `/api/v1` route policy
+// (`server/auth/routePolicy.ts`) already enforces this; each route below repeats its own `requireScope` as
+// defense in depth, so moving or renaming a route can never silently drop its guard.
+const requireAdminScope = requireScope('admin', scopeGuardOptions);
+const requireAuditScope = requireScope('audit', scopeGuardOptions);
+
+/** The last-admin rule (issue #108) only applies while no bootstrap token is configured: one that is, is always
+ * an implicit admin. */
+function adminGuard(): { envTokenConfigured: boolean } {
+  return { envTokenConfigured: Boolean(getApiToken()) };
+}
+
+function sendLastAdmin(res: express.Response, error: LastAdminError): void {
+  res.status(409).json({ error: 'last_admin', message: error.message });
 }
 
 /** `true` and already responded `501 keys_require_sqlite` when the store has no key registry (memory mode);
@@ -3532,15 +3581,16 @@ function serializeApiKey(record: ApiKeyRecord): Record<string, unknown> {
     eventCount: record.eventCount,
     firstEventAt: record.firstEventAt,
     lastEventAt: record.lastEventAt,
+    scopes: record.scopes,
   };
 }
 
-app.post('/api/v1/keys', async (req, res) => {
+app.post('/api/v1/keys', requireAdminScope, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (requireKeysSupported(res)) return;
-  if (requireBootstrap(res)) return;
+  const submitter = res.locals.submitter as Submitter;
 
-  const body = (req.body ?? {}) as { name?: unknown; expiresAt?: unknown; expiresIn?: unknown };
+  const body = (req.body ?? {}) as { name?: unknown; expiresAt?: unknown; expiresIn?: unknown; scopes?: unknown };
   if (body.expiresAt !== undefined && body.expiresIn !== undefined) {
     res.status(400).json({ error: 'validation_failed', issues: [{ path: 'expiresAt', message: 'expiresAt and expiresIn are mutually exclusive' }] });
     return;
@@ -3563,8 +3613,19 @@ app.post('/api/v1/keys', async (req, res) => {
   }
 
   try {
-    const created = apiKeyStore.create({ name: typeof body.name === 'string' ? body.name : '', expiresAt, createdBy: 'bootstrap' });
-    await appendAuditKeyEvent('audit.key.created', 'bootstrap', { keyId: created.id, name: created.name, prefix: created.prefix, expiresAt: created.expiresAt ?? undefined });
+    const created = apiKeyStore.create({
+      name: typeof body.name === 'string' ? body.name : '',
+      expiresAt,
+      createdBy: submitter.id,
+      scopes: body.scopes,
+    });
+    await appendAuditKeyEvent('audit.key.created', submitter.id, {
+      keyId: created.id,
+      name: created.name,
+      prefix: created.prefix,
+      expiresAt: created.expiresAt ?? undefined,
+      scopes: created.scopes,
+    });
     res.status(201).json(created);
   } catch (error) {
     if (error instanceof ApiKeyValidationError) {
@@ -3579,18 +3640,16 @@ app.post('/api/v1/keys', async (req, res) => {
   }
 });
 
-app.get('/api/v1/keys', async (_req, res) => {
+app.get('/api/v1/keys', requireAuditScope, async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (requireKeysSupported(res)) return;
-  if (requireBootstrap(res)) return;
   res.json({ keys: apiKeyStore.list().map(serializeApiKey) });
 });
 
-app.get('/api/v1/keys/:id', async (req, res) => {
+app.get('/api/v1/keys/:id', requireAuditScope, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (requireKeysSupported(res)) return;
-  if (requireBootstrap(res)) return;
-  const record = apiKeyStore.get(req.params.id);
+  const record = apiKeyStore.get(String(req.params.id));
   if (!record) {
     res.status(404).json({ error: 'key_not_found' });
     return;
@@ -3598,12 +3657,20 @@ app.get('/api/v1/keys/:id', async (req, res) => {
   res.json(serializeApiKey(record));
 });
 
-app.post('/api/v1/keys/:id/revoke', async (req, res) => {
+app.post('/api/v1/keys/:id/revoke', requireAdminScope, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   if (requireKeysSupported(res)) return;
-  if (requireBootstrap(res)) return;
   const submitter = res.locals.submitter as Submitter;
-  const outcome = apiKeyStore.revoke(req.params.id, submitter.id);
+  let outcome: ReturnType<ApiKeyStore['revoke']>;
+  try {
+    outcome = apiKeyStore.revoke(String(req.params.id), submitter.id, adminGuard());
+  } catch (error) {
+    if (error instanceof LastAdminError) {
+      sendLastAdmin(res, error);
+      return;
+    }
+    throw error;
+  }
   if (!outcome) {
     res.status(404).json({ error: 'key_not_found' });
     return;
@@ -3623,6 +3690,71 @@ app.get('/api/v1/whoami', async (_req, res) => {
     return;
   }
   res.json(submitter.kind === 'key' ? { kind: submitter.kind, id: submitter.id, name: submitter.name } : { kind: submitter.kind, id: submitter.id });
+});
+
+// Issue #108: changes a key's granted scopes. Admin only (the route policy and `requireAdminScope`), never on
+// the caller's own key (a key cannot widen or narrow itself), never on the bootstrap token (always admin, has no
+// row), and never demoting the last active admin key while no bootstrap token is configured (`409 last_admin`).
+app.patch('/api/v1/keys/:id', requireAdminScope, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (requireKeysSupported(res)) return;
+  const principal = principalOf(res) as Principal;
+  const id = String(req.params.id);
+
+  if (id === ENV_TOKEN_PRINCIPAL.keyId) {
+    res.status(400).json({ error: 'env_token_scopes_immutable', message: 'AGENT_VIEWER_API_TOKEN is always admin; its scopes cannot be set.' });
+    return;
+  }
+  if (principal.source === 'named' && principal.keyId === id) {
+    res.status(403).json({ error: 'cannot_modify_own_scopes', message: 'A key cannot change its own scopes; use another admin credential.' });
+    return;
+  }
+
+  const body = req.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    res.status(400).json({ error: 'validation_failed', issues: [{ path: '', message: 'body must be an object { scopes }' }] });
+    return;
+  }
+  const unknownField = Object.keys(body).find((key) => key !== 'scopes');
+  if (unknownField !== undefined) {
+    res.status(400).json({ error: 'validation_failed', issues: [{ path: unknownField, message: 'only "scopes" can be changed' }] });
+    return;
+  }
+
+  try {
+    const outcome = apiKeyStore.setScopes(id, (body as { scopes?: unknown }).scopes, adminGuard());
+    if (!outcome) {
+      res.status(404).json({ error: 'key_not_found' });
+      return;
+    }
+    res.json(serializeApiKey(outcome.record));
+  } catch (error) {
+    if (error instanceof ApiKeyValidationError) {
+      res.status(400).json({ error: 'validation_failed', issues: [{ path: error.path, message: error.message }] });
+      return;
+    }
+    if (error instanceof ApiKeyRevokedError) {
+      res.status(409).json({ error: 'key_revoked', message: error.message });
+      return;
+    }
+    if (error instanceof LastAdminError) {
+      sendLastAdmin(res, error);
+      return;
+    }
+    throw error;
+  }
+});
+
+// Issue #108: who the presented credential is and what it may do. Any valid credential (route policy
+// `authenticated`); `open: true` when no bootstrap token is configured, so the whole API is open.
+app.get('/api/v1/auth/whoami', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const principal = principalOf(res);
+  if (!principal) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  res.json({ ...describePrincipal(principal), ...(getApiToken() ? {} : { open: true }) });
 });
 
 // -------------------------------------------------------------

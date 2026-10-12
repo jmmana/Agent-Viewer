@@ -498,15 +498,20 @@ should answer in under 250 ms warm. Run it yourself with:
 AGENT_VIEWER_BENCH=1 npx tsx --test tests/budgets-bench.test.mjs
 ```
 
-As measured against the code this issue found already merged (sub-issues #302-#306), neither target is currently
-met: a cold pass over 100 budgets took roughly 9 s, and a warm pass roughly 6-7 s, both well past the targets. The
-root cause, visible directly in `server/budgets.ts`'s own code comments, is that two optimizations were
-deliberately deferred to this issue rather than spent speculatively: `evaluateBudgetView` calls the full
-`store.rollup()` (eight separate aggregate SQL statements: token sums, cost sums per currency, estimate and
-comparable sums, latency/failure sidecars) on every budget just to read its `asOf.ledgerSeq`/`coverage.complete`,
-and the registry's own exact-key evaluation cache (`getCachedStatus`/`setCachedStatus`) is wired for the live
-SSE-transition path (`evaluateBudgetLive`, sub-issue #305) but never consulted by the plain read path
-(`evaluateBudgetView`, used by both `GET /api/v1/budgets` and `snapshot.budgets`). Closing this gap (a
-lighter-weight coverage/asOf read, a scope-matched pre-filter, or wiring the existing cache into the read path)
-is out of this documentation-and-benchmark issue's own scope (no server production code changes); it is tracked
-as a follow-up. The real numbers from the run that produced this document are in the pull request that added it.
+The first measurement (#307, against sub-issues #302-#306) met neither target: roughly 9 s cold and 6-7 s warm,
+because `evaluateBudgetView` ran the full `store.rollup()` (eight aggregate SQL statements) for every budget just
+to read `asOf.ledgerSeq`/`coverage.complete`, and never consulted the registry's evaluation cache. Issue #331
+fixed both:
+
+- **One ledger probe per request.** `resolveBudgetLedgerScope` runs a single rollup over an empty `received_at`
+  range to read the ledger position and coverage inputs (`asOf.ledgerSeq`, the memory-mode cap flag,
+  `purgedThrough`), all global to the store. Each budget's `history_truncated` is then derived from its own window
+  start, with the same rule the rollup applies. Every budget in one `GET /api/v1/budgets` (or `snapshot.budgets`)
+  is evaluated at the same `ledgerSeq`.
+- **The evaluation cache on the read path.** A budget's status is looked up by (ledger write sequence, window
+  start, budget revision) before any ledger rows are read. The live check (`evaluateBudgetLive`) stores its result
+  under that exact key. A plain read stores its result only when that cannot hide a pending transition: there must
+  already be a baseline with the same window and state. Evaluation errors are never served from the cache.
+
+Any accepted ledger write moves `ledgerSeq`, so the next read re-evaluates. Without new writes, a warm read is one
+probe plus one cache lookup per budget.

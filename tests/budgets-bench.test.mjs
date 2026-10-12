@@ -293,10 +293,9 @@ if (!BENCH_ENABLED) {
 
   test(`GET /api/v1/budgets answers in under ${WARM_TARGET_MS} ms once warm`, async () => {
     // One more untimed pass so the timed one below is never the very first (the cold case already has its own
-    // assertion above); this is "warm" in the sense issue #85 section 3 and #307 use it: the OS/SQLite page cache
-    // for this ledger file is hot, not that any evaluation result is cached (the registry's own evaluation cache
-    // is never consulted on this read path, `server/budgets.ts`'s section 6 comment; every call here, cold or
-    // warm, is a fresh evaluation from the ledger).
+    // assertion above). "Warm" here means both the OS/SQLite page cache and the registry's evaluation cache (issue
+    // #331): with no ledger write in between, every budget's (ledgerSeq, windowStart, revision) key is unchanged,
+    // so each call below is one empty-range probe rollup plus 100 `budget_state` lookups, no ledger row reads.
     await fetch(`${baseUrl}/api/v1/budgets`, { headers: auth() });
 
     const samples = [];

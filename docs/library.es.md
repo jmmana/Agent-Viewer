@@ -929,7 +929,7 @@ async function cargarEjecucion(file: File) {
 }
 ```
 
-El resultado es `{ events, issues, totalLines, format, otlp? }`. Las líneas inválidas se reportan en `issues` (`line`, `error`, `raw?`, `code?`, `path?`) sin detener la lectura. Los logs OTLP se convierten en eventos `llm.usage`/`llm.failed`; las métricas OTLP devuelven cero eventos y un aviso explicando que son contadores preagregados; las trazas OTLP aún no se admiten y también devuelven cero eventos más un aviso. `otlp` (presente cuando `format === "otlp"`) reporta qué señales se encontraron y los contadores por registro `logRecords`/`converted`/`skipped`/`rejected`. El componente no trae una zona para soltar archivos; conecta tu propio selector de archivos a `parseEventLog`.
+El resultado es `{ events, issues, totalLines, format, otlp? }`. Las líneas inválidas se reportan en `issues` (`line`, `error`, `raw?`, `code?`, `path?`) sin detener la lectura. Los logs OTLP se convierten en eventos `llm.usage`/`llm.failed`; las métricas OTLP devuelven cero eventos y un aviso explicando que son contadores preagregados; importar un archivo de trazas OTLP aún no se admite y también devuelve cero eventos más un aviso (issue #98); el receptor en vivo `POST /v1/traces` ya convierte spans GenAI para runtimes que exportan por red (ver [otlp.md](otlp.md#otlp-traces-post-v1traces)). `otlp` (presente cuando `format === "otlp"`) reporta qué señales se encontraron y los contadores por registro `logRecords`/`converted`/`skipped`/`rejected`. El componente no trae una zona para soltar archivos; conecta tu propio selector de archivos a `parseEventLog`.
 
 ## Exportar video
 

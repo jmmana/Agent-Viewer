@@ -86,7 +86,7 @@ These are design rules, enforced in code, not marketing:
 5. **A good guest in your app.** No injected styles, no global selectors, no `localStorage`, no global keyboard shortcuts, nothing runs on import. Two offices on one page never share state.
 6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Unknown stays unknown for budgets too: a budget with an uncountable call is `unknown`, never a guessed `ok` ([docs/budgets.md](docs/budgets.md)). Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
-**What it is not:** a tracing backend, a log store or an APM replacement. It does not import OTLP traces yet, it does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
+**What it is not:** a tracing backend, a log store or an APM replacement. `POST /v1/traces` converts GenAI spans into events, it does not store spans, offer a trace explorer, or import a saved trace file yet (that part is still on the [roadmap](#-roadmap)). It does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
 
 ---
 
@@ -503,7 +503,7 @@ Honest maturity, so you know what you are getting:
 | **AutoGen** | [`examples/autogen-adapter.py`](examples/autogen-adapter.py) | 🧪 **Example adapter.** Conversable agents and group chat messages, tools and usage. Not run in CI. |
 | **OpenAI Agents SDK** | [`examples/openai-agents-adapter.ts`](examples/openai-agents-adapter.ts) | 🧪 **Example adapter.** Agent runs, handoffs, tools and usage. Type-checked in CI. |
 | **Google ADK** | [`examples/google-adk-adapter.ts`](examples/google-adk-adapter.ts) | 🧪 **Example adapter.** Gemini turns, function calls and usage. Type-checked in CI. |
-| **OTLP traces** | none | ❌ **Not supported yet.** `parseEventLog` says so instead of guessing. On the [roadmap](#-roadmap). |
+| **OTLP GenAI traces** | `POST /v1/traces` | ✅ **Stable receiver, http/json and http/protobuf, no gRPC.** Converts OpenTelemetry GenAI spans (`gen_ai.*`, for example OpenLLMetry/Traceloop) into `llm.usage`/`llm.failed` and `tool.*` events; spans are never stored. File import of a saved trace export in `parseEventLog` is not supported yet (issue #98). Reference: [docs/otlp.md](docs/otlp.md#otlp-traces-post-v1traces). |
 
 <sub>✅ stable and tested · 🧪 example code you wire into the framework's own callbacks (the adapters do not import the frameworks) · ❌ not available</sub>
 
@@ -959,7 +959,7 @@ Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showc
 Planned, not available yet:
 
 - [ ] `GET /api/v1/usage/reconciliation`: compare the OTLP metrics stored by `POST /v1/metrics` against the usage ledger. The ledger itself shipped in 0.4.0; this comparison endpoint is still not built.
-- [ ] Import OTLP (OpenTelemetry) traces.
+- [ ] Import a saved OTLP trace export (`resourceSpans`) in `parseEventLog`, reusing the live `POST /v1/traces` receiver's mapper (issue #98). The live receiver itself shipped in 0.7.0.
 - [ ] More adapters, packaged and tested against the real frameworks.
 - [ ] An MCP server, so agents can report into the office directly.
 - [ ] A web component for apps that do not use React.

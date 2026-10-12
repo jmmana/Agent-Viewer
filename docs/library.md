@@ -929,7 +929,7 @@ async function loadRun(file: File) {
 }
 ```
 
-The result is `{ events, issues, totalLines, format, otlp? }`. Invalid lines are reported in `issues` (`line`, `error`, `raw?`, `code?`, `path?`) without stopping the parse. OTLP logs convert to `llm.usage`/`llm.failed` events; OTLP metrics return no events and one issue explaining they are pre-aggregated counters; OTLP traces are not supported yet and also return no events plus one issue. `otlp` (present whenever `format === "otlp"`) reports which signals were found and the per-record `logRecords`/`converted`/`skipped`/`rejected` counters. The component has no built-in file drop; wire your own file input to `parseEventLog`.
+The result is `{ events, issues, totalLines, format, otlp? }`. Invalid lines are reported in `issues` (`line`, `error`, `raw?`, `code?`, `path?`) without stopping the parse. OTLP logs convert to `llm.usage`/`llm.failed` events; OTLP metrics return no events and one issue explaining they are pre-aggregated counters; OTLP trace *file* import is not supported yet and also returns no events plus one issue (issue #98); the live `POST /v1/traces` receiver already converts GenAI spans for runtimes that export over the network (see [otlp.md](otlp.md#otlp-traces-post-v1traces)). `otlp` (present whenever `format === "otlp"`) reports which signals were found and the per-record `logRecords`/`converted`/`skipped`/`rejected` counters. The component has no built-in file drop; wire your own file input to `parseEventLog`.
 
 ## Video export
 

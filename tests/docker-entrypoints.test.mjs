@@ -78,7 +78,7 @@ test('App image: flags passed to docker run are added to the defaults, which com
   const plain = entrypointArgs([]);
   assert.deepEqual(plain, ['start', '--no-open']);
   assert.deepEqual(parseCliArgs(plain, '/app', imageEnv), {
-    command: 'start', port: 8787, host: '0.0.0.0', token: undefined, demo: false, open: false, record: undefined,
+    command: 'start', port: 8787, host: '0.0.0.0', token: undefined, demo: false, open: false, record: undefined, metrics: false,
   });
 
   // The case that used to bind 127.0.0.1 inside the container.

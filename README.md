@@ -84,7 +84,7 @@ These are design rules, enforced in code, not marketing:
 3. **Nothing invented in professional mode.** The embedded office has no ambient life, no invented lines, no sounds. Showcase mode adds simulated office life, and every simulated bubble says so (`SOCIAL · SIMULATED`).
 4. **Unknown is not zero.** The component never computes, adds up or prices usage. A missing cost is shown as "unknown", never as `0`. Meeting figures (`meetingUsage`) follow the exact same rule: they come from your host, never from the deprecated `Meeting.tokensAccumulated`/`costAccumulated`.
 5. **A good guest in your app.** No injected styles, no global selectors, no `localStorage`, no global keyboard shortcuts, nothing runs on import. Two offices on one page never share state.
-6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
+6. **Unknown is not zero, anywhere.** The server, the portal, the CLI and the SDKs never store or show an unknown figure as zero and never add up different currencies. Unknown stays unknown for budgets too: a budget with an uncountable call is `unknown`, never a guessed `ok` ([docs/budgets.md](docs/budgets.md)). Full field-by-field semantics: [docs/usage-semantics.md](docs/usage-semantics.md) ([español](docs/usage-semantics.es.md)).
 
 **What it is not:** a tracing backend, a log store or an APM replacement. It does not import OTLP traces yet, it does not call model providers, and the framework adapters are examples to adapt, not packaged integrations. See the [maturity table](#-connect-your-agents).
 
@@ -675,6 +675,9 @@ flowchart LR
 | `POST` | `/api/v1/pricing/recompute` | Re-prices matching ledger rows against a corrected or explicitly pinned price-table version, atomically, writing a new revision only for rows whose result changed (issue #296). A write operation; requires the API token the same way ingestion does, which also means it is just as open as the rest of the API when `AGENT_VIEWER_API_TOKEN` is unset (see that row above). Set a token before using recompute on a shared server. [Details](docs/integration.md#usage-ledger-cost-estimation-and-recompute-issues-84-296). |
 | `GET` | `/api/v1/pricing/recompute-runs`, `/api/v1/pricing/recompute-runs/:runId` | Lists past recompute runs (newest first) / inspects one. [Details](docs/integration.md#usage-ledger-cost-estimation-and-recompute-issues-84-296). |
 | `GET` | `/api/v1/admin/retention` | Retention status: counts, coverage (`purgedBefore`, lifetime `deletedTotal`) and recent purge runs for events and the usage ledger. Read-only; no endpoint triggers a purge. [Details](docs/retention.md). |
+| `GET` | `/api/v1/budgets`, `/api/v1/budgets/:id` | A budget's server-computed state (`ok`/`warning`/`exceeded`/`unknown`) per agent, model, session, user or tag, over a day, week or month (issue #85). `GET /api/v1/snapshot` also gains a `budgets` field. [Details](docs/budgets.md). |
+| `POST` / `PUT` / `DELETE` | `/api/v1/budgets`, `/api/v1/budgets/:id` | Create, replace or soft-delete a budget's configuration. Every change is revisioned; requires the API token the same way ingestion does. [Details](docs/budgets.md). |
+| `GET` | `/api/v1/budgets/:id/revisions` | A budget's append-only configuration history. [Details](docs/budgets.md). |
 | `POST` | `/api/v1/agents` | Register or update an agent. |
 | `PATCH` | `/api/v1/agents/:agentId` | Update an agent's profile or status (descriptive fields only; usage is reported with `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Register a runtime (heartbeat) / list runtimes. |
@@ -830,6 +833,21 @@ const signature = crypto
 ```
 
 The signature is compared in constant time. Expired timestamps and bad signatures get HTTP 401.
+
+</details>
+
+<details>
+<summary><b>💰 Budgets</b></summary>
+<br/>
+
+A budget is a limit your app configures server-side, over an agent, model, session, user or tag, per day, week or
+month: `POST /api/v1/budgets` with `scope`, `period`, `currency`, `basis` (`reported` or `reported_plus_estimated`)
+and `limit`. The server alone evaluates it against the usage ledger, on every read, and answers one of four states:
+`ok`, `warning`, `exceeded` or `unknown`, the last one whenever the figure is incomplete (a missing cost, a
+mismatched currency, truncated history) rather than ever guessed as `ok`. `GET /api/v1/snapshot` carries the same
+computed state in its `budgets` field, and a state change pushes a named `event: budget` SSE frame. Both SDKs
+expose a read-only `budgets()`. Full reference, with every endpoint and a real captured request/response:
+[docs/budgets.md](docs/budgets.md).
 
 </details>
 

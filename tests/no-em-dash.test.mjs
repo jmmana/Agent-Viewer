@@ -19,6 +19,7 @@ const FILES = [
   'docs/event-log.md',
   'docs/library.md',
   'docs/library.es.md',
+  'docs/budgets.md',
   'docs/usage-ledger.md',
   'docs/redaction.md',
   'docs/migrating-to-0.4.md',

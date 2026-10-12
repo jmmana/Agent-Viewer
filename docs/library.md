@@ -835,7 +835,7 @@ Latency percentiles and failure rates (`include=latency,failures` on the same ro
 
 ## Budget state
 
-A budget is a comparison of spend against a limit. If the office did that comparison it would have to hold a limit, receive a spend figure, sum or convert currency, and decide a threshold, breaking every rule in [the four rules](#the-four-rules) above. So your app (typically backed by the server's budgets engine) decides the verdict and passes only that verdict; the office draws it, with an accessible text alternative, and nothing else.
+A budget is a comparison of spend against a limit. If the office did that comparison it would have to hold a limit, receive a spend figure, sum or convert currency, and decide a threshold, breaking every rule in [the four rules](#the-four-rules) above. So your app (typically backed by the server's budgets engine) decides the verdict and passes only that verdict; the office draws it, with an accessible text alternative, and nothing else. The four states below are exactly the server's own vocabulary: the library never evaluates a budget itself, it only ever receives one already-computed `BudgetState` through this prop, ready to draw (see [docs/budgets.md](budgets.md) for the full engine that produces it, issue #85).
 
 ```tsx
 import { useMemo } from 'react';

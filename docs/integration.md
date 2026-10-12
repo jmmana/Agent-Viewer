@@ -1174,6 +1174,25 @@ Response (`201`, or `200` for `dryRun`):
 
 **Together with #295.** The `estimates=latest|original`/`estimateRevision=N` query parameters on `GET /api/v1/usage/calls`, the rollup and the export (documented above, in their own sections) were added by the other #84 sub-issue, #295, which could land before or after this one; this item is what actually makes a revision other than 0 exist to select. Role-based access and caller identity for recompute are future issues (#107, #108); it uses the plain API token for now.
 
+### Budgets (issue #85)
+
+A budget asks one question of the usage ledger (issue #65), computed on the server from the same rows the
+export above reads: for this agent, model, session, user or tag, over this day, week or month, is spend `ok`,
+`warning`, `exceeded` or `unknown`? The engine consumes the ledger's reported cost, currency, cost source and
+ingestion-time price estimate (`cost`, `currency`, `costSource`, `estimatedCostNano`/`estimatedCurrency`/
+`pricingVersion`/`estimateStatus`, issues #64, #65, #84) exactly as those columns are defined elsewhere in this
+document; it never redefines or recomputes them, and it never reads the running per-agent counters `GET
+/api/v1/snapshot`'s deprecated `totalCost`/agent `cost` are built from. Full reference, including every field,
+every endpoint with a real captured request/response, the SSE frame and the four states: [docs/budgets.md](budgets.md).
+
+- `GET`/`POST /api/v1/budgets`, `GET`/`PUT`/`DELETE /api/v1/budgets/:id`, `GET /api/v1/budgets/:id/revisions`:
+  the CRUD API, behind the same Bearer token as everything else under `/api/v1`.
+- `GET /api/v1/snapshot` gains `budgets: BudgetView[]` (additive, `schemaVersion` stays `"1.0"`).
+- A state change pushes a named `event: budget` SSE frame on `GET /api/v1/events/stream` (no `id:` line, never
+  replayed; a reconnected client re-reads `GET /api/v1/budgets/:id` instead).
+- SDK: `viewer.budgets({ state })` (TypeScript) / `viewer.budgets(state=...)` (Python), read only, next to
+  `snapshot()`.
+
 ---
 
 ## 🔄 8. Multi-Runtime & Session Tracking

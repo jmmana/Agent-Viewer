@@ -84,7 +84,7 @@ Son reglas de diseño que el código cumple, no frases de marketing:
 3. **Nada inventado en modo profesional.** La oficina integrada no tiene vida ambiental, ni frases inventadas, ni sonidos. El modo vitrina agrega vida de oficina simulada, y cada burbuja simulada lo dice (`SOCIAL · SIMULADO`).
 4. **Desconocido no es cero.** El componente nunca calcula, suma ni pone precio al consumo. Un costo que falta se muestra como "desconocido", nunca como `0`. Las cifras de reuniones (`meetingUsage`) siguen exactamente la misma regla: vienen de tu host, nunca de los campos obsoletos `Meeting.tokensAccumulated`/`costAccumulated`.
 5. **Un buen invitado en tu app.** No inyecta estilos, no usa selectores globales ni `localStorage`, no registra atajos de teclado globales y no ejecuta nada al importarse. Dos oficinas en la misma página nunca comparten estado.
-6. **Desconocido no es cero, en ningún lado.** El servidor, el portal, la CLI y los SDK nunca guardan ni muestran una cifra desconocida como cero, y nunca suman monedas distintas. Semántica completa, campo por campo: [docs/usage-semantics.es.md](usage-semantics.es.md) ([english](../README.md)).
+6. **Desconocido no es cero, en ningún lado.** El servidor, el portal, la CLI y los SDK nunca guardan ni muestran una cifra desconocida como cero, y nunca suman monedas distintas. Desconocido sigue siendo desconocido también para los presupuestos: un presupuesto con una llamada no contable es `unknown`, nunca un `ok` adivinado ([docs/budgets.md](budgets.md), en inglés). Semántica completa, campo por campo: [docs/usage-semantics.es.md](usage-semantics.es.md) ([english](../README.md)).
 
 **Lo que no es:** un backend de trazas, un almacén de logs ni un reemplazo de tu APM. Todavía no importa trazas OTLP, no llama a proveedores de modelos y los adaptadores de frameworks son ejemplos para adaptar, no integraciones empaquetadas. Mira la [tabla de madurez](#-conecta-tus-agentes).
 
@@ -664,6 +664,9 @@ flowchart LR
 | `GET` | `/api/v1/usage/export` | Exporta el libro mayor de consumo como CSV o JSONL para reconciliar contra la factura del proveedor (issue #69): cada celda de texto redactada, protección contra inyección de fórmulas en CSV, una foto fija (`asOfSeq`) y `afterSeq` para descargas incrementales. [Detalles](usage-export.md). |
 | `GET` | `/api/v1/usage/export/totals` | Totales de reconciliación por `(currency, costSource)` y por tipo de token, para los mismos filtros, calculados por `GET /api/v1/usage/rollup` (nunca una segunda suma). El CSV se mantiene estrictamente tabular; aquí viven sus totales. [Detalles](usage-export.md). |
 | `GET` | `/api/v1/admin/retention` | Estado de retención: conteos, cobertura (`purgedBefore`, `deletedTotal` acumulado) y las últimas corridas de purga, para eventos y para el libro mayor de consumo. Solo lectura; ningún endpoint dispara una purga. [Detalles](retention.md) (en inglés). |
+| `GET` | `/api/v1/budgets`, `/api/v1/budgets/:id` | Estado calculado por el servidor de un presupuesto (`ok`/`warning`/`exceeded`/`unknown`) por agente, modelo, sesión, usuario o etiqueta, en un día, semana o mes (issue #85). `GET /api/v1/snapshot` también gana un campo `budgets`. [Detalles](budgets.md) (en inglés). |
+| `POST` / `PUT` / `DELETE` | `/api/v1/budgets`, `/api/v1/budgets/:id` | Crea, reemplaza o borra (soft delete) la configuración de un presupuesto. Cada cambio queda versionado; requiere el token de API igual que la ingesta. [Detalles](budgets.md) (en inglés). |
+| `GET` | `/api/v1/budgets/:id/revisions` | Historial de configuración, de solo anexado, de un presupuesto. [Detalles](budgets.md) (en inglés). |
 | `POST` | `/api/v1/agents` | Registra o actualiza un agente. |
 | `PATCH` | `/api/v1/agents/:agentId` | Actualiza el perfil o el estado de un agente (solo campos descriptivos; el uso se reporta con `llm.usage`). |
 | `POST` / `GET` | `/api/v1/runtimes` | Registra un runtime (latido) / lista los runtimes. |
@@ -831,6 +834,21 @@ const signature = crypto
 ```
 
 La firma se compara en tiempo constante. Las marcas de tiempo vencidas y las firmas inválidas reciben HTTP 401.
+
+</details>
+
+<details>
+<summary><b>💰 Presupuestos</b></summary>
+<br/>
+
+Un presupuesto es un límite que tu app configura del lado del servidor, sobre un agente, modelo, sesión, usuario
+o etiqueta, por día, semana o mes: `POST /api/v1/budgets` con `scope`, `period`, `currency`, `basis` (`reported` o
+`reported_plus_estimated`) y `limit`. Solo el servidor lo evalúa contra el libro mayor de consumo, en cada
+lectura, y responde uno de cuatro estados: `ok`, `warning`, `exceeded` o `unknown`, este último siempre que la
+cifra esté incompleta (un costo faltante, una moneda distinta, historial truncado), nunca adivinado como `ok`.
+`GET /api/v1/snapshot` trae el mismo estado calculado en su campo `budgets`, y un cambio de estado empuja un frame
+SSE nombrado `event: budget`. Ambos SDK exponen un `budgets()` de solo lectura. Referencia completa, con cada
+endpoint y un request/response real capturado: [docs/budgets.md](budgets.md) (en inglés).
 
 </details>
 

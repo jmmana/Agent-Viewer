@@ -835,7 +835,7 @@ Los percentiles de latencia y las tasas de fallas (`include=latency,failures` en
 
 ## Estado de presupuesto
 
-Un presupuesto es una comparación de gasto contra un límite. Si la oficina hiciera esa comparación tendría que guardar un límite, recibir una cifra de gasto, sumar o convertir monedas y decidir un umbral, rompiendo cada una de [las cuatro reglas](#las-cuatro-reglas) de arriba. Así que tu app (normalmente respaldada por el motor de presupuestos del servidor) decide el veredicto y solo pasa ese veredicto; la oficina lo dibuja, con una alternativa de texto accesible, y nada más.
+Un presupuesto es una comparación de gasto contra un límite. Si la oficina hiciera esa comparación tendría que guardar un límite, recibir una cifra de gasto, sumar o convertir monedas y decidir un umbral, rompiendo cada una de [las cuatro reglas](#las-cuatro-reglas) de arriba. Así que tu app (normalmente respaldada por el motor de presupuestos del servidor) decide el veredicto y solo pasa ese veredicto; la oficina lo dibuja, con una alternativa de texto accesible, y nada más. Los cuatro estados de abajo son exactamente el vocabulario del servidor: la librería nunca evalúa un presupuesto por sí misma, solo recibe un `BudgetState` ya calculado a través de esta prop, listo para dibujar (ver [docs/budgets.md](budgets.md) para el motor completo que lo produce, issue #85).
 
 ```tsx
 import { useMemo } from 'react';

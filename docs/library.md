@@ -2,7 +2,7 @@
 
 `@warlockcode/agent-viewer` puts the Agent Viewer office inside your own React app. The office is a Canvas2D scene drawn only from the events you pass: the agents your runtime registers, their statuses, the tools they use, the messages they send and the meetings they hold.
 
-This guide covers version **0.5.0**. Leer en español: [library.es.md](library.es.md).
+This guide covers version **0.6.0**. Leer en español: [library.es.md](library.es.md).
 
 ## Contents
 
@@ -41,7 +41,7 @@ The runtime dependencies are `lucide-react` (icons), `zod` (strict event validat
 Publication on npm is coming soon. Until then, install the package from the GitHub release asset:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.5.0/warlockcode-agent-viewer-0.5.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.6.0/warlockcode-agent-viewer-0.6.0.tgz
 ```
 
 The package name is `@warlockcode/agent-viewer` in both cases, so your imports will not change when you switch to the npm registry.
@@ -221,7 +221,7 @@ The agent of an event is `agentId`, then `payload.agentId`, then `payload.id` fo
 
 More details:
 
-- **Budget alerts are never evaluated here.** `budget.alert` (issue #86) is a server-emitted event: a budget's own evaluation engine decides when spend crosses a warning or an exceeded threshold, never the office. The library ignores every `budget.alert` it receives unless the host passes `trackUsage: true` to `applyExternalEvent`, exactly like the embedded `<AgentOffice>` (always `trackUsage: false`): a dropped `budget.alert` is not applied to any agent, task or meeting and never added to `events`. A host that does pass `trackUsage: true` (typically a server-backed portal, not the embedded office) keeps the raw event in its own history, but the library still renders none of its `summary` or `payload`: there is no desk marker or alert list for it here, only the [budget state](#budget-state) your app decides and passes in explicitly.
+- **Budget alerts are never evaluated here.** `budget.alert` (issue #86) is a server-emitted event: a budget's own evaluation engine decides when spend crosses a warning or an exceeded threshold, never the office. The library ignores every `budget.alert` it receives unless the host passes `trackUsage: true` to `applyExternalEvent`, exactly like the embedded `<AgentOffice>` (always `trackUsage: false`): a dropped `budget.alert` is not applied to any agent, task or meeting and never added to `events`. A host that does pass `trackUsage: true` (typically a server-backed portal, not the embedded office) keeps the raw event in its own history, but the library still renders none of its `summary` or `payload`: there is no desk marker or alert list for it here, only the [budget state](#budget-state) your app decides and passes in explicitly. The outbound webhook delivery of this same event is documented separately: [docs/webhooks.md](webhooks.md).
 
 - **Statuses.** `OFFLINE`, `IDLE`, `AVAILABLE`, `THINKING`, `READING`, `RESEARCHING`, `CODING`, `WRITING`, `TESTING`, `USING_TOOL`, `WAITING`, `WAITING_APPROVAL`, `BLOCKED`, `DELEGATING`, `PHONE_CALL`, `WALKING`, `IN_MEETING`, `COFFEE_BREAK`, `CHATTING`, `REVIEWING`, `DELIVERING`, `DONE`, `ERROR`.
 - **Agents the office does not know yet.** An event for an unknown agent adds it with a default profile (its id as name). An explicit `agentId` always names an agent, whatever the `source`. An event with a `runtime:` source and no `agentId` is about the runtime itself and adds no agent. Registering agents first (with `agent.registered` or the `agents` prop) gives them their real name, role title and workspace.

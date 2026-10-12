@@ -625,23 +625,12 @@ This should be the provider's own request or response id, the same one that appe
 
 ## 🔒 6. Webhook Security (HMAC-SHA256)
 
-When `AGENT_VIEWER_WEBHOOK_SECRET` is configured in `.env`, incoming webhooks must include HMAC signatures to prevent spoofing and replay attacks.
-
-Headers:
-- `X-Agent-Viewer-Signature`: Hex-encoded HMAC-SHA256 of `${timestamp}.${rawBody}`.
-- `X-Agent-Viewer-Timestamp`: Millisecond timestamp of request generation.
-
-```ts
-import crypto from 'node:crypto';
-
-const timestamp = Date.now().toString();
-const signature = crypto
-  .createHmac('sha256', process.env.AGENT_VIEWER_WEBHOOK_SECRET!)
-  .update(`${timestamp}.${rawBody}`)
-  .digest('hex');
-```
-
-The server rejects requests if `|now - timestamp| > 300_000` (5 minutes) or if signature verification fails.
+When `AGENT_VIEWER_WEBHOOK_SECRET` is configured, `POST /api/v1/webhooks/generic` requires
+`X-Agent-Viewer-Signature` (hex HMAC-SHA256 of `${timestamp}.${rawBody}`) and `X-Agent-Viewer-Timestamp`
+(milliseconds, not seconds), within a 5 minute window of the server clock. The same scheme, with a separate
+secret, signs the outbound `budget.alert` delivery (issue #86). Full reference, including every response status
+and `error` value, the in-memory replay cache and its limits, the exact check order, the raw-bytes requirement,
+and sender/receiver code in Node and Python for both directions: **[docs/webhooks.md](webhooks.md)**.
 
 ---
 
@@ -891,7 +880,14 @@ The list is exported as `LLM_ERROR_KINDS` (with the `isLlmErrorKind` guard) from
 - `cachedTokens: 0` and `reasoningTokens: 0` in events stored by 0.2.x may mean "not reported": the 0.2.x validator wrote `0` when the field was missing. Stored rows are not rewritten.
 - Mixed versions: a 0.3.0 SDK needs a 0.3.0 server. A 0.2.x server rejects `llm.failed` with HTTP 400 and silently drops `cacheReadTokens` and `cacheWriteTokens`.
 - The loose normalizer used by the embedded library and the generic webhook no longer writes `0` for a missing `inputTokens` or `outputTokens`. A webhook `usage` object without them is stored as an `llm.usage` event without those keys, which means unknown.
-- `costSource: "estimated"` is produced by the server, not sent by a client: it comes from resolving a ledger row against the versioned pricing table (issue #83, [docs/pricing.md](pricing.md)), which records exactly which `pricingVersion` produced the number. That resolution step itself is issue #84, not yet implemented; this item only ships the table and its admin API.
+- The event's own `costSource` field (`provider-reported` | `estimated` | `unknown`) is always a value the caller
+  sent, or `unknown` by default: the server never writes `estimated` onto this field itself. The server's own
+  ingestion-time price estimate (issue #84, built on the versioned pricing table of issue #83,
+  [docs/pricing.md](pricing.md)) is a **separate** fact, never read from or written onto `cost`/`costSource`: it
+  is exposed instead as `estimatedCost`/`estimatedCostSource`/`pricingVersion`/`estimateStatus` on
+  `GET /api/v1/usage/calls`, the rollup and the export (issue #295). A caller's own `costSource: "estimated"`
+  (for example Claude Code's own on-machine `cost_usd`) and the server's `estimatedCost` can both be present on
+  the same row and are never merged into one figure.
 
 ### Usage aggregates (`GET /api/v1/usage`)
 

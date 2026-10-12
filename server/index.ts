@@ -59,6 +59,13 @@ import {
 import { mapOtlpMetricsRequest, looksLikeOtlpMetricsRequest, countMetricDataPoints } from './otlp/metrics';
 import { renderExposition, buildInProcessFamilies, METRICS_CONTENT_TYPE } from './metrics';
 import {
+  parseOtlpMetricsPushConfig,
+  startOtlpMetricsPush,
+  buildOtlpPushFamilies,
+  type OtlpMetricsPushConfig,
+  type OtlpMetricsPushWorkerHandle,
+} from './otlpMetricsPush';
+import {
   decodeExportLogsServiceRequest,
   decodeExportMetricsServiceRequest,
   encodeExportLogsServiceResponse,
@@ -172,6 +179,7 @@ let store: EventStore;
 let sseReplayMax: number;
 let retentionConfig: RetentionConfig;
 let alertWebhookConfig: AlertWebhookConfig | null;
+let otlpMetricsPushConfig: OtlpMetricsPushConfig | null;
 try {
   store = createEventStore();
   sseReplayMax = parseSseReplayMax(process.env.AGENT_VIEWER_SSE_REPLAY_MAX);
@@ -182,6 +190,10 @@ try {
   // (no `AGENT_VIEWER_ALERT_WEBHOOK_URL`); an invalid URL, a refused plain `http://` or an out-of-range numeric
   // value stops the server here, with a message that never echoes the URL.
   alertWebhookConfig = parseAlertWebhookConfig(process.env);
+  // Issue #103 (sub-issue #349): the optional OTLP metrics push. Unlike every config above, a bad endpoint here
+  // never fails startup (see `parseOtlpMetricsPushConfig`'s own doc comment): `onInvalidEndpoint` just logs the
+  // "startup error line" issue #103 section 4 calls for, and the push stays off (`null`).
+  otlpMetricsPushConfig = parseOtlpMetricsPushConfig(process.env, (message) => console.error(message));
 } catch (error) {
   if (!isDirectRun) throw error;
   const message = error instanceof Error ? error.message : String(error);
@@ -227,6 +239,11 @@ const budgetAlertsDeps: BudgetAlertsHttpDeps = {
 // stop it without the whole live-transitions wiring having to live above `shutdown()`'s own definition.
 let budgetRolloverWatcher: BudgetRolloverWatcherHandle | null = null;
 
+// Issue #103 (sub-issue #349): same forward-declaration shape as `budgetRolloverWatcher` right above. Started
+// further below, once `SERVER_VERSION` and `clients` exist (the worker reuses the exact same in-process family
+// builder the `/metrics` route itself calls), so `shutdown()` can stop it regardless.
+let otlpMetricsPushWorker: OtlpMetricsPushWorkerHandle | null = null;
+
 if (retentionConfig.ledgerDays !== null) {
   console.log(usageRetentionWarning(retentionConfig.ledgerDays));
 }
@@ -258,6 +275,7 @@ export async function shutdown(): Promise<void> {
   budgetRolloverWatcher?.stop();
   await retentionJob.stop();
   await alertDeliveryWorker?.stop();
+  await otlpMetricsPushWorker?.stop();
   await store.close();
 }
 
@@ -967,14 +985,15 @@ function writeMetricsResponse(res: express.Response, body: string): void {
 }
 
 app.get('/metrics', (_req, res) => {
-  const body = renderExposition(
-    buildInProcessFamilies({
-      version: SERVER_VERSION,
-      storage: store.readiness().storage,
-      sseClients: clients.size,
-    })
-  );
-  writeMetricsResponse(res, body);
+  const families = buildInProcessFamilies({
+    version: SERVER_VERSION,
+    storage: store.readiness().storage,
+    sseClients: clients.size,
+  });
+  // Issue #103 (sub-issue #349): the push's own outcome counters are exposed here only when the push is actually
+  // on, same "only present when enabled" rule the catalog states for both families.
+  if (otlpMetricsPushWorker) families.push(...buildOtlpPushFamilies(otlpMetricsPushWorker.getStats()));
+  writeMetricsResponse(res, renderExposition(families));
 });
 
 // HEAD must answer with the same headers as GET and no body (issue #103's "GET (and HEAD)" requirement).
@@ -1153,6 +1172,27 @@ app.use(
 // Health & Ready
 // -------------------------------------------------------------
 const SERVER_VERSION: string = readPackageVersion();
+
+// Issue #103 (sub-issue #349): started here, once `SERVER_VERSION` exists, independent of `AGENT_VIEWER_METRICS`
+// (the push does not need `/metrics` itself enabled). `collectFamilies` calls the exact same
+// `buildInProcessFamilies(...)` the `/metrics` route above calls, so the two surfaces can never disagree; once
+// issue #348 adds ledger-derived families, both this call and the route above should be updated together to
+// include them.
+if (otlpMetricsPushConfig) {
+  console.log(`[agent-viewer] OTLP metrics push is enabled (interval ${otlpMetricsPushConfig.intervalMs}ms)`);
+}
+otlpMetricsPushWorker = otlpMetricsPushConfig
+  ? startOtlpMetricsPush({
+      config: otlpMetricsPushConfig,
+      serviceVersion: SERVER_VERSION,
+      collectFamilies: () =>
+        buildInProcessFamilies({
+          version: SERVER_VERSION,
+          storage: store.readiness().storage,
+          sseClients: clients.size,
+        }),
+    })
+  : null;
 
 app.get('/health', (_req, res) => {
   res.json({

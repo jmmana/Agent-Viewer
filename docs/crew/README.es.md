@@ -102,7 +102,8 @@ cambie lo que realmente hace. El issue
 [#127](https://github.com/jmmana/Agent-Viewer/issues/127) entrega un editor
 de personalización funcional (categorías de cabello/piel/prenda/calzado/
 accesorio, guardado por agente, vista previa de 4 cámaras) con pruebas
-completas de ida y vuelta.
+completas de ida y vuelta. Se abre desde el panel **Personalizar apariencia**
+de cada agente, debajo de su nombre en el listado de la sala.
 
 **Lo que honestamente no incluye todavía**: el editor opera sobre un catálogo
 de entradas explícitas `placeholder`, no sobre arte ilustrado final. El arte

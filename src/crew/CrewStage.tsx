@@ -7,6 +7,7 @@ import { CrewRoomSelector } from './CrewRoomSelector';
 import { renderCrewRoom } from './renderCrewRoom';
 import { projectCrewPresence } from './crewPresence';
 import { useCrewAgentWalk } from './useCrewAgentWalk';
+import { CrewAgentAppearancePanel } from './CrewAgentAppearancePanel';
 import { crewAgentsInRoom } from './crewEvents';
 import { useCrewSprites } from './useCrewSprite';
 import { crewSpriteView } from './crewSprites';
@@ -608,6 +609,7 @@ export function CrewStage({ locale = 'es', agents = EMPTY_CREW_AGENTS, tasks = [
         const alertRecord = alertTimeline.active[agent.id];
         const alertLine = alertRecord ? (isEs ? alertRecord.instance.textoEs : alertRecord.instance.textoEn) : null;
         return <span key={agent.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <CrewAgentAppearancePanel agentId={agent.id} functionalRole={agent.role} name={agent.name} isEs={isEs} idPrefix={idPrefix} />
           <button type="button" disabled={!marker}
             aria-label={isEs ? `Enfocar a ${agent.name}` : `Focus ${agent.name}`}
             title={safeStatusText || undefined}

@@ -461,6 +461,10 @@ Every value must be a non-empty string; an unknown parameter, an array where a s
 - `POST /v1/metrics`: OTLP/HTTP metrics receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Stores `claude_code.token.usage`/`claude_code.cost.usage` as independent evidence, never as canonical events: never summed into the snapshot, never broadcast over SSE, never part of `GET /api/v1/events`. See [docs/otlp.md](otlp.md#otlp-metrics-post-v1metrics).
 - `POST /v1/traces`: OTLP/HTTP GenAI traces receiver (`http/json` and `http/protobuf`), outside `/api/v1`. Converts `gen_ai.*` spans (any OpenTelemetry GenAI instrumentation, not Claude Code specific) into `llm.usage`/`llm.failed`/`tool.*`; spans are never stored. See [docs/otlp.md](otlp.md#otlp-traces-post-v1traces).
 
+### Named API keys and identity (issue #107)
+- `AGENT_VIEWER_API_TOKEN` is the bootstrap credential; `POST /api/v1/keys` (bootstrap only) creates additional named, independently revocable keys (`avk_<id>.<secret>`, shown once). `GET /api/v1/keys`/`/:id` list or inspect them, `POST /api/v1/keys/:id/revoke` revokes one. `GET /api/v1/whoami` (any valid credential) reports `{ kind: 'key' | 'bootstrap' | 'webhook' | 'anonymous', id, name? }`. Every endpoint requires `AGENT_VIEWER_STORAGE=sqlite`; `501 keys_require_sqlite` otherwise. Full reference, including the auth resolution order and the `submitter_id`/`submittedBy` attribution it feeds: [docs/api-keys.md](api-keys.md).
+- Both SDKs expose `whoami()` (TypeScript: `viewer.whoami()`; Python: `viewer.whoami()`), returning the same shape; a revoked or expired key surfaces as `error.code === 'key_revoked' | 'key_expired'` on the thrown error, never retried.
+
 ### Agents
 - `POST /api/v1/agents`: Register or upsert an agent profile.
 - `PATCH /api/v1/agents/:agentId`: Update an agent's profile or status using descriptive fields only.

@@ -76,6 +76,34 @@ npx @warlockcode/agent-viewer send --agent demo --status coding --message "Writi
 
 The pricing table (see `docs/pricing.md`) lives next to it: `pricing.json` and `pricing-history.jsonl` under the same `AGENT_VIEWER_HOME` folder by default, so `npx agent-viewer` never writes them into the current directory. Override either path with `AGENT_VIEWER_PRICING_FILE` / `AGENT_VIEWER_PRICING_HISTORY_FILE`.
 
+## Named API keys (issue #107)
+
+```bash
+agent-viewer keys create ci-pipeline --expires-in 30d
+agent-viewer keys list
+agent-viewer keys revoke key_3f9a1c7e02ab
+agent-viewer keys whoami
+```
+
+Requires a viewer started with `AGENT_VIEWER_STORAGE=sqlite` (named keys must survive a restart to be
+auditable); against a memory-mode viewer every subcommand fails with the server's `keys_require_sqlite` message.
+`--url`/`--token` resolve the same way as `send`: flags, then `AGENT_VIEWER_URL`/`AGENT_VIEWER_API_TOKEN`, then
+the session file. `--token` here is the **bootstrap** credential (`AGENT_VIEWER_API_TOKEN`), the only one that
+may manage keys.
+
+| Option | What it does |
+|---|---|
+| `create <name> [--expires-in <n>m\|<n>h\|<n>d]` | Creates a key. Prints the new token once to stdout (a warning that it cannot be shown again goes to stderr); it is never written to the session file and never accepted as a command-line argument, so it never shows up in the process list. |
+| `list` | A table of every key: name, id, status, last used, event count. |
+| `revoke <id>` | Revokes a key. Prints its new status; a second call on an already-revoked key succeeds and reports the same status. |
+| `whoami` | The identity the resolved credential authenticates as. |
+| `--json` | Any subcommand: the raw API response instead of the human-readable table/line. |
+
+Docker: `docker exec <container> agent-viewer keys create ...` works against the in-container server when the
+image ships the CLI; otherwise use the equivalent `curl` call (see `docs/api-keys.md`). Full reference, the
+authentication resolution order, `submitter_id` attribution and the key management HTTP API:
+[docs/api-keys.md](api-keys.md).
+
 ## Claude Code
 
 ```bash

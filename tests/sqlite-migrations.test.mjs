@@ -162,9 +162,11 @@ for (const fixtureName of fixtureNames) {
       // list() now carries receivedAt too (issue #65), equal to the row's own created_at.
       const listed = await store.list({ limit: 100 });
       assert.deepEqual(
-        listed.map(({ receivedAt, ...rest }) => rest),
+        listed.map(({ receivedAt, submittedBy, ...rest }) => rest),
         expectedEvents.slice().reverse()
       );
+      // Issue #107: every row from before attribution existed reads back `submittedBy: null`, never back-filled.
+      assert.ok(listed.every((event) => event.submittedBy === null));
       assert.deepEqual(
         listed.map((event) => event.receivedAt),
         listed.map((event) => createdAtById.get(event.id))

@@ -658,6 +658,38 @@ class TestPythonSDK(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=5)
 
+    def test_whoami_returns_the_identity(self):
+        """``whoami()`` (issue #107) calls ``GET /api/v1/whoami`` and returns the body unmodified."""
+        payload = {"kind": "key", "id": "key_3f9a1c7e02ab", "name": "ci-pipeline"}
+        httpd, thread, base_url = _run_scripted_server([(200, payload)])
+        try:
+            viewer = AgentViewer(url=base_url, token="avk_3f9a1c7e02ab.secret", max_retries=1, timeout=5.0)
+            result = viewer.whoami()
+            self.assertEqual(result, payload)
+            request = _ScriptedGetHandler.requests[-1]
+            self.assertEqual(urllib.parse.urlparse(request["path"]).path, "/api/v1/whoami")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
+    def test_whoami_on_a_revoked_key_raises_immediately_with_the_error_code(self):
+        """A 401 with ``error: "key_revoked"`` fails on the first attempt (no retry) and the code surfaces on
+        the raised ``AgentViewerError`` (issue #107)."""
+        payload = {"error": "key_revoked", "message": "This API key is revoked."}
+        httpd, thread, base_url = _run_scripted_server([(401, payload)])
+        try:
+            viewer = AgentViewer(url=base_url, token="avk_3f9a1c7e02ab.secret", max_retries=3, timeout=5.0)
+            with self.assertRaises(AgentViewerError) as ctx:
+                viewer.whoami()
+            self.assertEqual(ctx.exception.status_code, 401)
+            self.assertEqual(ctx.exception.code, "key_revoked")
+            self.assertEqual(len(_ScriptedGetHandler.requests), 1)  # never retried
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+
     def test_iter_calls_raises_if_the_server_returns_the_same_cursor_twice(self):
         page = {
             "schemaVersion": "1.0", "asOf": 1, "storage": "memory", "data": [{"seq": 1}],

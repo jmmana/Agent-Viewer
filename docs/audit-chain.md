@@ -161,18 +161,22 @@ like they were always part of the chain.
 
 ## Submitter id
 
-Until named ingestion keys (#107) land, `submitter_id` is derived from *how* the request authenticated, never
-from the token or secret itself:
+`submitter_id` is derived from *how* the request authenticated, never from the token or secret itself. Since
+issue #107 (named API keys), it names a specific credential, not just "the shared token":
 
 | Request | `submitter_id` |
 |---|---|
-| Bearer token matched the configured `AGENT_VIEWER_API_TOKEN` | `shared-token` |
-| No token configured (open API) | `anonymous` |
-| Generic webhook with `AGENT_VIEWER_WEBHOOK_SECRET` set and the HMAC signature verified | `webhook-hmac` |
-| Generic webhook with no secret configured (goes through the normal token check) | `shared-token` or `anonymous`, as above |
+| A valid, active named API key (`avk_...`) | the key's id, `key_<12 hex>` |
+| Bearer token matched the configured `AGENT_VIEWER_API_TOKEN` (the bootstrap credential) | `bootstrap` |
+| No token configured (open API) and no key matched | `anonymous` |
+| Generic webhook with `AGENT_VIEWER_WEBHOOK_SECRET` set and the HMAC signature verified, no (or no valid) key also sent | `webhook` |
+| Generic webhook with `AGENT_VIEWER_WEBHOOK_SECRET` set, HMAC verified, and a valid named key also sent as Bearer | the key's id |
+| Generic webhook with no secret configured (goes through the normal auth check) | same resolution as any other route: key id, `bootstrap` or `anonymous` |
 | A server-generated event (`POST /api/v1/agents`, `PATCH /api/v1/agents/:id`, `POST /api/v1/runtimes`) | the submitter of the request that triggered it |
 | `store.append`/`appendBatch` called with no context at all (tests, internal callers) | `unattributed` |
 | A `budget.alert` event the server emits itself | `system` |
+
+See [api-keys.md](api-keys.md) for key management, revocation and the full identity model.
 
 A duplicate id resent under the same request never advances the chain or gets a new hash: `classifyStored`
 returns before `insertEvent` is ever called for it. A *request-id* duplicate (issue #48: a different event id

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Named API keys and submitter identity (issue #107, v0.8.0 milestone)**: `AGENT_VIEWER_API_TOKEN` is now the "bootstrap" credential; `POST /api/v1/keys` creates additional named, independently revocable keys (`avk_<12 hex id>.<43 char secret>`, stored only as a SHA-256 hash, the full token shown exactly once), `GET /api/v1/keys`/`/:id` list or inspect them (`status`, `eventCount`, `firstEventAt`, `lastEventAt`), `POST /api/v1/keys/:id/revoke` revokes one (idempotent, never deletes the row), and `GET /api/v1/whoami` reports the identity of the current credential. Every physically stored event (and its usage-ledger row) now records `submitter_id` with a real identity (a key's id, `bootstrap`, `webhook`, or `anonymous`), reusing the column issue #105's hash chain already added and hashes, so rewriting an attribution is still detected. `GET /api/v1/events` exposes it as `submittedBy` (`null` for a pre-upgrade row, never back-filled), accepts `?submittedBy=` as a filter, and hides new internal `audit.key.created`/`audit.key.revoked` trail events by default (`includeAudit=true` or an explicit `type` filter shows them); these two types are rejected from `POST /api/v1/events`/`/events/batch` like any other unrecognized type. New CLI `agent-viewer keys create|list|revoke|whoami` (requires `AGENT_VIEWER_STORAGE=sqlite`); new SDK `whoami()` in both the TypeScript (`packages/sdk`) and Python SDKs, surfacing `key_revoked`/`key_expired` error codes without retrying them. Named keys have the same full read/write access as the bootstrap token in this item; role-based scopes and a read-only auditor role are issue #108. New `docs/api-keys.md`. Deferred, documented as known gaps: closing an open SSE connection when its key is revoked or expires, `submittedBy` on SSE reconnect-replay frames, and `submittedBy` as a rollup/export dimension.
+
 ## [0.7.0] - 2026-10-12
 
 "Captura automática e interoperabilidad" (automatic capture and interoperability): an OTLP/HTTP GenAI traces

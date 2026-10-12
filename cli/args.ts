@@ -58,11 +58,35 @@ export interface OtelHeadersCommand {
   url: string;
 }
 
+/** Issue #107: `agent-viewer keys create|list|revoke|whoami`, against a running viewer started with
+ * `AGENT_VIEWER_STORAGE=sqlite` (key management requires SQLite). Reuses `resolveConnection`, so the bootstrap
+ * token comes from `--token`, `AGENT_VIEWER_API_TOKEN` or the session file, the same way `send` resolves it. */
+export interface KeysCommand {
+  command: 'keys';
+  action: 'create' | 'list' | 'revoke' | 'whoami';
+  /** `create` only: the new key's name. */
+  name?: string;
+  /** `revoke` only: the key id to revoke. */
+  id?: string;
+  /** `create` only: raw `<n>m|<n>h|<n>d` (minutes/hours/days), converted to `expiresIn` seconds for the API. */
+  expiresIn?: string;
+  json: boolean;
+  url?: string;
+  token?: string;
+}
+
 export interface HelpCommand {
   command: 'help' | 'version';
 }
 
-export type CliCommand = StartCommand | SendCommand | ClaudeHookCommand | InstallCommand | OtelHeadersCommand | HelpCommand;
+export type CliCommand =
+  | StartCommand
+  | SendCommand
+  | ClaudeHookCommand
+  | InstallCommand
+  | OtelHeadersCommand
+  | KeysCommand
+  | HelpCommand;
 
 export const USAGE = `Usage:
   agent-viewer [options]                 Start the server and open the office in live mode
@@ -74,6 +98,14 @@ export const USAGE = `Usage:
   agent-viewer otel-headers --url <office-url>
                                           Print the bearer header for that office as JSON (used by Claude
                                           Code's otelHeadersHelper, not meant to be run by people)
+  agent-viewer keys create <name> [--expires-in <n>m|<n>h|<n>d] [--json] [--url <url>] [--token <token>]
+  agent-viewer keys list [--json] [--url <url>] [--token <token>]
+  agent-viewer keys revoke <id> [--json] [--url <url>] [--token <token>]
+  agent-viewer keys whoami [--json] [--url <url>] [--token <token>]
+                                          Named API keys (issue #107); requires a viewer started with
+                                          AGENT_VIEWER_STORAGE=sqlite. --token is the bootstrap credential
+                                          (AGENT_VIEWER_API_TOKEN), as on send. create prints the new token
+                                          once to stdout; it is never written to the session file.
 
 Start options:
   --port <n>           Port to listen on (default: PORT, or ${DEFAULT_PORT})
@@ -223,6 +255,40 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
       token: nonEmpty('--token', values.token as string | undefined),
       telemetry: values.telemetry as boolean | undefined,
     };
+  }
+
+  if (first === 'keys') {
+    const [action, ...actionRest] = rest;
+    if (action !== 'create' && action !== 'list' && action !== 'revoke' && action !== 'whoami') {
+      throw new CliUsageError('keys needs an action: create, list, revoke or whoami (for example: agent-viewer keys list)');
+    }
+    const { values, positionals } = parse(actionRest, {
+      'expires-in': { type: 'string' },
+      json: { type: 'boolean', default: false },
+      url: { type: 'string' },
+      token: { type: 'string' },
+    });
+    const common: Omit<KeysCommand, 'name' | 'id' | 'expiresIn'> = {
+      command: 'keys',
+      action,
+      json: Boolean(values.json),
+      url: parseUrl(values.url as string | undefined),
+      token: nonEmpty('--token', values.token as string | undefined),
+    };
+    if (action === 'create') {
+      const [name, ...extra] = positionals;
+      rejectPositionals(extra, 'keys create');
+      if (!name) throw new CliUsageError('keys create needs a name (for example: agent-viewer keys create ci-pipeline)');
+      return { ...common, name, expiresIn: values['expires-in'] as string | undefined };
+    }
+    if (action === 'revoke') {
+      const [id, ...extra] = positionals;
+      rejectPositionals(extra, 'keys revoke');
+      if (!id) throw new CliUsageError('keys revoke needs a key id (for example: agent-viewer keys revoke key_3f9a1c7e02ab)');
+      return { ...common, id };
+    }
+    rejectPositionals(positionals, `keys ${action}`);
+    return common;
   }
 
   if (first === 'otel-headers') {

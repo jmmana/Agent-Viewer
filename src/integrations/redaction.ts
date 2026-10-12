@@ -160,6 +160,8 @@ export const BUILTIN_REDACTION_RULES: readonly RedactionRule[] = [
   { name: 'stripe_key', pattern: /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g, source: 'builtin' },
   { name: 'gitlab_token', pattern: /\bglpat-[A-Za-z0-9_-]{20,}/g, source: 'builtin' },
   { name: 'npm_token', pattern: /\bnpm_[A-Za-z0-9]{30,}/g, source: 'builtin' },
+  // Agent Viewer's own named API key tokens (issue #107): `avk_<12 hex id>.<43 char base64url secret>`.
+  { name: 'agent_viewer_api_key', pattern: /\bavk_[0-9a-f]{12}\.[A-Za-z0-9_-]{43}/g, source: 'builtin' },
   // GitHub.
   {
     name: 'github_token',

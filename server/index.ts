@@ -10,6 +10,7 @@ import {
   ValidationIssue,
   LlmUsagePayloadSchema,
 } from '../src/integrations/canonicalContract';
+import { AUDIT_EVENT_TYPES, type AuditEventType } from '../src/integrations/canonicalTypes';
 import type { AgentStatus } from '../src/types/agent';
 import { OTLP_LOGS_PATH, OTLP_METRICS_PATH, OTLP_TRACES_PATH } from '../src/integrations/otelConstants';
 import { serverEventId } from './ids';
@@ -50,6 +51,16 @@ import {
   type BudgetRolloverWatcherHandle,
 } from './budgets';
 import { buildBudgetAlert, registerBudgetAlertsRoutes, type BudgetAlertsHttpDeps } from './budgetAlerts';
+import {
+  type ApiKeyStore,
+  type ApiKeyRecord,
+  createSqliteApiKeyStore,
+  createUnsupportedApiKeyStore,
+  ApiKeyValidationError,
+  ApiKeyNameTakenError,
+  API_KEY_TOKEN_PATTERN,
+  verifyKeySecret,
+} from './apiKeys';
 import { parseAlertWebhookConfig, startAlertDeliveryWorker, type AlertWebhookConfig, type AlertDeliveryWorkerHandle } from './budgetAlertDelivery';
 import {
   parseRecomputeRequest,
@@ -279,6 +290,15 @@ const budgetRegistry: BudgetRegistry = (() => {
   const handle = store.getDatabaseHandle?.();
   return handle ? createSqliteBudgetRegistry(handle) : createMemoryBudgetRegistry();
 })();
+
+// Named API keys (issue #107): same storage-mode split as budgets. `createUnsupportedApiKeyStore()` throws
+// `KeysUnsupportedError` from every method except `touchLastUsed` (a silent no-op), which the key routes and
+// the auth middleware both map to `501 keys_require_sqlite`.
+const apiKeyStore: ApiKeyStore = (() => {
+  const handle = store.getDatabaseHandle?.();
+  return handle ? createSqliteApiKeyStore(handle) : createUnsupportedApiKeyStore();
+})();
+const apiKeysSupported = store.getDatabaseHandle?.() !== undefined;
 
 const budgetDeps: BudgetHttpDeps = {
   getRegistry: () => budgetRegistry,
@@ -519,34 +539,87 @@ const otlpStats = {
 };
 
 /**
- * The Bearer-token decision `/api/v1` and `/v1/logs` both use, factored out so the two stay identical (issue
- * #59). Since issue #71 this is Bearer-only: a `token` or `api_key` query parameter never authenticates
- * anything, on any route, so a leaked URL cannot grant access (that case is rejected even earlier, by
- * `rejectQueryToken`, with its own `query_token_not_supported` response). Reads `getApiToken` and `safeEqual`,
- * both defined later in this module as hoisted `function` declarations.
+ * Issue #107: who a request authenticated as. `id` is the value recorded as `events.submitter_id` (issue #105
+ * reused, not a second column): `'key_...'` for a named key, `'bootstrap'` for the single `AGENT_VIEWER_API_TOKEN`
+ * (the pre-#107 "shared token"), `'webhook'` for an HMAC-verified webhook with no key, `'anonymous'` when the
+ * API is open and no key matched. Never derived from token material itself.
  */
-function isRequestAuthorized(req: express.Request): boolean {
-  const expectedToken = getApiToken();
-  if (!expectedToken) return true;
+export type Submitter =
+  | { kind: 'key'; id: string; name: string }
+  | { kind: 'bootstrap'; id: 'bootstrap' }
+  | { kind: 'webhook'; id: 'webhook' }
+  | { kind: 'anonymous'; id: 'anonymous' };
 
-  const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
-  return bearerMatch ? safeEqual(bearerMatch[1], expectedToken) : false;
-}
+type AuthResolution =
+  | { ok: true; submitter: Submitter }
+  | { ok: false; reason: 'unauthorized' | 'key_revoked' | 'key_expired' };
 
 /**
- * Issue #105: the stable, non-secret id recorded as `submitter_id` on every chained row, derived from how the
- * request authenticated, never from token material itself. `'shared-token'` when the one configured
- * `AGENT_VIEWER_API_TOKEN` matched, `'anonymous'` when no token is configured (the open-API case) or when
- * neither applies (unreachable on a route protected by `requireApiToken`, kept as a safe default rather than
- * throwing). The webhook route never calls this for an HMAC-verified request: it uses the literal
- * `'webhook-hmac'` instead, only after its own signature check passes.
+ * The Bearer-token decision `/api/v1` and `/v1/logs` both use, factored out so the two stay identical (issue
+ * #59) and extended by issue #107 to resolve a full identity, not just a yes/no. Since issue #71 this is
+ * Bearer-only: a `token` or `api_key` query parameter never authenticates anything, including a named key (that
+ * case is rejected even earlier, by `rejectQueryToken`, with its own `query_token_not_supported` response, and a
+ * key-shaped value reaching here through some other channel is still never accepted outside the header).
+ *
+ * Resolution order for the presented Bearer value: (1) if it is shaped like `avk_<id>.<secret>`, look up the id
+ * and compare the secret (constant-time, always running one comparison even for an unknown id, see
+ * `verifyKeySecret`); a match on a revoked or expired key returns that specific reason instead of falling
+ * through, so a legitimate holder can diagnose it, while an unknown id or a wrong secret falls through to (2);
+ * (2) compare the raw presented value against the configured bootstrap token (`AGENT_VIEWER_API_TOKEN`), so a
+ * bootstrap token that happens to be `avk_`-shaped still authenticates; (3) with no token configured at all
+ * (open API) and no key matched, `anonymous`. Reads `getApiToken` and `safeEqual`, both defined later in this
+ * module as hoisted `function` declarations.
  */
-function submitterIdForRequest(req: express.Request): string {
+function resolveAuth(req: express.Request): AuthResolution {
   const expectedToken = getApiToken();
-  if (!expectedToken) return 'anonymous';
   const bearerMatch = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
-  if (bearerMatch && safeEqual(bearerMatch[1], expectedToken)) return 'shared-token';
-  return 'anonymous';
+  const presented = bearerMatch ? bearerMatch[1] : null;
+
+  if (presented) {
+    const keyMatch = API_KEY_TOKEN_PATTERN.exec(presented);
+    if (keyMatch) {
+      const id = `key_${keyMatch[1]}`;
+      const secret = keyMatch[2];
+      let found: ReturnType<ApiKeyStore['findForAuth']> = null;
+      try {
+        found = apiKeyStore.findForAuth(id);
+      } catch {
+        found = null; // KeysUnsupportedError in memory mode: named keys simply never match.
+      }
+      if (verifyKeySecret(secret, found ? found.secretHash : null)) {
+        // The hash matched, so `found` is non-null here; narrow for TypeScript.
+        if (found) {
+          if (found.status === 'revoked') return { ok: false, reason: 'key_revoked' };
+          if (found.status === 'expired') return { ok: false, reason: 'key_expired' };
+          apiKeyStore.touchLastUsed(id);
+          return { ok: true, submitter: { kind: 'key', id, name: found.name } };
+        }
+      }
+    }
+    if (expectedToken && safeEqual(presented, expectedToken)) {
+      return { ok: true, submitter: { kind: 'bootstrap', id: 'bootstrap' } };
+    }
+  }
+
+  if (!expectedToken) return { ok: true, submitter: { kind: 'anonymous', id: 'anonymous' } };
+  return { ok: false, reason: 'unauthorized' };
+}
+
+/** Back-compat boolean view of `resolveAuth`, for the one caller (`requireApiToken`) that only needs yes/no
+ * before deciding how to report a `no`. */
+function isRequestAuthorized(req: express.Request): boolean {
+  return resolveAuth(req).ok;
+}
+
+/** The id to record as `submitter_id` (issue #105, reused by #107) for the current request. Reads the
+ * `Submitter` `requireApiToken` already resolved and stored on `res.locals.submitter`; re-resolves from `req`
+ * only as a defensive fallback for a call site that somehow bypassed that middleware (every real route here
+ * does not). */
+function submitterIdForRequest(req: express.Request, res: express.Response): string {
+  const submitter = res.locals.submitter as Submitter | undefined;
+  if (submitter) return submitter.id;
+  const resolution = resolveAuth(req);
+  return resolution.ok ? resolution.submitter.id : 'anonymous';
 }
 
 /**
@@ -571,7 +644,9 @@ function requireApiToken(options: {
       next();
       return;
     }
-    if (isRequestAuthorized(req)) {
+    const resolution = resolveAuth(req);
+    if (resolution.ok) {
+      res.locals.submitter = resolution.submitter;
       next();
       return;
     }
@@ -586,6 +661,13 @@ function requireApiToken(options: {
       return;
     }
     markRejection(res, 'unauthorized');
+    // Issue #107: a revoked or expired *known* key says so, so a legitimate holder can diagnose it; every other
+    // failure (unknown id, wrong secret, malformed value, no credential at all) stays the generic, uninformative
+    // `onUnauthorized` body, so a probe learns nothing.
+    if (resolution.reason === 'key_revoked' || resolution.reason === 'key_expired') {
+      res.status(401).json({ error: resolution.reason, message: `This API key is ${resolution.reason === 'key_revoked' ? 'revoked' : 'expired'}.` });
+      return;
+    }
     options.onUnauthorized(res);
   };
 }
@@ -769,8 +851,9 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
   });
 
   let appendResult: AppendBatchResult;
+  const otlpSubmitterId = submitterIdForRequest(req, res);
   try {
-    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp', submitterId: submitterIdForRequest(req) });
+    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp', submitterId: otlpSubmitterId });
     recordAppendResults(appendResult.results, mapped.events);
   } catch (error) {
     otlpStats.requestsRejected += 1;
@@ -779,7 +862,7 @@ app.post(OTLP_LOGS_PATH, async (req, res) => {
     return;
   }
 
-  appendResult.acceptedEvents.forEach((event, index) => broadcastEvent(event, appendResult.acceptedSeqs[index] ?? null));
+  appendResult.acceptedEvents.forEach((event, index) => broadcastEvent(event, appendResult.acceptedSeqs[index] ?? null, otlpSubmitterId));
 
   // A conflict (same content-derived id already stored with different content) can only happen when two
   // otherwise-identical records resolved to different timestamps because neither had `event.timestamp` nor a
@@ -1064,8 +1147,9 @@ app.post(OTLP_TRACES_PATH, async (req, res) => {
   const mapped = mapOtlpTraces(body);
 
   let appendResult: AppendBatchResult;
+  const otlpSubmitterId = submitterIdForRequest(req, res);
   try {
-    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp', submitterId: submitterIdForRequest(req) });
+    appendResult = await store.appendBatch(mapped.events, { channel: 'otlp', submitterId: otlpSubmitterId });
     recordAppendResults(appendResult.results, mapped.events);
   } catch (error) {
     otlpTracesStats.requestsRejected += 1;
@@ -1074,7 +1158,7 @@ app.post(OTLP_TRACES_PATH, async (req, res) => {
     return;
   }
 
-  appendResult.acceptedEvents.forEach((event, index) => broadcastEvent(event, appendResult.acceptedSeqs[index] ?? null));
+  appendResult.acceptedEvents.forEach((event, index) => broadcastEvent(event, appendResult.acceptedSeqs[index] ?? null, otlpSubmitterId));
 
   otlpTracesStats.requestsAccepted += 1;
   otlpTracesStats.spansReceived += totalSpans;
@@ -1504,9 +1588,11 @@ export function onEventAccepted(listener: AcceptedEventListener): () => void {
  * Broadcasts an accepted event to SSE subscribers (without a named event, so `EventSource.onmessage` receives
  * all of them). `seq` is the event's insertion seq (issue #54), used to order the live buffer of a connection
  * still replaying a reconnect gap: `broadcastEvent` queues the frame for it instead of writing it right away, so
- * nothing broadcast during its replay is ever lost or delivered out of order.
+ * nothing broadcast during its replay is ever lost or delivered out of order. `submittedBy` (issue #107) is
+ * included in the live frame's data when known; a reconnect's replayed frames (built from the stored event
+ * through a separate path, `listBetween`) do not yet carry it, a documented gap of this item.
  */
-function broadcastEvent(event: CanonicalEvent, seq: EventSeq | null) {
+function broadcastEvent(event: CanonicalEvent, seq: EventSeq | null, submittedBy: string | null = null) {
   for (const listener of acceptedEventListeners) {
     // A failing listener must never break ingestion, whether it throws or returns a rejected promise.
     try {
@@ -1518,7 +1604,7 @@ function broadcastEvent(event: CanonicalEvent, seq: EventSeq | null) {
       // Ignored on purpose, see above.
     }
   }
-  const frame = `id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`;
+  const frame = `id: ${event.id}\ndata: ${JSON.stringify(submittedBy !== null ? { ...event, submittedBy } : event)}\n\n`;
   for (const client of clients) {
     const replay = replayBuffers.get(client);
     if (replay) {
@@ -1567,9 +1653,10 @@ function reservedBudgetAlertIssue(body: unknown): { path: 'type' | 'id'; message
  * (`POST /agents`, `PATCH /agents`, `POST /runtimes`), never a separate "server" identity.
  */
 async function appendServerEvent(event: CanonicalEvent, req: express.Request, res: express.Response): Promise<boolean> {
-  const result: AppendResult = await store.append(event, { submitterId: submitterIdForRequest(req) });
+  const submitterId = submitterIdForRequest(req, res);
+  const result: AppendResult = await store.append(event, { submitterId });
   if (result.outcome === 'accepted') {
-    broadcastEvent(event, result.seq);
+    broadcastEvent(event, result.seq, submitterId);
     return true;
   }
   console.error(
@@ -1675,7 +1762,7 @@ onBudgetTransition(async (transition) => {
   try {
     const result = await store.recordBudgetAlert(built, { attemptDelivery });
     if (result.inserted) {
-      broadcastEvent(result.event, result.seq);
+      broadcastEvent(result.event, result.seq, 'system');
       // Off the ingest request path (this whole listener already is): wakes the poll worker so a configured
       // webhook fires promptly instead of waiting out its poll interval, without ever blocking this handler's
       // own caller on the delivery attempt itself.
@@ -1733,7 +1820,8 @@ app.post('/api/v1/events', async (req, res) => {
   }
 
   const event = validation.data;
-  const result = await store.append(event, { submitterId: submitterIdForRequest(req) });
+  const submitterId = submitterIdForRequest(req, res);
+  const result = await store.append(event, { submitterId });
   recordAppendResults([result], [event]);
 
   if (result.outcome === 'conflict') {
@@ -1765,7 +1853,7 @@ app.post('/api/v1/events', async (req, res) => {
     return;
   }
 
-  broadcastEvent(event, result.seq);
+  broadcastEvent(event, result.seq, submitterId);
 
   // Issue #105: an optional receipt, SQLite mode only (chainRecords returns {} in memory mode and when the
   // chain is disabled).
@@ -1842,13 +1930,14 @@ app.post('/api/v1/events/batch', async (req, res) => {
     return;
   }
 
+  const batchSubmitterId = submitterIdForRequest(req, res);
   const { accepted, duplicates, conflicts, results, acceptedEvents, acceptedSeqs } = await store.appendBatch(validatedEvents, {
     channel: 'events-batch',
-    submitterId: submitterIdForRequest(req),
+    submitterId: batchSubmitterId,
   });
   recordAppendResults(results, validatedEvents);
 
-  acceptedEvents.forEach((event, index) => broadcastEvent(event, acceptedSeqs[index] ?? null));
+  acceptedEvents.forEach((event, index) => broadcastEvent(event, acceptedSeqs[index] ?? null, batchSubmitterId));
 
   // Issue #105: an optional receipt per accepted item, SQLite mode only, looked up by id (absent for
   // duplicates and conflicts).
@@ -1920,6 +2009,12 @@ app.get('/api/v1/events', async (req, res) => {
   const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined;
   const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
   const type = typeof req.query.type === 'string' ? req.query.type : undefined;
+  const submittedBy = typeof req.query.submittedBy === 'string' ? req.query.submittedBy : undefined;
+  // Issue #107: `audit.*` events are hidden by default, so a consumer that re-validates returned events against
+  // `CANONICAL_EVENT_TYPES` (replay, import) never meets a type it does not know. Shown with `includeAudit=true`
+  // or when `type` explicitly names one of them.
+  const includeAudit = req.query.includeAudit === 'true' || (type !== undefined && (AUDIT_EVENT_TYPES as readonly string[]).includes(type));
+  const excludeTypes = includeAudit ? undefined : AUDIT_EVENT_TYPES;
 
   // Backward paging (issue #72): an unknown or evicted cursor is a client error, unlike `afterId`, which applies
   // no filter when it cannot be resolved. A partial history must never look complete.
@@ -1929,7 +2024,7 @@ app.get('/api/v1/events', async (req, res) => {
   }
 
   // Fetch one extra row to learn whether there is a next page, without exposing it in the response.
-  const page = await store.list({ limit: limit + 1, since, afterId, beforeId, runtimeId, sessionId, agentId, type });
+  const page = await store.list({ limit: limit + 1, since, afterId, beforeId, runtimeId, sessionId, agentId, type, submittedBy, excludeTypes });
   const hasMore = page.length > limit;
   const events = hasMore ? page.slice(0, limit) : page;
   const nextBeforeId = hasMore ? (events[events.length - 1]?.id ?? null) : null;
@@ -3005,9 +3100,19 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
     verifiedSignature = expected;
   }
 
-  // Issue #105: 'webhook-hmac' only once the signature check above has actually passed (a return above this
-  // point never reaches here); otherwise this request went through the normal token middleware instead.
-  const submitterId = secret ? 'webhook-hmac' : submitterIdForRequest(req);
+  // Issue #107: this route bypasses the normal `requireApiToken` middleware when a webhook secret is configured
+  // (`webhookBypass`), so `res.locals.submitter` is never set for it in that case; HMAC (already verified above
+  // when `secret` is set) is the actual credential. An optional Bearer value is still resolved, but only for
+  // attribution: a valid, active named key names the submitter, and anything else (missing, malformed, unknown,
+  // wrong secret, the bootstrap token, revoked, expired) is the generic `'webhook'`, never surfaced as an auth
+  // failure on a request that already authenticated via its signature. With no webhook secret configured, the
+  // webhook needs a normal Bearer credential like every other route (`requireApiToken` already ran it).
+  const submitterId = secret
+    ? (() => {
+        const resolution = resolveAuth(req);
+        return resolution.ok && resolution.submitter.kind === 'key' ? resolution.submitter.id : 'webhook';
+      })()
+    : submitterIdForRequest(req, res);
 
   // Step 2: Parse and validate the webhook payload
   const parseResult = GenericWebhookPayloadSchema.safeParse(req.body ?? {});
@@ -3271,7 +3376,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
   }
 
   // Step 8: Broadcast only newly accepted events
-  acceptedEvents.forEach((evt, index) => broadcastEvent(evt, acceptedSeqs[index] ?? null));
+  acceptedEvents.forEach((evt, index) => broadcastEvent(evt, acceptedSeqs[index] ?? null, submitterId));
 
   const isDuplicate = accepted === 0 && duplicates > 0 && conflicts === 0;
   const statusCode = conflicts > 0 ? 409 : accepted > 0 ? 202 : 200;
@@ -3301,6 +3406,165 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
       results: formattedResults,
     });
   }
+});
+
+// -------------------------------------------------------------
+// Named API keys (issue #107): `/api/v1/keys*` (bootstrap-only management) and `/api/v1/whoami` (any valid
+// credential). Sits under `/api/v1` like every route above, so it already has the rate limiter, the query-token
+// rejection, the open-mode guard and the Bearer auth (which also resolves `res.locals.submitter`) registered
+// earlier in this file.
+// -------------------------------------------------------------
+
+/** Issue #107: appends an `audit.key.created`/`audit.key.revoked` event directly, bypassing
+ * `validateCanonicalEvent`/`normalizeCanonicalEvent` (these types are deliberately not in
+ * `CANONICAL_EVENT_TYPES`) and never calling `broadcastEvent`, so it is never sent over SSE and never reaches an
+ * `onEventAccepted` listener (`--record` files stay canonical V1). It still enters the stored log, and therefore
+ * the hash chain (#105), like any other event. Failures are logged, never thrown: a key change must not fail
+ * because its own audit trail entry could not be written. */
+async function appendAuditKeyEvent(type: AuditEventType, actorId: string, payload: Record<string, unknown>): Promise<void> {
+  const event = {
+    schemaVersion: '1.0' as const,
+    id: `evt_audit_${crypto.randomUUID()}`,
+    type: type as unknown as CanonicalEvent['type'],
+    timestamp: Date.now(),
+    source: 'server',
+    severity: 'normal' as const,
+    summary: type,
+    payload,
+  };
+  try {
+    await store.append(event, { submitterId: actorId });
+  } catch (error) {
+    console.error(`[agent-viewer] Failed to record ${type} audit event:`, error);
+  }
+}
+
+/** `true` and already responded `403 admin_required` when the caller is not the bootstrap submitter; `false`
+ * (nothing sent) otherwise. Key management stays bootstrap-only until scoped keys (#108) replace this rule. */
+function requireBootstrap(res: express.Response): boolean {
+  const submitter = res.locals.submitter as Submitter | undefined;
+  if (submitter?.kind === 'bootstrap') return false;
+  res.status(403).json({ error: 'admin_required', message: 'Only the bootstrap token (AGENT_VIEWER_API_TOKEN) may manage API keys.' });
+  return true;
+}
+
+/** `true` and already responded `501 keys_require_sqlite` when the store has no key registry (memory mode);
+ * `false` otherwise. Every `/api/v1/keys*` handler (not `/whoami`, which needs no registry) checks this first. */
+function requireKeysSupported(res: express.Response): boolean {
+  if (apiKeysSupported) return false;
+  res.status(501).json({
+    error: 'keys_require_sqlite',
+    message: 'Named API keys require AGENT_VIEWER_STORAGE=sqlite: set it and restart to use this endpoint.',
+  });
+  return true;
+}
+
+function serializeApiKey(record: ApiKeyRecord): Record<string, unknown> {
+  return {
+    id: record.id,
+    name: record.name,
+    prefix: record.prefix,
+    status: record.status,
+    createdAt: record.createdAt,
+    createdBy: record.createdBy,
+    expiresAt: record.expiresAt,
+    lastUsedAt: record.lastUsedAt,
+    revokedAt: record.revokedAt,
+    revokedBy: record.revokedBy,
+    eventCount: record.eventCount,
+    firstEventAt: record.firstEventAt,
+    lastEventAt: record.lastEventAt,
+  };
+}
+
+app.post('/api/v1/keys', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (requireKeysSupported(res)) return;
+  if (requireBootstrap(res)) return;
+
+  const body = (req.body ?? {}) as { name?: unknown; expiresAt?: unknown; expiresIn?: unknown };
+  if (body.expiresAt !== undefined && body.expiresIn !== undefined) {
+    res.status(400).json({ error: 'validation_failed', issues: [{ path: 'expiresAt', message: 'expiresAt and expiresIn are mutually exclusive' }] });
+    return;
+  }
+  let expiresAt: number | null = null;
+  if (typeof body.expiresAt === 'number') {
+    expiresAt = body.expiresAt;
+  } else if (body.expiresAt !== undefined) {
+    res.status(400).json({ error: 'validation_failed', issues: [{ path: 'expiresAt', message: 'must be an integer epoch-ms timestamp' }] });
+    return;
+  } else if (typeof body.expiresIn === 'number') {
+    if (!Number.isInteger(body.expiresIn) || body.expiresIn < 60 || body.expiresIn > 31_536_000) {
+      res.status(400).json({ error: 'validation_failed', issues: [{ path: 'expiresIn', message: 'must be an integer number of seconds, 60 to 31536000' }] });
+      return;
+    }
+    expiresAt = Date.now() + body.expiresIn * 1000;
+  } else if (body.expiresIn !== undefined) {
+    res.status(400).json({ error: 'validation_failed', issues: [{ path: 'expiresIn', message: 'must be an integer number of seconds' }] });
+    return;
+  }
+
+  try {
+    const created = apiKeyStore.create({ name: typeof body.name === 'string' ? body.name : '', expiresAt, createdBy: 'bootstrap' });
+    await appendAuditKeyEvent('audit.key.created', 'bootstrap', { keyId: created.id, name: created.name, prefix: created.prefix, expiresAt: created.expiresAt ?? undefined });
+    res.status(201).json(created);
+  } catch (error) {
+    if (error instanceof ApiKeyValidationError) {
+      res.status(400).json({ error: 'validation_failed', issues: [{ path: error.path, message: error.message }] });
+      return;
+    }
+    if (error instanceof ApiKeyNameTakenError) {
+      res.status(409).json({ error: 'key_name_taken', message: error.message });
+      return;
+    }
+    throw error;
+  }
+});
+
+app.get('/api/v1/keys', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (requireKeysSupported(res)) return;
+  if (requireBootstrap(res)) return;
+  res.json({ keys: apiKeyStore.list().map(serializeApiKey) });
+});
+
+app.get('/api/v1/keys/:id', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (requireKeysSupported(res)) return;
+  if (requireBootstrap(res)) return;
+  const record = apiKeyStore.get(req.params.id);
+  if (!record) {
+    res.status(404).json({ error: 'key_not_found' });
+    return;
+  }
+  res.json(serializeApiKey(record));
+});
+
+app.post('/api/v1/keys/:id/revoke', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (requireKeysSupported(res)) return;
+  if (requireBootstrap(res)) return;
+  const submitter = res.locals.submitter as Submitter;
+  const outcome = apiKeyStore.revoke(req.params.id, submitter.id);
+  if (!outcome) {
+    res.status(404).json({ error: 'key_not_found' });
+    return;
+  }
+  if (!outcome.alreadyRevoked) {
+    await appendAuditKeyEvent('audit.key.revoked', submitter.id, { keyId: outcome.record.id, name: outcome.record.name, prefix: outcome.record.prefix });
+  }
+  res.json(serializeApiKey(outcome.record));
+});
+
+app.get('/api/v1/whoami', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const submitter = res.locals.submitter as Submitter | undefined;
+  if (!submitter) {
+    // Unreachable on a route behind `requireApiToken` (every `/api/v1` route), kept as a defensive default.
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  res.json(submitter.kind === 'key' ? { kind: submitter.kind, id: submitter.id, name: submitter.name } : { kind: submitter.kind, id: submitter.id });
 });
 
 // -------------------------------------------------------------

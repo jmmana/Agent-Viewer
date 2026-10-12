@@ -1603,6 +1603,16 @@ class AgentViewer:
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    def whoami(self) -> Dict[str, Any]:
+        """Fetch the authenticated identity from ``GET /api/v1/whoami`` (issue #107).
+
+        Returns ``{"kind": "key" | "bootstrap" | "webhook" | "anonymous", "id": str, "name"?: str}``, ``name``
+        present only for ``kind == "key"``. Handy as a startup check that a configured named key is still
+        accepted: uses ``_get_with_retry``, which already raises immediately (never retries) on a 401, with
+        ``AgentViewerError.code`` set to the server's ``key_revoked``/``key_expired`` when that is why.
+        """
+        return self._get_with_retry("/api/v1/whoami")
+
     def usage_summary(self) -> Dict[str, Any]:
         """Fetch the usage aggregates from ``GET /api/v1/usage``.
 

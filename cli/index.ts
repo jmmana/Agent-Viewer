@@ -37,6 +37,10 @@ async function run(command: CliCommand): Promise<number> {
       const { runOtelHeaders } = await import('./otelHeaders.ts');
       return runOtelHeaders(command);
     }
+    case 'keys': {
+      const { runKeys } = await import('./keys.ts');
+      return runKeys(command);
+    }
     case 'start': {
       const { runStart } = await import('./start.ts');
       return runStart(command);

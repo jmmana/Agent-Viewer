@@ -159,6 +159,12 @@ export interface ListEventsOptions {
   sessionId?: string;
   agentId?: string;
   type?: string;
+  /** Issue #107: only events attributed to this submitter id (a `key_...` id, `bootstrap`, `webhook` or
+   * `anonymous`). An id no event carries returns an empty page, same as any other filter that matches nothing. */
+  submittedBy?: string;
+  /** Issue #107: rows whose `type` is in this list are excluded, applied after every other filter. Used by the
+   * route layer to hide `audit.*` events from `GET /api/v1/events` by default. */
+  excludeTypes?: readonly string[];
 }
 
 /**
@@ -266,7 +272,9 @@ export interface ChainRecord {
 
 /** What `list()` returns (issue #65): the stored event plus the server receive time SQLite already kept in
  * `created_at` but never returned. `GET /api/v1/snapshot` and SSE frames are unaffected; see the issue. */
-export type EventWithReceivedAt = CanonicalEvent & { receivedAt: number };
+/** Issue #107: `submittedBy` is `null` for an event stored before attribution existed (or by a caller that
+ * passed no `AppendOptions.submitterId` at all), never back-filled. */
+export type EventWithReceivedAt = CanonicalEvent & { receivedAt: number; submittedBy: string | null };
 
 export interface UsageLedgerStatus {
   schemaVersion: '1.0';
@@ -834,6 +842,9 @@ interface RetainedEntry {
   receivedAt: number;
   /** Insertion sequence, for SSE reconnect replay (issue #54). Strictly increasing with every push. */
   seq: EventSeq;
+  /** Issue #107: the id resolved by `resolveAuth` for the request that submitted this event, or `null` for a
+   * caller that passed no `AppendOptions.submitterId` at all. */
+  submittedBy: string | null;
 }
 
 /**
@@ -1161,7 +1172,8 @@ export class MemoryEventStore implements EventStore {
     event: CanonicalEvent,
     ignoreTimestamp = false,
     receivedAtOverride?: number,
-    channel: IngestChannel = 'events'
+    channel: IngestChannel = 'events',
+    submitterId: string | null = null
   ): AppendResult {
     const fingerprint = eventFingerprint(event, ignoreTimestamp);
 
@@ -1227,7 +1239,7 @@ export class MemoryEventStore implements EventStore {
     this.originalReceivedAt.set(event.id, receivedAt);
     const seq = this.nextSeq++;
     this.eventSeqs.set(event.id, seq);
-    const evicted = this.window.push({ event, receivedAt, seq });
+    const evicted = this.window.push({ event, receivedAt, seq, submittedBy: submitterId });
     if (evicted) {
       this.droppedEvents++;
       this.eventSeqs.delete(evicted.event.id);
@@ -1412,7 +1424,7 @@ export class MemoryEventStore implements EventStore {
   }
 
   async append(event: CanonicalEvent, options?: AppendOptions): Promise<AppendResult> {
-    return this.classifyAndApply(event, false, options?.receivedAt, options?.channel ?? 'events');
+    return this.classifyAndApply(event, false, options?.receivedAt, options?.channel ?? 'events', options?.submitterId ?? null);
   }
 
   async appendBatch(
@@ -1450,10 +1462,10 @@ export class MemoryEventStore implements EventStore {
       }
       // All checks passed, now insert. Each item evicts through the ring as it is pushed, in order, so a batch
       // larger than maxEvents still retains exactly the newest maxEvents events (issue #53).
-      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp, receivedAt, channel));
+      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp, receivedAt, channel, options?.submitterId ?? null));
       return summarizeBatch(results, events);
     } else {
-      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp, receivedAt, channel));
+      const results = events.map((event) => this.classifyAndApply(event, ignoreTimestamp, receivedAt, channel, options?.submitterId ?? null));
       return summarizeBatch(results, events);
     }
   }
@@ -1589,23 +1601,25 @@ export class MemoryEventStore implements EventStore {
    */
   async list(options: ListEventsOptions = {}): Promise<EventWithReceivedAt[]> {
     const limit = options.limit && options.limit > 0 ? options.limit : 100;
-    const matches = (event: CanonicalEvent): boolean => {
+    const matches = (event: CanonicalEvent, submittedBy: string | null): boolean => {
       if (options.runtimeId && event.runtimeId !== options.runtimeId) return false;
       if (options.sessionId && event.sessionId !== options.sessionId) return false;
       if (options.agentId && event.agentId !== options.agentId) return false;
       if (options.type && event.type !== options.type) return false;
+      if (options.submittedBy && submittedBy !== options.submittedBy) return false;
+      if (options.excludeTypes && options.excludeTypes.includes(event.type)) return false;
       if (options.since !== undefined && event.timestamp < options.since) return false;
       return true;
     };
 
     if (!options.beforeId) {
       const result: EventWithReceivedAt[] = [];
-      this.window.forEachNewestToOldest(({ event, receivedAt }) => {
-        if (!matches(event)) return true;
+      this.window.forEachNewestToOldest(({ event, receivedAt, submittedBy }) => {
+        if (!matches(event, submittedBy)) return true;
         // Mirrors `result.slice(0, index)` on the equivalent array implementation: everything from the cursor
         // onward (older, in this walk order) is excluded, whether or not `limit` was reached yet.
         if (options.afterId && event.id === options.afterId) return false;
-        result.push({ ...event, receivedAt });
+        result.push({ ...event, receivedAt, submittedBy });
         return result.length < limit;
       });
       return result;
@@ -1617,14 +1631,14 @@ export class MemoryEventStore implements EventStore {
     // afterward, rather than exited early the way the no-`beforeId` branch above does.
     const matched: EventWithReceivedAt[] = [];
     let cursorIndex = -1;
-    this.window.forEachNewestToOldest(({ event, receivedAt }) => {
-      if (!matches(event)) return true;
+    this.window.forEachNewestToOldest(({ event, receivedAt, submittedBy }) => {
+      if (!matches(event, submittedBy)) return true;
       if (options.afterId && event.id === options.afterId) return false;
       if (event.id === options.beforeId) {
         cursorIndex = matched.length;
         return true;
       }
-      matched.push({ ...event, receivedAt });
+      matched.push({ ...event, receivedAt, submittedBy });
       return true;
     });
     const start = cursorIndex === -1 ? 0 : cursorIndex;
@@ -3244,6 +3258,14 @@ export class SQLiteEventStore implements EventStore {
       conditions.push('type = ?');
       params.push(options.type);
     }
+    if (options.submittedBy) {
+      conditions.push('submitter_id = ?');
+      params.push(options.submittedBy);
+    }
+    if (options.excludeTypes && options.excludeTypes.length > 0) {
+      conditions.push(`type NOT IN (${options.excludeTypes.map(() => '?').join(',')})`);
+      params.push(...options.excludeTypes);
+    }
     if (options.since !== undefined) {
       conditions.push('timestamp >= ?');
       params.push(options.since);
@@ -3284,9 +3306,10 @@ export class SQLiteEventStore implements EventStore {
     const stmt = this.db.prepare(sql);
     const rows = stmt.all(...params) as any[];
 
-    // `receivedAt` (issue #65): the server clock already stored in `created_at`, finally returned. `GET
-    // /api/v1/snapshot` and SSE frames are unaffected on purpose; they build their own event lists separately.
-    return rows.map((r) => ({ ...this.rowToEvent(r), receivedAt: Number(r.created_at) }));
+    // `receivedAt` (issue #65): the server clock already stored in `created_at`, finally returned. `submittedBy`
+    // (issue #107): the `submitter_id` column (issue #105) exposed as a public, read-only field; `null` on a row
+    // from before the chain existed or before a store opened against a truncated migration list ever wrote it.
+    return rows.map((r) => ({ ...this.rowToEvent(r), receivedAt: Number(r.created_at), submittedBy: r.submitter_id ?? null }));
   }
 
   /**

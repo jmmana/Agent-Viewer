@@ -81,6 +81,7 @@ export type {
   LegacyEventType,
   ValidationIssue,
   ValidationResult,
+  StoredEvent,
 } from '../integrations/canonicalTypes';
 export {
   validateCanonicalEvent,

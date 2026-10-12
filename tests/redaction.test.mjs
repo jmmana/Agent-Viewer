@@ -35,6 +35,7 @@ const FIXTURES = {
   stripe_key: 'sk_live_' + 'Ab1Cd2Ef3Gh4Ij5Kl6Mn7',
   gitlab_token: 'glpat-' + 'Ab1Cd2Ef3Gh4Ij5Kl6Mn21',
   npm_token: 'npm_' + 'Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv'.slice(0, 31),
+  agent_viewer_api_key: 'avk_' + '3f9a1c7e02ab' + '.' + 'Qw3Rt7Yu9Pl2As5Df8Gh1Jk4Lm7Np0Qr2St5Uv8Wx9Y'.slice(0, 43),
   github_token: 'ghp_' + 'Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8Qr9St0Uv',
   github_pat: 'github_pat_' + 'Ab1Cd2Ef3Gh4Ij5Kl6Mn7Op8'.slice(0, 23),
   aws_access_key_id: 'AKIA' + 'AB12CD34EF56GH78',

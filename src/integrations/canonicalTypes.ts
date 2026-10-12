@@ -39,6 +39,27 @@ export const CANONICAL_EVENT_TYPES = [
 
 export type CanonicalEventType = (typeof CANONICAL_EVENT_TYPES)[number];
 
+/**
+ * Server-internal event types (issue #107): recorded in the log (and therefore the hash chain, #105) so key
+ * creation and revocation are themselves auditable, but never accepted from a client. Deliberately **not**
+ * added to `CANONICAL_EVENT_TYPES`: `validateCanonicalEvent` keeps rejecting a client-submitted event of one of
+ * these types with `400 validation_failed`, and `normalizeCanonicalEvent` never produces one. The server writes
+ * them with a direct internal `store.append`, bypassing both. Never broadcast to SSE, never passed to
+ * `onEventAccepted` listeners (so `--record` files stay canonical V1), and omitted from `GET /api/v1/events` and
+ * the snapshot unless `includeAudit=true` or an explicit `type` filter asks for one.
+ */
+export const AUDIT_EVENT_TYPES = ['audit.key.created', 'audit.key.revoked'] as const;
+export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
+
+/**
+ * A `CanonicalEvent` as the server actually returns it (issue #107): `submittedBy` is a server-side, read-only
+ * fact (the id of the key, `'bootstrap'`, `'webhook'` or `'anonymous'` that submitted it; `null` for an event
+ * stored before this item, never back-filled). It is never part of what a client sends: `CanonicalEventInput`
+ * is unchanged, and any `submittedBy` a client puts in a request body is ignored. Hosts that replay server
+ * events (the SSE stream, `GET /api/v1/events`) can use this type for the extra field; it is purely additive.
+ */
+export type StoredEvent<T = Record<string, any>> = CanonicalEvent<T> & { readonly submittedBy: string | null };
+
 /** Older or alternative type names that are still accepted and mapped to a V1 type. */
 export type LegacyEventType =
   | 'message.sent'

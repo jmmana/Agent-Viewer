@@ -800,6 +800,45 @@ test('TypeScript SDK: usageRollup() against a live server returns the real respo
 });
 
 // -------------------------------------------------------------
+// whoami() (issue #107)
+// -------------------------------------------------------------
+
+test('TypeScript SDK: whoami() returns the identity, and a key_revoked 401 raises immediately with the error code', async (t) => {
+  let callCount = 0;
+  let mode = 'ok';
+  t.mock.method(globalThis, 'fetch', async () => {
+    callCount++;
+    if (mode === 'ok') {
+      return new Response(JSON.stringify({ kind: 'key', id: 'key_3f9a1c7e02ab', name: 'ci-pipeline' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ error: 'key_revoked', message: 'This API key is revoked.' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  const viewer = new AgentViewer({ url: 'http://sdk.test', token: 'avk_3f9a1c7e02ab.secret' });
+  const identity = await viewer.whoami();
+  assert.deepEqual(identity, { kind: 'key', id: 'key_3f9a1c7e02ab', name: 'ci-pipeline' });
+  assert.equal(callCount, 1);
+
+  mode = 'revoked';
+  callCount = 0;
+  await assert.rejects(
+    () => viewer.whoami(),
+    (error) => {
+      assert.ok(error instanceof AgentViewerError);
+      assert.equal(error.status, 401);
+      assert.equal(error.code, 'key_revoked');
+      return true;
+    }
+  );
+  assert.equal(callCount, 1, 'a 401 is never retried');
+});
+
+// -------------------------------------------------------------
 // budgets() (issue #85, sub-issue #306: SDK read helper only, no write helper)
 // -------------------------------------------------------------
 

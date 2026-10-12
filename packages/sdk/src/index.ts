@@ -820,6 +820,13 @@ export interface LlmFailedOptions extends UsageCorrelation {
  * resending it will never succeed. Give each distinct event its own id, and resend the identical event (same
  * `timestamp`) only to retry. The client never retries a 409.
  */
+/** `GET /api/v1/whoami` (issue #107). `name` is present only for `kind: 'key'`. */
+export interface WhoamiResponse {
+  kind: 'key' | 'bootstrap' | 'webhook' | 'anonymous';
+  id: string;
+  name?: string;
+}
+
 export class AgentViewerError extends Error {
   public readonly status?: number;
   public readonly issues?: Array<{ path: string; message: string }>;
@@ -2472,6 +2479,15 @@ export class AgentViewer {
       throw new AgentViewerError(`Failed to fetch usage summary: ${response.status}`, response.status);
     }
     return (await response.json()) as UsageSummary;
+  }
+
+  /**
+   * `GET /api/v1/whoami` (issue #107): the identity the configured credential authenticates as. Handy as a
+   * startup check that a named key is still valid: `getWithRetry` already throws immediately (never retries) on
+   * 401, with `error.code` set to the server's `key_revoked`/`key_expired` when that is why.
+   */
+  async whoami(): Promise<WhoamiResponse> {
+    return this.getWithRetry('/api/v1/whoami') as Promise<WhoamiResponse>;
   }
 
   /**

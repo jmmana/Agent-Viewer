@@ -834,6 +834,28 @@ La firma se compara en tiempo constante. Las marcas de tiempo vencidas y las fir
 
 </details>
 
+<details>
+<summary><b>🔔 Webhook de alertas de presupuesto (saliente)</b></summary>
+<br/>
+
+Un webhook saliente opcional entrega cada evento `budget.alert` (un presupuesto que cruza su umbral de aviso o crítico) al destino que configures, firmado con su propio secreto HMAC, nunca el `AGENT_VIEWER_WEBHOOK_SECRET` entrante de arriba. Define `AGENT_VIEWER_ALERT_WEBHOOK_URL` (y opcionalmente `_SECRET`, `_ALLOW_HTTP`, `_MAX_ATTEMPTS`, `_TIMEOUT_MS`, ver la tabla de Configuración) para activarlo; sin URL, nunca se envía nada y la entrega de cada alerta queda `skipped`.
+
+Cada intento es un `POST` con el evento canónico completo como cuerpo, bytes idénticos en cada reintento, y estos encabezados:
+
+| Encabezado | Significado |
+|---|---|
+| `X-Agent-Viewer-Event` | Siempre `budget.alert`. |
+| `X-Agent-Viewer-Delivery` | El id de la alerta, estable en cada reintento: úsalo para deduplicar. |
+| `X-Agent-Viewer-Attempt` | `1` en el primer intento, incrementa en cada reintento. |
+| `X-Agent-Viewer-Timestamp` | Milisegundos desde la época Unix, nuevo en cada intento. |
+| `X-Agent-Viewer-Signature` | HMAC-SHA256 en hexadecimal de `${timestamp}.${rawBody}` usando `AGENT_VIEWER_ALERT_WEBHOOK_SECRET`; se omite por completo sin secreto configurado. |
+
+Política de reintentos: cualquier `2xx` tiene éxito; un error de red, un timeout, `5xx`, `408` o `429` reintentan; cualquier otro `4xx` y cualquier redirección fallan de inmediato, sin reintento. El backoff es `min(5s * 2^(intento-1), 1h)`, con aleatoriedad uniforme en `[base/2, base]`; un `Retry-After` en `429`/`503` eleva el piso, con tope de una hora. Tras `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` la entrega queda `failed` para siempre (carta muerta, nunca se reintenta de nuevo), y se registra una línea `warn` que solo nombra el id de la alerta y el último estado HTTP, nunca el secreto ni la URL.
+
+La entrega es **al menos una vez**: deduplica usando `X-Agent-Viewer-Delivery`. El destino es configuración del operador, nunca viene de una petición de cliente, pero el payload igual lleva nombres de presupuesto, alcance y cifras de gasto, así que trátalo como un destino de confianza. Con `AGENT_VIEWER_STORAGE=sqlite`, una entrega que sigue `pending` tras un reinicio se retoma automáticamente; en modo `memory` se pierde en su lugar, la misma limitación de reinicio ya documentada para el resto de este modo de almacenamiento. Una alerta de backfill (detectada en un período ya cerrado) y cualquier alerta detectada sin una URL de webhook configurada quedan `skipped` y nunca se entregan, aunque el webhook se active después.
+
+</details>
+
 **Almacenamiento:** `memory` (por defecto) guarda los últimos `AGENT_VIEWER_MAX_EVENTS` eventos (10.000 por defecto) en un búfer circular para `GET /api/v1/events` y el reenvío por SSE, incluido el estado derivado. La deduplicación nunca olvida: una vez que se acepta el id de un evento (o, para `llm.usage`/`llm.failed`, un par `(provider, requestId)`), un reintento posterior de ese id se reconoce como duplicado mientras el proceso siga corriendo, incluso después de que el evento haya salido del búfer. Recordar cada id cuesta entre 100 y 150 bytes aproximadamente por evento aceptado durante la vida del proceso; el servidor registra un aviso único al cruzar 1.000.000 de ids conocidos, sugiriendo `AGENT_VIEWER_STORAGE=sqlite` para servidores de larga duración. Los totales, las cifras por agente y el bloque `usage` de `GET /api/v1/snapshot` cubren todo evento aceptado desde que arrancó el proceso, incluidos los que ya se descartaron; solo la lista de eventos tiene tope. `snapshot.retention` (y el campo `retention` de `GET /api/v1/events` y del heartbeat de SSE) informa `maxEvents`, cuántos eventos están retenidos frente a los aceptados, y `droppedEvents`, para que un cliente nunca confunda una lista recortada con el historial completo.
 
 **Libro mayor de consumo (issue #65):** cada evento `llm.usage` o `llm.failed` aceptado también obtiene una fila tipada y de solo anexado en el libro mayor de consumo, con el receive time del **servidor** (`received_at`), nunca el reloj del cliente. `GET /api/v1/events` ahora devuelve ese mismo receive time como `receivedAt` en cada evento (SQLite ya lo guardaba en `created_at`, pero nunca se devolvía antes de esto). El libro mayor es independiente del búfer de eventos y de `AGENT_VIEWER_MAX_EVENTS`: en modo memoria tiene su propio tope, `AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS` (100.000 por defecto); en modo SQLite no tiene clave foránea hacia `events`, así que la retención (issue #70) podrá podar eventos antiguos sin tocar sus filas del libro mayor. El primer arranque de un servidor 0.4.0 corre un backfill de una sola vez sobre todo lo ya guardado, con una línea de resumen como `usage_ledger: scanned=1546 inserted=1530 duplicate=14 conflict=2 unparseable=0 (backfill)`; cada reinicio posterior repite el mismo paso para cerrar cualquier hueco, lo que normalmente no encuentra nada que hacer. Referencia completa: [usage-ledger.md](usage-ledger.md) (en inglés).
@@ -869,6 +891,11 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Peticiones por minuto por IP en `/api/v1`. |
 | `AGENT_VIEWER_SSE_REPLAY_MAX` | `10000` | Máximo de eventos perdidos que una reconexión reenvía en su totalidad. `0` significa que cualquier reconexión que haya perdido algo resincroniza en vez de reenviar. Un valor inválido detiene el servidor al iniciar. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | vacío | Activa la verificación HMAC del webhook genérico. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_URL` | vacío (función apagada) | Destino del webhook saliente `budget.alert` (ver arriba). Una URL inválida, un `http://` que no sea loopback sin `_ALLOW_HTTP`, o credenciales `user:pass@` embebidas detienen el servidor al arrancar con un mensaje que nunca repite la URL. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_SECRET` | vacío | Clave HMAC del webhook saliente, independiente del `AGENT_VIEWER_WEBHOOK_SECRET` de arriba: nunca son intercambiables. Vacío envía las entregas sin firmar (sin encabezado `X-Agent-Viewer-Signature`). |
+| `AGENT_VIEWER_ALERT_WEBHOOK_ALLOW_HTTP` | sin definir | Define `1` para permitir un destino `http://` plano en un host que no sea loopback. Loopback (`localhost`, `127.0.0.0/8`, `::1`) siempre se permite sin importar esta variable. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` | `6` | Intentos de entrega totales (1 inicial más reintentos) antes de dejar la entrega `failed` para siempre. Entero de 1 a 20. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_TIMEOUT_MS` | `5000` | Timeout HTTP por intento. Entero de 500 a 60000. |
 | `AGENT_VIEWER_RETENTION_DAYS` | sin definir (conserva para siempre) | Los eventos cuyo receive time del servidor supera esta cantidad de días se purgan con un trabajo programado. Entero de `1` a `36500`; `0` o cualquier otro valor inválido impide el arranque. Ver [retention.md](retention.md) (en inglés). |
 | `AGENT_VIEWER_USAGE_RETENTION_DAYS` | sin definir (conserva para siempre) | Lo mismo, para el libro mayor de consumo (el registro de auditoría de tokens y costo), de forma independiente de `AGENT_VIEWER_RETENTION_DAYS`. Definirla registra una advertencia de una línea al iniciar. |
 | `AGENT_VIEWER_RETENTION_INTERVAL_MINUTES` | `60` | Cada cuánto corre el trabajo de purga, una vez definida cualquiera de las dos ventanas. Entero de `1` a `1440`. |

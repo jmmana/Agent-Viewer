@@ -49,6 +49,7 @@ import {
   type BudgetRolloverWatcherHandle,
 } from './budgets';
 import { buildBudgetAlert } from './budgetAlerts';
+import { parseAlertWebhookConfig, startAlertDeliveryWorker, type AlertWebhookConfig, type AlertDeliveryWorkerHandle } from './budgetAlertDelivery';
 import {
   parseRecomputeRequest,
   PricingVersionNotFoundError,
@@ -169,12 +170,17 @@ const PATCH_USAGE_MESSAGE =
 let store: EventStore;
 let sseReplayMax: number;
 let retentionConfig: RetentionConfig;
+let alertWebhookConfig: AlertWebhookConfig | null;
 try {
   store = createEventStore();
   sseReplayMax = parseSseReplayMax(process.env.AGENT_VIEWER_SSE_REPLAY_MAX);
   // Issue #70: validated once at startup, like every other env-derived config here. A bad value must never be
   // silently ignored or guessed at, since it governs permanent deletion.
   retentionConfig = parseRetentionConfig(process.env);
+  // Issue #86 (sub-issue #321): same rule, for the outbound budget alert webhook. `null` means the feature is off
+  // (no `AGENT_VIEWER_ALERT_WEBHOOK_URL`); an invalid URL, a refused plain `http://` or an out-of-range numeric
+  // value stops the server here, with a message that never echoes the URL.
+  alertWebhookConfig = parseAlertWebhookConfig(process.env);
 } catch (error) {
   if (!isDirectRun) throw error;
   const message = error instanceof Error ? error.message : String(error);
@@ -216,14 +222,29 @@ if (retentionConfig.ledgerDays !== null) {
 // below stops it before closing the store.
 const retentionJob: RetentionJobHandle = startRetention({ store, config: retentionConfig });
 
+// Issue #86 (sub-issue #321): the outbound alert webhook worker only exists when a destination is configured.
+// With `alertWebhookConfig === null` every alert's delivery row is written `skipped` (`onBudgetTransition` below)
+// and there is nothing for a worker to ever pick up, so none is started at all. Logged without the secret or the
+// URL, like every other config line in this file.
+if (alertWebhookConfig) {
+  console.log(
+    `[agent-viewer] budget alert webhook is enabled${alertWebhookConfig.secret ? '' : ' (unsigned: AGENT_VIEWER_ALERT_WEBHOOK_SECRET is not set)'}`
+  );
+}
+const alertDeliveryWorker: AlertDeliveryWorkerHandle | null = alertWebhookConfig
+  ? startAlertDeliveryWorker({ store, config: alertWebhookConfig })
+  : null;
+
 /**
- * Stops the retention job (waiting for a run already in progress) and closes the store. Called by the direct-run
- * `SIGTERM`/`SIGINT` handlers below, and by the embedded CLI's `close()` (`cli/start.ts`) after it closes the
- * HTTP server (issue #70). Safe to call more than once: both steps it calls already are.
+ * Stops the retention job (waiting for a run already in progress), the alert delivery worker (waiting for every
+ * in-flight attempt) and closes the store. Called by the direct-run `SIGTERM`/`SIGINT` handlers below, and by the
+ * embedded CLI's `close()` (`cli/start.ts`) after it closes the HTTP server (issue #70). Safe to call more than
+ * once: every step it calls already is.
  */
 export async function shutdown(): Promise<void> {
   budgetRolloverWatcher?.stop();
   await retentionJob.stop();
+  await alertDeliveryWorker?.stop();
   await store.close();
 }
 
@@ -1193,21 +1214,31 @@ budgetRolloverWatcher = startBudgetRolloverWatcher({
 });
 
 // -------------------------------------------------------------
-// Budget alerts (issue #86, sub-issue #319): the durable, deduplicated `budget.alert` canonical event. Registered
-// once at process bootstrap, on top of #85's own `onBudgetTransition` subscription point, exactly as that hook's
-// own doc comment in `server/budgets.ts` anticipates. `buildBudgetAlert` ignores every transition that does not
-// land on `warning`/`exceeded` (a drop back to `ok`, or into `unknown`, is never an alert); `store.recordBudgetAlert`
-// is the actual dedup (a real crossing can reach this listener more than once, the same race `onBudgetTransition`
-// documents), so only a genuinely new row is broadcast. A failing listener must never break the live-transition
-// broadcast (`checkBudgetLive`) or any other `onBudgetTransition` subscriber: errors are caught, logged and
-// swallowed here, the same policy `broadcastEvent`'s own listeners and `emitBudgetTransition` already follow.
+// Budget alerts (issue #86, sub-issue #319, extended by #321): the durable, deduplicated `budget.alert` canonical
+// event, plus its outbound webhook delivery row. Registered once at process bootstrap, on top of #85's own
+// `onBudgetTransition` subscription point, exactly as that hook's own doc comment in `server/budgets.ts`
+// anticipates. `buildBudgetAlert` ignores every transition that does not land on `warning`/`exceeded` (a drop back
+// to `ok`, or into `unknown`, is never an alert); `store.recordBudgetAlert` is the actual dedup (a real crossing
+// can reach this listener more than once, the same race `onBudgetTransition` documents), so only a genuinely new
+// row is broadcast. `attemptDelivery` is `false` (the delivery row is written `skipped`) for a backfill alert or
+// when no webhook URL is configured; a webhook enabled afterward never retroactively delivers that row. A failing
+// listener must never break the live-transition broadcast (`checkBudgetLive`) or any other `onBudgetTransition`
+// subscriber: errors are caught, logged and swallowed here, the same policy `broadcastEvent`'s own listeners and
+// `emitBudgetTransition` already follow.
 // -------------------------------------------------------------
 onBudgetTransition(async (transition) => {
   const built = buildBudgetAlert(transition);
   if (!built) return;
+  const attemptDelivery = alertWebhookConfig !== null && !built.alert.backfill;
   try {
-    const result = await store.recordBudgetAlert(built);
-    if (result.inserted) broadcastEvent(result.event, result.seq);
+    const result = await store.recordBudgetAlert(built, { attemptDelivery });
+    if (result.inserted) {
+      broadcastEvent(result.event, result.seq);
+      // Off the ingest request path (this whole listener already is): wakes the poll worker so a configured
+      // webhook fires promptly instead of waiting out its poll interval, without ever blocking this handler's
+      // own caller on the delivery attempt itself.
+      if (attemptDelivery) void alertDeliveryWorker?.checkNow();
+    }
   } catch (error) {
     console.error(
       `[agent-viewer] failed to record budget alert for ${transition.budgetId} (${transition.to}): ${error instanceof Error ? error.message : String(error)}`

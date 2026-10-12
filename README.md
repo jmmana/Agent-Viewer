@@ -833,6 +833,28 @@ The signature is compared in constant time. Expired timestamps and bad signature
 
 </details>
 
+<details>
+<summary><b>🔔 Budget alert webhook (outbound)</b></summary>
+<br/>
+
+An optional outbound webhook delivers every `budget.alert` event (a budget crossing its warning or critical threshold) to a destination you configure, signed with its own HMAC secret, never the inbound `AGENT_VIEWER_WEBHOOK_SECRET` above. Set `AGENT_VIEWER_ALERT_WEBHOOK_URL` (plus, optionally, `_SECRET`, `_ALLOW_HTTP`, `_MAX_ATTEMPTS`, `_TIMEOUT_MS`, see the Configuration table) to enable it; with no URL, nothing is ever sent, and every alert's delivery stays `skipped`.
+
+Each attempt is a `POST` with the full canonical event as the body, byte-identical on every retry, and these headers:
+
+| Header | Meaning |
+|---|---|
+| `X-Agent-Viewer-Event` | Always `budget.alert`. |
+| `X-Agent-Viewer-Delivery` | The alert id, stable across every retry: dedupe on it. |
+| `X-Agent-Viewer-Attempt` | `1` on the first try, incrementing on each retry. |
+| `X-Agent-Viewer-Timestamp` | Milliseconds since the epoch, fresh on every attempt. |
+| `X-Agent-Viewer-Signature` | Hex HMAC-SHA256 of `${timestamp}.${rawBody}` using `AGENT_VIEWER_ALERT_WEBHOOK_SECRET`; omitted entirely when no secret is set. |
+
+Retry policy: any `2xx` succeeds; a network error, a timeout, `5xx`, `408` or `429` retries; any other `4xx` and any redirect fail immediately, with no retry. Backoff is `min(5s * 2^(attempt-1), 1h)`, with jitter uniform in `[base/2, base]`; a `Retry-After` on `429`/`503` raises the floor, still capped at one hour. After `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` the delivery is left `failed` for good (a dead letter, never retried again), and one `warn` log line names only the alert id and the last HTTP status, never the secret or the URL.
+
+Delivery is **at least once**: dedupe on `X-Agent-Viewer-Delivery`. The destination is operator configuration, never taken from a client request, but the payload still carries budget names, scopes and spend figures, so treat it as a trusted destination. With `AGENT_VIEWER_STORAGE=sqlite`, a delivery still `pending` after a restart resumes automatically; in `memory` mode it is lost instead, the same documented restart limitation as the rest of this storage mode. A backfill alert (detected in an already-closed period) and any alert detected while no webhook URL was configured are written `skipped` and never delivered, even if the webhook is enabled afterward.
+
+</details>
+
 **Storage:** `memory` (default) keeps the last `AGENT_VIEWER_MAX_EVENTS` events (default 10,000) in a ring buffer for `GET /api/v1/events` and SSE replay, derived state included. Dedup never forgets: once an event id (or, for `llm.usage`/`llm.failed`, a `(provider, requestId)` pair) is accepted, a later retry of that id is recognized as a duplicate for as long as the process runs, even after the event itself has fallen off the ring. Remembering every id costs roughly 100-150 bytes per accepted event for the process lifetime; the server logs one warning when it crosses 1,000,000 known ids, suggesting `AGENT_VIEWER_STORAGE=sqlite` for long-running servers. Totals, per-agent figures and `GET /api/v1/snapshot`'s `usage` cover every accepted event since the process started, including evicted ones; only the event list itself is capped. `snapshot.retention` (and the `retention` field on `GET /api/v1/events` and the SSE heartbeat) reports `maxEvents`, how many events are retained versus accepted, and `droppedEvents`, so a client never mistakes a truncated list for the full history.
 
 **Usage ledger (issue #65):** every accepted `llm.usage` or `llm.failed` event also gets one append-only, typed row in the usage ledger, carrying the **server** receive time (`received_at`), never the client's own clock. `GET /api/v1/events` now returns that same receive time as `receivedAt` on every event (SQLite always stored it in `created_at`; it was never returned before this). The ledger is independent of the event ring and of `AGENT_VIEWER_MAX_EVENTS`: in memory mode it has its own cap, `AGENT_VIEWER_USAGE_LEDGER_MAX_ROWS` (default 100,000); in SQLite mode it has no foreign key to `events`, so retention (issue #70) can prune old events without touching their ledger rows. The first start of a 0.4.0 server runs a one-time backfill over every event already stored, logging a summary line such as `usage_ledger: scanned=1546 inserted=1530 duplicate=14 conflict=2 unparseable=0 (backfill)`; every later restart runs the same pass again to catch up on any gap, which normally finds nothing to do. Full reference: [docs/usage-ledger.md](docs/usage-ledger.md).
@@ -868,6 +890,11 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_RATE_LIMIT` | `1000` | Requests per minute per IP on `/api/v1`. |
 | `AGENT_VIEWER_SSE_REPLAY_MAX` | `10000` | Maximum missed events a reconnect replays in full. `0` means any reconnect that missed something resyncs instead of replaying. An invalid value stops the server at startup. |
 | `AGENT_VIEWER_WEBHOOK_SECRET` | empty | Enables HMAC verification on the generic webhook. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_URL` | empty (feature off) | Destination for the outbound `budget.alert` webhook (see above). An invalid URL, a non-loopback `http://` without `_ALLOW_HTTP`, or embedded `user:pass@` credentials stop the server at startup with a message that never echoes the URL. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_SECRET` | empty | HMAC key for the outbound webhook, independent of `AGENT_VIEWER_WEBHOOK_SECRET` above: the two are never interchangeable. Empty sends deliveries unsigned (no `X-Agent-Viewer-Signature` header). |
+| `AGENT_VIEWER_ALERT_WEBHOOK_ALLOW_HTTP` | unset | Set to `1` to allow a plain `http://` destination on a non-loopback host. Loopback (`localhost`, `127.0.0.0/8`, `::1`) is always allowed regardless. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` | `6` | Total delivery attempts (1 initial plus retries) before a delivery is left `failed` for good. Integer 1 to 20. |
+| `AGENT_VIEWER_ALERT_WEBHOOK_TIMEOUT_MS` | `5000` | Per-attempt HTTP timeout. Integer 500 to 60000. |
 | `AGENT_VIEWER_RETENTION_DAYS` | unset (keep forever) | Raw events whose server receive time is older than this many days are purged by a scheduled job. Integer `1` to `36500`; `0` and any other invalid value refuse to start. See [docs/retention.md](docs/retention.md). |
 | `AGENT_VIEWER_USAGE_RETENTION_DAYS` | unset (keep forever) | Same, for the usage ledger (the audit record of tokens and cost), independently of `AGENT_VIEWER_RETENTION_DAYS`. Setting it logs a one-line startup warning. |
 | `AGENT_VIEWER_RETENTION_INTERVAL_MINUTES` | `60` | How often the purge job runs, once either window above is set. Integer `1` to `1440`. |

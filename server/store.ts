@@ -384,6 +384,46 @@ export type RecordBudgetAlertResult =
   | { inserted: false }
   | { inserted: true; event: CanonicalEvent; seq: EventSeq | null };
 
+/** Options for `EventStore.recordBudgetAlert` (issue #86, sub-issue #321). `attemptDelivery` is decided by the
+ * caller (`server/index.ts`, which holds the parsed webhook config): `true` writes the new `budget_alert_deliveries`
+ * row as `pending` with `nextAttemptAt` due immediately; `false` (no webhook configured, or `input.alert.backfill`)
+ * writes it `skipped`, and it is never attempted even if the webhook is configured later. Ignored entirely when
+ * `inserted` ends up `false`: no delivery row is ever written for a crossing that was already recorded. */
+export interface RecordBudgetAlertOptions {
+  attemptDelivery: boolean;
+}
+
+/** `budget_alert_deliveries.status` (migration 16, issue #321). `pending`: due for an attempt. `delivered`: a
+ * `2xx` response was received. `failed`: the configured maximum attempt count was reached (dead letter, never
+ * retried again). `skipped`: a backfill alert, or an alert detected while no webhook URL was configured; never
+ * attempted, even if the webhook is enabled afterward. */
+export type AlertDeliveryStatus = 'pending' | 'delivered' | 'failed' | 'skipped';
+
+/** One `budget_alert_deliveries` row, as read back for the delivery worker (`server/budgetAlertDelivery.ts`).
+ * `body` is the exact JSON bytes of the `budget.alert` event, captured once by `recordBudgetAlert` and sent
+ * unchanged on every attempt. `lastError` is already truncated to 2 KB by the writer. */
+export interface AlertDeliveryRecord {
+  alertId: string;
+  status: AlertDeliveryStatus;
+  attempts: number;
+  nextAttemptAt: number | null;
+  body: string;
+  lastStatus: number | null;
+  lastError: string | null;
+  deliveredAt: number | null;
+}
+
+/** Patch applied after one delivery attempt (`server/budgetAlertDelivery.ts`'s worker). Never transitions a row
+ * to `skipped`: that status is only ever set once, by `recordBudgetAlert` itself. */
+export interface AlertDeliveryAttemptPatch {
+  status: 'pending' | 'delivered' | 'failed';
+  attempts: number;
+  nextAttemptAt: number | null;
+  lastStatus: number | null;
+  lastError: string | null;
+  deliveredAt: number | null;
+}
+
 /** Per-process ingestion counters, reset on restart. Exposed by `GET /ready`. */
 export interface IngestionCounters {
   /** Conflicting duplicates rejected since process start. */
@@ -532,7 +572,17 @@ export interface EventStore {
    * restart) and is only ever stored and broadcast once. Never broadcasts anything itself; the caller
    * (`server/index.ts`) only calls `broadcastEvent` when `inserted` is `true`.
    */
-  recordBudgetAlert(input: BudgetAlertStoreInput): Promise<RecordBudgetAlertResult>;
+  recordBudgetAlert(input: BudgetAlertStoreInput, options: RecordBudgetAlertOptions): Promise<RecordBudgetAlertResult>;
+  /**
+   * Issue #86 (sub-issue #321): up to `limit` `budget_alert_deliveries` rows with `status: 'pending'` and
+   * `nextAttemptAt <= now`, oldest due first. Called by the delivery worker's poll loop; never returns a `skipped`,
+   * `delivered` or `failed` row.
+   */
+  listDueAlertDeliveries(now: number, limit: number): Promise<AlertDeliveryRecord[]>;
+  /** Issue #86 (sub-issue #321): applies the result of one delivery attempt to a `budget_alert_deliveries` row.
+   * A no-op (resolves without writing) if the row no longer exists, which should be unreachable since nothing
+   * ever deletes a delivery row. */
+  recordAlertDeliveryAttempt(alertId: string, patch: AlertDeliveryAttemptPatch): Promise<void>;
   /** Conflicts rejected and legacy rows matched by id only, since process start. */
   ingestionCounters(): IngestionCounters;
   /** True for an original event id and for a duplicate reference's own id. */
@@ -970,6 +1020,10 @@ export class MemoryEventStore implements EventStore {
    * alert's dedup must survive its own event being evicted from the ring, just like a resent event id's dedup
    * does. Reset only by a fresh process (memory mode's documented restart limitation, see `recordBudgetAlert`). */
   private budgetAlertDedupKeys = new Set<string>();
+  /** Issue #86 (sub-issue #321): one row per recorded alert, written alongside `budgetAlertDedupKeys` in
+   * `recordBudgetAlert`. Like the dedup set above, this never survives a restart (memory mode's documented
+   * limitation): a `pending` delivery queued before a restart is lost, not resumed. */
+  private alertDeliveries = new Map<string, AlertDeliveryRecord>();
 
   constructor(options?: number | MemoryEventStoreOptions) {
     const opts: MemoryEventStoreOptions = typeof options === 'number' ? { maxEvents: options } : (options ?? {});
@@ -1332,7 +1386,7 @@ export class MemoryEventStore implements EventStore {
    * `UNIQUE` constraint does for the other store. Memory mode's documented limitation: this `Set` (like the rest of
    * `MemoryEventStore`) does not survive a restart, so a re-imported history after one can alert again.
    */
-  async recordBudgetAlert(input: BudgetAlertStoreInput): Promise<RecordBudgetAlertResult> {
+  async recordBudgetAlert(input: BudgetAlertStoreInput, options: RecordBudgetAlertOptions): Promise<RecordBudgetAlertResult> {
     const dedupKey = budgetAlertDedupKey(input.alert);
     if (this.budgetAlertDedupKeys.has(dedupKey)) return { inserted: false };
     this.budgetAlertDedupKeys.add(dedupKey);
@@ -1345,7 +1399,34 @@ export class MemoryEventStore implements EventStore {
       this.budgetAlertDedupKeys.delete(dedupKey);
       return { inserted: false };
     }
+    // Issue #86 (sub-issue #321): the delivery row is written in this same synchronous prefix, right alongside the
+    // dedup reservation above, so a stored alert never exists without one. `body` is captured once, here, as the
+    // exact bytes every delivery attempt will send.
+    this.alertDeliveries.set(input.alert.id, {
+      alertId: input.alert.id,
+      status: options.attemptDelivery ? 'pending' : 'skipped',
+      attempts: 0,
+      nextAttemptAt: options.attemptDelivery ? input.alert.detectedAt : null,
+      body: JSON.stringify(input.event),
+      lastStatus: null,
+      lastError: null,
+      deliveredAt: null,
+    });
     return { inserted: true, event: input.event, seq: result.seq };
+  }
+
+  async listDueAlertDeliveries(now: number, limit: number): Promise<AlertDeliveryRecord[]> {
+    const due = Array.from(this.alertDeliveries.values()).filter(
+      (row) => row.status === 'pending' && (row.nextAttemptAt ?? 0) <= now
+    );
+    due.sort((a, b) => (a.nextAttemptAt ?? 0) - (b.nextAttemptAt ?? 0));
+    return due.slice(0, limit).map((row) => ({ ...row }));
+  }
+
+  async recordAlertDeliveryAttempt(alertId: string, patch: AlertDeliveryAttemptPatch): Promise<void> {
+    const existing = this.alertDeliveries.get(alertId);
+    if (!existing) return; // Unreachable in practice: nothing ever deletes a delivery row.
+    this.alertDeliveries.set(alertId, { ...existing, ...patch });
   }
 
   ingestionCounters(): IngestionCounters {
@@ -2689,17 +2770,19 @@ export class SQLiteEventStore implements EventStore {
   }
 
   /**
-   * Issue #86 (sub-issue #319). One transaction: the `budget_alerts` row is inserted first (its `UNIQUE (budget_id,
-   * period_start, state)` constraint, migration 15, is the entire dedup mechanism), and only when that succeeds is
-   * the canonical `budget.alert` event inserted through the same `classifyAndInsert` path `append`/`appendBatch`
-   * already use. A constraint violation on `budget_alerts` means this exact crossing was already recorded: the
-   * transaction rolls back and `{ inserted: false }` is returned with no further side effect, no event row and no
-   * broadcast, which is what makes two concurrent live checks racing on the same transition, a re-imported
-   * history, or a restart all safe. Any other failure (including the event insert itself failing, which should be
-   * unreachable since the id is a deterministic hash of the same dedup key) rolls back the alert row too, so an
-   * alert can never exist without its event, never the reverse.
+   * Issue #86 (sub-issue #319, extended by #321). One transaction: the `budget_alerts` row is inserted first (its
+   * `UNIQUE (budget_id, period_start, state)` constraint, migration 15, is the entire dedup mechanism); once that
+   * succeeds, the `budget_alert_deliveries` row (migration 16) is inserted with the exact JSON bytes of `event` as
+   * its `body`; only then is the canonical `budget.alert` event itself inserted through the same `classifyAndInsert`
+   * path `append`/`appendBatch` already use. A constraint violation on `budget_alerts` means this exact crossing
+   * was already recorded: the transaction rolls back and `{ inserted: false }` is returned with no further side
+   * effect at all (no delivery row, no event row, no broadcast), which is what makes two concurrent live checks
+   * racing on the same transition, a re-imported history, or a restart all safe. Any other failure (including the
+   * event insert itself failing, which should be unreachable since the id is a deterministic hash of the same
+   * dedup key) rolls back the alert and delivery rows too, so an alert can never exist without its event or its
+   * delivery row, nor either of those without the alert.
    */
-  async recordBudgetAlert(input: BudgetAlertStoreInput): Promise<RecordBudgetAlertResult> {
+  async recordBudgetAlert(input: BudgetAlertStoreInput, options: RecordBudgetAlertOptions): Promise<RecordBudgetAlertResult> {
     const { alert, event } = input;
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -2727,6 +2810,19 @@ export class SQLiteEventStore implements EventStore {
           alert.spendIsLowerBound ? 1 : 0,
           alert.backfill ? 1 : 0,
           alert.detectedAt
+        );
+
+      this.db
+        .prepare(
+          `INSERT INTO budget_alert_deliveries (
+            alert_id, status, attempts, next_attempt_at, body, last_status, last_error, delivered_at
+          ) VALUES (?, ?, 0, ?, ?, NULL, NULL, NULL)`
+        )
+        .run(
+          alert.id,
+          options.attemptDelivery ? 'pending' : 'skipped',
+          options.attemptDelivery ? alert.detectedAt : null,
+          JSON.stringify(event)
         );
     } catch (error) {
       try {
@@ -2764,6 +2860,51 @@ export class SQLiteEventStore implements EventStore {
     this.ensureTotalsSinceCache();
     if (this.rebuild.state === 'done') applyEvent(this.state, event, { skipUsage: pending.ledgerSkipped ?? false });
     return { inserted: true, event, seq: pending.result.outcome === 'accepted' ? pending.result.seq : null };
+  }
+
+  /** Issue #86 (sub-issue #321). A plain read, outside any transaction: the worker only ever updates a row it just
+   * read here, through `recordAlertDeliveryAttempt`, never two rows at once. */
+  async listDueAlertDeliveries(now: number, limit: number): Promise<AlertDeliveryRecord[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT alert_id, status, attempts, next_attempt_at, body, last_status, last_error, delivered_at
+         FROM budget_alert_deliveries
+         WHERE status = 'pending' AND next_attempt_at <= ?
+         ORDER BY next_attempt_at ASC
+         LIMIT ?`
+      )
+      .all(now, limit) as Array<{
+      alert_id: string;
+      status: AlertDeliveryStatus;
+      attempts: number;
+      next_attempt_at: number | null;
+      body: string;
+      last_status: number | null;
+      last_error: string | null;
+      delivered_at: number | null;
+    }>;
+    return rows.map((row) => ({
+      alertId: row.alert_id,
+      status: row.status,
+      attempts: row.attempts,
+      nextAttemptAt: row.next_attempt_at,
+      body: row.body,
+      lastStatus: row.last_status,
+      lastError: row.last_error,
+      deliveredAt: row.delivered_at,
+    }));
+  }
+
+  /** Issue #86 (sub-issue #321). A single-row `UPDATE`; never reaches into `budget_alerts` or `events`, so it
+   * needs no transaction of its own. */
+  async recordAlertDeliveryAttempt(alertId: string, patch: AlertDeliveryAttemptPatch): Promise<void> {
+    this.db
+      .prepare(
+        `UPDATE budget_alert_deliveries
+         SET status = ?, attempts = ?, next_attempt_at = ?, last_status = ?, last_error = ?, delivered_at = ?
+         WHERE alert_id = ?`
+      )
+      .run(patch.status, patch.attempts, patch.nextAttemptAt, patch.lastStatus, patch.lastError, patch.deliveredAt, alertId);
   }
 
   ingestionCounters(): IngestionCounters {

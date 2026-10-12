@@ -13,5 +13,6 @@
   [12, "usage-ledger-estimates"],
   [13, "pricing-recompute"],
   [14, "budgets"],
-  [15, "budget-alerts"]
+  [15, "budget-alerts"],
+  [16, "budget-alert-deliveries"]
 ]

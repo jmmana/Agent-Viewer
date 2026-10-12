@@ -264,11 +264,3 @@ export interface ViewerEvent {
   summary: string;
   payload: Record<string, any>;
 }
-
-export interface PricingConfig {
-  provider: string;
-  model: string;
-  inputPerMillion: number;
-  outputPerMillion: number;
-  cachedPerMillion: number;
-}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useId, useMemo, useRef } from 'react';
-import { Agent, AgentStatus, PricingConfig, Task, ViewerEvent } from '../types/agent';
+import { Agent, AgentStatus, Task, ViewerEvent } from '../types/agent';
 import { OFFICE_ROOMS } from '../engine/officeModel';
 import { APP_MESSAGES, t, type Locale, type TranslationKey } from '../i18n';
 import { localizeDemoText } from '../content/demoScript';
@@ -39,7 +39,6 @@ interface AgentDetailModalProps {
   allAgents: Agent[];
   tasks: Task[];
   events: ViewerEvent[];
-  pricing: PricingConfig[];
   locale: Locale;
   onClose: () => void;
   onSelectAgent: (agentId: string) => void;

@@ -16,6 +16,8 @@ import { MatrixTab } from './modelOps/MatrixTab';
 import { AgentsTab } from './modelOps/AgentsTab';
 import { FeedTab } from './modelOps/FeedTab';
 import { SimulatorTab } from './modelOps/SimulatorTab';
+import { PricingEditor } from './PricingEditor';
+import { useServerApi } from '../integrations/useServerApi';
 import {
   X,
   Server,
@@ -26,6 +28,7 @@ import {
   Radio,
   BarChart3,
   Zap,
+  DollarSign,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -51,9 +54,9 @@ export interface ModelOpsModalProps {
 
 type MessageParams = Record<string, string | number>;
 
-type ModelOpsTab = 'matrix' | 'simulator' | 'agents' | 'feed';
+type ModelOpsTab = 'matrix' | 'simulator' | 'agents' | 'feed' | 'pricing';
 
-const TABS: readonly ModelOpsTab[] = ['matrix', 'simulator', 'agents', 'feed'];
+const TABS: readonly ModelOpsTab[] = ['matrix', 'simulator', 'agents', 'feed', 'pricing'];
 
 const TITLE_ID = 'av-modelops-title';
 const PANEL_ID = 'av-modelops-panel';
@@ -71,6 +74,7 @@ const TAB_KEYS: Record<ModelOpsTab, TranslationKey> = {
   simulator: 'ops.tab.simulator',
   agents: 'ops.tab.agents',
   feed: 'ops.tab.feed',
+  pricing: 'ops.tab.pricing',
 };
 
 const TAB_ICONS: Record<ModelOpsTab, LucideIcon> = {
@@ -78,6 +82,7 @@ const TAB_ICONS: Record<ModelOpsTab, LucideIcon> = {
   simulator: Zap,
   agents: Users,
   feed: Activity,
+  pricing: DollarSign,
 };
 
 const SimulatedBadgeTag: React.FC<{ label: string }> = ({ label }) => (
@@ -120,6 +125,8 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
 
   const ledgerState = useModelOpsLedger({ ledger, isOpen, events });
   const mode = ledgerState.mode;
+  // Server pricing (issue #333): `null` in demo mode (no `ledger`), same as every other live-only surface here.
+  const pricingServerApi = useServerApi(ledger);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -452,6 +459,8 @@ export const ModelOpsModal: React.FC<ModelOpsModalProps> = ({
               isLiveMode={isLiveMode}
             />
           )}
+
+          {activeTab === 'pricing' && <PricingEditor serverApi={pricingServerApi} locale={locale} />}
         </div>
 
         {/* MODAL FOOTER */}

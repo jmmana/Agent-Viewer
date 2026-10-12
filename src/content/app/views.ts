@@ -104,14 +104,8 @@ const EN = {
 
   // Settings
   'settings.close': 'Close settings',
-  'settings.pricingTitle': 'LLM model pricing catalog ($ per 1M tokens)',
-  'settings.pricingHelp': 'Set custom token rates for real-time cost observability. Use $0 for local Ollama or LM Studio models.',
-  'settings.provider': 'Provider',
-  'settings.model': 'Model',
-  'settings.inputPrice': 'Input ($/M)',
-  'settings.outputPrice': 'Output ($/M)',
-  'settings.inputPriceFor': 'Input price per million tokens for {model}',
-  'settings.outputPriceFor': 'Output price per million tokens for {model}',
+  'settings.pricingTitle': 'LLM model pricing catalog (per 1M tokens)',
+  'settings.pricingHelp': 'View and edit the server pricing catalog used for real-time cost observability.',
   'settings.privacyTitle': 'Privacy and secret sanitization',
   'settings.privacyLabel': 'Sanitize passwords, tokens and tool arguments',
   'settings.privacyHelp':
@@ -218,14 +212,8 @@ const ES: Record<keyof typeof EN, string> = {
   'newTask.preset.e2e.description': 'Ejecutar pruebas en navegador headless en todas las vistas de escritorio y móvil.',
 
   'settings.close': 'Cerrar la configuración',
-  'settings.pricingTitle': 'Catálogo de precios de modelos LLM ($ por 1M de tokens)',
-  'settings.pricingHelp': 'Define tarifas propias por token para observar costos en tiempo real. Usa $0 para modelos locales de Ollama o LM Studio.',
-  'settings.provider': 'Proveedor',
-  'settings.model': 'Modelo',
-  'settings.inputPrice': 'Entrada ($/M)',
-  'settings.outputPrice': 'Salida ($/M)',
-  'settings.inputPriceFor': 'Precio de entrada por millón de tokens de {model}',
-  'settings.outputPriceFor': 'Precio de salida por millón de tokens de {model}',
+  'settings.pricingTitle': 'Catálogo de precios de modelos LLM (por 1M de tokens)',
+  'settings.pricingHelp': 'Consulta y edita el catálogo de precios del servidor usado para observar costos en tiempo real.',
   'settings.privacyTitle': 'Privacidad y limpieza de secretos',
   'settings.privacyLabel': 'Ocultar contraseñas, tokens y argumentos de herramientas',
   'settings.privacyHelp':

@@ -1,15 +1,18 @@
 import React, { useId, useState } from 'react';
-import { PricingConfig } from '../types/agent';
 import { isSoundEnabled, setSoundEnabled } from '../engine/soundEffects';
 import { X, DollarSign, Shield, Volume2, RotateCcw, Download, Coffee, Eye } from 'lucide-react';
 import type { Locale } from '../i18n';
 import { t } from '../i18n';
+import { PricingEditor } from './PricingEditor';
+import { useServerApi } from '../integrations/useServerApi';
+import type { LedgerConnection } from './modelOps/useModelOpsLedger';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  pricing: PricingConfig[];
-  onUpdatePricing: (pricing: PricingConfig[]) => void;
+  /** Server connection for the pricing editor (issue #333); `null` in demo mode, same convention as the rest of
+   * the portal's live-only surfaces (`ModelOpsModal`'s own `ledger` prop). */
+  ledger: LedgerConnection | null;
   onResetSession: () => void;
   onExportSession: () => void;
   ambientSocialEnabled: boolean;
@@ -30,8 +33,7 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
-  pricing,
-  onUpdatePricing,
+  ledger,
   onResetSession,
   onExportSession,
   ambientSocialEnabled,
@@ -44,20 +46,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onShowUsageBadgesChange,
   locale,
 }) => {
-  const [localPricing, setLocalPricing] = useState<PricingConfig[]>(pricing);
   const [soundActive, setSoundActive] = useState(isSoundEnabled());
   const titleId = useId();
+  const pricingServerApi = useServerApi(ledger);
 
   if (!isOpen) return null;
 
-  const handlePriceChange = (index: number, field: keyof PricingConfig, val: number) => {
-    const updated = [...localPricing];
-    (updated[index] as any)[field] = val;
-    setLocalPricing(updated);
-  };
-
   const handleSave = () => {
-    onUpdatePricing(localPricing);
     setSoundEnabled(soundActive);
     onClose();
   };
@@ -99,46 +94,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {t(locale, 'settings.pricingHelp')}
             </p>
 
-            <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-950">
-              <table className="w-full text-left text-xs font-mono tabular-nums">
-                <thead>
-                  <tr className="border-b border-slate-800 text-[11px] text-slate-400 bg-slate-900/40">
-                    <th scope="col" className="py-2.5 px-3">{t(locale, 'settings.provider')}</th>
-                    <th scope="col" className="py-2.5 px-3">{t(locale, 'settings.model')}</th>
-                    <th scope="col" className="py-2.5 px-3 text-right">{t(locale, 'settings.inputPrice')}</th>
-                    <th scope="col" className="py-2.5 px-3 text-right">{t(locale, 'settings.outputPrice')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                  {localPricing.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-slate-900/30">
-                      <td className="py-2 px-3 text-slate-400 font-sans">{item.provider}</td>
-                      <td className="py-2 px-3 font-semibold text-slate-200">{item.model}</td>
-                      <td className="py-2 px-3 text-right">
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={item.inputPerMillion}
-                          aria-label={t(locale, 'settings.inputPriceFor', { model: item.model })}
-                          onChange={(e) => handlePriceChange(idx, 'inputPerMillion', parseFloat(e.target.value) || 0)}
-                          className="w-20 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-right text-emerald-400 text-xs focus:outline-none"
-                        />
-                      </td>
-                      <td className="py-2 px-3 text-right">
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={item.outputPerMillion}
-                          aria-label={t(locale, 'settings.outputPriceFor', { model: item.model })}
-                          onChange={(e) => handlePriceChange(idx, 'outputPerMillion', parseFloat(e.target.value) || 0)}
-                          className="w-20 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-right text-emerald-400 text-xs focus:outline-none"
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <PricingEditor serverApi={pricingServerApi} locale={locale} />
           </div>
 
           {/* Section: Privacy & Security Filter */}

@@ -2,7 +2,7 @@
 
 `@warlockcode/agent-viewer` puts the Agent Viewer office inside your own React app. The office is a Canvas2D scene drawn only from the events you pass: the agents your runtime registers, their statuses, the tools they use, the messages they send and the meetings they hold.
 
-This guide covers version **0.6.0**. Leer en español: [library.es.md](library.es.md).
+This guide covers version **0.7.0**. Leer en español: [library.es.md](library.es.md).
 
 ## Contents
 
@@ -41,7 +41,7 @@ The runtime dependencies are `lucide-react` (icons), `zod` (strict event validat
 Publication on npm is coming soon. Until then, install the package from the GitHub release asset:
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.6.0/warlockcode-agent-viewer-0.6.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.7.0/warlockcode-agent-viewer-0.7.0.tgz
 ```
 
 The package name is `@warlockcode/agent-viewer` in both cases, so your imports will not change when you switch to the npm registry.

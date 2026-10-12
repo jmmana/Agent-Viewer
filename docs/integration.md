@@ -1281,6 +1281,11 @@ unbounded query, or one starting at or before it) also turns `complete` to `fals
 
 ## 🧩 10. Framework Adapters
 
+### Packaged adapters
+
+Installable code that imports the real framework, tested against it in CI. See the maturity table in
+[README.md](../README.md#-connect-your-agents) for the exact test file or CI job behind each one.
+
 **LangGraph** has a published adapter package, `AgentViewerCallbackHandler`, for both languages: `@warlockcode/agent-viewer-langgraph` on npm (peer dependencies `@langchain/core` and `@warlockcode/agent-viewer-sdk`) and `agent_viewer_langgraph` in the Python SDK (`pip install "agent-viewer[langgraph]"`). Pass the handler in the graph config; node runs become `agent.status.changed` (Thinking, Done, Blocked or Waiting on an interrupt), tools become `tool.started`/`tool.completed`/`tool.failed`, and model calls become `llm.usage` (only when the provider reported both token counts) or `llm.failed`. Prompts, completions, tool inputs and outputs and error messages are never sent; callback metadata goes through a whitelist (`langgraph_node`, `thread_id`, `ls_provider`, `ls_model_name`, `ls_model_type`), and `thread_id` becomes the session.
 
 ```ts
@@ -1291,14 +1296,19 @@ await handler.flush();
 
 Full guide: [docs/adapters/langgraph.md](adapters/langgraph.md). Runnable example with a fake chat model: [`examples/langgraph/`](../examples/langgraph/README.md).
 
-Example adapter implementations for the other frameworks are available in `examples/`:
+**OpenAI Agents SDK** has a published workspace package, `@warlockcode/agent-viewer-openai-agents` (`packages/openai-agents/`, peer dependency `@openai/agents`, dependency `@warlockcode/agent-viewer-sdk`). It registers `AgentViewerTracingProcessor` with `addTraceProcessor()`/`setTraceProcessors()` instead of requiring manual callbacks: agent runs, handoffs, tool calls and model usage are captured automatically from the SDK's own tracing pipeline. Tested against the real `@openai/agents` package in [`tests/openai-agents-adapter.test.mjs`](../tests/openai-agents-adapter.test.mjs). Not yet published to npm (issue #346's publish plumbing covers LangGraph only so far); see [`packages/openai-agents/README.md`](../packages/openai-agents/README.md).
+
+Both packages follow the same workspace layout and `check:package` convention (issue #343); neither is a dependency of the main `@warlockcode/agent-viewer` package, so installing it is opt-in.
+
+### Example adapters
+
+Code to copy and adapt, kept in `examples/`. These do not import the framework and are not run against it in CI (Google ADK is type-checked only):
 
 - **CrewAI** (`examples/crewai-adapter.py`): Crew agent registration, task delegation, step actions, token telemetry.
 - **AutoGen** (`examples/autogen-adapter.py`): ConversableAgent and GroupChat dialogues, tool returns, and token counts.
-- **OpenAI Agents SDK** (`examples/openai-agents-adapter/`, see its [README](../examples/openai-agents-adapter/README.md)): a real tracing-processor adapter (`AgentViewerTracingProcessor`) registered via `addTraceProcessor()`, tested against the real `@openai/agents` package in CI. Agent runs, handoffs, tool calls and model usage are captured automatically from the SDK's own tracing pipeline, no manual callbacks.
 - **Google ADK** (`examples/google-adk-adapter.ts`): Gemini turns, function calling, grounding, token telemetry.
 
-All adapters adhere to the **Trust Boundary Principle**: Only observable states, dialogues, and telemetry are transmitted; internal chain-of-thought scratchpads are never leaked.
+All adapters, packaged and example alike, adhere to the **Trust Boundary Principle**: Only observable states, dialogues, and telemetry are transmitted; internal chain-of-thought scratchpads are never leaked.
 
 ## 📈 11. Seeing your usage in Model Ops
 

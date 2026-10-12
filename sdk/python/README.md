@@ -20,7 +20,7 @@ You can also build a wheel and install it elsewhere:
 
 ```bash
 python -m pip wheel ./sdk/python -w dist/
-pip install dist/agent_viewer-0.6.0-py3-none-any.whl
+pip install dist/agent_viewer-0.7.0-py3-none-any.whl
 ```
 
 ## Quick start
@@ -139,7 +139,7 @@ viewer.close(timeout=5.0)    # final bounded flush attempt; also usable as `with
 
 A short-lived script gets one last delivery attempt at interpreter exit (`atexit`); anything still queued stays on disk for the next run to pick up. Every counter in `SpoolStats` is an event count, never a token or money figure: the spool never sums, prices or defaults usage, and it stores each event's JSON exactly as the SDK built it (a missing `cost` stays absent, never `0`). When the backlog hits `spool_max_events`/`spool_max_bytes`, `spool_overflow="drop_oldest"` (the default) evicts the oldest non-`llm.usage` row first and only touches usage rows once nothing else is left; `"drop_newest"` refuses the incoming event instead. Every drop and every server-side rejection is counted, never silent; a poison event (the server answers `400` for just that one item during a batch replay) is isolated into a 100-row dead letter (`spool_rejected()`) instead of blocking the events behind it.
 
-**The spool holds your event data in clear text on disk**: the same summaries, messages and tags the SDK would otherwise have sent over the network, nothing more, and never the API token (headers are rebuilt from the live client at send time). Treat the spool directory (`0700`, files `0600`) like any other local credential-adjacent data: on `/var/lib/...` on a server, with its own file permissions, not in a repo. One caveat: an in-memory server (`AGENT_VIEWER_STORAGE=memory`, the default without `AGENT_VIEWER_DB_PATH`) forgets ids past 10000 events, so replaying a very long outage against a memory-mode server could in principle double-count a very old id; SQLite-mode servers have no such limit.
+**The spool holds your event data in clear text on disk**: the same summaries, messages and tags the SDK would otherwise have sent over the network, nothing more, and never the API token (headers are rebuilt from the live client at send time). Treat the spool directory (`0700`, files `0600`) like any other local credential-adjacent data: on `/var/lib/...` on a server, with its own file permissions, not in a repo. One caveat: an in-memory server (`AGENT_VIEWER_STORAGE=memory`, the default; set it to `sqlite` to persist to `AGENT_VIEWER_SQLITE_PATH` instead) forgets ids past 10000 events, so replaying a very long outage against a memory-mode server could in principle double-count a very old id; SQLite-mode servers have no such limit.
 
 Full cross-language contract (shared with the TypeScript SDK): [docs/sdk-queue.md](../../docs/sdk-queue.md).
 

@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/jmmana/Agent-Viewer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/jmmana/Agent-Viewer/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white" alt="CI status" /></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.6.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.6.0" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.7.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.7.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" alt="MIT license" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer"><img src="https://img.shields.io/github/stars/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=a855f7&label=stars" alt="GitHub stars" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer/network/members"><img src="https://img.shields.io/github/forks/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=4c1d95&label=forks" alt="GitHub forks" /></a>
@@ -202,12 +202,12 @@ This starts the API on **:8787** with SQLite on a named volume, and the built de
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> in professional mode: a meeting where agents propose, object, agree and decide. Only the events passed to the component are drawn.</sub>
 </p>
 
-Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.6.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
+Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.7.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
 
 Publication on npm is coming soon. Until then, install it from the GitHub release asset (the package name and your imports stay the same when you switch to npm):
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.6.0/warlockcode-agent-viewer-0.6.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.7.0/warlockcode-agent-viewer-0.7.0.tgz
 ```
 
 ### Minimal example
@@ -966,12 +966,12 @@ Agent Viewer needs no model provider keys: usage figures come from your runtime.
 
 Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showcase modes, message kinds, replay, video export, isolated CSS, keyboard access and English and Spanish texts. Shipped in [0.3.0](CHANGELOG.md): true usage figures end to end, `llm.failed`, Claude Code token telemetry, and the first publish to npm, PyPI and GHCR. Shipped in [0.4.0](CHANGELOG.md): the usage ledger with the server receive time, the rollup and calls APIs, CSV/JSONL export with reconciliation totals, retention, secret redaction at export, an API that no longer accepts a token in the URL or runs open by accident, the portal loading full history on open, and OTLP metrics ingestion. Shipped in [0.5.0](CHANGELOG.md): per-agent usage badges and a per-call detail panel on the canvas, cost per meeting and per tool, Model Ops reconciling against the real ledger call by call, and the library guide's four usage privacy rules stated together in [docs/library.md](docs/library.md#usage-figures). Shipped in [0.6.0](CHANGELOG.md), "Precios y control": a versioned server pricing table with a per-row cost estimate ([docs/pricing.md](docs/pricing.md)), budgets per agent, model, session, user or tag with server-computed state and signed outbound alerts ([docs/budgets.md](docs/budgets.md)), measured latency percentiles and failure rates per model, and one canonical webhook-signing guide for both directions ([docs/webhooks.md](docs/webhooks.md)). See [docs/migrating-to-0.4.md](docs/migrating-to-0.4.md) if you are upgrading from 0.3.0.
 
-Next, in 0.7.0: the LangGraph adapter as a published package, `@warlockcode/agent-viewer-langgraph` on npm and `agent-viewer[langgraph]` on PyPI ([docs/adapters/langgraph.md](docs/adapters/langgraph.md)).
+Shipped in [0.7.0](CHANGELOG.md), "Captura automática e interoperabilidad": an OTLP/HTTP GenAI traces receiver (`POST /v1/traces`) and the matching `parseEventLog` file import, packaged LangGraph (`@warlockcode/agent-viewer-langgraph`) and OpenAI Agents SDK (`@warlockcode/agent-viewer-openai-agents`) adapters tested against the real frameworks in CI, a durable local queue in both SDKs so a server outage never loses an event, and a Prometheus `GET /metrics` export (opt-in, token-protected, ledger-derived token/cost/call/failure/latency families, in-process ingestion counters, optional OTLP metrics push).
 
 Planned, not available yet:
 
 - [ ] `GET /api/v1/usage/reconciliation`: compare the OTLP metrics stored by `POST /v1/metrics` against the usage ledger. The ledger itself shipped in 0.4.0; this comparison endpoint is still not built.
-- [ ] More adapters, packaged and tested against the real frameworks.
+- [ ] CrewAI, AutoGen and Google ADK as packaged adapters, tested against the real frameworks (today they are examples to adapt).
 - [ ] An MCP server, so agents can report into the office directly.
 - [ ] A web component for apps that do not use React.
 - [ ] A hosted demo on GitHub Pages.

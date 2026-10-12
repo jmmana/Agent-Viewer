@@ -114,7 +114,7 @@ Images are published on every release tag:
 | Tags | What runs | Token |
 |---|---|---|
 | `:<version>`, `:<major>.<minor>`, `:latest` | Office and API (this CLI) | `AGENT_VIEWER_API_TOKEN`, or a new token printed on every start. |
-| `:<version>-api`, `:<major>.<minor>-api`, `:latest-api` | API only (`npm run server`, as in `docker/compose.yml`) | `AGENT_VIEWER_API_TOKEN`; otherwise a token generated on first start, saved in `/app/data/api-token` (kept across restarts with a volume on `/app/data`) and printed in the logs. The API image never runs open. |
+| `:<version>-api`, `:<major>.<minor>-api`, `:latest-api` | API only (`npm run server`, as in `docker/compose.yml`) | `AGENT_VIEWER_API_TOKEN`; otherwise a token generated on first start, saved in `/app/data/api-token` (kept across restarts with a volume on `/app/data`) and printed in the logs. The API image never runs open. Override the generated token's file path with `AGENT_VIEWER_TOKEN_FILE`. |
 
 > **Maintainers:** GitHub Container Registry creates a new package as **private**, and the release workflow cannot change that. After the first image is published, make it public once, or the `docker run` above fails for everyone else: on GitHub, open the `agent-viewer` package, then **Package settings > Danger Zone > Change visibility > Public**. The release run summary shows the current visibility and a warning while it is not public.
 

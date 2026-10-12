@@ -22,6 +22,43 @@ scrape_configs:
       - targets: ["agent-viewer:8787"]
 ```
 
+`credentials_file` must hold the token with no trailing newline (`printf '%s' "$AGENT_VIEWER_METRICS_TOKEN" >
+agent-viewer.token`, not `echo >`). The token travels in clear text over plain HTTP: keep Prometheus and the
+server on a private network, or put TLS in front of either side.
+
+### Docker Compose example
+
+Extends [`docker/compose.yml`](../docker/compose.yml)'s `api` service (same file, same network) with
+`AGENT_VIEWER_METRICS=1` and a `prometheus` service scraping it by its compose service name, `api`, not
+`localhost`:
+
+```yaml
+# docker/compose.yml, abridged: add alongside the existing `api`/`viewer` services and `volumes` key
+services:
+  api:
+    environment:
+      # ...existing variables from compose.yml...
+      - AGENT_VIEWER_METRICS=1
+      - AGENT_VIEWER_METRICS_TOKEN=${AGENT_VIEWER_METRICS_TOKEN:-}
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./agent-viewer.token:/etc/prometheus/agent-viewer.token:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - api
+    restart: unless-stopped
+```
+
+with `docker/prometheus.yml`'s target set to `["api:8787"]` (the compose service name, resolved on the
+compose network the Dockerfile's `EXPOSE` already documents) instead of `agent-viewer:8787`. Verify with
+`curl -H "Authorization: Bearer $AGENT_VIEWER_METRICS_TOKEN" http://localhost:8787/metrics` from the host,
+and `http://localhost:9090/targets` in a browser to confirm Prometheus itself shows the `agent-viewer` target
+as `UP`.
+
 This export is read-only. The ledger-derived families below reuse the same server-side figures the usage ledger
 (#65) already holds, through the rollup query (#66) and the export row stream (#69); it is never a second, less
 careful aggregation path. The rules that protect the numbers everywhere else in this product apply here too:

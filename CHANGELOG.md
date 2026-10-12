@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-12
+
+"Captura automática e interoperabilidad" (automatic capture and interoperability): an OTLP/HTTP GenAI traces
+receiver and file import, packaged LangGraph and OpenAI Agents SDK adapters tested against the real
+frameworks in CI, a durable local queue in both SDKs, and a Prometheus `/metrics` export (core endpoint,
+ledger-derived families, in-process ingestion counters, optional OTLP metrics push).
+
+### Upgrading
+
+Purely additive: no breaking change to the event contract, the HTTP API, or the embeddable library's props.
+Every new setting defaults to off or to its existing behavior, so an existing deployment needs no
+configuration change to keep working.
+
+- The SDK durable queue (Python `spool_dir=...`, TypeScript `spoolDir`/`AGENT_VIEWER_SPOOL_DIR`) is opt-in:
+  without it, both SDKs behave exactly as before (an unrecovered transient failure still raises/throws).
+- `GET /metrics` is opt-in (`AGENT_VIEWER_METRICS=1`, CLI `--metrics`); unset, the route answers `404`
+  exactly like before this release. See [docs/metrics.md](docs/metrics.md) for every new environment
+  variable it reads.
+- The OTLP traces receiver (`POST /v1/traces`) and file import share the existing OTLP auth, rate limit and
+  size-limit settings already in place for `/v1/logs`/`/v1/metrics`; no new required variable.
+- `examples/openai-agents-adapter/` is removed (dead code since issue #361); import
+  `@warlockcode/agent-viewer-openai-agents` instead if anything in your own tree still referenced that path
+  (see the Removed section below).
+
 ### Added
 
 - **Durable local queue in the Python SDK (#101, v0.7.0 milestone)**: optional, bounded, on-disk spool (`spool_dir=...`, stdlib `sqlite3` only, no third-party dependency) so a transient failure (connection down, reset, timeout, `408`, `429`, any `5xx`) after the normal retries never raises into the host agent. Events are written to disk with their original `id` and `timestamp` and replayed in enqueue order once the server returns, through `POST /api/v1/events/batch`, so the server's own idempotency by `id` keeps totals honest. New `AgentViewer` arguments (`spool_dir`, `spool_max_events`, `spool_max_bytes`, `spool_overflow`, `spool_batch_size`, `spool_background`, `spool_probe_interval`, `spool_max_probe_interval`) and methods (`flush()`, `spool_stats()`, `spool_rejected()`, `close()`, usable as a context manager, plus an `atexit` final flush). A size cap evicts the oldest non-usage events before usage events (`drop_oldest`, the default) or refuses the new event (`drop_newest`); every drop and every server-side rejection is counted in `SpoolStats`, never silently lost, and the spool never sums, prices or defaults usage (a missing `cost` stays absent, never `0`). Also fixes transient-failure classification with the spool disabled: a raw `OSError`/`http.client.HTTPException` and HTTP `408` are now retried instead of escaping or failing immediately. New `docs/sdk-queue.md` (shared contract with the TypeScript SDK, #102) and `tests/fixtures/sdk-queue-scenarios.json` (shared test vectors). New `tests/test_python_sdk_spool.py` (34 tests: outages, restart persistence, overflow matrix, poison events, `413`/`429`/`401` handling, corrupt/newer-schema spool files, permissions, fork safety, a seeded randomized concurrency test). CI now runs both Python SDK test files and adds a Python 3.9 job to exercise the SDK's declared minimum version.
@@ -28,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - import { LangGraphViewerAdapter } from './langgraph-adapter';
   + import { AgentViewerCallbackHandler } from '@warlockcode/agent-viewer-langgraph';
   + await graph.invoke(inputs, { callbacks: [new AgentViewerCallbackHandler({ runtimeId: 'my-graph' })] });
+  ```
+
+- **`examples/openai-agents-adapter/` (issue #104)**: dead code left behind when issue #361 moved this adapter into the published workspace package. Nothing imported it (`tests/examples-adapters.test.mjs`'s own doc comment already said the case was removed in favor of `tests/openai-agents-adapter.test.mjs`), so it only duplicated `packages/openai-agents/src/processor.ts` with a stale doc comment. To migrate, import from the package instead:
+
+  ```diff
+  - import { AgentViewerTracingProcessor } from './openai-agents-adapter/processor';
+  + import { AgentViewerTracingProcessor } from '@warlockcode/agent-viewer-openai-agents';
   ```
 
 ## [0.6.0] - 2026-10-11

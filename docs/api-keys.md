@@ -61,7 +61,7 @@ its own scopes. A redeemed stream ticket carries only `read` (minting one alread
   since that token is always admin.
 - Scopes cannot be changed on a revoked key (`409 key_revoked`).
 
-**Query-string credentials.** No key, whatever its scopes, is ever accepted as `?token=`/`?api_key=` on `/api/v1`:
+**Query-string credentials.** No key, whatever its scopes, is ever accepted via the `token` or `api_key` query parameters on `/api/v1`:
 that was already rejected for every credential since issue #71 (`401 query_token_not_supported`), which more than
 covers the "never in the query string for `audit`/`admin`" rule.
 

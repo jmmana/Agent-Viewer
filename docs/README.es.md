@@ -73,7 +73,7 @@ Es código abierto (MIT), corre en tu máquina, no necesita ninguna clave de pro
 | 📡 **Servidor de ingesta** | API Express en el puerto 8787: ingesta individual y por lotes con idempotencia, flujo Server-Sent Events que se reanuda desde el último evento, webhook genérico con firma HMAC y almacenamiento en memoria o SQLite. |
 | 🐍 **SDKs y adaptadores** | Clientes en Python y TypeScript, y adaptadores de ejemplo para LangGraph, CrewAI, AutoGen, OpenAI Agents SDK y Google ADK. |
 | 🎬 **Repetición y exportación** | Carga un log JSONL V1, repítelo a su ritmo original con salto y velocidad, y grábalo en WebM o MP4 desde el navegador. |
-| 📊 **Consola Model Ops** | En la app de demostración: las pestañas Matriz, Agentes y Flujo leen el ledger de uso del servidor (`GET /api/v1/usage/rollup` y `/usage/calls`), así que las cifras concilian llamada por llamada; un valor que el ledger nunca reportó se muestra como "n/d", nunca como cero. Cada tarjeta de modelo también muestra percentiles de latencia medidos (p50/p95, nearest-rank, solo a partir de valores reales reportados de `latencyMs`) y la tasa de fallas con el tamaño de muestra junto a cada cifra (`n = 1.102, 78 sin latencia`); sin muestras dice "Sin latencia reportada" y sin intentos "Sin datos", nunca `0`. Una pestaña Simulador separada se mantiene, claramente etiquetada, sin efecto en los datos reales. Sin un servidor conectado, Model Ops cae a una vista simulada y etiquetada sobre el estado local de la demo. |
+| 📊 **Consola Model Ops** | En la app de demostración: las pestañas Matriz, Agentes y Flujo leen el ledger de uso del servidor (`GET /api/v1/usage/rollup` y `/usage/calls`), así que las cifras concilian llamada por llamada; un valor que el ledger nunca reportó se muestra como "n/d", nunca como cero. Cada tarjeta de modelo también muestra percentiles de latencia medidos (p50/p95, nearest-rank, solo a partir de valores reales reportados de `latencyMs`) y la tasa de fallas con el tamaño de muestra junto a cada cifra (`n = 1.102, 78 sin latencia`); sin muestras dice "Sin latencia reportada" y sin intentos "Sin datos", nunca `0`. Una pestaña Simulador separada se mantiene, claramente etiquetada, sin efecto en los datos reales. Dos pestañas más administran estado propiedad del servidor directamente: **Pricing** edita la tabla de precios versionada (`GET`/`POST /api/v1/pricing*`) con guardado por fila, un formulario para agregar modelo y un cajón de historial de versiones; **Budgets** lista, crea, edita y elimina presupuestos propiedad del servidor (`GET`/`POST`/`PUT`/`DELETE /api/v1/budgets*`), con el `spent`/`ratio`/`state` en vivo de cada uno leído directamente del servidor. Ninguna de las dos pestañas calcula un precio ni un veredicto de presupuesto en el navegador: los precios y los límites viven en el servidor, nunca inventados ni recalculados por el portal. Sin un servidor conectado, Model Ops cae a una vista simulada y etiquetada sobre el estado local de la demo, y las pestañas Pricing/Budgets muestran una explicación de modo demo en lugar de campos editables. |
 
 ## 🧠 Principios
 
@@ -847,8 +847,11 @@ o etiqueta, por día, semana o mes: `POST /api/v1/budgets` con `scope`, `period`
 lectura, y responde uno de cuatro estados: `ok`, `warning`, `exceeded` o `unknown`, este último siempre que la
 cifra esté incompleta (un costo faltante, una moneda distinta, historial truncado), nunca adivinado como `ok`.
 `GET /api/v1/snapshot` trae el mismo estado calculado en su campo `budgets`, y un cambio de estado empuja un frame
-SSE nombrado `event: budget`. Ambos SDK exponen un `budgets()` de solo lectura. Referencia completa, con cada
-endpoint y un request/response real capturado: [docs/budgets.md](budgets.md) (en inglés).
+SSE nombrado `event: budget`. Ambos SDK exponen un `budgets()` de solo lectura. La pestaña **Budgets** de Model Ops
+en la app de demostración es la interfaz propia del portal para esto: lista cada presupuesto con su `spent`/
+`ratio`/`state` en vivo, y permite crear, editar y eliminar uno, leyendo cada cifra directamente del servidor, sin
+calcular nunca un ratio ni un veredicto por su cuenta. Referencia completa, con cada endpoint y un request/response
+real capturado: [docs/budgets.md](budgets.md) (en inglés).
 
 </details>
 
@@ -930,7 +933,7 @@ Crea tu `.env` en la raíz del repositorio a partir del ejemplo: `cp server/.env
 
 ## 🎮 App de demostración
 
-`npm run dev` levanta la oficina viva completa: un equipo simulado, una secuencia de demostración guionizada, vida ambiental, un tablero de tareas, salas de reunión, una línea de tiempo de actividad y la consola Model Ops. Es la vitrina; la librería integrable es el producto que llevas a producción.
+`npm run dev` levanta la oficina viva completa: un equipo simulado, una secuencia de demostración guionizada, vida ambiental, un tablero de tareas, salas de reunión, una línea de tiempo de actividad y la consola Model Ops (incluidas sus pestañas Pricing y Budgets sobre el catálogo y los límites propios del servidor). Es la vitrina; la librería integrable es el producto que llevas a producción.
 
 | Acción | Control |
 |---|---|

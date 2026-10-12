@@ -167,7 +167,7 @@ other path (for example a `401` on `GET /api/v1/sessions`).
 | `malformed_json` | A body that is not valid JSON (`400 Malformed JSON payload`, or the OTLP receivers' body-parser errors). |
 | `payload_too_large` | A body over the size limit (`413`, from the global JSON parser or an OTLP receiver), or an OTLP request over `AGENT_VIEWER_OTLP_MAX_RECORDS`. |
 | `unrecognized_payload` | A webhook with no agent activity (`unrecognized_webhook_payload`), an OTLP body that is not the expected request shape or does not decode, or an unsupported OTLP content type (`415`). |
-| `unauthorized` | A missing or wrong Bearer token (`401`), an invalid stream ticket, a `?token=` query, an open-mode guard `403`, or `/metrics`'s own `401`/`403 metrics_require_token`. |
+| `unauthorized` | A missing or wrong Bearer token (`401`), an invalid stream ticket, a `token` query parameter (never accepted), an open-mode guard `403`, or `/metrics`'s own `401`/`403 metrics_require_token`. |
 | `rate_limited` | `429` from the `/api/v1`, OTLP or `/metrics` rate limiter. |
 | `signature` | A webhook with missing or invalid `X-Agent-Viewer-Signature`/`X-Agent-Viewer-Timestamp` headers. |
 | `replay` | A webhook whose timestamp is outside the replay window (`replay_detected_or_clock_skew`). |

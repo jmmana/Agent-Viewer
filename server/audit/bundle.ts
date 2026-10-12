@@ -435,7 +435,11 @@ export async function streamAuditBundle(deps: AuditBundleDeps, requested: AuditB
       let eventCount = 0;
       let ledgerCount = 0;
       if (!isEmpty) {
-        const page = db.prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE hash IS NOT NULL AND seq >= ? AND seq <= ? ORDER BY seq LIMIT ?`);
+        // Keyset pagination on a strict `seq > cursor`, not `>=`: `cursor` starts at `fromSeq - 1`, so the first
+        // page already begins exactly at `fromSeq`. An inclusive `>=` here, with that same starting cursor, would
+        // wrongly include the row at `fromSeq - 1` on every first page (a partial-range export's `fromSeq` row
+        // would then always be off by one).
+        const page = db.prepare(`SELECT ${EVENT_COLUMNS} FROM events WHERE hash IS NOT NULL AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?`);
         const ledgerStmt = (ids: string[]) =>
           db
             .prepare(

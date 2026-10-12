@@ -1,20 +1,23 @@
 /**
- * Minimal Prometheus text-exposition writer for `GET /metrics` (issue #103, first sub-issue). No `prom-client`,
- * no runtime dependency, about 100 lines: a label sanitizer/escaper and a renderer for the text format 0.0.4.
+ * Minimal Prometheus text-exposition writer for `GET /metrics` (issue #103). No `prom-client`, no runtime
+ * dependency: a label sanitizer/escaper and a renderer for the text format 0.0.4.
  *
- * This slice ships only the in-process families `server/index.ts` can compute without a ledger query:
- * `agent_viewer_build_info` and `agent_viewer_sse_clients`. The ledger-derived families (tokens, cost, calls,
- * failures, latency) and the cardinality cap they need are a later sub-issue of #103, tracked separately so the
- * endpoint, its auth model and its opt-in/rate-limit plumbing can ship and be reviewed on their own first. See
- * `docs/metrics.md` (added by that later sub-issue) for the full catalog; this module intentionally has no
- * histogram or counter-accumulation support yet, since nothing in this slice needs one.
+ * The first sub-issue (#350) shipped only the in-process families `server/index.ts` can compute without a
+ * ledger query: `agent_viewer_build_info` and `agent_viewer_sse_clients`. This sub-issue (#348) adds the
+ * ledger-derived families (`server/metrics/ledgerFamilies.ts`), which is why `MetricType` now includes
+ * `'histogram'` and `MetricSample` carries an optional `suffix` (`_bucket`/`_sum`/`_count`): a histogram family
+ * writes multiple series per sample under the same `# HELP`/`# TYPE` pair, each with the family name plus that
+ * suffix, per the text-exposition format's own convention (`agent_viewer_llm_latency_seconds_bucket{...,le="1"}`,
+ * `..._sum`, `..._count`). Counter and gauge families never set `suffix` and render exactly as before.
  */
 
-export type MetricType = 'counter' | 'gauge';
+export type MetricType = 'counter' | 'gauge' | 'histogram';
 
 export interface MetricSample {
   labels: Record<string, string>;
   value: number;
+  /** Histogram families only: which of `_bucket`/`_sum`/`_count` this sample is. Ignored for counter/gauge. */
+  suffix?: '_bucket' | '_sum' | '_count';
 }
 
 export interface MetricFamily {
@@ -61,7 +64,8 @@ function writeFamily(lines: string[], family: MetricFamily): void {
   lines.push(`# HELP ${family.name} ${family.help}`);
   lines.push(`# TYPE ${family.name} ${family.type}`);
   for (const sample of family.samples) {
-    lines.push(`${family.name}${formatLabels(sample.labels)} ${formatNumber(sample.value)}`);
+    const name = family.type === 'histogram' && sample.suffix ? `${family.name}${sample.suffix}` : family.name;
+    lines.push(`${name}${formatLabels(sample.labels)} ${formatNumber(sample.value)}`);
   }
 }
 

@@ -24,7 +24,14 @@ import {
 } from './store';
 import { parseRetentionConfig, startRetention, usageRetentionWarning, type RetentionConfig, type RetentionJobHandle } from './retention';
 import { readPackageVersion } from './version';
-import { createMetricsHandler, createMetricsRegistry, METRICS_PATH } from './metrics';
+import {
+  createHttpMetrics,
+  createLedgerMetrics,
+  createMetricsHandler,
+  createMetricsRegistry,
+  METRICS_PATH,
+  type IngestionOutcome,
+} from './metrics';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
 import type { RollupQuery, UsageFilters } from './usage/types';
@@ -102,7 +109,11 @@ const app = express();
 // Express 5 defaults to the "simple" query parser. Keep the "extended" (qs) parser of Express 4 so query
 // strings such as `?type[a]=b` keep parsing the same way.
 app.set('query parser', 'extended');
-const port = Number(process.env.PORT ?? 8787);
+// Issue #348: first middleware, so every request (including a 401/429 refused before its route) is timed and
+// every ingestion outcome counted once its response has finished.
+const httpMetrics = createHttpMetrics();
+app.use(httpMetrics.middleware);
+const port =Number(process.env.PORT ?? 8787);
 const maxBatchSize = Number(process.env.AGENT_VIEWER_MAX_BATCH_SIZE ?? 100);
 const rateLimitMax = Number(process.env.AGENT_VIEWER_RATE_LIMIT ?? 1000);
 /** Above this many matching rows, `GET /api/v1/usage/export` answers `422 export_too_large` before streaming
@@ -863,7 +874,8 @@ app.post(OTLP_METRICS_PATH, async (req, res) => {
 });
 
 // Prometheus /metrics (issue #350): opt-in, mounted before the global body parser and CORS with its own rate
-// limit and auth (see server/metrics.ts). Collectors are read on every scrape, never cached.
+// limit and auth (see server/metrics.ts). In-process collectors are read on every scrape; the ledger families
+// (issue #348) go through a short scrape cache, and a failed ledger query is a 503, never a partial body.
 const metricsRegistry = createMetricsRegistry();
 metricsRegistry.register({
   name: 'agent_viewer_build_info',
@@ -877,7 +889,15 @@ metricsRegistry.register({
   type: 'gauge',
   collect: () => clients.size,
 });
-app.all(METRICS_PATH, createMetricsHandler({ registry: metricsRegistry, getApiToken, safeEqual }));
+httpMetrics.register(metricsRegistry);
+const ledgerMetrics = createLedgerMetrics({ usageMetrics: () => store.usageMetrics() });
+ledgerMetrics.register(metricsRegistry);
+app.all(METRICS_PATH, createMetricsHandler({ registry: metricsRegistry, getApiToken, safeEqual, prepare: ledgerMetrics.load }));
+
+/** What an ingestion route stored, for `agent_viewer_events_*_total` (issue #348). */
+function recordIngestion(res: express.Response, outcome: IngestionOutcome): void {
+  res.locals.ingestion = outcome;
+}
 
 // Body parsing with raw buffer capture for webhook HMAC
 app.use(
@@ -1337,6 +1357,7 @@ app.post('/api/v1/events', async (req, res) => {
   }
 
   if (result.outcome === 'duplicate') {
+    recordIngestion(res, { accepted: 0, duplicates: 1, conflicts: 0 });
     // `id` is the id the figure is held under: the original event id for a request_id duplicate, the same id
     // sent for an event_id duplicate. `submittedId` and `matchesOriginal` appear only when they apply (#48).
     res.status(200).json({
@@ -1354,6 +1375,7 @@ app.post('/api/v1/events', async (req, res) => {
   }
 
   broadcastEvent(event, result.seq);
+  recordIngestion(res, { accepted: 1, duplicates: 0, conflicts: 0 });
 
   res.status(202).json({
     accepted: true,
@@ -1412,6 +1434,7 @@ app.post('/api/v1/events/batch', async (req, res) => {
   });
 
   if (errors.length > 0) {
+    recordIngestion(res, { accepted: 0, duplicates: 0, conflicts: 0, invalid: rawEvents.length });
     res.status(400).json({
       error: 'validation_failed',
       message: `${errors.length} event(s) in batch failed validation`,
@@ -1425,6 +1448,7 @@ app.post('/api/v1/events/batch', async (req, res) => {
   });
 
   acceptedEvents.forEach((event, index) => broadcastEvent(event, acceptedSeqs[index] ?? null));
+  recordIngestion(res, { accepted, duplicates, conflicts });
 
   // 202 even when every item is a conflict, so existing clients keep working: read `conflicts` and each `status`.
   res.status(202).json({
@@ -2761,6 +2785,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
         duplicate: true,
       }));
 
+      recordIngestion(res, { accepted: 0, duplicates: generatedEvents.length, conflicts: 0 });
       res.status(200).json({
         accepted: true,
         duplicate: isDuplicate,
@@ -2797,6 +2822,7 @@ app.post('/api/v1/webhooks/generic', async (req, res) => {
 
   // Step 8: Broadcast only newly accepted events
   acceptedEvents.forEach((evt, index) => broadcastEvent(evt, acceptedSeqs[index] ?? null));
+  recordIngestion(res, { accepted, duplicates, conflicts });
 
   const isDuplicate = accepted === 0 && duplicates > 0 && conflicts === 0;
   const statusCode = conflicts > 0 ? 409 : accepted > 0 ? 202 : 200;

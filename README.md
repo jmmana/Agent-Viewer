@@ -894,6 +894,7 @@ Create your `.env` at the repository root from the example: `cp server/.env.exam
 | `AGENT_VIEWER_ALERT_WEBHOOK_ALLOW_HTTP` | unset | Set to `1` to allow a plain `http://` destination on a non-loopback host. Loopback (`localhost`, `127.0.0.0/8`, `::1`) is always allowed regardless. |
 | `AGENT_VIEWER_ALERT_WEBHOOK_MAX_ATTEMPTS` | `6` | Total delivery attempts (1 initial plus retries) before a delivery is left `failed` for good. Integer 1 to 20. |
 | `AGENT_VIEWER_ALERT_WEBHOOK_TIMEOUT_MS` | `5000` | Per-attempt HTTP timeout. Integer 500 to 60000. |
+| `AGENT_VIEWER_METRICS` | off | Serves Prometheus metrics at `GET /metrics`: ingestion counters, request durations, and token, cost, call, failure and latency families from the usage ledger. `AGENT_VIEWER_METRICS_MAX_MODELS` (100) caps the labelled models, `AGENT_VIEWER_METRICS_CACHE_MS` (5000) caches the ledger query. See [docs/metrics.md](docs/metrics.md). |
 | `AGENT_VIEWER_RETENTION_DAYS` | unset (keep forever) | Raw events whose server receive time is older than this many days are purged by a scheduled job. Integer `1` to `36500`; `0` and any other invalid value refuse to start. See [docs/retention.md](docs/retention.md). |
 | `AGENT_VIEWER_USAGE_RETENTION_DAYS` | unset (keep forever) | Same, for the usage ledger (the audit record of tokens and cost), independently of `AGENT_VIEWER_RETENTION_DAYS`. Setting it logs a one-line startup warning. |
 | `AGENT_VIEWER_RETENTION_INTERVAL_MINUTES` | `60` | How often the purge job runs, once either window above is set. Integer `1` to `1440`. |

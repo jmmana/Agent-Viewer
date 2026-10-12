@@ -52,6 +52,7 @@ import { buildListCallsQuery, listCallsInMemory, sqliteRowToCallRecord, type Cal
 import { type UsageSummary } from './usageAggregates';
 import { buildWhere, computeMemoryRollup, computeSqliteRollup, rowMatchesFilters } from './usage/rollup';
 import type { RollupQuery, UsageFilters, UsageRollupResponse } from './usage/types';
+import { LLM_LATENCY_BUCKETS_SECONDS, type UsageMetricsGroup, type UsageMetricsSnapshot } from './metrics';
 import { applyRollupAttributionSideEffect, ensureRollupAttributionTables, runRollupAttributionBackfill } from './rollupAttribution';
 import {
   applyEvent,
@@ -644,6 +645,10 @@ export interface EventStore {
   /** Grouped sums over the usage ledger (issue #66): `GET /api/v1/usage/rollup`. Both stores go through the same
    * shaper (`server/usage/rollup.ts`), so rounding, key ordering and `day` buckets never diverge. */
   rollup(query: RollupQuery): Promise<UsageRollupResponse>;
+  /** Ledger sums for Prometheus `/metrics` (issue #348): the rollup's sums (issue #66), unfiltered, grouped by
+   * provider/model/currency/status/errorKind/eventType, plus latency buckets and each group's first `seq` (the
+   * order the cardinality cap keeps models in). One grouped query in SQLite mode, one pass in memory mode. */
+  usageMetrics(): Promise<UsageMetricsSnapshot>;
   /** Streams ledger rows matching `filters` (issue #69: `GET /api/v1/usage/export`), ascending by `seq`, with
    * `filters.afterSeq < seq <= asOfSeq`. Never materializes the full match set: SQLite mode pages through
    * `chunkSize` rows at a time via keyset pagination on `seq` (bounded peak memory for a million-row export);
@@ -1315,6 +1320,64 @@ export class MemoryEventStore implements EventStore {
       // the SQLite `tool_calls`/`meeting_labels` tables, kept current on every accepted event.
       attributionIndex: { toolCallNames: this.state.toolCallNames, meetingTitles: this.state.meetingTitles },
     });
+  }
+
+  async usageMetrics(): Promise<UsageMetricsSnapshot> {
+    const groups = new Map<string, UsageMetricsGroup>();
+    let oldest: number | null = null;
+    let newest: number | null = null;
+    for (const row of this.ledger) {
+      if (oldest === null || row.receivedAt < oldest) oldest = row.receivedAt;
+      if (newest === null || row.receivedAt > newest) newest = row.receivedAt;
+      const key = JSON.stringify([row.provider, row.model, row.currency, row.status, row.errorKind, row.eventType]);
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          provider: row.provider,
+          model: row.model,
+          currency: row.currency,
+          status: row.status,
+          errorKind: row.errorKind,
+          eventType: row.eventType,
+          firstSeq: row.seq,
+          calls: 0,
+          tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 },
+          tokensUnreported: { input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 },
+          costReported: 0,
+          costEstimated: 0,
+          costUnknownCalls: 0,
+          latencyCount: 0,
+          latencySumMs: 0,
+          latencyBuckets: LLM_LATENCY_BUCKETS_SECONDS.map(() => 0),
+        };
+        groups.set(key, group);
+      }
+      group.calls++;
+      const tokenValues = {
+        input: row.inputTokens,
+        output: row.outputTokens,
+        cache_read: row.cacheReadTokens,
+        cache_write: row.cacheWriteTokens,
+        reasoning: row.reasoningTokens,
+      };
+      for (const [kind, value] of Object.entries(tokenValues) as Array<[keyof typeof tokenValues, number | null]>) {
+        if (value === null) group.tokensUnreported[kind]++;
+        else group.tokens[kind] += value;
+      }
+      if (row.cost === null || row.costSource === 'unknown') group.costUnknownCalls++;
+      else if (row.costSource === 'provider-reported') group.costReported += row.cost;
+      else group.costEstimated += row.cost;
+      const latencyMs = row.latencyMs;
+      if (row.eventType === 'llm.usage' && latencyMs !== null) {
+        group.latencyCount++;
+        group.latencySumMs += latencyMs;
+        const buckets = group.latencyBuckets;
+        LLM_LATENCY_BUCKETS_SECONDS.forEach((le, i) => {
+          if (latencyMs <= le * 1000) buckets[i]++;
+        });
+      }
+    }
+    return { groups: [...groups.values()], oldestReceivedAt: oldest, newestReceivedAt: newest };
   }
 
   /** `this.ledger` is already fully resident (append-only, seq-ascending; see its own field comment), so this
@@ -2652,6 +2715,61 @@ export class SQLiteEventStore implements EventStore {
 
   async rollup(query: RollupQuery): Promise<UsageRollupResponse> {
     return computeSqliteRollup(this.db, query);
+  }
+
+  async usageMetrics(): Promise<UsageMetricsSnapshot> {
+    const tokenColumns = [
+      ['input', 'input_tokens'],
+      ['output', 'output_tokens'],
+      ['cache_read', 'cache_read_tokens'],
+      ['cache_write', 'cache_write_tokens'],
+      ['reasoning', 'reasoning_tokens'],
+    ] as const;
+    const latencyRow = "event_type = 'llm.usage' AND latency_ms IS NOT NULL";
+    const rows = this.db
+      .prepare(
+        `SELECT provider, model, currency, status, error_kind, event_type,
+                MIN(seq) AS first_seq,
+                COUNT(*) AS calls,
+                ${tokenColumns.map(([kind, col]) => `COALESCE(SUM(${col}), 0) AS tok_${kind}, SUM(CASE WHEN ${col} IS NULL THEN 1 ELSE 0 END) AS unrep_${kind}`).join(',\n                ')},
+                COALESCE(SUM(CASE WHEN cost IS NOT NULL AND cost_source = 'provider-reported' THEN cost END), 0) AS cost_reported,
+                COALESCE(SUM(CASE WHEN cost IS NOT NULL AND cost_source = 'estimated' THEN cost END), 0) AS cost_estimated,
+                SUM(CASE WHEN cost IS NULL OR cost_source = 'unknown' THEN 1 ELSE 0 END) AS cost_unknown,
+                SUM(CASE WHEN ${latencyRow} THEN 1 ELSE 0 END) AS lat_count,
+                COALESCE(SUM(CASE WHEN ${latencyRow} THEN latency_ms END), 0) AS lat_sum,
+                ${LLM_LATENCY_BUCKETS_SECONDS.map((le, i) => `SUM(CASE WHEN ${latencyRow} AND latency_ms <= ${le * 1000} THEN 1 ELSE 0 END) AS lat_b${i}`).join(',\n                ')}
+         FROM usage_ledger
+         GROUP BY provider, model, currency, status, error_kind, event_type`
+      )
+      .all() as Array<Record<string, unknown>>;
+    const bounds = this.db.prepare('SELECT MIN(received_at) AS oldest, MAX(received_at) AS newest FROM usage_ledger').get() as {
+      oldest: number | null;
+      newest: number | null;
+    };
+    const str = (value: unknown) => (value === null || value === undefined ? null : String(value));
+    const groups: UsageMetricsGroup[] = rows.map((row) => ({
+      provider: str(row.provider),
+      model: str(row.model),
+      currency: str(row.currency),
+      status: String(row.status),
+      errorKind: str(row.error_kind),
+      eventType: row.event_type as UsageMetricsGroup['eventType'],
+      firstSeq: Number(row.first_seq),
+      calls: Number(row.calls),
+      tokens: Object.fromEntries(tokenColumns.map(([kind]) => [kind, Number(row[`tok_${kind}`])])) as UsageMetricsGroup['tokens'],
+      tokensUnreported: Object.fromEntries(tokenColumns.map(([kind]) => [kind, Number(row[`unrep_${kind}`])])) as UsageMetricsGroup['tokens'],
+      costReported: Number(row.cost_reported),
+      costEstimated: Number(row.cost_estimated),
+      costUnknownCalls: Number(row.cost_unknown),
+      latencyCount: Number(row.lat_count),
+      latencySumMs: Number(row.lat_sum),
+      latencyBuckets: LLM_LATENCY_BUCKETS_SECONDS.map((_, i) => Number(row[`lat_b${i}`])),
+    }));
+    return {
+      groups,
+      oldestReceivedAt: bounds.oldest === null || bounds.oldest === undefined ? null : Number(bounds.oldest),
+      newestReceivedAt: bounds.newest === null || bounds.newest === undefined ? null : Number(bounds.newest),
+    };
   }
 
   /** `POST /api/v1/pricing/recompute` (issue #296). `testHooks` is never set by production code: see

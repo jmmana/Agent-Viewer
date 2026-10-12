@@ -68,6 +68,8 @@ import {
   rejectionEndpoint,
   type RejectionReason,
 } from './metrics';
+import { buildLedgerGaugeFamilies, DEFAULT_METRICS_MAX_MODELS } from './metrics/ledgerFamilies';
+import { LedgerFamiliesCache } from './metrics/ledgerFamiliesCache';
 import {
   decodeExportLogsServiceRequest,
   decodeExportMetricsServiceRequest,
@@ -1105,17 +1107,43 @@ app.post(OTLP_TRACES_PATH, async (req, res) => {
 });
 
 // -------------------------------------------------------------
-// GET /metrics (issue #103, first sub-issue): Prometheus text-exposition export. Mounted here, before the
-// global JSON body parser and the CORS middleware below, so it is never CORS-enabled (no
-// Access-Control-Allow-Origin header, ever) and a cross-origin page can never read it even when
-// AGENT_VIEWER_CORS_ORIGIN is unset or `*`. `OPTIONS /metrics` therefore never reaches `app.options('*')`
-// either; the method guard below answers it directly.
+// GET /metrics (issue #103): Prometheus text-exposition export. Mounted here, before the global JSON body
+// parser and the CORS middleware below, so it is never CORS-enabled (no Access-Control-Allow-Origin header,
+// ever) and a cross-origin page can never read it even when AGENT_VIEWER_CORS_ORIGIN is unset or `*`.
+// `OPTIONS /metrics` therefore never reaches `app.options('*')` either; the method guard below answers it
+// directly.
 //
-// This slice ships the endpoint's enabling, auth and rate-limit plumbing plus the two families
-// `server/index.ts` can compute without a ledger query (`agent_viewer_build_info`, `agent_viewer_sse_clients`).
-// Ledger-derived families (tokens, cost, calls, failures, latency) and the optional OTLP metrics push are later
-// sub-issues of #103, so an empty-looking scrape today is expected, not a bug; see `server/metrics.ts`.
+// The first sub-issue (#350) shipped the endpoint's enabling, auth and rate-limit plumbing plus the two
+// families computable without a ledger query (`agent_viewer_build_info`, `agent_viewer_sse_clients`). This
+// sub-issue (#348) adds the ledger-derived families (tokens, cost, calls, failures, latency, the two ledger
+// gauges; `server/metrics/ledgerFamilies.ts`), cached per `AGENT_VIEWER_METRICS_CACHE_MS`
+// (`server/metrics/ledgerFamiliesCache.ts`). The optional OTLP metrics push remains a later sub-issue of #103
+// (#349); the in-process ingestion counters shipped separately (#365, #378).
 // -------------------------------------------------------------
+
+/** `AGENT_VIEWER_METRICS_CACHE_MS` (issue #103): default 5000, `0` disables the cache. An invalid value (not a
+ * finite number, or negative) falls back to the default rather than silently caching forever or never. */
+function getMetricsCacheMs(): number {
+  const raw = process.env.AGENT_VIEWER_METRICS_CACHE_MS;
+  if (raw === undefined || raw.trim() === '') return 5000;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 5000;
+}
+
+/** `AGENT_VIEWER_METRICS_MAX_MODELS` (issue #103): default 100. An invalid value (not a positive integer) falls
+ * back to the default. */
+function getMetricsMaxModels(): number {
+  const raw = process.env.AGENT_VIEWER_METRICS_MAX_MODELS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_METRICS_MAX_MODELS;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_METRICS_MAX_MODELS;
+}
+
+const ledgerFamiliesCache = new LedgerFamiliesCache({
+  getStore: () => store,
+  getTtlMs: getMetricsCacheMs,
+  getMaxModels: getMetricsMaxModels,
+});
 
 /** Opt-in (issue #103): disabled by default, so existing deployments see no new surface. CLI: `--metrics`. */
 function isMetricsEnabled(): boolean {
@@ -1199,7 +1227,18 @@ function writeMetricsResponse(res: express.Response, body: string): void {
   res.status(200).send(Buffer.from(body, 'utf8'));
 }
 
-app.get('/metrics', (_req, res) => {
+app.get('/metrics', async (_req, res) => {
+  let ledger: Awaited<ReturnType<typeof ledgerFamiliesCache.get>>;
+  try {
+    ledger = await ledgerFamiliesCache.get();
+  } catch (err) {
+    // Issue #103: never a partial body without the ledger families (an absent series must not look like zero).
+    // The failure itself is not cached (`LedgerFamiliesCache`), so the next scrape retries.
+    console.error('[agent-viewer] /metrics: ledger query failed:', err);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(503).json({ error: 'metrics_unavailable' });
+    return;
+  }
   const body = renderExposition([
     ...buildInProcessFamilies({
       version: SERVER_VERSION,
@@ -1207,6 +1246,8 @@ app.get('/metrics', (_req, res) => {
       sseClients: clients.size,
     }),
     ...ingestionMetrics.families(),
+    ...ledger.families,
+    ...buildLedgerGaugeFamilies(ledger.gauges),
   ]);
   writeMetricsResponse(res, body);
 });

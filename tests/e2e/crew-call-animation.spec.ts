@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import type { DesktopPatch } from './fixtures/crew-desktop';
+import type {} from './fixtures/crew-desktop';
 import { readFileSync } from 'node:fs';
 const catalog = JSON.parse(readFileSync(new URL('../../assets/crew/clips/calls.v1.json', import.meta.url), 'utf8')) as { clips: { clip: string; facing: string; frames: { x: number; y: number }[] }[] };
 type Draw = { url: string; x: number; y: number };
@@ -25,7 +25,7 @@ test('coge, habla y cuelga con cuadros reales en cuatro cámaras, vuelve a repos
   for (const [view, facing] of [['front', 'front'], ['right', 'left'], ['back', 'back'], ['left', 'right']]) {
     await page.locator('#crew-view').selectOption(view);
     await page.getByRole('button', { name: 'Focus Fixture CEO', exact: true }).click();
-    await page.evaluate((patch: DesktopPatch) => { window.__callDraws = []; window.__crewDesktopFixture(patch); }, { status: 'PHONE_CALL' });
+    await page.evaluate(() => { window.__callDraws = []; window.__crewDesktopFixture({ status: 'PHONE_CALL' }); });
     const coords = (clip: string) => catalog.clips.find(item => item.clip === clip && item.facing === facing)!.frames.map(frame => `${frame.x}:${frame.y}`);
     await expect.poll(() => page.evaluate(() => [...new Set(window.__callDraws.filter(draw => draw.url.includes('ceo-call-v')).map(draw => `${draw.x}:${draw.y}`))].sort())).toEqual(coords('call').sort());
     expect(await page.evaluate(() => [...new Set(window.__callDraws.filter(draw => draw.url.includes('call-pickup')).map(draw => `${draw.x}:${draw.y}`))])).toEqual(coords('call-pickup'));

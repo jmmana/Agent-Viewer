@@ -1,3 +1,4 @@
+import { CREW_AMBIENCE_PALETTES, type CrewAmbience } from './crewAmbience';
 import type { CrewRoomDefinition, CrewView } from './crewModel';
 import { CREW_PROP_SIZE } from './crewSpatial';
 import { crewPolygon, type CrewPoint } from './crewRenderPrimitives';
@@ -26,7 +27,7 @@ export interface CrewPropImageSpec {
 /** Dibuja un mueble en un punto ya proyectado a coordenadas de sala (antes de isoPoint). */
 export function drawCrewProp(ctx: CanvasRenderingContext2D, item: Pick<CrewFurnitureItem, 'type'>,
   x: number, y: number, view: CrewView, isoPoint: (x: number, y: number, z?: number) => CrewPoint,
-  highContrast = false, propImage?: CrewPropImageSpec): void {
+  highContrast = false, propImage?: CrewPropImageSpec, ambience: CrewAmbience = 'day', illumination = 0): void {
   if (propImage) {
     const point = isoPoint(x, y);
     const height = propImage.displayHeight, width = height * propImage.width / propImage.height;
@@ -45,5 +46,5 @@ export function drawCrewProp(ctx: CanvasRenderingContext2D, item: Pick<CrewFurni
   const ct = isoPoint(x + w / 2, y + d / 2, h), et = isoPoint(x - w / 2, y + d / 2, h);
   crewPolygon(ctx, [e, c, ct, et], shade.front);
   crewPolygon(ctx, [b, c, ct, bt], shade.side);
-  crewPolygon(ctx, [at, bt, ct, et], shade.top);
+  crewPolygon(ctx, [at, bt, ct, et], item.type === 'screen' && !highContrast ? (illumination > .1 ? '#b9e8ee' : CREW_AMBIENCE_PALETTES[ambience].screen) : shade.top);
 }

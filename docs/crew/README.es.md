@@ -76,6 +76,18 @@ cámara propia de esa sala; nunca se comparte entre salas ni se reinicia al
 cambiar a Caricatura y volver (issue
 [#171](https://github.com/jmmana/Agent-Viewer/issues/171)).
 
+El selector **Ambiente** configura amanecer/día/atardecer/noche por sala, o sigue
+la hora local con **Auto**. Ventanas, skyline, colores y brillo de monitores
+geométricos cambian con la fase y la selección se conserva al recargar. Consulta
+[Ambientes por sala](AMBIENCE.md) para horarios, persistencia y límites del arte
+prototipo.
+
+Las lámparas de escritorio, techo, pared y recepción de cada sala tienen su
+propio interruptor manual On/Off/Auto, por clic/toque en el canvas o desde el
+panel accesible por teclado **Luces de la oficina**; Auto sigue el ambiente de
+la sala. Consulta [Lámparas](LAMPS.md) para persistencia, aislamiento y
+límites del arte prototipo.
+
 ## 4. Personajes: qué es personalizable hoy, y qué sigue siendo marcador de posición
 
 Crew define 6 arquetipos cosméticos (CEO, Planner, Developer, Analyst,
@@ -182,7 +194,7 @@ alcance. Al momento de esta guía, ese registro muestra: el motor, el
 registro/selector de salas, la cámara, el layout espacial/colisiones, la
 navegación, el controlador de animación y el contrato de dos modos tienen
 código real y probado en main; la mayoría del mobiliario de las salas, cinco
-de los seis roles de personaje, el ciclo día/noche, la coreografía de
+de los seis roles de personaje, la coreografía de
 reuniones y la compuerta de video de producción "G1" todavía no.
 
 ## 9. Qué queda explícitamente fuera de alcance aquí

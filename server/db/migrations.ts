@@ -17,7 +17,8 @@ import { budgets } from './migrations/0014-budgets';
 import { budgetAlerts } from './migrations/0015-budget-alerts';
 import { budgetAlertDeliveries } from './migrations/0016-budget-alert-deliveries';
 import { eventHashChain } from './migrations/0017-event-hash-chain';
-import { apiKeys } from './migrations/0018-api-keys';
+import { auditMeta } from './migrations/0018-audit-meta';
+import { apiKeys } from './migrations/0019-api-keys';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -46,6 +47,7 @@ export const MIGRATIONS: readonly Migration[] = [
   budgetAlerts,
   budgetAlertDeliveries,
   eventHashChain,
+  auditMeta,
   apiKeys,
 ];
 

@@ -6,7 +6,7 @@ import type { Migration } from '../migrations';
  * `eventCount`/`firstEventAt`/`lastEventAt` aggregates).
  */
 export const apiKeys: Migration = {
-  version: 18,
+  version: 19,
   name: 'api-keys',
   up(db) {
     db.exec(`

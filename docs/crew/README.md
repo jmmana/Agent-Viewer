@@ -72,6 +72,16 @@ Changing rooms and returning to a room later restores that room's own camera
 preference; it is never shared across rooms or reset by switching to Cartoon
 and back (issue [#171](https://github.com/jmmana/Agent-Viewer/issues/171)).
 
+The **Ambience** selector sets dawn/day/sunset/night independently for each room,
+or follows the local clock in **Auto**. Windows, skyline, room colors and geometric
+monitor brightness follow the chosen phase, including after reloading. See
+[Room ambience](AMBIENCE.md) for the schedule, persistence and prototype-art limits.
+
+Each room's desk, ceiling, wall and reception fixtures have their own manual
+On/Off/Auto switch, by click/tap on the canvas or from the keyboard-reachable
+**Office lights** panel; Auto follows the room's ambience. See
+[Lamps](LAMPS.md) for persistence, isolation and prototype-art limits.
+
 ## 4. Characters: what is customizable today, and what is still placeholder
 
 Crew defines 6 cosmetic archetypes (CEO, Planner, Developer, Analyst,
@@ -169,7 +179,7 @@ run verified it, and what explicitly remains out of scope. As of this guide,
 that ledger shows: the engine, room registry/selector, camera, spatial
 layout/collisions, navigation, animation controller and two-mode contract all
 have real, tested code in main; most room furniture, five of six character
-roles, day/night, meetings choreography and the production "G1" video gate do
+roles, meetings choreography and the production "G1" video gate do
 not yet.
 
 ## 9. What is explicitly out of scope here

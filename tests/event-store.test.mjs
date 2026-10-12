@@ -937,6 +937,7 @@ test('SQLiteEventStore: a 0.2.1 database migrates, backfills content_hash and th
       'budget-alerts',
       'budget-alert-deliveries',
       'event-hash-chain',
+      'audit-meta',
       'api-keys',
     ]);
     const db = new DatabaseSync(file);

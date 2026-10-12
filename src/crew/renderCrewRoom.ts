@@ -1,3 +1,7 @@
+import { CREW_LAMPS_BY_ROOM, crewLampIsOn, crewLampVisible, crewLampIllumination, type CrewLampModes } from './crewLamps';
+import { drawCrewLamp, drawCrewLampPools } from './crewLampLayer';
+import { drawCrewAmbience } from './crewAmbienceLayer';
+import type { CrewAmbience } from './crewAmbience';
 import { drawCrewWorkstation } from './crewWorkstationLayer';
 import { crewProject, type CrewRoomDefinition, type CrewView } from './crewModel';
 import type { CrewWorkstation } from './crewActorActions';
@@ -39,6 +43,8 @@ export interface CrewRenderInput {
   blink?: CrewSpriteBlink;
   /** Tema de alto contraste de la preferencia de accesibilidad Crew (#157). */
   highContrast?: boolean;
+  ambience?: CrewAmbience;
+  lampModes?: CrewLampModes;
   workstationImage?: HTMLImageElement;
   seats?: readonly CrewWorkstation[];
   actions?: Readonly<Record<string, CrewSpriteBlink | undefined>>;
@@ -101,21 +107,24 @@ export function crewFitScale(room: CrewRoomDefinition, view: CrewView, width: nu
 }
 
 /** Render only this room, with no clock, fake agents, usage or side-effects. */
-export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, walks = {}, actions = {}, propImages, seats = [], workstationImage, calls = {}, callIcon, alerts = {} }: CrewRenderInput): void {
+export function renderCrewRoom({ ctx, width, height, room, camera, markers = [], sprites = {}, blink, highContrast = false, ambience = 'day', lampModes = {}, walks = {}, actions = {}, propImages, seats = [], workstationImage, calls = {}, callIcon, alerts = {} }: CrewRenderInput): void {
   const { view, zoom, pan } = camera;
   const roomSize = crewViewSize(room, view);
   const bounds = crewGeometryBounds(room, view);
   const fit = crewFitScale(room, view, width, height);
   ctx.save();
-  drawCrewBackground(ctx, width, height, highContrast);
+  drawCrewBackground(ctx, width, height, highContrast, ambience);
   ctx.translate(width/2+pan.x,height/2+pan.y);
   ctx.scale(fit*zoom,fit*zoom);
   ctx.translate(-bounds.centerX,-bounds.centerY);
 
   const geometry: CrewSceneGeometry = { isoPoint: crewIsoPoint, wallHeight: CREW_WALL_HEIGHT };
-  drawCrewRoomShell(ctx, room, roomSize.width, roomSize.depth, geometry, highContrast);
+  drawCrewRoomShell(ctx, room, roomSize.width, roomSize.depth, geometry, highContrast, ambience);
   drawCrewFloorGrid(ctx, roomSize.width, roomSize.depth, geometry, highContrast);
+  drawCrewAmbience(ctx, room, view, geometry, ambience, highContrast);
   drawCrewDoors(ctx, room, view, geometry);
+  const lamps = CREW_LAMPS_BY_ROOM[room.id] ?? [];
+  drawCrewLampPools(ctx, room, view, lamps, lampModes, ambience, crewIsoPoint, highContrast);
 
   // Project every furniture anchor and marker from ORIGINAL room-local coordinates;
   // sorted by rotated depth so props and actors interleave correctly in 2.5D.
@@ -135,7 +144,12 @@ export function renderCrewRoom({ ctx, width, height, room, camera, markers = [],
       const p = crewProject(seat?.x ?? item.x,seat?.y ?? item.y,room,view);
       const point = crewIsoPoint(p.x, p.y);
       return {x:p.x,y:p.y,point,draw:()=>drawCrewProp(ctx, item, p.x, p.y, view, crewIsoPoint, highContrast,
-        resolveCrewPropImage(item.id, propImages))};
+        resolveCrewPropImage(item.id, propImages), ambience, crewLampIllumination(item, lamps, lampModes, ambience))};
+    }),
+    ...lamps.filter(lamp => crewLampVisible(lamp, room, view)).map(lamp => {
+      const p = crewProject(lamp.x, lamp.y, room, view);
+      return { x: p.x, y: p.y, point: crewIsoPoint(p.x, p.y), draw: () => drawCrewLamp(ctx, lamp, p.x, p.y,
+        crewIsoPoint, crewLampIsOn(lampModes[lamp.id], ambience), highContrast) };
     }),
     ...markers.map(marker => {
       const p = crewProject(marker.x,marker.y,room,view);

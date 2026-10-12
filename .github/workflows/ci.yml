@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build workspace packages (packages/sdk)
+        run: npm run build:packages
+
       - name: Security audit
         run: npm audit --omit=dev
 
@@ -89,6 +92,20 @@ jobs:
 
       - name: Check package (publint + attw)
         run: npm run check:package
+
+      - name: Check packages/sdk package (publint + attw)
+        run: npm run check:package:sdk
+
+      - name: packages/sdk smoke test from a packed tarball
+        run: |
+          cd packages/sdk
+          npm pack --ignore-scripts
+          mkdir -p /tmp/sdk-smoke && cd /tmp/sdk-smoke
+          npm init -y >/dev/null
+          npm pkg set type=module
+          npm install --no-audit --no-fund "$GITHUB_WORKSPACE"/packages/sdk/warlockcode-agent-viewer-sdk-*.tgz
+          node -e "import('@warlockcode/agent-viewer-sdk').then(({ AgentViewer, verifyWebhookSignature }) => { if (typeof AgentViewer !== 'function' || typeof verifyWebhookSignature !== 'function') throw new Error('SDK import did not resolve the expected exports'); console.log('packages/sdk import OK'); });"
+          rm -f "$GITHUB_WORKSPACE"/packages/sdk/warlockcode-agent-viewer-sdk-*.tgz
 
       - name: Docker Build (office + API image, the published default)
         run: docker build -f docker/Dockerfile -t agent-viewer-app:ci .

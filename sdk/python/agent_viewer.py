@@ -375,15 +375,27 @@ class AgentHandle:
         )
 
     def tool_completed(
-        self, tool: str, output_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+        self,
+        tool: str,
+        output_summary: Optional[str] = None,
+        *,
+        tool_call_id: Optional[str] = None,
+        duration_ms: Optional[int] = None,
     ) -> None:
-        """Report tool call completion."""
+        """Report tool call completion.
+
+        ``duration_ms`` is accepted here and on ``tool_failed`` (the contract's
+        ``ToolCompletedPayloadSchema``/``ToolFailedPayloadSchema``), not on ``tool_started``, which has no
+        end time yet. The caller measures it with a monotonic clock; the SDK never times a call itself.
+        """
         self._ensure_registered()
         payload = {"tool": tool}
         if output_summary is not None:
             payload["outputSummary"] = output_summary
         if tool_call_id is not None:
             payload["toolCallId"] = tool_call_id
+        if duration_ms is not None:
+            payload["durationMs"] = duration_ms
         self.viewer.emit(
             "tool.completed",
             f"Completed {tool}: {output_summary}" if output_summary else f"Completed tool {tool}",
@@ -393,13 +405,20 @@ class AgentHandle:
         )
 
     def tool_failed(
-        self, tool: str, error_summary: Optional[str] = None, *, tool_call_id: Optional[str] = None
+        self,
+        tool: str,
+        error_summary: Optional[str] = None,
+        *,
+        tool_call_id: Optional[str] = None,
+        duration_ms: Optional[int] = None,
     ) -> None:
-        """Report tool call failure."""
+        """Report tool call failure. See ``tool_completed`` for ``duration_ms``."""
         self._ensure_registered()
         payload = {"tool": tool, "error": error_summary}
         if tool_call_id is not None:
             payload["toolCallId"] = tool_call_id
+        if duration_ms is not None:
+            payload["durationMs"] = duration_ms
         self.viewer.emit(
             "tool.failed",
             f"Failed {tool}: {error_summary}" if error_summary else f"Failed tool {tool}",
@@ -616,17 +635,27 @@ class AgentViewer:
         source: Optional[str] = None,
         target: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        timestamp_ms: Optional[int] = None,
         severity: str = "normal",
         event_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Emit a single canonical event to the Agent Viewer API."""
+        """Emit a single canonical event to the Agent Viewer API.
+
+        ``session_id`` overrides the client's own ``session_id`` for this one event, and
+        ``timestamp_ms`` overrides the wall-clock send time. Both exist for a long-lived process that
+        serves many sessions through one client (for example a LangGraph app with one handler per
+        ``thread_id``, issue #99) and that must record the time a callback fired, not the time it was
+        sent through a background queue. ``emit_batch()`` already accepts both per event; this brings
+        ``emit()`` to parity.
+        """
         raw_event = {
             "schemaVersion": "1.0",
             "id": event_id or _default_event_id(),
             "type": event_type,
-            "timestamp": int(time.time() * 1000),
+            "timestamp": timestamp_ms if timestamp_ms is not None else int(time.time() * 1000),
             "runtimeId": self.runtime_id,
-            "sessionId": self.session_id,
+            "sessionId": session_id if session_id is not None else self.session_id,
             "source": source or self.source,
             "target": target,
             "taskId": task_id,

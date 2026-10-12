@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
 import type { CanonicalEvent } from '../src/integrations/canonicalContract';
 import { MIGRATIONS, runMigrations, type Migration, type MigrationResult } from './db/migrations';
-import type { BudgetAlertStoreInput } from './budgetAlerts';
+import type { BudgetAlertStoreInput, BudgetAlertRow, BudgetAlertDeliveryState } from './budgetAlerts';
 import { eventFingerprint } from './eventFingerprint';
 import { rowToEvent } from './eventRow';
 import { readPackageVersion } from './version';
@@ -583,6 +583,25 @@ export interface EventStore {
    * A no-op (resolves without writing) if the row no longer exists, which should be unreachable since nothing
    * ever deletes a delivery row. */
   recordAlertDeliveryAttempt(alertId: string, patch: AlertDeliveryAttemptPatch): Promise<void>;
+  /** Issue #86 (sub-issue #322): newest-first page of recorded budget alerts (`budget_alerts`, ties broken by
+   * `id` for determinism), optionally restricted to one `budgetId` and/or a `since` (epoch ms, `detectedAt >=
+   * since`) floor. `filter.limit` is already validated/capped by the caller (`parseBudgetAlertsQuery`, 1..500);
+   * this reads exactly that many rows, never a silent extra page. */
+  listBudgetAlerts(filter: { budgetId?: string; since?: number; limit: number }): Promise<BudgetAlertRow[]>;
+  /** One alert by id, or `null` if it was never recorded. */
+  getBudgetAlert(alertId: string): Promise<BudgetAlertRow | null>;
+  /**
+   * Delivery state for a batch of alert ids, API-shaped (issue #86, sub-issue #322): `status`/`attempts`/
+   * `lastStatus`/`deliveredAt` only, never `nextAttemptAt`/`body`/`lastError` (those stay internal to the worker,
+   * `AlertDeliveryRecord` above). Since #321 (migration 16, `recordBudgetAlert`'s `options.attemptDelivery`) a
+   * delivery row always exists for every alert in both stores, so this should only ever return an entry for every
+   * id it is asked about; it is still read defensively (`SQLiteEventStore`: a `sqlite_master` table-existence
+   * check before the join, never a hardcoded flag) so it degrades to an empty map, rather than a thrown error, for
+   * a store that for any reason has no matching row or predates migration 16. The caller
+   * (`registerBudgetAlertsRoutes`) treats "absent" as the honest `pending` placeholder from the issue, not an
+   * error.
+   */
+  getBudgetAlertDeliveries(alertIds: readonly string[]): Promise<Map<string, BudgetAlertDeliveryState>>;
   /** Conflicts rejected and legacy rows matched by id only, since process start. */
   ingestionCounters(): IngestionCounters;
   /** True for an original event id and for a duplicate reference's own id. */
@@ -1024,6 +1043,10 @@ export class MemoryEventStore implements EventStore {
    * `recordBudgetAlert`. Like the dedup set above, this never survives a restart (memory mode's documented
    * limitation): a `pending` delivery queued before a restart is lost, not resumed. */
   private alertDeliveries = new Map<string, AlertDeliveryRecord>();
+  /** Issue #86 (sub-issue #322): the recorded alerts themselves (the dedup `Set` above only tracks the key, not
+   * the row), for `listBudgetAlerts`/`getBudgetAlert`. Same lifetime as the dedup keys: never evicted, reset only
+   * by a fresh process. */
+  private budgetAlertsById = new Map<string, BudgetAlertRow>();
 
   constructor(options?: number | MemoryEventStoreOptions) {
     const opts: MemoryEventStoreOptions = typeof options === 'number' ? { maxEvents: options } : (options ?? {});
@@ -1412,6 +1435,7 @@ export class MemoryEventStore implements EventStore {
       lastError: null,
       deliveredAt: null,
     });
+    this.budgetAlertsById.set(input.alert.id, input.alert);
     return { inserted: true, event: input.event, seq: result.seq };
   }
 
@@ -1427,6 +1451,32 @@ export class MemoryEventStore implements EventStore {
     const existing = this.alertDeliveries.get(alertId);
     if (!existing) return; // Unreachable in practice: nothing ever deletes a delivery row.
     this.alertDeliveries.set(alertId, { ...existing, ...patch });
+  }
+
+  async listBudgetAlerts(filter: { budgetId?: string; since?: number; limit: number }): Promise<BudgetAlertRow[]> {
+    let alerts = Array.from(this.budgetAlertsById.values());
+    if (filter.budgetId !== undefined) alerts = alerts.filter((alert) => alert.budgetId === filter.budgetId);
+    if (filter.since !== undefined) alerts = alerts.filter((alert) => alert.detectedAt >= (filter.since as number));
+    alerts.sort((a, b) => b.detectedAt - a.detectedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return alerts.slice(0, filter.limit);
+  }
+
+  async getBudgetAlert(alertId: string): Promise<BudgetAlertRow | null> {
+    return this.budgetAlertsById.get(alertId) ?? null;
+  }
+
+  /** Issue #86 (sub-issue #322). #321 (merged first in practice) means `this.alertDeliveries` already holds a
+   * real row for every recorded alert in memory mode too; this is still a plain lookup (never a fabricated row)
+   * so an id this store genuinely has nothing for (should be unreachable once `recordBudgetAlert` has run) is
+   * simply absent from the map, same as the SQLite store's own defensive behavior. */
+  async getBudgetAlertDeliveries(alertIds: readonly string[]): Promise<Map<string, BudgetAlertDeliveryState>> {
+    const result = new Map<string, BudgetAlertDeliveryState>();
+    for (const alertId of alertIds) {
+      const row = this.alertDeliveries.get(alertId);
+      if (!row) continue;
+      result.set(alertId, { status: row.status, attempts: row.attempts, lastStatus: row.lastStatus, deliveredAt: row.deliveredAt });
+    }
+    return result;
   }
 
   ingestionCounters(): IngestionCounters {
@@ -1865,6 +1915,30 @@ function isUniqueRequestKeyViolation(error: unknown): boolean {
 function isBudgetAlertDedupViolation(error: unknown): boolean {
   const err = error as { errcode?: number; message?: string } | null;
   return err?.errcode === 2067 && /UNIQUE constraint failed: budget_alerts\./.test(err?.message ?? '');
+}
+
+/** Issue #86 (sub-issue #322): maps one raw `budget_alerts` row (`SELECT *`, snake_case columns, migration 15)
+ * back to the camelCase `BudgetAlertRow` shape `server/budgetAlerts.ts` defines, the same column names
+ * `recordBudgetAlert`'s own `INSERT` above already uses. */
+function rowToBudgetAlert(row: any): BudgetAlertRow {
+  return {
+    id: row.id,
+    budgetId: row.budget_id,
+    budgetName: row.budget_name,
+    scopeType: row.scope_type,
+    scopeValue: row.scope_value,
+    periodType: row.period_type,
+    periodStart: row.period_start,
+    periodEnd: row.period_end,
+    state: row.state,
+    threshold: row.threshold,
+    limit: row.limit_amount,
+    currency: row.currency,
+    knownSpent: row.known_spent,
+    spendIsLowerBound: row.spend_is_lower_bound === 1,
+    backfill: row.backfill === 1,
+    detectedAt: row.detected_at,
+  };
 }
 
 /** What a SQLite classification decided, before the side effects (counters, logs) that wait for the commit. */
@@ -2905,6 +2979,66 @@ export class SQLiteEventStore implements EventStore {
          WHERE alert_id = ?`
       )
       .run(patch.status, patch.attempts, patch.nextAttemptAt, patch.lastStatus, patch.lastError, patch.deliveredAt, alertId);
+  }
+
+  /** Issue #86 (sub-issue #322). Newest first by `detected_at`, ties broken by `id` for a deterministic order. */
+  async listBudgetAlerts(filter: { budgetId?: string; since?: number; limit: number }): Promise<BudgetAlertRow[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.budgetId !== undefined) {
+      clauses.push('budget_id = ?');
+      params.push(filter.budgetId);
+    }
+    if (filter.since !== undefined) {
+      clauses.push('detected_at >= ?');
+      params.push(filter.since);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(`SELECT * FROM budget_alerts ${where} ORDER BY detected_at DESC, id ASC LIMIT ?`)
+      .all(...params, filter.limit) as any[];
+    return rows.map(rowToBudgetAlert);
+  }
+
+  async getBudgetAlert(alertId: string): Promise<BudgetAlertRow | null> {
+    const row = this.db.prepare('SELECT * FROM budget_alerts WHERE id = ?').get(alertId) as any;
+    return row ? rowToBudgetAlert(row) : null;
+  }
+
+  /**
+   * Issue #86 (sub-issue #322), API-shaped read over #321's `budget_alert_deliveries` (migration 16): every alert
+   * has a real row there by construction (`recordBudgetAlert` above always inserts one), so this should return an
+   * entry for every id it is asked about. Still defensive, same spirit as the rest of this sub-issue's own design
+   * (written before it was certain whether #321 would merge first): a `sqlite_master` table-existence check before
+   * the join (`tableExists`, the same helper `init()` already uses for `retention_runs`) and a try/catch around
+   * the read itself, so a missing table, an unexpected column shape, or simply no row yet for a given id all
+   * degrade to "absent from the map" rather than a thrown 500 or a fabricated delivery.
+   */
+  async getBudgetAlertDeliveries(alertIds: readonly string[]): Promise<Map<string, BudgetAlertDeliveryState>> {
+    const result = new Map<string, BudgetAlertDeliveryState>();
+    if (alertIds.length === 0) return result;
+    if (!this.tableExists('budget_alert_deliveries')) return result;
+    try {
+      const placeholders = alertIds.map(() => '?').join(', ');
+      const rows = this.db
+        .prepare(`SELECT alert_id, status, attempts, last_status, delivered_at FROM budget_alert_deliveries WHERE alert_id IN (${placeholders})`)
+        .all(...alertIds) as any[];
+      for (const row of rows) {
+        result.set(row.alert_id, {
+          status: row.status,
+          attempts: row.attempts,
+          lastStatus: row.last_status ?? null,
+          deliveredAt: row.delivered_at ?? null,
+        });
+      }
+    } catch (error) {
+      // `budget_alert_deliveries` exists but could not be read the way this was written to expect: never a 500
+      // for a reader, fall back to "unknown here" for every id, exactly like a missing table.
+      console.warn(
+        `[agent-viewer] budget_alert_deliveries read failed, reporting no known delivery state for ${alertIds.length} alert id(s): ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    return result;
   }
 
   ingestionCounters(): IngestionCounters {

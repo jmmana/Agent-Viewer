@@ -48,7 +48,7 @@ import {
   type BudgetTransitionTrigger,
   type BudgetRolloverWatcherHandle,
 } from './budgets';
-import { buildBudgetAlert } from './budgetAlerts';
+import { buildBudgetAlert, registerBudgetAlertsRoutes, type BudgetAlertsHttpDeps } from './budgetAlerts';
 import { parseAlertWebhookConfig, startAlertDeliveryWorker, type AlertWebhookConfig, type AlertDeliveryWorkerHandle } from './budgetAlertDelivery';
 import {
   parseRecomputeRequest,
@@ -207,6 +207,18 @@ const budgetDeps: BudgetHttpDeps = {
   currentAuthMode: () => currentAuthMode(),
   rollup: (query) => store.rollup(query),
   iterateLedgerRows: (filters, asOfSeq) => store.iterateExportRows(filters, asOfSeq),
+};
+
+// Budget alerts read API (issue #86, sub-issue #322): a narrow slice of `store` (memory or SQLite, whichever
+// `createEventStore()` picked above), the same dependency-injection shape `budgetDeps` already uses.
+const budgetAlertsDeps: BudgetAlertsHttpDeps = {
+  listBudgetAlerts: (filter) => store.listBudgetAlerts(filter),
+  getBudgetAlert: (alertId) => store.getBudgetAlert(alertId),
+  getBudgetAlertDeliveries: (alertIds) => store.getBudgetAlertDeliveries(alertIds),
+  // Derived from the same parsed `alertWebhookConfig` #321's own startup validation already produced (above),
+  // never a second independent read of the raw env vars: `configured` is "a destination URL passed validation",
+  // `signed` additionally requires a secret (an unsigned webhook is still "configured", just never "signed").
+  webhookSummary: () => ({ configured: alertWebhookConfig !== null, signed: alertWebhookConfig !== null && alertWebhookConfig.secret !== null }),
 };
 
 // Started further below, once `broadcastBudgetTransition` and `onEventAccepted` exist (issue #85 section 6,
@@ -2814,6 +2826,13 @@ registerPricingRoutes(app, {
 // earlier in this file.
 // -------------------------------------------------------------
 registerBudgetsRoutes(app, budgetDeps);
+
+// -------------------------------------------------------------
+// Budget alerts read API (issue #86, sub-issue #322): the two read-only `/api/v1/budget-alerts*` routes
+// (`server/budgetAlerts.ts`). Sits under `/api/v1` right after the budgets routes above, so it already has the
+// same rate limiter, query-token rejection, open-mode guard and Bearer auth with zero extra wiring.
+// -------------------------------------------------------------
+registerBudgetAlertsRoutes(app, budgetAlertsDeps);
 
 // -------------------------------------------------------------
 // Pricing recompute (issue #296, sub-issue of #84): re-runs the ingestion-time estimator (`server/pricing/

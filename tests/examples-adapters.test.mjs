@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { LangGraphViewerAdapter } from '../examples/langgraph-adapter.ts';
 import { GoogleADKViewerAdapter } from '../examples/google-adk-adapter.ts';
 
 /**
@@ -13,6 +12,10 @@ import { GoogleADKViewerAdapter } from '../examples/google-adk-adapter.ts';
  * implementation (`packages/openai-agents/src/processor.ts`, published as
  * `@warlockcode/agent-viewer-openai-agents`, issue #361; registered on the real `@openai/agents` tracing
  * pipeline) with its own, more thorough test suite at `tests/openai-agents-adapter.test.mjs`.
+ *
+ * The LangGraph case was removed the same way by issue #346: the hand-wired example adapter it tested was
+ * replaced by `packages/langgraph` (`@warlockcode/agent-viewer-langgraph`), tested in
+ * `tests/langgraph-adapter.test.mjs`.
  */
 function stubFetch(t) {
   const requests = [];
@@ -28,45 +31,6 @@ function stubFetch(t) {
     bodiesOf: (type) => requests.map((r) => r.body).filter((body) => body.type === type),
   };
 }
-
-test('LangGraph adapter: forwards tool_call.id, root run id and parentRunId only when given', async (t) => {
-  const { bodiesOf } = stubFetch(t);
-  const adapter = new LangGraphViewerAdapter();
-
-  await adapter.onNodeStart('researcher');
-  await adapter.onToolStart('researcher', 'web.search', 'query', 'toolcall_1');
-  await adapter.onToolEnd('researcher', 'web.search', 'done', 'toolcall_1');
-  await adapter.onToolError('researcher', 'web.search', 'boom', 'toolcall_2');
-  await adapter.onToolStart('researcher', 'web.search'); // LangGraph gave no tool_call.id this time
-  await adapter.onModelUsage('researcher', {
-    provider: 'OpenAI',
-    model: 'gpt-4.1',
-    inputTokens: 100,
-    outputTokens: 20,
-    traceId: 'trace_root_run',
-    parentId: 'run_parent',
-    tags: ['feature:x'],
-  });
-  await adapter.onModelUsage('researcher', {
-    provider: 'OpenAI', model: 'gpt-4.1', inputTokens: 10, outputTokens: 2,
-  });
-
-  const [started, startedWithoutId] = bodiesOf('tool.started');
-  const [completed] = bodiesOf('tool.completed');
-  const [failed] = bodiesOf('tool.failed');
-  assert.equal(started.payload.toolCallId, 'toolcall_1');
-  assert.equal(completed.payload.toolCallId, 'toolcall_1');
-  assert.equal(failed.payload.toolCallId, 'toolcall_2');
-  assert.equal('toolCallId' in startedWithoutId.payload, false);
-
-  const [withCorrelation, without] = bodiesOf('llm.usage');
-  assert.equal(withCorrelation.payload.traceId, 'trace_root_run');
-  assert.equal(withCorrelation.payload.parentId, 'run_parent');
-  assert.deepEqual(withCorrelation.payload.tags, ['feature:x']);
-  for (const field of ['traceId', 'parentId', 'toolCallId', 'tags']) {
-    assert.equal(field in without.payload, false);
-  }
-});
 
 test('Google ADK adapter: forwards the function call id and invocation_id, never a parentId', async (t) => {
   const { bodiesOf } = stubFetch(t);

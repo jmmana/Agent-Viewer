@@ -13,6 +13,9 @@ name: Release
 # 3. Builds the Docker images and pushes them to GitHub Container Registry on a real release tag:
 #    ghcr.io/jmmana/agent-viewer:<version>      office + API in one container (target app), also :latest
 #    ghcr.io/jmmana/agent-viewer:<version>-api  API only (target api), also :latest-api
+# 4. Publishes the workspace packages to npm the same optional way: packages/openai-agents, packages/sdk and
+#    then packages/langgraph (which needs the SDK). The PyPI distribution already carries the Python LangGraph
+#    adapter (agent_viewer_langgraph.py, the "langgraph" extra).
 #
 # A prerelease tag (vX.Y.Z-rc.N, -beta.N or -alpha.N, for example v0.3.0-rc.1) is a dry run: every job
 # builds and checks everything, but nothing is published to npm, PyPI or GHCR, and the GitHub release is
@@ -75,6 +78,20 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: node scripts/release-rules.mjs check-versions "$TAG"
+
+      # packages/langgraph (issue #346) ships in lockstep with the release tag, same rule as the root package.json
+      # and sdk/python/pyproject.toml above. "${TAG#v}" is the tag's full version, prerelease suffix included,
+      # the same value check-versions expects.
+      - name: Check packages/langgraph version matches tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          expected="${TAG#v}"
+          lg_version=$(node -p "require('./packages/langgraph/package.json').version")
+          if [ "$lg_version" != "$expected" ]; then
+            echo "::error title=version mismatch::packages/langgraph/package.json is at $lg_version but the tag $TAG expects $expected. Bump it with the release." >> /dev/stderr
+            exit 1
+          fi
 
       - name: Typecheck and tests
         run: |
@@ -187,6 +204,107 @@ jobs:
           if [ -z "$NODE_AUTH_TOKEN" ]; then
             echo "::error title=npm publish blocked::NPM_TOKEN is not configured. Configure npm trusted publishing or the NPM_TOKEN secret before tagging a real (non-prerelease) release." >> /dev/stderr
             echo "packages/openai-agents npm publish blocked: NPM_TOKEN is missing on a real release tag ($TAG)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          npm publish --provenance --access public --ignore-scripts
+
+  # Publishes packages/sdk (@warlockcode/agent-viewer-sdk), the peer dependency of packages/langgraph, before
+  # release-langgraph below, same skip-without-NPM_TOKEN pattern. packages/sdk keeps its own version line, so a
+  # version already on the registry is skipped instead of failing the publish.
+  release-sdk:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages/sdk
+        run: npm run build --workspace packages/sdk
+
+      - name: Check package (publint + attw)
+        run: npm run check:package:sdk
+
+      - name: Publish packages/sdk to npm
+        continue-on-error: true
+        working-directory: packages/sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          IS_PRERELEASE: ${{ needs.release.outputs.is_prerelease }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "Prerelease tag ($TAG): skipping packages/sdk npm publish (dry run)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error title=npm publish blocked::NPM_TOKEN is not configured. Configure npm trusted publishing or the NPM_TOKEN secret before tagging a real (non-prerelease) release." >> /dev/stderr
+            echo "packages/sdk npm publish blocked: NPM_TOKEN is missing on a real release tag ($TAG)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          sdk_version=$(node -p "require('./package.json').version")
+          if npm view "@warlockcode/agent-viewer-sdk@$sdk_version" version >/dev/null 2>&1; then
+            echo "packages/sdk $sdk_version is already on npm: skipping its publish." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          npm publish --provenance --access public --ignore-scripts
+
+  # Publishes packages/langgraph (@warlockcode/agent-viewer-langgraph, issues #344/#346) after
+  # @warlockcode/agent-viewer-sdk (release-sdk above), its peer dependency, same skip-without-NPM_TOKEN pattern.
+  # Its version is checked against the tag in the release job.
+  release-langgraph:
+    needs: [release, release-sdk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages/sdk and packages/langgraph
+        run: |
+          npm run build --workspace packages/sdk
+          npm run build --workspace packages/langgraph
+
+      - name: Check package (publint)
+        run: npx --no-install publint --strict packages/langgraph
+
+      - name: Publish packages/langgraph to npm
+        continue-on-error: true
+        working-directory: packages/langgraph
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          IS_PRERELEASE: ${{ needs.release.outputs.is_prerelease }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "Prerelease tag ($TAG): skipping packages/langgraph npm publish (dry run)." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error title=npm publish blocked::NPM_TOKEN is not configured. Configure npm trusted publishing or the NPM_TOKEN secret before tagging a real (non-prerelease) release." >> /dev/stderr
+            echo "packages/langgraph npm publish blocked: NPM_TOKEN is missing on a real release tag ($TAG)." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
           npm publish --provenance --access public --ignore-scripts

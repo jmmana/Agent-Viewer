@@ -1281,9 +1281,18 @@ unbounded query, or one starting at or before it) also turns `complete` to `fals
 
 ## 🧩 10. Framework Adapters
 
-Functional adapter implementations are available in `examples/`:
+**LangGraph** has a published adapter package, `AgentViewerCallbackHandler`, for both languages: `@warlockcode/agent-viewer-langgraph` on npm (peer dependencies `@langchain/core` and `@warlockcode/agent-viewer-sdk`) and `agent_viewer_langgraph` in the Python SDK (`pip install "agent-viewer[langgraph]"`). Pass the handler in the graph config; node runs become `agent.status.changed` (Thinking, Done, Blocked or Waiting on an interrupt), tools become `tool.started`/`tool.completed`/`tool.failed`, and model calls become `llm.usage` (only when the provider reported both token counts) or `llm.failed`. Prompts, completions, tool inputs and outputs and error messages are never sent; callback metadata goes through a whitelist (`langgraph_node`, `thread_id`, `ls_provider`, `ls_model_name`, `ls_model_type`), and `thread_id` becomes the session.
 
-- **LangGraph** (`examples/langgraph-adapter.ts`): Node start, tool callbacks, model usage, step completion.
+```ts
+const handler = new AgentViewerCallbackHandler({ url: 'http://localhost:8787', runtimeId: 'my-graph' });
+await graph.invoke(inputs, { callbacks: [handler], configurable: { thread_id: 'thread-1' } });
+await handler.flush();
+```
+
+Full guide: [docs/adapters/langgraph.md](adapters/langgraph.md). Runnable example with a fake chat model: [`examples/langgraph/`](../examples/langgraph/README.md).
+
+Example adapter implementations for the other frameworks are available in `examples/`:
+
 - **CrewAI** (`examples/crewai-adapter.py`): Crew agent registration, task delegation, step actions, token telemetry.
 - **AutoGen** (`examples/autogen-adapter.py`): ConversableAgent and GroupChat dialogues, tool returns, and token counts.
 - **OpenAI Agents SDK** (`examples/openai-agents-adapter/`, see its [README](../examples/openai-agents-adapter/README.md)): a real tracing-processor adapter (`AgentViewerTracingProcessor`) registered via `addTraceProcessor()`, tested against the real `@openai/agents` package in CI. Agent runs, handoffs, tool calls and model usage are captured automatically from the SDK's own tracing pipeline, no manual callbacks.

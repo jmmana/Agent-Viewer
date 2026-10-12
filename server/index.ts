@@ -29,6 +29,8 @@ import {
 import { parseRetentionConfig, startRetention, usageRetentionWarning, type RetentionConfig, type RetentionJobHandle } from './retention';
 import { readPackageVersion } from './version';
 import { verifyChain } from './audit/verify';
+import { AuditCheckpointService, auditCheckpointsSupported, parseCheckpointScheduleConfig } from './audit/checkpoints';
+import { loadSigningKey } from './audit/signingKey';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
 import type { RollupQuery, UsageFilters } from './usage/types';
@@ -317,6 +319,30 @@ const apiKeyStore: ApiKeyStore = (() => {
 })();
 const apiKeysSupported = store.getDatabaseHandle?.() !== undefined;
 
+// Signed audit checkpoints (issue #387): SQLite only, and only once migration 22 has run. Loading the signing key
+// (env, key file, or a generated 0600 default next to the database) and the schedule both validate at startup;
+// a bad key or value stops a direct run with a message that never contains key material, like every other
+// env-derived config above. `start()` registers the key (retiring a different, previously active one and signing
+// a `key_change` checkpoint) and starts the unref'd interval timer.
+let auditCheckpoints: AuditCheckpointService | null = null;
+try {
+  const handle = store.getDatabaseHandle?.();
+  const dbPath = store.getDatabasePath?.();
+  if (handle && dbPath !== undefined && auditCheckpointsSupported(handle)) {
+    auditCheckpoints = new AuditCheckpointService({
+      db: handle,
+      key: loadSigningKey({ env: process.env, dbPath }),
+      schedule: parseCheckpointScheduleConfig(process.env),
+    });
+    auditCheckpoints.start();
+  }
+} catch (error) {
+  if (!isDirectRun) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message.replace(/[\r\n]+/g, ' ').trim());
+  process.exit(1);
+}
+
 const budgetDeps: BudgetHttpDeps = {
   getRegistry: () => budgetRegistry,
   currentAuthMode: () => currentAuthMode(),
@@ -372,6 +398,8 @@ export async function shutdown(): Promise<void> {
   budgetRolloverWatcher?.stop();
   await retentionJob.stop();
   await alertDeliveryWorker?.stop();
+  // Issue #387: a final `shutdown` checkpoint (only if the head advanced), before the store closes its handle.
+  auditCheckpoints?.shutdown();
   await store.close();
 }
 
@@ -1629,6 +1657,13 @@ export function onEventAccepted(listener: AcceptedEventListener): () => void {
   };
 }
 
+// Issue #387: drives the `AGENT_VIEWER_CHECKPOINT_EVERY_EVENTS` trigger. Events appended without a broadcast
+// (`appendAuditKeyEvent`) are not counted here, but are still covered by the next checkpoint of any kind.
+if (auditCheckpoints) {
+  const service = auditCheckpoints;
+  onEventAccepted(() => service.noteChainedEvents());
+}
+
 // Helper to broadcast event to SSE subscribers (without named event so EventSource.onmessage receives all)
 /**
  * Broadcasts an accepted event to SSE subscribers (without a named event, so `EventSource.onmessage` receives
@@ -2228,7 +2263,7 @@ const MAX_RULES_VERSION_LENGTH = 100;
  * from racing the same candidate list. */
 let auditDestructiveRunInFlight = false;
 
-/** Whether the store can tombstone with a chained audit trail (SQLite past migration 20). */
+/** Whether the store can tombstone with a chained audit trail (SQLite past migration 21). */
 function storeSupportsAuditRetention(): boolean {
   return Boolean(store.getDatabasePath?.() && store.setLegalHold && store.activeLegalHold && store.listTombstoneCandidates && store.auditRetentionStatus);
 }
@@ -2453,6 +2488,101 @@ app.post('/api/v1/audit/redact', async (req, res) => {
   } finally {
     auditDestructiveRunInFlight = false;
   }
+});
+
+// -------------------------------------------------------------
+// Signed audit checkpoints (issue #387). Under `/api/v1`, so they share the rate limiter, query-token rejection,
+// open-mode guard and Bearer auth registered above. Without a checkpoint service (memory storage, or a database
+// opened against a migration list that stops before migration 22) every route answers `409 audit_unavailable`.
+// -------------------------------------------------------------
+
+/** `null` and already responded `409 audit_unavailable` when there is no checkpoint service. */
+function requireAuditCheckpoints(res: express.Response): AuditCheckpointService | null {
+  res.setHeader('Cache-Control', 'no-store');
+  if (auditCheckpoints) return auditCheckpoints;
+  const reason = store.getDatabaseHandle?.() ? 'schema_not_migrated' : 'memory_storage';
+  res.status(409).json({ error: 'audit_unavailable', reason, message: 'Signed audit checkpoints require SQLite storage.' });
+  return null;
+}
+
+const CHECKPOINT_PAGE_DEFAULT = 100;
+const CHECKPOINT_PAGE_MAX = 1000;
+
+function parseNonNegativeIntParam(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** `?afterSeq=<n>` (keyset cursor, default 0), `?limit=1..1000` (default 100), `?format=json|jsonl`. */
+app.get('/api/v1/audit/checkpoints', (req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  const afterSeq = req.query.afterSeq === undefined ? 0 : parseNonNegativeIntParam(req.query.afterSeq);
+  const limit = req.query.limit === undefined ? CHECKPOINT_PAGE_DEFAULT : parseNonNegativeIntParam(req.query.limit);
+  const format = req.query.format ?? 'json';
+  if (afterSeq === null) {
+    res.status(400).json({ error: 'validation_failed', message: 'afterSeq must be a non-negative integer' });
+    return;
+  }
+  if (limit === null || limit < 1 || limit > CHECKPOINT_PAGE_MAX) {
+    res.status(400).json({ error: 'validation_failed', message: `limit must be an integer from 1 to ${CHECKPOINT_PAGE_MAX}` });
+    return;
+  }
+  if (format !== 'json' && format !== 'jsonl') {
+    res.status(400).json({ error: 'validation_failed', message: 'format must be "json" or "jsonl"' });
+    return;
+  }
+  const checkpoints = service.list(afterSeq, limit);
+  const nextAfterSeq = checkpoints.length === limit ? checkpoints[checkpoints.length - 1].body.checkpointSeq : null;
+  if (format === 'jsonl') {
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    if (nextAfterSeq !== null) res.setHeader('X-Next-After-Seq', String(nextAfterSeq));
+    res.send(checkpoints.map((checkpoint) => `${JSON.stringify(checkpoint)}\n`).join(''));
+    return;
+  }
+  res.json({ checkpoints, nextAfterSeq });
+});
+
+app.get('/api/v1/audit/checkpoints/latest', (_req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  const checkpoint = service.latest();
+  if (!checkpoint) {
+    res.status(404).json({ error: 'checkpoint_not_found', message: 'No signed checkpoint exists yet.' });
+    return;
+  }
+  res.json({ checkpoint });
+});
+
+/** On-demand checkpoint (`reason: 'manual'`). `201` when one was signed; `200` with `created: false` when the
+ * chain is empty or the head has not advanced since the latest checkpoint; `409` when signing was refused
+ * (head behind the latest checkpoint, or this server's key is no longer the active one). */
+app.post('/api/v1/audit/checkpoints', (_req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  try {
+    const result = service.createCheckpoint('manual');
+    if (result.created) {
+      res.status(201).json({ created: true, checkpoint: result.checkpoint });
+      return;
+    }
+    if (result.skipped === 'head_behind_checkpoint' || result.skipped === 'key_not_active') {
+      res.status(409).json({ error: 'checkpoint_refused', reason: result.skipped, message: 'The checkpoint was not signed; run GET /api/v1/audit/verify.' });
+      return;
+    }
+    res.json({ created: false, reason: result.skipped, checkpoint: result.checkpoint });
+  } catch (err) {
+    console.error('[agent-viewer] POST /api/v1/audit/checkpoints failed:', err);
+    res.status(503).json({ error: 'audit_checkpoint_failed', message: 'The checkpoint could not be written.' });
+  }
+});
+
+/** Every public key that ever signed here (never a private key), oldest first; exactly one is `active`. */
+app.get('/api/v1/audit/keys', (_req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  res.json({ activeKeyId: service.key.keyId, keys: service.keys() });
 });
 
 // -------------------------------------------------------------

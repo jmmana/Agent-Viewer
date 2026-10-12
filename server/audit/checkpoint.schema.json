@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-viewer.dev/schemas/audit/checkpoint/v1.json",
+  "title": "Agent Viewer signed audit checkpoint (v1)",
+  "description": "A signed checkpoint as returned by GET /api/v1/audit/checkpoints (issue #387). The signed bytes are the UTF-8 encoding of \"agent-viewer/checkpoint/v1\\n\" followed by the RFC 8785 (JCS) canonical JSON of `body`. `digest` is the lowercase hex SHA-256 of those bytes; `signature` is the base64 pure Ed25519 signature over them. The next checkpoint's body.prevCheckpointDigest equals this checkpoint's digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["body", "digest", "signature"],
+  "properties": {
+    "body": { "$ref": "#/$defs/body" },
+    "digest": { "$ref": "#/$defs/hex64" },
+    "signature": {
+      "type": "string",
+      "description": "Base64 (RFC 4648, padded) Ed25519 signature, 64 bytes.",
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  },
+  "$defs": {
+    "hex64": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version", "instanceId", "checkpointSeq", "headSeq", "headHash", "chainedCount",
+        "createdAt", "reason", "keyId", "prevCheckpointDigest"
+      ],
+      "properties": {
+        "version": { "const": 1 },
+        "instanceId": { "type": "string", "minLength": 1, "description": "audit_meta.instance_id of the signing database." },
+        "checkpointSeq": { "type": "integer", "minimum": 1, "description": "1-based, contiguous position in the checkpoint chain." },
+        "headSeq": { "type": "integer", "minimum": 1, "description": "events.seq of the newest chained row covered." },
+        "headHash": { "$ref": "#/$defs/hex64", "description": "events.hash of the row at headSeq." },
+        "chainedCount": { "type": "integer", "minimum": 1, "description": "Chained rows with seq <= headSeq when signed." },
+        "createdAt": { "type": "integer", "minimum": 0, "description": "Unix epoch milliseconds." },
+        "reason": { "enum": ["events", "interval", "shutdown", "manual", "key_change"] },
+        "keyId": {
+          "type": "string",
+          "pattern": "^ed25519:[0-9a-f]{64}$",
+          "description": "ed25519: + hex SHA-256 of the signing public key's SPKI DER encoding."
+        },
+        "prevCheckpointDigest": {
+          "description": "Digest of checkpoint checkpointSeq - 1; null only when checkpointSeq is 1.",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hex64" }]
+        }
+      }
+    }
+  }
+}

@@ -21,6 +21,7 @@ import { auditMeta } from './migrations/0018-audit-meta';
 import { apiKeys } from './migrations/0019-api-keys';
 import { apiKeyScopes } from './migrations/0020-api-key-scopes';
 import { tombstonesLegalHold } from './migrations/0021-tombstones-legal-hold';
+import { auditCheckpoints } from './migrations/0022-audit-checkpoints';
 
 export interface Migration {
   /** 1-based, contiguous, never reused. */
@@ -53,6 +54,7 @@ export const MIGRATIONS: readonly Migration[] = [
   apiKeys,
   apiKeyScopes,
   tombstonesLegalHold,
+  auditCheckpoints,
 ];
 
 export interface MigrationOptions {

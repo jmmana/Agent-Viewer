@@ -273,15 +273,32 @@ A clean report has the same shape with `"ok": true` and `"firstBreak": null`. Ev
 produce: `hash_mismatch` (the event content changed), `link_mismatch` (a row was deleted, inserted or reordered,
 or the first chained row's link to the genesis checkpoint was tampered with), `unparseable_event` (`event_json`
 is not valid JSON), `column_mismatch` (an indexed column such as `agent_id` was edited directly, bypassing
-`event_json`; the message names the column, never its value), and `missing_hash` (a row past every recorded
-checkpoint's coverage has no hash at all). `seq_gap` is reserved for a later, checkpoint-aware slice; deleting a
-row is reported as `link_mismatch` instead. Legacy rows (before the chain started, or interleaved via a
-`resume` checkpoint) are counted in `chain.unchained` with a `legacy_rows` warning, never individually walked:
-their integrity is a separate, lighter guarantee (the genesis/resume digest), not this walk's job. `checkpoints`
-reports the signed checkpoint verification described below (`ok` is `false` when either `firstBreak` or
-`checkpoints.firstFailure` is set); `exported` stays `null` until #388's CLI cross-checks an exported file, and
-`keyTrust` stays `server-reported` until that CLI can pin a public key. In memory mode: the same `{ "enabled": false, ... }` shape `GET /api/v1/audit/chain`
-already uses, not a `409` (this is a read about availability, not a write the server refuses).
+`event_json`; the message names the column, never its value), `missing_hash` (a row past every recorded
+checkpoint's coverage has no hash at all), and `tombstone_invalid` (a tombstoned row's `tombstone_audit_seq`
+does not point to a real, matching committing audit event; see below). `seq_gap` is reserved for a later,
+checkpoint-aware slice; deleting a row is reported as `link_mismatch` instead. Legacy rows (before the chain
+started, or interleaved via a `resume` checkpoint) are counted in `chain.unchained` with a `legacy_rows` warning,
+never individually walked: their integrity is a separate, lighter guarantee (the genesis/resume digest), not this
+walk's job. `checkpoints` reports the signed checkpoint verification described below (`ok` is `false` when either
+`firstBreak` or `checkpoints.firstFailure` is set); `exported` stays `null` until #388's CLI cross-checks an
+exported file, and `keyTrust` stays `server-reported` until that CLI can pin a public key. In memory mode: the
+same `{ "enabled": false, ... }` shape `GET /api/v1/audit/chain` already uses, not a `409` (this is a read about
+availability, not a write the server refuses).
+
+### Tombstones (issue #109) do not break verification (issue #408)
+
+A row tombstoned by `POST /api/v1/audit/retention/purge` or `/audit/redact` (issue #109) has its `event_json`
+deliberately rewritten (`summary`/`payload` replaced, a `tombstone` object added), while `seq`, `hash`,
+`prev_hash` and every header column stay byte-identical. Recomputing that row's hash from its current, redacted
+content would never match the stored `hash` again, by design, not because the row was tampered with. This walk
+is tombstone-aware: a row with `tombstoned_at IS NOT NULL` skips the content-hash recompute entirely (its link to
+the previous row is still checked the normal way, since links are never touched by a tombstone) and is instead
+cross-checked against the chained `audit.retention.purged`/`audit.redaction.applied` event its
+`tombstone_audit_seq` column names. That audit event must exist, be of one of those two types, and have committed
+exactly this row's original `hash` and `content_hash` in its `payload.events` list. A missing, wrong-type or
+mismatched pointer (a forged tombstone) is reported as `tombstone_invalid` at that row rather than silently
+passed. The same rule is implemented independently by `scripts/verify-audit-bundle.mjs`'s `REDACTION` check (see
+`docs/audit-bundle.md`) and exercised by `tests/audit-retention.test.mjs`'s own `tombstoneAwareWalk` helper.
 
 ## Signed checkpoints (issue #387)
 

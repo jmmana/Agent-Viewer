@@ -176,11 +176,6 @@ raw body before validation (a batch is refused whole).
 
 ### Known limits and pending work
 
-- **`GET /api/v1/audit/verify` does not understand tombstones yet.** It recomputes each row's hash from
-  `event_json`, which a tombstone necessarily changes, so it reports `hash_mismatch` at the first tombstoned row.
-  The accounting a verifier needs is in place (links unchanged; the original `hash` and `content_hash` committed
-  by a chained, still-recomputable audit event that `tombstone_audit_seq` points to; see `tombstoneAwareWalk` in
-  `tests/audit-retention.test.mjs`), but `server/audit/verify.ts` itself is not changed by this item.
 - **Crypto-shredding is structural only.** The v1 chain (`server/chain.ts`) hashes the raw event and
   `content_hash` is an unsalted fingerprint, so the stored hashes still commit to the removed content: low-entropy
   content could be confirmed by guessing. `content_salt` exists and is destroyed on tombstone, but nothing writes

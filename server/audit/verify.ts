@@ -20,12 +20,25 @@ import {
  * (issue #388) and by #387's checkpoint verification, which extends `VerifyReport.checkpoints`.
  *
  * Scope of this slice: chain-break detection only (`hash_mismatch`, `link_mismatch`, `unparseable_event`,
- * `column_mismatch`, `missing_hash`). Without a signed checkpoint (#387, `./verifyCheckpoints.ts`) a
+ * `column_mismatch`, `missing_hash`, `tombstone_invalid`). Without a signed checkpoint (#387,
+ * `./verifyCheckpoints.ts`) a
  * *consistent* rewrite (an attacker who edits a row and recomputes every later hash correctly) is undetectable by
  * design, and the `no_checkpoints` warning says so; with one, a rewrite of any covered row is a `head_mismatch`. `seq_gap` is deliberately never produced by this slice: deleting a chained
  * row is reported as `link_mismatch` instead (the next remaining row's `prev_hash` no longer matches anything
  * this walk computed), which issue #106's own acceptance criteria accepts ("yields seq_gap (or link_mismatch)").
  * The type stays in `BreakKind` for shape stability across sub-issues.
+ *
+ * Issue #408: issue #109's tombstone (`POST /api/v1/audit/retention/purge`, `/redact`) rewrites a row's
+ * `event_json` (content replaced, `tombstone` object added) while deliberately keeping `seq`, `hash`, `prev_hash`
+ * and every header column byte-identical, so a tombstoned row's own stored `hash` never recomputes from its
+ * current content again, on purpose. This walk is tombstone-aware: a row flagged `tombstoned_at IS NOT NULL`
+ * skips the content-hash recompute (its link to the previous row is still checked normally, since links are
+ * never touched by a tombstone) and is instead cross-checked against the chained
+ * `audit.retention.purged`/`audit.redaction.applied` event its `tombstone_audit_seq` names, which must exist, be
+ * of the right type, and have committed exactly this row's original `hash`/`content_hash`. A missing, wrong-type
+ * or mismatched pointer is reported as `tombstone_invalid` rather than a silent pass. Mirrors
+ * `scripts/verify-audit-bundle.mjs`'s `REDACTION` check and `tests/audit-retention.test.mjs`'s own
+ * `tombstoneAwareWalk` helper, written for exactly this purpose.
  */
 
 let _DatabaseSync: any = null;
@@ -43,7 +56,9 @@ export type BreakKind =
   | 'seq_gap' // reserved for a future, checkpoint-aware slice; never produced by this one (see module doc comment)
   | 'missing_hash' // a row past every known checkpoint's coverage has no hash
   | 'unparseable_event' // event_json is not valid JSON
-  | 'column_mismatch'; // an indexed column disagrees with the parsed event_json
+  | 'column_mismatch' // an indexed column disagrees with the parsed event_json
+  | 'tombstone_invalid'; // issue #408: a tombstoned row's `tombstone_audit_seq` does not point to a real,
+  // matching `audit.retention.purged`/`audit.redaction.applied` event (forged or missing tombstone)
 
 export interface ChainBreak {
   kind: BreakKind;
@@ -154,10 +169,14 @@ interface RawRow {
   task_id: string | null;
   severity: string;
   summary: string;
+  content_hash: string | null;
+  /** Issue #408/#109: `NULL` unless migration 21 has run and this row was tombstoned. */
+  tombstoned_at: number | null;
+  tombstone_audit_seq: number | null;
 }
 
 const ROW_COLUMNS =
-  'seq, id, event_json, created_at, submitter_id, prev_hash, hash, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary';
+  'seq, id, event_json, created_at, submitter_id, prev_hash, hash, type, timestamp, runtime_id, session_id, agent_id, task_id, severity, summary, content_hash';
 
 /** Mirrors `SQLiteEventStore.prepareInsert`'s column mapping exactly (`server/store.ts`): what a column must
  * equal for a given parsed event, so tampering with a column directly (never touching `event_json`) is caught
@@ -243,6 +262,15 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
       | { name: string }
       | undefined) !== undefined;
 
+    // Issue #408/#109: `tombstoned_at`/`tombstone_audit_seq` exist only once migration 21 has run (same migration
+    // that adds `legal_holds`, checked the same way `store.ts`'s own `tombstonesEnabled` is). A database between
+    // migrations 17 and 20 has the chain but no tombstone columns, so every row there is correctly selected as
+    // never tombstoned (`NULL AS ...` below) rather than the query failing on a column that does not exist yet.
+    const hasTombstoneColumns = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'legal_holds'").get() as
+      | { name: string }
+      | undefined) !== undefined;
+    const tombstoneColumnsSql = hasTombstoneColumns ? 'tombstoned_at, tombstone_audit_seq' : 'NULL AS tombstoned_at, NULL AS tombstone_audit_seq';
+
     const chainStartSeq: number | null = hasCheckpointsTable
       ? (() => {
           const row = db.prepare('SELECT MIN(seq) AS s FROM events WHERE hash IS NOT NULL').get() as { s: number | null };
@@ -288,7 +316,12 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
     let firstBreak: ChainBreak | null = null;
     let checked = 0;
     if (chainStartSeq !== null) {
-      const page = db.prepare(`SELECT ${ROW_COLUMNS} FROM events WHERE hash IS NOT NULL AND seq > ? ORDER BY seq LIMIT ?`);
+      const page = db.prepare(`SELECT ${ROW_COLUMNS}, ${tombstoneColumnsSql} FROM events WHERE hash IS NOT NULL AND seq > ? ORDER BY seq LIMIT ?`);
+      // Issue #408: a tombstoned row's committing audit event always has a *higher* seq than the tombstoned row
+      // itself (it is appended fresh in the same transaction that rewrites the row), so by the time this ascending
+      // walk reaches a tombstoned row, its audit event has not been read yet. A direct point lookup by seq (the
+      // primary key) is simpler and cheaper than a two-pass walk or buffering every audit event seen so far.
+      const auditEventLookup = db.prepare('SELECT type, event_json FROM events WHERE seq = ?');
       let cursor = chainStartSeq - 1;
       // Issue #105: the first chained row's `prev_hash` is the genesis checkpoint's own hash (there is exactly
       // one, by the unique index on `chain_checkpoints(kind) WHERE kind = 'genesis'`), never `null`, so this
@@ -339,23 +372,55 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
             break pageLoop;
           }
 
-          const recomputed = eventHash({
-            seq: Number(row.seq),
-            prevHash: row.prev_hash ?? '',
-            receivedAt: Number(row.created_at),
-            submitterId: row.submitter_id ?? '',
-            event: parsedEvent,
-          });
-          if (recomputed !== row.hash) {
-            firstBreak = {
-              kind: 'hash_mismatch',
+          if (row.tombstoned_at === null) {
+            const recomputed = eventHash({
               seq: Number(row.seq),
-              eventId: row.id,
-              expectedHash: recomputed,
-              storedHash: row.hash ?? undefined,
-              message: `The stored hash does not match the event content at seq ${row.seq}.`,
-            };
-            break pageLoop;
+              prevHash: row.prev_hash ?? '',
+              receivedAt: Number(row.created_at),
+              submitterId: row.submitter_id ?? '',
+              event: parsedEvent,
+            });
+            if (recomputed !== row.hash) {
+              firstBreak = {
+                kind: 'hash_mismatch',
+                seq: Number(row.seq),
+                eventId: row.id,
+                expectedHash: recomputed,
+                storedHash: row.hash ?? undefined,
+                message: `The stored hash does not match the event content at seq ${row.seq}.`,
+              };
+              break pageLoop;
+            }
+          } else {
+            // Issue #408: a legitimately tombstoned row's `event_json` was rewritten by design (issue #109), so
+            // it never recomputes to its own stored `hash` again; that is not tampering. Instead, cross-check the
+            // tombstone against the chained audit event `tombstone_audit_seq` names: it must exist, be of the
+            // right type, and have committed exactly this row's original `hash`/`content_hash` (mirrors
+            // `verify-audit-bundle.mjs`'s `REDACTION` check and `tombstoneAwareWalk` in
+            // `tests/audit-retention.test.mjs`). A missing, wrong-type or mismatched pointer means the tombstone
+            // itself cannot be trusted, so it is reported as a break rather than silently passed.
+            const auditRow = row.tombstone_audit_seq === null
+              ? undefined
+              : (auditEventLookup.get(row.tombstone_audit_seq) as { type: string; event_json: string | null } | undefined);
+            let committed: { id?: unknown; hash?: unknown; contentHash?: unknown } | undefined;
+            if (auditRow && (auditRow.type === 'audit.retention.purged' || auditRow.type === 'audit.redaction.applied')) {
+              try {
+                const auditEvent = auditRow.event_json === null ? null : JSON.parse(auditRow.event_json);
+                const events = auditEvent?.payload?.events;
+                if (Array.isArray(events)) committed = events.find((entry: any) => entry && entry.id === row.id);
+              } catch {
+                committed = undefined;
+              }
+            }
+            if (!committed || committed.hash !== row.hash || committed.contentHash !== row.content_hash) {
+              firstBreak = {
+                kind: 'tombstone_invalid',
+                seq: Number(row.seq),
+                eventId: row.id,
+                message: `The tombstone at seq ${row.seq} is not committed by a matching audit event.`,
+              };
+              break pageLoop;
+            }
           }
 
           const expected = expectedColumns(parsedEvent);

@@ -285,6 +285,96 @@ test('verifyChain: a row past every checkpoint\'s coverage with no hash is caugh
   });
 });
 
+// -------------------------------------------------------------
+// Issue #408: tombstone-aware verification (issue #109's retention/redaction)
+// -------------------------------------------------------------
+
+function tombstoneInfo(extra = {}) {
+  return { reason: 'retention', rulesVersion: null, actor: { kind: 'api', name: 'api-token' }, submitterId: 'shared-token', ...extra };
+}
+
+test('verifyChain: a legitimately tombstoned row (plus its committing audit event) verifies clean, never hash_mismatch', async () => {
+  await withTempStore('tombstone-clean', async (store, file) => {
+    await store.append(storeEvent('evt_keep_1', 1000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_gone', 2000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_keep_2', 3000), { submitterId: 'shared-token' });
+    const result = await store.tombstone(['evt_gone'], tombstoneInfo());
+    assert.equal(result.tombstoned, 1);
+    await store.append(storeEvent('evt_keep_3', 4000), { submitterId: 'shared-token' });
+    await store.close();
+
+    const report = await verifyChain({ dbPath: file });
+    assert.equal(report.ok, true);
+    assert.equal(report.firstBreak, null);
+    // 3 ordinary events + 1 tombstone audit event + 1 more ordinary event appended after = 5 chained rows.
+    assert.equal(report.chain.checked, 5);
+  });
+});
+
+test('verifyChain: a tombstone whose tombstone_audit_seq points nowhere is caught as tombstone_invalid, not hash_mismatch', async () => {
+  await withTempStore('tombstone-forged-seq', async (store, file) => {
+    await store.append(storeEvent('evt_a', 1000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_gone', 2000), { submitterId: 'shared-token' });
+    await store.tombstone(['evt_gone'], tombstoneInfo());
+    await store.close();
+
+    const raw = new DatabaseSync(file);
+    raw.exec('DROP TRIGGER events_immutable');
+    raw.prepare('UPDATE events SET tombstone_audit_seq = ? WHERE id = ?').run(9999, 'evt_gone');
+    raw.close();
+
+    const report = await verifyChain({ dbPath: file });
+    assert.equal(report.ok, false);
+    assert.equal(report.firstBreak.kind, 'tombstone_invalid');
+    assert.equal(report.firstBreak.seq, 2);
+    assert.equal(report.firstBreak.eventId, 'evt_gone');
+  });
+});
+
+test('verifyChain: a tombstone pointing at a real but unrelated (non-audit) row is caught as tombstone_invalid', async () => {
+  await withTempStore('tombstone-wrong-type', async (store, file) => {
+    await store.append(storeEvent('evt_a', 1000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_gone', 2000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_unrelated', 3000), { submitterId: 'shared-token' });
+    await store.tombstone(['evt_gone'], tombstoneInfo());
+    await store.close();
+
+    const raw = new DatabaseSync(file);
+    raw.exec('DROP TRIGGER events_immutable');
+    // Point the tombstone at `evt_unrelated` (an ordinary row, not the real committing audit event).
+    const unrelated = raw.prepare('SELECT seq FROM events WHERE id = ?').get('evt_unrelated');
+    raw.prepare('UPDATE events SET tombstone_audit_seq = ? WHERE id = ?').run(unrelated.seq, 'evt_gone');
+    raw.close();
+
+    const report = await verifyChain({ dbPath: file });
+    assert.equal(report.ok, false);
+    assert.equal(report.firstBreak.kind, 'tombstone_invalid');
+    assert.equal(report.firstBreak.eventId, 'evt_gone');
+  });
+});
+
+test('verifyChain: a tombstone whose committing audit event records the wrong original hash is caught as tombstone_invalid (forged tombstone is not a silent pass)', async () => {
+  await withTempStore('tombstone-wrong-hash', async (store, file) => {
+    await store.append(storeEvent('evt_a', 1000), { submitterId: 'shared-token' });
+    await store.append(storeEvent('evt_gone', 2000), { submitterId: 'shared-token' });
+    const result = await store.tombstone(['evt_gone'], tombstoneInfo());
+    await store.close();
+
+    const raw = new DatabaseSync(file);
+    raw.exec('DROP TRIGGER events_immutable');
+    const auditRow = raw.prepare('SELECT event_json FROM events WHERE id = ?').get(result.auditEventIds[0]);
+    const auditEvent = JSON.parse(auditRow.event_json);
+    auditEvent.payload.events[0].hash = 'f'.repeat(64);
+    raw.prepare('UPDATE events SET event_json = ? WHERE id = ?').run(JSON.stringify(auditEvent), result.auditEventIds[0]);
+    raw.close();
+
+    const report = await verifyChain({ dbPath: file });
+    assert.equal(report.ok, false);
+    assert.equal(report.firstBreak.kind, 'tombstone_invalid');
+    assert.equal(report.firstBreak.eventId, 'evt_gone');
+  });
+});
+
 test('verifyChain: legacy rows from before the chain started are counted in chain.unchained with a legacy_rows warning, and are not individually verified', async () => {
   const { dir, file } = tempDbPath('legacy-upgrade');
   try {

@@ -84,6 +84,16 @@ What the chain, keys and bundle exist to protect, and what an attacker or a curi
   covers a deleted, inserted or reordered row, and a checkpoint behind the chain's current head, or a head
   behind the latest checkpoint, is refused rather than silently re-signed
   ([docs/audit-chain.md#when-a-checkpoint-is-signed](audit-chain.md#when-a-checkpoint-is-signed)).
+- **A tombstone was placed through this chain's own retention/redaction routes**, not just deleted or edited
+  out of band. Issue #109's tombstone keeps the chain's *links* intact (`seq`, `hash`, `prev_hash` and every
+  header column stay byte-identical); both the live `GET /api/v1/audit/verify` route/`agent-viewer verify`
+  CLI (issue #408) and the standalone bundle verifier (`scripts/verify-audit-bundle.mjs`, #401) skip the
+  content-hash recompute for a tombstoned row and instead cross-check it against the chained
+  `audit.retention.purged`/`audit.redaction.applied` event that committed its original `hash`/`content_hash`
+  ([docs/audit-chain.md#tombstones-issue-109-do-not-break-verification-issue-408](audit-chain.md#tombstones-issue-109-do-not-break-verification-issue-408)).
+  A forged or missing pointer is reported as `tombstone_invalid`, not a silent pass. What this does not cover:
+  whether the redaction was *justified* (legal hold, redaction rules version) is a policy question this chain
+  has no opinion on; it only proves the tombstone was recorded through the real audit trail.
 
 ## What the chain does not prove
 
@@ -118,19 +128,6 @@ What the chain, keys and bundle exist to protect, and what an attacker or a curi
   verifiable rows; neither one names a specific credential holder, because this release's shipped behavior
   does not require one for either path. See the full resolution table in
   [docs/audit-chain.md#submitter-id](audit-chain.md#submitter-id).
-- **That verification still passes after a legitimate redaction or retention purge, today.** This is the one
-  place this page corrects an assumption the rest of the audit documentation set was written against: issue
-  #109's tombstone is designed to keep the chain's *links* intact (`seq`, `hash`, `prev_hash` and every header
-  column stay byte-identical), and the standalone bundle verifier (`scripts/verify-audit-bundle.mjs`, #401)
-  already understands this and skips the content-hash recompute for a tombstoned row. **The live
-  `GET /api/v1/audit/verify` route and the `agent-viewer verify` CLI do not yet have that same logic**: they
-  recompute every row's content hash unconditionally and report `hash_mismatch` at the first tombstoned row,
-  indistinguishable on the wire from real tampering. This is a known, disclosed gap
-  (see [docs/retention.md](retention.md#known-limits-and-pending-work)), tracked as
-  [issue #408](https://github.com/jmmana/Agent-Viewer/issues/408). Until it ships, treat a `hash_mismatch`
-  reported by the live verifier or CLI as requiring a manual check against `docs/retention.md`'s tombstone
-  columns (or a bundle re-export, which already verifies correctly) before concluding the chain was tampered
-  with.
 
 ## Memory mode
 

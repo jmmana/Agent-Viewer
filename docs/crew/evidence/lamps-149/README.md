@@ -1,4 +1,4 @@
-# Crew lamps #149 — runtime evidence
+# Crew lamps #149: runtime evidence
 
 Captured from the real application with Playwright against branch
 `feat/crew-lamps-149`.

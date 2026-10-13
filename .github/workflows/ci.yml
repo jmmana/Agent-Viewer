@@ -48,6 +48,9 @@ jobs:
             exit 1
           fi
 
+      - name: Docs hygiene (relative links, README linkage, em dash scan; issue #410)
+        run: npm run check:docs
+
       - name: Typecheck
         run: npm run lint
 

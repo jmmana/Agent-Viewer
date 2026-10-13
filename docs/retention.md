@@ -65,8 +65,8 @@ pruning: they live in `retention_state`, a separate table from `retention_runs`.
 
 ## Run history
 
-Every non-skipped run writes one row to `retention_runs` (`id`, `started_at`, `finished_at`, `trigger` —
-`'startup'` or `'schedule'` —, `status`, the window/cutoff/deleted count for each table, and a short `error` on
+Every non-skipped run writes one row to `retention_runs` (`id`, `started_at`, `finished_at`, `trigger`
+(`'startup'` or `'schedule'`), `status`, the window/cutoff/deleted count for each table, and a short `error` on
 failure) and one console line with the same counts, for example:
 
 ```

@@ -11,7 +11,7 @@ counters (`claude_code.token.usage`, `claude_code.cost.usage`). It is the cheape
 can have: the logs receiver above turns each `api_request` into a ledger row, and the metrics receiver stores
 the same consumption as reported by a second, independent counter. The two are kept strictly apart: a metric
 point is never turned into a canonical event, never added to the ledger, the snapshot totals, SSE or any
-rollup. See [OTLP metrics](#otlp-metrics-post-v1metrics) below.
+rollup. See [OTLP metrics](#otlp-metrics-post-v1metrics-issue-73) below.
 
 `POST /v1/traces` (issue #97) is a third, independent receiver: an OTLP/HTTP GenAI *traces* converter, for any
 runtime that already emits OpenTelemetry GenAI spans (`gen_ai.*` semantic conventions; OpenLLMetry/Traceloop and

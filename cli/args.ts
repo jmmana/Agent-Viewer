@@ -100,6 +100,25 @@ export interface AuditCommand {
   token?: string;
 }
 
+/** Issue #388: `agent-viewer verify`, live-chain verification (not to be confused with `agent-viewer audit
+ * verify <bundle-file>`, issue #402, which checks an exported bundle instead). Online by default
+ * (`GET /api/v1/audit/verify` via `resolveConnection`, same as `keys`/`audit export`); `--db <file>` runs the
+ * same verifier directly against a local SQLite file instead, no server involved, and is a usage error combined
+ * with `--url`/`--token`. */
+export interface VerifyCommand {
+  command: 'verify';
+  db?: string;
+  scope?: 'full' | 'recent';
+  /** Pins trust to this one key (a PEM file) instead of whatever the chain's own `audit_keys` records. */
+  publicKey?: string;
+  /** Cross-checks this exported checkpoints file (`GET /api/v1/audit/checkpoints?format=jsonl` output) against
+   * the chain just verified, filling `VerifyReport.exported`. */
+  checkpoints?: string;
+  json: boolean;
+  url?: string;
+  token?: string;
+}
+
 export interface HelpCommand {
   command: 'help' | 'version';
 }
@@ -112,6 +131,7 @@ export type CliCommand =
   | OtelHeadersCommand
   | KeysCommand
   | AuditCommand
+  | VerifyCommand
   | HelpCommand;
 
 export const USAGE = `Usage:
@@ -141,6 +161,15 @@ export const USAGE = `Usage:
                                           no file there); verify runs the standalone, zero-dependency
                                           verify-audit-bundle.mjs script as a child process and returns its
                                           exit code unchanged, never contacting a server. See docs/audit-bundle.md.
+  agent-viewer verify [--db <file>] [--scope full|recent] [--public-key <file>] [--checkpoints <file>] [--json]
+                      [--url <url>] [--token <token>]
+                                          Live-chain verification (issue #388; not the bundle verifier above).
+                                          Online by default (GET /api/v1/audit/verify); --db <file> runs the same
+                                          verifier directly against a local SQLite file, no server, and cannot be
+                                          combined with --url/--token. --public-key pins trust to one key instead
+                                          of the chain's own recorded keys. --checkpoints <file> cross-checks an
+                                          exported checkpoints file against the chain just verified. Exit codes:
+                                          0 clean, 1 integrity failure, 2 usage error, 3 could not verify.
 
 Start options:
   --port <n>           Port to listen on (default: PORT, or ${DEFAULT_PORT})
@@ -385,6 +414,39 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
       requireComplete: Boolean(values['require-complete']),
       json: Boolean(values.json),
       gzip: false,
+    };
+  }
+
+  if (first === 'verify') {
+    const { values, positionals } = parse(rest, {
+      db: { type: 'string' },
+      scope: { type: 'string' },
+      'public-key': { type: 'string' },
+      checkpoints: { type: 'string' },
+      json: { type: 'boolean', default: false },
+      url: { type: 'string' },
+      token: { type: 'string' },
+    });
+    rejectPositionals(positionals, 'verify');
+    const db = nonEmpty('--db', values.db as string | undefined);
+    const url = parseUrl(values.url as string | undefined);
+    const token = nonEmpty('--token', values.token as string | undefined);
+    if (db && (url || token)) {
+      throw new CliUsageError('verify --db cannot be combined with --url or --token (pick one mode)');
+    }
+    const scopeFlag = values.scope as string | undefined;
+    if (scopeFlag !== undefined && scopeFlag !== 'full' && scopeFlag !== 'recent') {
+      throw new CliUsageError(`--scope must be "full" or "recent", got "${scopeFlag}"`);
+    }
+    return {
+      command: 'verify',
+      db,
+      scope: scopeFlag as 'full' | 'recent' | undefined,
+      publicKey: nonEmpty('--public-key', values['public-key'] as string | undefined),
+      checkpoints: nonEmpty('--checkpoints', values.checkpoints as string | undefined),
+      json: Boolean(values.json),
+      url,
+      token,
     };
   }
 

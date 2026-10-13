@@ -122,6 +122,60 @@ packaged CLI ships a copy next to `cli.js`) as a child process and returns its e
 from a GitHub release with no install at all (`curl -LO .../verify-audit-bundle.mjs{,.sha256}`). Full format
 reference, the nine checks, the exit-code table and the key-pinning workflow: [docs/audit-bundle.md](audit-bundle.md).
 
+## Verify the audit chain (issue #388)
+
+```bash
+agent-viewer verify [--url <url>] [--token <token>] [--scope full|recent] [--json]
+                     [--public-key <file>] [--checkpoints <file>]
+agent-viewer verify --db <file> [--public-key <file>] [--checkpoints <file>] [--scope full|recent] [--json]
+```
+
+Not to be confused with `agent-viewer audit verify <bundle-file>` above (issue #402), which checks an exported
+bundle file and never talks to a server. This command verifies a **live chain** instead: by default it calls
+`GET /api/v1/audit/verify` (issue #106) the same way the office itself would; `--db <file>` opens that SQLite
+file read-only and runs the exact same verifier (`server/audit/verify.ts`) directly, no server involved.
+`--db` cannot be combined with `--url`/`--token` (pick one mode); without `--db`, `--url`/`--token` resolve the
+same way as `send` (flag, then `AGENT_VIEWER_URL`/`AGENT_VIEWER_API_TOKEN`, then the running `agent-viewer`'s
+session file). Needs the `audit` scope (issue #108).
+
+| Option | What it does |
+|---|---|
+| `--db <file>` | Verify this SQLite file directly instead of a running server. Keep the `-wal`/`-shm` siblings next to it, unrenamed: in WAL mode, recent commits can still be sitting there instead of in the main file, so a copy of only the `.db` file can be missing the newest rows. |
+| `--scope full\|recent` | Passed through to `GET /api/v1/audit/verify`, or to the same verifier function in `--db` mode. `recent` still behaves like `full` today; this is issue #106's own documented limitation, not something this command changes. |
+| `--public-key <file>` | Pin trust to this one PKCS#8/SPKI PEM public key instead of whichever key the chain's own `audit_keys` table currently reports as active. Every checkpoint is re-checked against only this key (online, by re-fetching and re-verifying the server's own checkpoint list; `--db`, by reading `audit_keys` only to resolve hashes, never to decide trust); a checkpoint signed by a key rotation this pinned copy does not know about reports `key_unknown`, by design. Sets `keyTrust` to `"pinned"` in the report regardless of the outcome. |
+| `--checkpoints <file>` | Cross-check an exported checkpoints file (one JSON `SignedCheckpoint` per line, `GET /api/v1/audit/checkpoints?format=jsonl`'s own shape) against the chain just verified: each checkpoint's own signature and digest, the file's own prev-digest links, and its signed `headHash` against the chain's actual row at that `seq`, fetched one at a time through `GET /api/v1/audit/entries/:seq` (online) or read directly from `--db` — so the server (or the local file, in `--db` mode) never needs the exported file itself beyond that one hash per checkpoint. Fills `VerifyReport.exported`. A malformed line is a usage error (`2`), not an integrity failure: it means the file could not be read, not that anything was tampered with. |
+| `--json` | A single `VerifyReport` JSON document on stdout; every line the human-readable form prints moves to stderr instead (so `--json | jq` never mixes in diagnostics). |
+
+Exit codes (specific to `verify`; the general table at the bottom of this page does not apply here): `0` clean
+(the chain, the checkpoints, and `--checkpoints`'s cross-check if given, all passed); `1` an integrity failure
+(a chain break, a checkpoint failure, or a failure in the exported-checkpoints cross-check); `2` a usage error
+(`--db` combined with `--url`/`--token`, an invalid `--scope`, or an unreadable `--public-key`/`--checkpoints`
+file); `3` could not verify at all (the server is unreachable, answered `401`, is running in memory mode, or
+`--db` points at a file that cannot be opened).
+
+Example, a clean chain with a pinned signing key:
+
+```text
+storage: sqlite
+instance: b7f0c6a2-4d1e-4a56-9a1c-0d6d2f3b8e11
+coverage: seq 1..5321 (scope: full)
+chain: 5320 checked, head seq 5321, 0 unchained
+chain: ok, no break found
+checkpoints: 6 checked, 6 valid, key trust: pinned
+verdict: ok
+```
+
+The cross-check reads one row at a time from `GET /api/v1/audit/entries/:seq` (new in this issue): `{ "seq":
+5321, "eventId": "evt_8f1c", "entryHash": "c0de...42", "prevHash": "b17e...90" }`, or `404 seq_not_found` for an
+out-of-range or unchained `seq`, `409 audit_requires_chain` in memory mode. It needs the `audit` scope like
+every other `/api/v1/audit/*` route, and never accepts a `token` query parameter (issue #71's rule applies here
+too).
+
+Full chain/checkpoint mechanics, the `VerifyReport` and checkpoint JSON shapes, manual `openssl`/`node:crypto`
+verification without this CLI, and key-handling guidance: [docs/audit.md](audit.md). The underlying format and
+the `GET /api/v1/audit/verify`/`chain` routes are documented in depth in
+[docs/audit-chain.md](audit-chain.md).
+
 ## Claude Code
 
 ```bash

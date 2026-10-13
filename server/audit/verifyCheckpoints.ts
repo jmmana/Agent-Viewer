@@ -38,17 +38,39 @@ interface Row {
   signature: string;
 }
 
-export function verifySignedCheckpoints(db: DatabaseSync, instanceId: string, chainHeadSeq: number | null): CheckpointResult {
+/**
+ * `trustedKeyPem`, PKCS#8/SPKI PEM of a public key (issue #388, `agent-viewer verify --public-key`): when given,
+ * only *that* key is ever trusted, regardless of what `audit_keys` records. A checkpoint signed by any other key,
+ * server-reported key rotation included, reports `key_unknown` exactly as an actually-unknown key would: pinning
+ * means the auditor's own copy decides who is trusted, not the database being verified. The caller (`verifyChain`)
+ * sets `VerifyReport.keyTrust` to `'pinned'` whenever this parameter is passed, independent of the outcome.
+ */
+export function verifySignedCheckpoints(
+  db: DatabaseSync,
+  instanceId: string,
+  chainHeadSeq: number | null,
+  trustedKeyPem?: string
+): CheckpointResult {
   const result: CheckpointResult = { checked: 0, valid: 0, firstFailure: null };
   if (!hasSignedCheckpointTables(db)) return result;
 
-  const keyRows = db.prepare('SELECT key_id, public_key_pem FROM audit_keys').all() as Array<{ key_id: string; public_key_pem: string }>;
   const keys = new Map<string, string>();
-  for (const row of keyRows) {
+  if (trustedKeyPem !== undefined) {
     try {
-      if (keyIdFor(crypto.createPublicKey(row.public_key_pem)) === row.key_id) keys.set(row.key_id, row.public_key_pem);
+      const keyId = keyIdFor(crypto.createPublicKey(trustedKeyPem));
+      keys.set(keyId, trustedKeyPem);
     } catch {
-      // An unparseable key row is simply not a usable key: checkpoints signed by it report `key_unknown`.
+      // An unparseable --public-key file trusts nothing: every checkpoint reports key_unknown, which is the
+      // correct outcome (the caller cannot verify against a key it cannot even parse).
+    }
+  } else {
+    const keyRows = db.prepare('SELECT key_id, public_key_pem FROM audit_keys').all() as Array<{ key_id: string; public_key_pem: string }>;
+    for (const row of keyRows) {
+      try {
+        if (keyIdFor(crypto.createPublicKey(row.public_key_pem)) === row.key_id) keys.set(row.key_id, row.public_key_pem);
+      } catch {
+        // An unparseable key row is simply not a usable key: checkpoints signed by it report `key_unknown`.
+      }
     }
   }
 

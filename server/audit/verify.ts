@@ -1,6 +1,15 @@
 import { createRequire } from 'node:module';
+import crypto from 'node:crypto';
 import { eventHash } from '../chain';
 import { verifySignedCheckpoints } from './verifyCheckpoints';
+import {
+  checkpointDigest,
+  keyIdFor,
+  parseCheckpointBody,
+  verifyCheckpointSignature,
+  type CheckpointBody,
+  type SignedCheckpoint,
+} from './checkpointFormat';
 
 /**
  * Chain-walk verifier for the hash chain issue #105 adds over SQLite-stored events (first sub-issue of #106,
@@ -103,7 +112,8 @@ export interface VerifyReport {
   checkpoints: CheckpointResult;
   /** Filled only by the CLI (#388) after cross-checking an exported file; never set by `GET /audit/verify`. */
   exported: CheckpointResult | null;
-  /** Always `'server-reported'` in this slice: there is no pinned public key yet (#387, #388). */
+  /** `'server-reported'` unless the caller pinned a public key (`VerifyOptions.trustedKeyPem`, issue #388's
+   * `agent-viewer verify --public-key`), in which case it is always `'pinned'`, independent of the outcome. */
   keyTrust: 'server-reported' | 'pinned';
   warnings: VerifyWarning[];
 }
@@ -121,6 +131,11 @@ export interface VerifyOptions {
   now?: () => number;
   /** Awaited between pages (after one `setImmediate`), for tests to observe yielding without a real sleep. */
   afterPage?: () => Promise<void> | void;
+  /** PKCS#8/SPKI PEM of a public key to pin (issue #388, `agent-viewer verify --public-key`): when given, only
+   * this key is trusted for checkpoint signatures, and `VerifyReport.keyTrust` is `'pinned'` regardless of the
+   * outcome. See `verifySignedCheckpoints`'s own doc comment for what "only this key" means for a key rotation
+   * the pinned copy does not know about. */
+  trustedKeyPem?: string;
 }
 
 interface RawRow {
@@ -203,7 +218,7 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
     if (Number(totalsRow.total) === 0) {
       warnings.push({ code: 'empty_chain', message: 'The database has no events.' });
       // Issue #387: an empty table with signed checkpoints on record means every covered row was removed.
-      const emptyCheckpoints = verifySignedCheckpoints(db, instanceId, null);
+      const emptyCheckpoints = verifySignedCheckpoints(db, instanceId, null, options.trustedKeyPem);
       return {
         ok: emptyCheckpoints.firstFailure === null,
         storage: 'sqlite',
@@ -215,7 +230,7 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
         firstBreak: null,
         checkpoints: emptyCheckpoints,
         exported: null,
-        keyTrust: 'server-reported',
+        keyTrust: options.trustedKeyPem !== undefined ? 'pinned' : 'server-reported',
         warnings,
       };
     }
@@ -382,7 +397,7 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
     }
 
     // Issue #387: signed checkpoints, verified against the same read-only snapshot of the chain.
-    const checkpoints = verifySignedCheckpoints(db, instanceId, headSeq);
+    const checkpoints = verifySignedCheckpoints(db, instanceId, headSeq, options.trustedKeyPem);
     if (checkpoints.checked === 0) {
       warnings.push({ code: 'no_checkpoints', message: 'No signed checkpoint exists; a consistent rewrite of the entire chain would not be detected.' });
     }
@@ -398,10 +413,119 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
       firstBreak,
       checkpoints,
       exported: null,
-      keyTrust: 'server-reported',
+      keyTrust: options.trustedKeyPem !== undefined ? 'pinned' : 'server-reported',
       warnings,
     };
   } finally {
     db.close();
   }
+}
+
+/**
+ * Parses `agent-viewer verify --checkpoints <file>`'s own copy of checkpoints (one JSON `SignedCheckpoint` per
+ * non-empty line, the same shape `GET /api/v1/audit/checkpoints?format=jsonl` streams). Throws on a structurally
+ * invalid line; the caller maps that to the CLI's usage-error exit code (not an integrity failure: a malformed
+ * export file is not evidence of tampering, it just cannot be read).
+ */
+export function parseExportedCheckpointsFile(text: string): SignedCheckpoint[] {
+  const checkpoints: SignedCheckpoint[] = [];
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim();
+    if (line === '') continue;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(line);
+    } catch {
+      throw new Error(`line ${i + 1}: not valid JSON`);
+    }
+    if (!raw || typeof raw !== 'object') throw new Error(`line ${i + 1}: not a checkpoint object`);
+    const record = raw as Record<string, unknown>;
+    const body = parseCheckpointBody(record.body);
+    if (!body || typeof record.digest !== 'string' || typeof record.signature !== 'string') {
+      throw new Error(`line ${i + 1}: not a valid signed checkpoint`);
+    }
+    checkpoints.push({ body, digest: record.digest, signature: record.signature });
+  }
+  return checkpoints;
+}
+
+/**
+ * Cross-checks an exported checkpoint file against a chain the caller can query one `seq` at a time (issue #388:
+ * "compare an exported checkpoint file against a live server without the server seeing the file" via
+ * `GET /api/v1/audit/entries/:seq`, or the same thing read directly from a local database for `--db` mode).
+ * Lighter than a full re-verification: it checks that every checkpoint in the file is internally
+ * self-consistent (its own signature, digest, and the file's own prev-digest chain) and that its signed
+ * `headHash` matches what the chain actually has at `headSeq` today. It does not re-derive `chainedCount` or
+ * require every intermediate checkpoint to exist in the live chain's own `audit_checkpoints` table: that full
+ * check is what `verifyChain` already does when the file is the live chain's own export.
+ */
+export async function crossCheckExportedCheckpoints(
+  checkpoints: readonly SignedCheckpoint[],
+  options: {
+    trustedKeyPem?: string;
+    /** Public keys this verification trusts, keyed by `keyId` (ignored when `trustedKeyPem` is given). */
+    knownKeys?: ReadonlyMap<string, string>;
+    /** Resolves the chain's actual hash at `seq`, or `null` if that `seq` is unknown to the chain. */
+    getHashAtSeq: (seq: number) => Promise<string | null>;
+  }
+): Promise<CheckpointResult> {
+  const result: CheckpointResult = { checked: 0, valid: 0, firstFailure: null };
+  const keys = new Map<string, string>();
+  if (options.trustedKeyPem !== undefined) {
+    try {
+      keys.set(keyIdFor(crypto.createPublicKey(options.trustedKeyPem)), options.trustedKeyPem);
+    } catch {
+      // Unparseable pinned key: every checkpoint reports key_unknown below, which is correct.
+    }
+  } else if (options.knownKeys) {
+    for (const [keyId, pem] of options.knownKeys) keys.set(keyId, pem);
+  }
+
+  let prevDigest: string | null = null;
+  let expectedSeq = 1;
+  for (const checkpoint of checkpoints) {
+    const body: CheckpointBody = checkpoint.body;
+    result.checked++;
+    const cursor = body.checkpointSeq;
+    const fail = (kind: CheckpointFailureKind, message: string): void => {
+      if (!result.firstFailure) result.firstFailure = { kind, checkpoint: cursor, seq: body.headSeq, message };
+    };
+
+    const digest = checkpointDigest(body);
+    const linkPrev = prevDigest;
+    const linkExpectedSeq = expectedSeq;
+    prevDigest = digest;
+    expectedSeq = cursor + 1;
+
+    const pem = keys.get(body.keyId);
+    let valid = true;
+    if (!pem) {
+      fail('key_unknown', `Checkpoint ${cursor} is signed by unknown key ${body.keyId}.`);
+      valid = false;
+    } else if (!verifyCheckpointSignature(body, checkpoint.signature, pem)) {
+      fail('signature_invalid', `Checkpoint ${cursor} has an invalid signature.`);
+      valid = false;
+    } else if (checkpoint.digest !== digest) {
+      fail('signature_invalid', `Checkpoint ${cursor}'s stored digest does not match its signed body.`);
+      valid = false;
+    }
+    if (valid && cursor !== linkExpectedSeq) {
+      fail('checkpoint_missing', `Checkpoint ${linkExpectedSeq} is missing from the export (found ${cursor} next).`);
+      valid = false;
+    }
+    if (valid && body.prevCheckpointDigest !== linkPrev) {
+      fail('checkpoint_link_broken', `Checkpoint ${cursor} does not link to the previous checkpoint's digest in this export.`);
+      valid = false;
+    }
+    if (valid) {
+      const actualHash = await options.getHashAtSeq(body.headSeq);
+      if (actualHash === null || actualHash !== body.headHash) {
+        fail('head_mismatch', `The chain's row at seq ${body.headSeq} does not match checkpoint ${cursor}'s signed head hash.`);
+        valid = false;
+      }
+    }
+    if (valid) result.valid++;
+  }
+  return result;
 }

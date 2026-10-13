@@ -2201,6 +2201,36 @@ app.get('/api/v1/audit/chain', async (_req, res) => {
   res.json(await store.chainInfo());
 });
 
+/**
+ * Issue #388: one chained row's identity and hashes, nothing else. Lets `agent-viewer verify --checkpoints
+ * <file>` cross-check an exported checkpoint file against a live server one `seq` at a time, without ever
+ * uploading that file to the server. `404 seq_not_found` for an unchained or out-of-range `seq`; `409
+ * audit_requires_chain` in memory mode or on a schema predating migration 17 (the same condition `/audit/chain`
+ * reports as `enabled: false`, but this route always needs a real row to answer with, so there is no
+ * `enabled: false` shape here to fall back to).
+ */
+app.get('/api/v1/audit/entries/:seq', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const seq = parseNonNegativeIntParam(req.params.seq);
+  if (seq === null || seq < 1) {
+    res.status(400).json({ error: 'validation_failed', message: 'seq must be a positive integer' });
+    return;
+  }
+  const handle = store.getDatabaseHandle?.();
+  if (!handle) {
+    res.status(409).json({ error: 'audit_requires_chain', message: 'Chain entries need AGENT_VIEWER_STORAGE=sqlite with the hash chain enabled' });
+    return;
+  }
+  const row = handle.prepare('SELECT seq, id, hash, prev_hash FROM events WHERE seq = ? AND hash IS NOT NULL').get(seq) as
+    | { seq: number; id: string; hash: string; prev_hash: string | null }
+    | undefined;
+  if (!row) {
+    res.status(404).json({ error: 'seq_not_found', message: `No chained row at seq ${seq}.` });
+    return;
+  }
+  res.json({ seq: Number(row.seq), eventId: row.id, entryHash: row.hash, prevHash: row.prev_hash });
+});
+
 /** Per-scope in-flight de-duplication (issue #106): concurrent `GET /api/v1/audit/verify` requests with the
  * same `scope` share one walk instead of each opening their own read-only connection and re-walking the whole
  * chain. Keyed by `dbPath` too, mostly for `tests/audit-verify.test.mjs`, which constructs several stores (and

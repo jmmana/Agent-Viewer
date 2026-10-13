@@ -49,6 +49,7 @@ export const API_V1_ROUTE_SCOPES: ReadonlyArray<readonly [Method, string, RouteR
   ['GET', '/usage/export/totals', 'audit'],
   ['GET', '/audit/chain', 'audit'],
   ['GET', '/audit/verify', 'audit'],
+  ['GET', '/audit/entries/:seq', 'audit'],
   ['GET', '/audit/checkpoints', 'audit'],
   ['GET', '/audit/checkpoints/:id', 'audit'],
   ['GET', '/audit/bundle', 'audit'],

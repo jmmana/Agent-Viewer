@@ -1404,3 +1404,31 @@ Two portal layers consume these methods:
 
 - `src/integrations/useBudgetState.ts` owns every fetch the Budgets tab needs: `getBudgets()` on connect, on tab open, after a write (the panel's `refresh()`), on a 30s timer, and on a throttled trailing refresh (at most once per 5s) after a new `llm.usage` event. A failed refresh never clears the last good list, only sets `stale: true`.
 - `src/integrations/budgetByAgent.ts`'s `reduceBudgetStateByAgent(budgets)` reduces that flat list to one verdict per agent id for the office canvas (only `enabled: true`, `scope.type === 'agent'` budgets count; the most severe state wins, `exceeded > warning > unknown > ok`; an agent whose most severe state is `unknown` is left out of the map entirely, never written as `{ state: 'ok' }`). `agentBudgetRows(budgets, agentId)` instead returns every budget (enabled or not) scoped to that agent id, verbatim, for the `AgentInspector`/`AgentDetailModal` panels. Neither function talks to the network; both operate on the list `useBudgetState` already fetched.
+
+## 🔐 14. Audit trail (`/api/v1/audit/*`, issue #388)
+
+Every route below needs SQLite storage (`AGENT_VIEWER_STORAGE=sqlite`) with the hash chain migrated in; all of
+them send `Cache-Control: no-store` and reject a `token` query parameter the same as every other `/api/v1`
+route (issue #71). This table is the one-stop index; each route's full request/response shape, failure modes
+and the mechanics behind it live in the linked doc, not duplicated here.
+
+| Method & path | Scope (issue #108) | What it returns | Full reference |
+|---|---|---|---|
+| `GET /audit/chain` | `audit` | Chain head, genesis checkpoint, chained row count. `{ enabled: false, reason }` in memory mode or on a pre-chain schema. | [audit-chain.md#server-api](audit-chain.md#server-api) |
+| `GET /audit/verify` | `audit` | Walks the whole chain plus every signed checkpoint in one read-only pass; `?scope=full\|recent` (`recent` behaves like `full` today). A `VerifyReport`: first break, first checkpoint failure, warnings. | [audit.md](audit.md), [audit-chain.md#verification-get-apiv1auditverify](audit-chain.md#verification-get-apiv1auditverify) |
+| `GET /audit/entries/:seq` | `audit` | One chained row's identity and hashes only: `{ seq, eventId, entryHash, prevHash }`. `404 seq_not_found` outside the chain's range. Added by this issue so `agent-viewer verify --checkpoints <file>` can cross-check an exported file one `seq` at a time without ever uploading it. | [cli.md#verify-the-audit-chain-issue-388](cli.md#verify-the-audit-chain-issue-388) |
+| `GET /audit/checkpoints` | `audit` | Signed checkpoints, oldest first; `?afterSeq=`/`?limit=1..1000`/`?format=json\|jsonl`. | [audit-chain.md#routes](audit-chain.md#routes) |
+| `GET /audit/checkpoints/latest` | `audit` | The newest signed checkpoint, or `404 checkpoint_not_found`. | [audit-chain.md#routes](audit-chain.md#routes) |
+| `POST /audit/checkpoints` | `admin` | Signs an on-demand checkpoint (`reason: "manual"`); `200 { created: false }` when the head has not advanced, `409 checkpoint_refused` when signing was refused. | [audit-chain.md#when-a-checkpoint-is-signed](audit-chain.md#when-a-checkpoint-is-signed) |
+| `GET /audit/keys` | `audit` | Every public key that ever signed here (never a private key), with exactly one `active`. | [audit-chain.md#signing-key](audit-chain.md#signing-key) |
+| `GET /audit/bundle` | `audit` | Streams an offline-verifiable NDJSON export of a range of the chain (headers, keys, checkpoints, events+ledger, a reconciling footer); `?fromSeq=&toSeq=`/`?from=&to=`, `?gzip=1`. | [audit-bundle.md](audit-bundle.md) |
+| `GET /audit/retention` | `admin` | Retention policy, legal hold status, tombstone counts. | [retention.md](retention.md) |
+| `POST /audit/legal-hold` | `admin` | Places or releases the legal hold (`{ action: "place"\|"release", reason }`); blocks every destructive route below while active (`423`), never itself. | [retention.md](retention.md) |
+| `POST /audit/retention/purge` | `admin` | Tombstones every eligible row received before `{ before: ms epoch }`, in batches. | [retention.md](retention.md) |
+| `POST /audit/redact` | `admin` | Tombstones explicitly named `eventIds` (whole-row only; there is no field-level redaction yet). | [redaction.md](redaction.md) |
+
+`GET /audit/chain`, `/audit/verify`, `/audit/entries/:seq`, `/audit/checkpoints[/latest]`, `/audit/bundle` and
+`/keys[/:id]` are the only routes under `audit`; a key with only `audit` (not `admin`) can read every signed
+checkpoint and the full chain but can neither mint a new checkpoint nor touch retention, redaction or the legal
+hold. See [api-keys.md](api-keys.md) for the full scope model and how a key gets `audit`/`admin` in the first
+place.

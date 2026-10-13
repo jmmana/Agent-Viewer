@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/jmmana/Agent-Viewer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/jmmana/Agent-Viewer/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white" alt="CI status" /></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.7.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.7.0" /></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/release-v0.8.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Release 0.8.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" alt="MIT license" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer"><img src="https://img.shields.io/github/stars/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=a855f7&label=stars" alt="GitHub stars" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer/network/members"><img src="https://img.shields.io/github/forks/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=4c1d95&label=forks" alt="GitHub forks" /></a>
@@ -202,12 +202,12 @@ This starts the API on **:8787** with SQLite on a named volume, and the built de
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> in professional mode: a meeting where agents propose, object, agree and decide. Only the events passed to the component are drawn.</sub>
 </p>
 
-Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.7.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
+Agent Viewer is also a React library: **`@warlockcode/agent-viewer` 0.8.0**. ES modules only, React and React DOM 19 as peer dependencies, `express`, `lucide-react` and `zod` as runtime dependencies (`express` runs the server of the `agent-viewer` command; the library modules never import it), TypeScript declarations included.
 
 Publication on npm is coming soon. Until then, install it from the GitHub release asset (the package name and your imports stay the same when you switch to npm):
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.7.0/warlockcode-agent-viewer-0.7.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.8.0/warlockcode-agent-viewer-0.8.0.tgz
 ```
 
 ### Minimal example
@@ -991,6 +991,8 @@ Shipped in [0.2.0](CHANGELOG.md): the embeddable library, professional and showc
 
 Shipped in [0.7.0](CHANGELOG.md), "Captura automática e interoperabilidad": an OTLP/HTTP GenAI traces receiver (`POST /v1/traces`) and the matching `parseEventLog` file import, packaged LangGraph (`@warlockcode/agent-viewer-langgraph`) and OpenAI Agents SDK (`@warlockcode/agent-viewer-openai-agents`) adapters tested against the real frameworks in CI, a durable local queue in both SDKs so a server outage never loses an event, and a Prometheus `GET /metrics` export (opt-in, token-protected, ledger-derived token/cost/call/failure/latency families, in-process ingestion counters, optional OTLP metrics push).
 
+Shipped in [0.8.0](CHANGELOG.md), "Auditoria formal": a SHA-256 hash chain over every stored event with periodic signed checkpoints ([docs/audit-chain.md](docs/audit-chain.md)), named ingestion keys and scoped read-only auditor keys ([docs/api-keys.md](docs/api-keys.md)), chain-compatible retention and redaction that tombstones a row without breaking the chain, an offline-verifiable audit bundle with a standalone verifier script ([docs/audit-bundle.md](docs/audit-bundle.md)), and the audit guide, threat model and migration guide from the single shared token ([docs/audit.md](docs/audit.md), [docs/threat-model.md](docs/threat-model.md), [docs/migrating-to-0.8.md](docs/migrating-to-0.8.md)). This closes the 0.3.0 to 0.8.0 observability and audit roadmap; see [docs/roadmap.md](docs/roadmap.md) for the full history.
+
 Planned, not available yet:
 
 - [ ] `GET /api/v1/usage/reconciliation`: compare the OTLP metrics stored by `POST /v1/metrics` against the usage ledger. The ledger itself shipped in 0.4.0; this comparison endpoint is still not built.
@@ -998,8 +1000,6 @@ Planned, not available yet:
 - [ ] An MCP server, so agents can report into the office directly.
 - [ ] A web component for apps that do not use React.
 - [ ] A hosted demo on GitHub Pages.
-
-The next releases (0.3.0 to 0.8.0) turn Agent Viewer into an observability and audit tool for the tokens and cost your agents consume, with the office as the hero view. See the full [observability and audit roadmap](docs/roadmap.md).
 
 Want one of these sooner? [Open an issue](https://github.com/jmmana/Agent-Viewer/issues/new) and say what you would use it for.
 

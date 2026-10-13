@@ -1,6 +1,6 @@
 {
   "name": "@warlockcode/agent-viewer-langgraph",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "LangGraph callback handler that reports node runs, tools and model usage to Agent Viewer",
   "license": "MIT",
   "type": "module",

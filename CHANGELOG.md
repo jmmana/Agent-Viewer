@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-13
+
+"Auditoria formal" (formal audit): a SHA-256 hash chain over every stored event (#105) with periodic Ed25519-signed
+checkpoints (#387, #106), named ingestion keys with submitter identity (#107) and scoped read-only auditor keys
+(#108), chain-compatible retention and redaction that tombstones a row without breaking the chain (#109), and an
+offline-verifiable audit bundle with a standalone zero-dependency verifier script (#110). This release also ships
+the audit guide, key management guide, threat model, migration notes from the single shared token, and a docs
+hygiene check wired into CI (#111, split into sub-issues #408 to #411 per `.claude/agent-policy.md`'s size rule).
+The guarantee, in one sentence, from `docs/threat-model.md`: "a hash chain proves that stored history was not
+altered after the fact; it does not prove that what an agent reported is true."
+
+### Upgrading
+
+Purely additive: no breaking change to the event contract, the HTTP API or the embeddable library's props. The
+hash chain, checkpoints, named/scoped keys and the audit bundle are all SQLite-only and opt-in by use; a
+deployment running memory storage or the single shared `AGENT_VIEWER_API_TOKEN` keeps working exactly as before,
+with every audit route reporting `enabled: false` or `409 audit_requires_chain` in memory mode. See
+[docs/migrating-to-0.8.md](docs/migrating-to-0.8.md) for the practical runbook from the single shared token to
+named keys, and [docs/threat-model.md](docs/threat-model.md) for what the chain proves and what it does not.
+
+### Known gaps
+
+- `GET /api/v1/audit/verify`/`agent-viewer verify` were not tombstone-aware until the fix below landed in this
+  same release; any 0.8.0 deployment running an earlier pre-release build of this milestone should re-verify.
+- Closing an open SSE connection when its key is revoked or expires, `submittedBy` on SSE reconnect-replay
+  frames, and `submittedBy` as a rollup/export dimension remain deferred (documented on issue #108).
+- Pricing-version digests in the audit bundle are not yet chain-anchored (documented in `server/audit/bundle.ts`
+  and `docs/audit-bundle.md`, deferred to a follow-up of #83).
+- A full Spanish translation of `docs/audit.md`, `docs/key-management.md`/`docs/api-keys.md` and
+  `docs/threat-model.md` is deferred; the Spanish README mirrors only the changed Security table rows.
+
 ### Fixed
 
 - **`GET /api/v1/audit/verify`/`agent-viewer verify` are now tombstone-aware (issue #408, v0.8.0 milestone)**: a row legitimately tombstoned by issue #109's retention/redaction routes rewrites its own `event_json` by design, so it never recomputes to its own stored `hash` again; before this fix `server/audit/verify.ts`'s walk had no tombstone handling at all and reported `hash_mismatch` at the first such row, indistinguishable from real tampering, contradicting #109's and the 0.8.0 exit criterion's stated goal ("after a retention purge the chain still verifies through tombstones"). The walk now skips the content-hash recompute for a row with `tombstoned_at IS NOT NULL` (its link to the previous row is still checked normally, since links are never touched by a tombstone) and instead cross-checks it against the chained `audit.retention.purged`/`audit.redaction.applied` event its `tombstone_audit_seq` names: that event must exist, be of the right type, and have committed exactly this row's original `hash`/`content_hash`, or the new `tombstone_invalid` `BreakKind` is reported (a forged or missing tombstone is not a silent pass). Mirrors the logic `scripts/verify-audit-bundle.mjs`'s `REDACTION` check (#401) already implemented and `tests/audit-retention.test.mjs`'s `tombstoneAwareWalk` helper already pinned in tests. `docs/audit-chain.md` gains a "Tombstones do not break verification" section; `docs/retention.md`'s "Known limits" entry for this gap is removed (closed, not reworded); `docs/threat-model.md`'s "what the chain does not prove" bullet about this gap moves to "what the chain proves", corrected. New tests in `tests/audit-verify.test.mjs`: a clean tombstoned chain, a tombstone pointing nowhere, one pointing at a real but unrelated row, and one whose committing audit event records the wrong original hash.

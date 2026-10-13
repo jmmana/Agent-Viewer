@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/jmmana/Agent-Viewer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/jmmana/Agent-Viewer/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white" alt="Estado de CI" /></a>
-  <a href="../CHANGELOG.md"><img src="https://img.shields.io/badge/versi%C3%B3n-v0.7.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Versión 0.7.0" /></a>
+  <a href="../CHANGELOG.md"><img src="https://img.shields.io/badge/versi%C3%B3n-v0.8.0-a855f7?style=for-the-badge&logo=github&logoColor=white" alt="Versión 0.8.0" /></a>
   <a href="../LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-22c55e?style=for-the-badge" alt="Licencia MIT" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer"><img src="https://img.shields.io/github/stars/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=a855f7&label=estrellas" alt="Estrellas en GitHub" /></a>
   <a href="https://github.com/jmmana/Agent-Viewer/network/members"><img src="https://img.shields.io/github/forks/jmmana/Agent-Viewer?style=for-the-badge&logo=github&color=4c1d95&label=forks" alt="Forks en GitHub" /></a>
@@ -202,12 +202,12 @@ Levanta la API en **:8787** con SQLite en un volumen con nombre, y la demo compi
   <sub><code>&lt;AgentOffice locale="es" /&gt;</code> en modo profesional: una reunión donde los agentes proponen, objetan, acuerdan y deciden. Solo se dibujan los eventos que recibe el componente.</sub>
 </p>
 
-Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.7.0**. Solo módulos ES, React y React DOM 19 como dependencias peer, `express`, `lucide-react` y `zod` como dependencias de ejecución (con `express` corre el servidor del comando `agent-viewer`; los módulos de la librería nunca lo importan), y declaraciones de TypeScript incluidas.
+Agent Viewer también es una librería React: **`@warlockcode/agent-viewer` 0.8.0**. Solo módulos ES, React y React DOM 19 como dependencias peer, `express`, `lucide-react` y `zod` como dependencias de ejecución (con `express` corre el servidor del comando `agent-viewer`; los módulos de la librería nunca lo importan), y declaraciones de TypeScript incluidas.
 
 La publicación en npm llegará muy pronto. Mientras tanto, instálala desde el archivo de la release de GitHub (el nombre del paquete y tus imports no cambian cuando pases a npm):
 
 ```bash
-npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.7.0/warlockcode-agent-viewer-0.7.0.tgz
+npm install https://github.com/jmmana/Agent-Viewer/releases/download/v0.8.0/warlockcode-agent-viewer-0.8.0.tgz
 ```
 
 ### Ejemplo mínimo
@@ -993,6 +993,8 @@ Ya incluido en la [0.2.0](../CHANGELOG.md): la librería integrable, los modos p
 
 Ya incluido en la [0.7.0](../CHANGELOG.md), "Captura automática e interoperabilidad": un receptor OTLP/HTTP de trazas GenAI (`POST /v1/traces`) y la importación de archivos correspondiente en `parseEventLog`, los adaptadores empaquetados de LangGraph (`@warlockcode/agent-viewer-langgraph`) y OpenAI Agents SDK (`@warlockcode/agent-viewer-openai-agents`) probados contra los frameworks reales en CI, una cola local durable en ambos SDKs para que una caída del servidor nunca pierda un evento, y una exportación Prometheus `GET /metrics` (opcional, protegida por token, con familias de tokens/costo/llamadas/fallas/latencia derivadas del ledger, contadores de ingesta en proceso y envío OTLP opcional).
 
+Ya incluido en la [0.8.0](../CHANGELOG.md), "Auditoria formal": una cadena de hashes SHA-256 sobre cada evento guardado con checkpoints firmados periódicos ([audit-chain.md](audit-chain.md), en inglés), claves de ingesta nombradas y claves de auditor de solo lectura con alcances ([api-keys.md](api-keys.md), en inglés), retención y redacción compatibles con la cadena que marcan una fila como tombstone sin romper la cadena, un paquete de auditoría verificable sin conexión con un script verificador independiente ([audit-bundle.md](audit-bundle.md), en inglés), y la guía de auditoría, el modelo de amenazas y la guía de migración desde el token único ([audit.md](audit.md), [threat-model.md](threat-model.md), [migrating-to-0.8.md](migrating-to-0.8.md), en inglés). Esto cierra la hoja de ruta de observabilidad y auditoría de la 0.3.0 a la 0.8.0; ver [roadmap.es.md](roadmap.es.md) para el historial completo.
+
 Planeado, todavía no disponible:
 
 - [ ] `GET /api/v1/usage/reconciliation`: comparar las métricas OTLP guardadas por `POST /v1/metrics` contra el ledger de consumo. El ledger en sí se publicó en la 0.4.0; este endpoint de comparación todavía no existe.
@@ -1001,7 +1003,7 @@ Planeado, todavía no disponible:
 - [ ] Un web component para apps que no usan React.
 - [ ] Una demo publicada en GitHub Pages.
 
-Las próximas versiones (0.3.0 a 0.8.0) convierten a Agent Viewer en una herramienta de observabilidad y auditoría de los tokens y el costo que consumen tus agentes, con la oficina como vista protagonista. Consulta la [hoja de ruta de observabilidad y auditoría](roadmap.es.md) completa.
+¿Quieres alguno antes? [Abre un issue](https://github.com/jmmana/Agent-Viewer/issues/new) y cuenta para qué lo usarías.
 
 ¿Quieres alguno antes? [Abre un issue](https://github.com/jmmana/Agent-Viewer/issues/new) y cuenta para qué lo usarías.
 

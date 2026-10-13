@@ -14,9 +14,11 @@ Concretely, by 0.8.0 you will be able to:
 - See spend where it happens in the office: a badge per agent, the detail of each call on click, cost per meeting and per tool.
 - Trust that the history was not touched, with a verifiable hash chain and read-only auditor access, on your own server.
 
-## Where we are today (0.2.1)
+## Where we are today (0.8.0 shipped)
 
-The visual side is finished and the event format already carries everything needed: provider, model, input, output, cache and reasoning tokens, latency, request id, cost, cost source and currency. Today, though, token and cost figures behave like a live counter, not like an audit tool. Known gaps that 0.3.0 closes before anything else is built on top:
+This roadmap is complete: every release from 0.3.0 through 0.8.0 ("formal audit") described below has shipped. See the [README Roadmap section](../README.md#-roadmap) and [CHANGELOG.md](../CHANGELOG.md) for the Shipped line of each release. The section below is kept as the historical baseline (as of 0.2.1) that justified this plan.
+
+The visual side is finished and the event format already carries everything needed: provider, model, input, output, cache and reasoning tokens, latency, request id, cost, cost source and currency. Before 0.3.0, though, token and cost figures behaved like a live counter, not like an audit tool. Known gaps that 0.3.0 closed before anything else was built on top:
 
 - With SQLite the totals live only in memory and go back to zero after a restart.
 - A missing cost is added as 0, a missing `cachedTokens` or `reasoningTokens` is read as 0, and different currencies are summed together.

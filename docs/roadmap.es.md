@@ -14,9 +14,11 @@ En concreto, con la 0.8.0 podrás:
 - Ver el gasto donde ocurre en la oficina: una insignia por agente, el detalle de cada llamada al hacer clic, el costo por reunión y por herramienta.
 - Confiar en que el historial no se tocó, con una cadena de hashes verificable y acceso de auditor de solo lectura, en tu propio servidor.
 
-## Dónde estamos hoy (0.2.1)
+## Dónde estamos hoy (0.8.0 publicada)
 
-La parte visual está terminada y el formato de evento ya trae todo lo necesario: proveedor, modelo, tokens de entrada, salida, caché y razonamiento, latencia, id de la petición, costo, origen del costo y moneda. Sin embargo, hoy las cifras de tokens y costo se comportan como un contador en vivo, no como una herramienta de auditoría. Estas son las brechas conocidas que la 0.3.0 cierra antes de construir nada encima:
+Esta hoja de ruta está completa: todas las versiones de la 0.3.0 a la 0.8.0 ("auditoría formal") descritas abajo ya se publicaron. Ver la [sección Hoja de ruta del README](README.es.md#-hoja-de-ruta) y [CHANGELOG.md](../CHANGELOG.md) para la línea "Ya incluido" de cada versión. La sección de abajo se conserva como la línea base histórica (a la fecha de la 0.2.1) que justificó este plan.
+
+La parte visual está terminada y el formato de evento ya trae todo lo necesario: proveedor, modelo, tokens de entrada, salida, caché y razonamiento, latencia, id de la petición, costo, origen del costo y moneda. Antes de la 0.3.0, sin embargo, las cifras de tokens y costo se comportaban como un contador en vivo, no como una herramienta de auditoría. Estas eran las brechas conocidas que la 0.3.0 cerró antes de construir nada encima:
 
 - Con SQLite los totales viven solo en memoria y vuelven a cero tras un reinicio.
 - Un costo ausente se suma como 0, un `cachedTokens` o `reasoningTokens` ausente se lee como 0 y las monedas distintas se suman entre sí.

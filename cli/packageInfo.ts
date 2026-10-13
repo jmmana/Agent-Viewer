@@ -49,3 +49,14 @@ export function cliScriptPath(): string {
   if (self.startsWith(path.join(root, 'dist-cli') + path.sep)) return bundled;
   return path.join(root, 'cli', 'index.ts');
 }
+
+/** Absolute path of `verify-audit-bundle.mjs` (issue #401), the standalone script `agent-viewer audit verify`
+ * (issue #402) runs as a child process rather than reimplementing: `scripts/` in a checkout, or
+ * `dist-cli/verify-audit-bundle.mjs` once installed, where `scripts/build-cli.mjs` copies it after every
+ * build (including the `--skip-viewer` path) so the packed tarball always ships a working copy next to `cli.js`. */
+export function verifyScriptPath(): string {
+  const { root } = packageInfo();
+  const self = fileURLToPath(import.meta.url);
+  if (self.startsWith(path.join(root, 'dist-cli') + path.sep)) return path.join(root, 'dist-cli', 'verify-audit-bundle.mjs');
+  return path.join(root, 'scripts', 'verify-audit-bundle.mjs');
+}

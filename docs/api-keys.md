@@ -61,9 +61,9 @@ its own scopes. A redeemed stream ticket carries only `read` (minting one alread
   since that token is always admin.
 - Scopes cannot be changed on a revoked key (`409 key_revoked`).
 
-**Query-string credentials.** No key, whatever its scopes, is ever accepted via the `token` or `api_key` query parameters on `/api/v1`:
-that was already rejected for every credential since issue #71 (`401 query_token_not_supported`), which more than
-covers the "never in the query string for `audit`/`admin`" rule.
+**Query-string credentials.** No key, whatever its scopes, is ever accepted as a `token` or `api_key` query-string
+parameter on `/api/v1`: that was already rejected for every credential since issue #71 (`401 query_token_not_supported`),
+which more than covers the "never in the query string for `audit`/`admin`" rule.
 
 **Upgrading.** Migration 20 adds `api_keys.scopes` (a JSON array, default `["ingest"]`). Every key created under
 #107 becomes `["ingest"]`, the least-privileged scope. **A #107 key that was also used to read** (dashboards,

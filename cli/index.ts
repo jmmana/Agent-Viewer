@@ -41,6 +41,10 @@ async function run(command: CliCommand): Promise<number> {
       const { runKeys } = await import('./keys.ts');
       return runKeys(command);
     }
+    case 'audit': {
+      const { runAudit } = await import('./audit.ts');
+      return runAudit(command);
+    }
     case 'start': {
       const { runStart } = await import('./start.ts');
       return runStart(command);

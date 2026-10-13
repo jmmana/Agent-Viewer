@@ -237,12 +237,12 @@ Ingestion responses carry an optional receipt, SQLite mode only, absent for a du
 ## Verification (`GET /api/v1/audit/verify`)
 
 Issue #106 (first sub-issue): walks the chain in one read-only pass and reports the first broken link, if any.
-Same auth and rate limit as the rest of `/api/v1`; `?scope=full|recent` (default `full`). There are no signed
-checkpoints yet (#387), so `scope=recent` always behaves like `full`, and a *consistent* rewrite (someone who
-edits a row and correctly recomputes every later hash) is undetectable by design, not a bug: the `no_checkpoints`
-warning says so on every clean report. The chain by itself only proves that nothing has changed *since the
-database was last read*, never that it was never tampered with before a signed checkpoint existed to prove
-otherwise.
+Same auth and rate limit as the rest of `/api/v1`; `?scope=full|recent` (default `full`). `scope=recent` still
+always behaves like `full` (anchoring it to the latest signed checkpoint is not implemented yet). Without a signed
+checkpoint, a *consistent* rewrite (someone who edits a row and correctly recomputes every later hash) is
+undetectable by design, not a bug: the `no_checkpoints` warning says so. The chain by itself only proves that
+nothing has changed *since the database was last read*; signed checkpoints (see "Signed checkpoints" below) are
+what extend that to "nothing covered by a checkpoint has changed since it was signed".
 
 ```json
 {
@@ -277,9 +277,100 @@ checkpoint's coverage has no hash at all). `seq_gap` is reserved for a later, ch
 row is reported as `link_mismatch` instead. Legacy rows (before the chain started, or interleaved via a
 `resume` checkpoint) are counted in `chain.unchained` with a `legacy_rows` warning, never individually walked:
 their integrity is a separate, lighter guarantee (the genesis/resume digest), not this walk's job. `checkpoints`
-and `exported` stay empty until #387 ships signed checkpoints; `keyTrust` stays `server-reported` until #388's
-CLI can pin a public key. In memory mode: the same `{ "enabled": false, ... }` shape `GET /api/v1/audit/chain`
+reports the signed checkpoint verification described below (`ok` is `false` when either `firstBreak` or
+`checkpoints.firstFailure` is set); `exported` stays `null` until #388's CLI cross-checks an exported file, and
+`keyTrust` stays `server-reported` until that CLI can pin a public key. In memory mode: the same `{ "enabled": false, ... }` shape `GET /api/v1/audit/chain`
 already uses, not a `409` (this is a read about availability, not a write the server refuses).
+
+## Signed checkpoints (issue #387)
+
+SQLite mode periodically signs the current chain head with an Ed25519 key, so a copy of a checkpoint kept
+elsewhere proves what the chain looked like at that moment, and a later consistent rewrite of any covered row is
+detected (`head_mismatch`).
+
+### Signing key
+
+Resolved once at startup, first match wins:
+
+1. `AGENT_VIEWER_AUDIT_SIGNING_KEY`: a PKCS#8 PEM Ed25519 private key (a single line with `\n` escapes works).
+2. `AGENT_VIEWER_AUDIT_KEY_FILE`: a path to such a file; generated (mode `0600`, never overwriting) when missing.
+3. Default: `audit-signing-key.pem` in the database's directory, generated (mode `0600`) on first start.
+4. `AGENT_VIEWER_SQLITE_PATH=:memory:` with neither variable set: an ephemeral in-memory key, with a warning.
+
+Setting both variables, a non-Ed25519 key or an unparseable file stops startup; no message ever contains key
+material. An existing key file readable by group/other loads with a warning. Keep the key file **off** the volume
+an attacker of the database could also read: anyone holding the private key can sign forged checkpoints.
+
+`audit_keys` (migration 20) records every public key that ever signed here. Starting with a different key than the
+active one retires it (`retired_at`), inserts the new one, and immediately signs a `key_change` checkpoint if the
+head advanced since the latest checkpoint. A server whose key is no longer the active one refuses to sign.
+
+### Format
+
+```json
+{
+  "body": {
+    "version": 1,
+    "instanceId": "b7f0c6a2-4d1e-4a56-9a1c-0d6d2f3b8e11",
+    "checkpointSeq": 6,
+    "headSeq": 5321,
+    "headHash": "c0de...42",
+    "chainedCount": 5321,
+    "createdAt": 1791547200123,
+    "reason": "events",
+    "keyId": "ed25519:4f1a...9b",
+    "prevCheckpointDigest": "77d2...c1"
+  },
+  "digest": "9a0e...3f",
+  "signature": "base64 Ed25519 signature (64 bytes)"
+}
+```
+
+The signed bytes are the UTF-8 encoding of `"agent-viewer/checkpoint/v1\n"` followed by the RFC 8785 canonical
+JSON of `body` (the same `canonicalize` as the event hashes). `digest` is the hex SHA-256 of those bytes, and the
+signature is pure Ed25519 over them. `prevCheckpointDigest` (`null` only for checkpoint 1) chains checkpoints
+together. `keyId` is `ed25519:` plus the hex SHA-256 of the public key's SPKI DER encoding. `reason` is one of
+`events`, `interval`, `shutdown`, `manual`, `key_change`. The JSON Schema is committed at
+[`server/audit/checkpoint.schema.json`](../server/audit/checkpoint.schema.json).
+
+### When a checkpoint is signed
+
+Every `AGENT_VIEWER_CHECKPOINT_EVERY_EVENTS` chained events (default `1000`), every
+`AGENT_VIEWER_CHECKPOINT_INTERVAL_MS` (default one hour, an `unref()`ed timer), on graceful shutdown, on a key
+change, and on `POST /api/v1/audit/checkpoints`. Each one is skipped when the head has not advanced since the
+latest checkpoint. A head *behind* the latest checkpoint (rows removed from the tail) is refused and logged, never
+signed, so a truncation is never laundered into a fresh checkpoint. `audit_checkpoints` is append-only through
+triggers, and an `audit_keys` row can only be retired once.
+
+### Routes
+
+All under `/api/v1` (same auth and rate limit), `Cache-Control: no-store`, and `409 { "error":
+"audit_unavailable", "reason": "memory_storage" }` in memory mode:
+
+- `GET /api/v1/audit/checkpoints`: `{ "checkpoints": [...], "nextAfterSeq": 6 | null }`, oldest first;
+  `?afterSeq=` (default `0`), `?limit=` (`1` to `1000`, default `100`), `?format=jsonl` for one checkpoint per
+  line (`application/x-ndjson`, next cursor in `X-Next-After-Seq`).
+- `GET /api/v1/audit/checkpoints/latest`: `{ "checkpoint": {...} }`, or `404 checkpoint_not_found`.
+- `POST /api/v1/audit/checkpoints`: `201 { "created": true, "checkpoint" }`; `200 { "created": false, "reason":
+  "chain_empty" | "head_unchanged", "checkpoint" }`; `409 checkpoint_refused` when signing was refused.
+- `GET /api/v1/audit/keys`: `{ "activeKeyId", "keys": [{ "keyId", "algorithm", "publicKeyPem", "source",
+  "createdAt", "retiredAt", "active" }] }`.
+
+### Verification
+
+`GET /api/v1/audit/verify` checks every checkpoint in order and reports the lowest failing one in
+`checkpoints.firstFailure`: `signature_invalid` (malformed body, bad signature or a stored digest that disagrees),
+`key_unknown` (no recorded public key hashes to `keyId`), `checkpoint_missing` (numbering gap),
+`checkpoint_link_broken`, `instance_mismatch`, `seq_beyond_head` (the chain is shorter than a signed head),
+`head_mismatch` (the row at `headSeq` is gone or has another hash) and `count_mismatch`. The `no_checkpoints`
+warning is only emitted when there is no checkpoint at all.
+
+Honest limits of this slice: public keys come from the same database (`keyTrust: "server-reported"`), so someone
+who controls the file *and* replaces `audit_keys` and every checkpoint with their own key is only caught by
+comparing against a checkpoint or public key kept elsewhere (pinning is #388's CLI). Rows appended after the
+latest checkpoint, and deleting the newest checkpoints together with the rows they cover, are not detectable
+without such an external copy. Raw-event retention (`AGENT_VIEWER_RETENTION_DAYS`) deleting chained rows makes
+older checkpoints fail (`head_mismatch`/`count_mismatch`), the same way it already breaks the chain walk.
 
 ## Upgrading to 0.8.0
 
@@ -292,6 +383,6 @@ take proportionally longer, one time, at the first 0.8.0 startup.
 
 Because a hash chain alone cannot detect a consistent rewrite by someone with full file access (see "Honest
 scope" above), the practical next step for real tamper evidence is to copy `GET /api/v1/audit/chain`'s `head`
-(or, once #387 lands, a signed checkpoint) somewhere the operator of the database cannot also write: a separate
+(or, better, `GET /api/v1/audit/checkpoints/latest` and `GET /api/v1/audit/keys`) somewhere the operator of the database cannot also write: a separate
 log, a ticket, a second system. Comparing a later chain walk (`GET /api/v1/audit/verify`, issue #106) against
 that recorded head is what actually proves nothing changed since the moment it was recorded.

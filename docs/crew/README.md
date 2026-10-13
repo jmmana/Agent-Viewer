@@ -94,6 +94,8 @@ functional role; an agent can "wear" any of the six without changing what it
 actually does. Issue [#127](https://github.com/jmmana/Agent-Viewer/issues/127)
 ships a working customization editor (hair/skin/clothing/footwear/accessory
 categories, per-agent save, a 4-view preview) with full round-trip tests.
+Open it from each agent's own **Customize appearance** panel, below its name
+in the room's agent list.
 
 **What this honestly does not include yet:** the editor operates on a catalog
 of explicit `placeholder` entries, not final illustrated art. Real,

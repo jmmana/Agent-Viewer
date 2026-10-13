@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import { eventHash } from '../chain';
+import { verifySignedCheckpoints } from './verifyCheckpoints';
 
 /**
  * Chain-walk verifier for the hash chain issue #105 adds over SQLite-stored events (first sub-issue of #106,
@@ -10,9 +11,9 @@ import { eventHash } from '../chain';
  * (issue #388) and by #387's checkpoint verification, which extends `VerifyReport.checkpoints`.
  *
  * Scope of this slice: chain-break detection only (`hash_mismatch`, `link_mismatch`, `unparseable_event`,
- * `column_mismatch`, `missing_hash`). There are no signed checkpoints yet (#387), so a *consistent* rewrite
- * (an attacker who edits a row and recomputes every later hash correctly) is undetectable by design; the
- * `no_checkpoints` warning says so. `seq_gap` is deliberately never produced by this slice: deleting a chained
+ * `column_mismatch`, `missing_hash`). Without a signed checkpoint (#387, `./verifyCheckpoints.ts`) a
+ * *consistent* rewrite (an attacker who edits a row and recomputes every later hash correctly) is undetectable by
+ * design, and the `no_checkpoints` warning says so; with one, a rewrite of any covered row is a `head_mismatch`. `seq_gap` is deliberately never produced by this slice: deleting a chained
  * row is reported as `link_mismatch` instead (the next remaining row's `prev_hash` no longer matches anything
  * this walk computed), which issue #106's own acceptance criteria accepts ("yields seq_gap (or link_mismatch)").
  * The type stays in `BreakKind` for shape stability across sub-issues.
@@ -47,7 +48,7 @@ export interface ChainBreak {
   message: string;
 }
 
-/** Reserved for #387 (signed checkpoints); always the empty/trivial result in this slice. */
+/** Signed checkpoint failures (issue #387), produced by `verifySignedCheckpoints` (`./verifyCheckpoints.ts`). */
 export type CheckpointFailureKind =
   | 'signature_invalid'
   | 'key_unknown'
@@ -98,7 +99,7 @@ export interface VerifyReport {
     unchained: number;
   };
   firstBreak: ChainBreak | null;
-  /** Always `{ checked: 0, valid: 0, firstFailure: null }` in this slice; #387 fills it in. */
+  /** Signed checkpoint verification (issue #387); all zero when no checkpoint exists. */
   checkpoints: CheckpointResult;
   /** Filled only by the CLI (#388) after cross-checking an exported file; never set by `GET /audit/verify`. */
   exported: CheckpointResult | null;
@@ -201,8 +202,10 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
 
     if (Number(totalsRow.total) === 0) {
       warnings.push({ code: 'empty_chain', message: 'The database has no events.' });
+      // Issue #387: an empty table with signed checkpoints on record means every covered row was removed.
+      const emptyCheckpoints = verifySignedCheckpoints(db, instanceId, null);
       return {
-        ok: true,
+        ok: emptyCheckpoints.firstFailure === null,
         storage: 'sqlite',
         instanceId,
         verifiedAt: startedAt,
@@ -210,7 +213,7 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
         coverage: { fromSeq: 0, toSeq: 0, scope: 'full' },
         chain: { checked: 0, headSeq: null, headHash: null, chainStartSeq: null, unchained: 0 },
         firstBreak: null,
-        checkpoints: { checked: 0, valid: 0, firstFailure: null },
+        checkpoints: emptyCheckpoints,
         exported: null,
         keyTrust: 'server-reported',
         warnings,
@@ -378,10 +381,14 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
       firstBreak = missingHashBreak;
     }
 
-    warnings.push({ code: 'no_checkpoints', message: 'No signed checkpoint exists; a consistent rewrite of the entire chain would not be detected.' });
+    // Issue #387: signed checkpoints, verified against the same read-only snapshot of the chain.
+    const checkpoints = verifySignedCheckpoints(db, instanceId, headSeq);
+    if (checkpoints.checked === 0) {
+      warnings.push({ code: 'no_checkpoints', message: 'No signed checkpoint exists; a consistent rewrite of the entire chain would not be detected.' });
+    }
 
     return {
-      ok: firstBreak === null,
+      ok: firstBreak === null && checkpoints.firstFailure === null,
       storage: 'sqlite',
       instanceId,
       verifiedAt: startedAt,
@@ -389,7 +396,7 @@ export async function verifyChain(options: VerifyOptions): Promise<VerifyReport>
       coverage: { fromSeq: chainStartSeq ?? 0, toSeq, scope: 'full' },
       chain: { checked, headSeq, headHash, chainStartSeq, unchained: unchainedCount },
       firstBreak,
-      checkpoints: { checked: 0, valid: 0, firstFailure: null },
+      checkpoints,
       exported: null,
       keyTrust: 'server-reported',
       warnings,

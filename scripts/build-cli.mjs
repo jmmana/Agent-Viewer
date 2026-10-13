@@ -2,8 +2,12 @@
 //   dist-cli/viewer/  the office, prebuilt, streaming from the server that serves it (same origin)
 //   dist-cli/cli.js   the CLI and the ingestion server, bundled for Node. Dependencies (express, zod) stay
 //                     external and are installed with the package; Node built-ins stay external too.
+//   dist-cli/verify-audit-bundle.mjs  the standalone audit-bundle verifier (issue #401), copied verbatim (it
+//                     is already zero-dependency plain ESM, nothing to bundle) so `agent-viewer audit verify`
+//                     (issue #402, `cli/packageInfo.ts`'s `verifyScriptPath`) finds it next to cli.js once
+//                     installed. Copied unconditionally, including with --skip-viewer, so it is never stale.
 // Usage: node scripts/build-cli.mjs [--skip-viewer]
-import { chmodSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
 
@@ -55,4 +59,6 @@ await build({
 });
 
 chmodSync(`${outDir}/cli.js`, 0o755);
-console.log('dist-cli/ ready: cli.js and the prebuilt office in dist-cli/viewer/');
+copyFileSync(fileURLToPath(new URL('../scripts/verify-audit-bundle.mjs', import.meta.url)), `${outDir}/verify-audit-bundle.mjs`);
+chmodSync(`${outDir}/verify-audit-bundle.mjs`, 0o755);
+console.log('dist-cli/ ready: cli.js, verify-audit-bundle.mjs, and the prebuilt office in dist-cli/viewer/');

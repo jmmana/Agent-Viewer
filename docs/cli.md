@@ -104,6 +104,24 @@ image ships the CLI; otherwise use the equivalent `curl` call (see `docs/api-key
 authentication resolution order, `submitter_id` attribution and the key management HTTP API:
 [docs/api-keys.md](api-keys.md).
 
+## Audit bundle (issues #400, #401, #402)
+
+```bash
+agent-viewer audit export --out bundle.avbundle.jsonl [--from-seq <n>] [--to-seq <n>] [--gzip]
+agent-viewer audit verify bundle.avbundle.jsonl [--trusted-key <fingerprint|pem-file>]
+                                                 [--expect-checkpoint <seq>:<headHash>] [--require-complete] [--json]
+```
+
+`export` downloads `GET /api/v1/audit/bundle` (requires the `audit` scope and `AGENT_VIEWER_STORAGE=sqlite` on
+the server) to `--out`, writing to a temp file next to it and renaming only after a clean end, so a failed or
+interrupted export never leaves a file at `--out`. `--url`/`--token` resolve the same way as `send`.
+
+`verify` never talks to a server: it runs the standalone, zero-dependency `scripts/verify-audit-bundle.mjs` (the
+packaged CLI ships a copy next to `cli.js`) as a child process and returns its exit code unchanged (`0` pass,
+`1` fail, `2` invalid, `3` unpinned without `--trusted-key`). The same script also runs standalone, downloadable
+from a GitHub release with no install at all (`curl -LO .../verify-audit-bundle.mjs{,.sha256}`). Full format
+reference, the nine checks, the exit-code table and the key-pinning workflow: [docs/audit-bundle.md](audit-bundle.md).
+
 ## Claude Code
 
 ```bash

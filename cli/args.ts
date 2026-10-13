@@ -77,6 +77,29 @@ export interface KeysCommand {
   token?: string;
 }
 
+/** Issue #402: `agent-viewer audit export`/`agent-viewer audit verify`, built on #400 (`GET /api/v1/audit/bundle`)
+ * and #401 (`scripts/verify-audit-bundle.mjs`). `export` reuses `resolveConnection` exactly like `keys`; `verify`
+ * never talks to a server at all (it runs the standalone script as a child process against a local file). */
+export interface AuditCommand {
+  command: 'audit';
+  action: 'export' | 'verify';
+  /** `export` only: destination file. Written to a temp name and renamed only after a clean response end. */
+  out?: string;
+  /** `export` only. */
+  fromSeq?: number;
+  toSeq?: number;
+  gzip: boolean;
+  /** `verify` only: the bundle file to check. */
+  file?: string;
+  /** `verify` only, passed through to the script verbatim. */
+  trustedKey?: string;
+  expectCheckpoint?: string;
+  requireComplete: boolean;
+  json: boolean;
+  url?: string;
+  token?: string;
+}
+
 export interface HelpCommand {
   command: 'help' | 'version';
 }
@@ -88,6 +111,7 @@ export type CliCommand =
   | InstallCommand
   | OtelHeadersCommand
   | KeysCommand
+  | AuditCommand
   | HelpCommand;
 
 export const USAGE = `Usage:
@@ -109,6 +133,14 @@ export const USAGE = `Usage:
                                           AGENT_VIEWER_STORAGE=sqlite. --token is the bootstrap credential
                                           (AGENT_VIEWER_API_TOKEN), as on send. create prints the new token
                                           once to stdout; it is never written to the session file.
+  agent-viewer audit export --out <file> [--from-seq <n>] [--to-seq <n>] [--gzip] [--url <url>] [--token <token>]
+  agent-viewer audit verify <file> [--trusted-key <fingerprint|pem-file>] [--expect-checkpoint <seq>:<hash>]
+                                    [--require-complete] [--json]
+                                          Offline-verifiable audit bundle (issues #400, #401, #402). export
+                                          downloads GET /api/v1/audit/bundle to --out (a failed export leaves
+                                          no file there); verify runs the standalone, zero-dependency
+                                          verify-audit-bundle.mjs script as a child process and returns its
+                                          exit code unchanged, never contacting a server. See docs/audit-bundle.md.
 
 Start options:
   --port <n>           Port to listen on (default: PORT, or ${DEFAULT_PORT})
@@ -157,6 +189,14 @@ function parseUrl(value: string | undefined): string | undefined {
 function nonEmpty(name: string, value: string | undefined): string | undefined {
   if (value !== undefined && value.trim() === '') throw new CliUsageError(`${name} cannot be empty`);
   return value;
+}
+
+/** `--from-seq`/`--to-seq` for `agent-viewer audit export`: a positive integer, or `undefined` when the flag
+ * was never given (the server then defaults the range on its own, same as the bare `GET /api/v1/audit/bundle`). */
+function parseSeqFlag(name: string, value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[1-9][0-9]*$/.test(value.trim())) throw new CliUsageError(`${name} must be a positive integer, got "${value}"`);
+  return Number(value.trim());
 }
 
 function parse(argv: string[], options: NonNullable<ParseArgsConfig['options']>) {
@@ -295,6 +335,57 @@ export function parseCliArgs(argv: string[], cwd: string = process.cwd(), env: N
     }
     rejectPositionals(positionals, `keys ${action}`);
     return common;
+  }
+
+  if (first === 'audit') {
+    const [action, ...actionRest] = rest;
+    if (action !== 'export' && action !== 'verify') {
+      throw new CliUsageError('audit needs an action: export or verify (for example: agent-viewer audit export --out bundle.avbundle.jsonl)');
+    }
+    if (action === 'export') {
+      const { values, positionals } = parse(actionRest, {
+        out: { type: 'string' },
+        'from-seq': { type: 'string' },
+        'to-seq': { type: 'string' },
+        gzip: { type: 'boolean', default: false },
+        url: { type: 'string' },
+        token: { type: 'string' },
+      });
+      rejectPositionals(positionals, 'audit export');
+      const out = nonEmpty('--out', values.out as string | undefined);
+      if (!out) throw new CliUsageError('audit export needs --out <file> (for example: agent-viewer audit export --out bundle.avbundle.jsonl)');
+      return {
+        command: 'audit',
+        action: 'export',
+        out,
+        fromSeq: parseSeqFlag('--from-seq', values['from-seq'] as string | undefined),
+        toSeq: parseSeqFlag('--to-seq', values['to-seq'] as string | undefined),
+        gzip: Boolean(values.gzip),
+        json: false,
+        requireComplete: false,
+        url: parseUrl(values.url as string | undefined),
+        token: nonEmpty('--token', values.token as string | undefined),
+      };
+    }
+    const { values, positionals } = parse(actionRest, {
+      'trusted-key': { type: 'string' },
+      'expect-checkpoint': { type: 'string' },
+      'require-complete': { type: 'boolean', default: false },
+      json: { type: 'boolean', default: false },
+    });
+    const [file, ...extra] = positionals;
+    rejectPositionals(extra, 'audit verify');
+    if (!file) throw new CliUsageError('audit verify needs a bundle file (for example: agent-viewer audit verify bundle.avbundle.jsonl)');
+    return {
+      command: 'audit',
+      action: 'verify',
+      file,
+      trustedKey: nonEmpty('--trusted-key', values['trusted-key'] as string | undefined),
+      expectCheckpoint: nonEmpty('--expect-checkpoint', values['expect-checkpoint'] as string | undefined),
+      requireComplete: Boolean(values['require-complete']),
+      json: Boolean(values.json),
+      gzip: false,
+    };
   }
 
   if (first === 'otel-headers') {

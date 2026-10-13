@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
@@ -17,6 +18,9 @@ import { serverEventId } from './ids';
 import { webhookEventId, webhookUsageRequestEventId } from './webhookIds';
 import {
   createEventStore,
+  parseRetentionBatchSize,
+  type AuditActor,
+  type TombstoneResult,
   type AppendResult,
   type AppendBatchResult,
   type EventSeq,
@@ -26,6 +30,15 @@ import {
 import { parseRetentionConfig, startRetention, usageRetentionWarning, type RetentionConfig, type RetentionJobHandle } from './retention';
 import { readPackageVersion } from './version';
 import { verifyChain } from './audit/verify';
+import { AuditCheckpointService, auditCheckpointsSupported, parseCheckpointScheduleConfig } from './audit/checkpoints';
+import { loadSigningKey } from './audit/signingKey';
+import {
+  streamAuditBundle,
+  parseAuditBundleQuery,
+  AuditBundleRangeError,
+  AuditBundleUnsupportedError,
+  type AuditBundleRawQuery,
+} from './audit/bundle';
 import { parseUsageFilters } from './usage/filters';
 import { decodeCursor, encodeCursor, filterHash } from './usage/calls';
 import type { RollupQuery, UsageFilters } from './usage/types';
@@ -270,6 +283,7 @@ const PATCH_USAGE_MESSAGE =
 let store: EventStore;
 let sseReplayMax: number;
 let retentionConfig: RetentionConfig;
+let retentionBatchSize: number;
 let alertWebhookConfig: AlertWebhookConfig | null;
 try {
   store = createEventStore();
@@ -277,6 +291,8 @@ try {
   // Issue #70: validated once at startup, like every other env-derived config here. A bad value must never be
   // silently ignored or guessed at, since it governs permanent deletion.
   retentionConfig = parseRetentionConfig(process.env);
+  // Issue #109: rows per tombstone transaction (and per chained audit event). Same rule as above.
+  retentionBatchSize = parseRetentionBatchSize(process.env.AGENT_VIEWER_RETENTION_BATCH_SIZE);
   // Issue #86 (sub-issue #321): same rule, for the outbound budget alert webhook. `null` means the feature is off
   // (no `AGENT_VIEWER_ALERT_WEBHOOK_URL`); an invalid URL, a refused plain `http://` or an out-of-range numeric
   // value stops the server here, with a message that never echoes the URL.
@@ -310,6 +326,30 @@ const apiKeyStore: ApiKeyStore = (() => {
   return handle ? createSqliteApiKeyStore(handle) : createUnsupportedApiKeyStore();
 })();
 const apiKeysSupported = store.getDatabaseHandle?.() !== undefined;
+
+// Signed audit checkpoints (issue #387): SQLite only, and only once migration 22 has run. Loading the signing key
+// (env, key file, or a generated 0600 default next to the database) and the schedule both validate at startup;
+// a bad key or value stops a direct run with a message that never contains key material, like every other
+// env-derived config above. `start()` registers the key (retiring a different, previously active one and signing
+// a `key_change` checkpoint) and starts the unref'd interval timer.
+let auditCheckpoints: AuditCheckpointService | null = null;
+try {
+  const handle = store.getDatabaseHandle?.();
+  const dbPath = store.getDatabasePath?.();
+  if (handle && dbPath !== undefined && auditCheckpointsSupported(handle)) {
+    auditCheckpoints = new AuditCheckpointService({
+      db: handle,
+      key: loadSigningKey({ env: process.env, dbPath }),
+      schedule: parseCheckpointScheduleConfig(process.env),
+    });
+    auditCheckpoints.start();
+  }
+} catch (error) {
+  if (!isDirectRun) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message.replace(/[\r\n]+/g, ' ').trim());
+  process.exit(1);
+}
 
 const budgetDeps: BudgetHttpDeps = {
   getRegistry: () => budgetRegistry,
@@ -366,6 +406,8 @@ export async function shutdown(): Promise<void> {
   budgetRolloverWatcher?.stop();
   await retentionJob.stop();
   await alertDeliveryWorker?.stop();
+  // Issue #387: a final `shutdown` checkpoint (only if the head advanced), before the store closes its handle.
+  auditCheckpoints?.shutdown();
   await store.close();
 }
 
@@ -1623,6 +1665,13 @@ export function onEventAccepted(listener: AcceptedEventListener): () => void {
   };
 }
 
+// Issue #387: drives the `AGENT_VIEWER_CHECKPOINT_EVERY_EVENTS` trigger. Events appended without a broadcast
+// (`appendAuditKeyEvent`) are not counted here, but are still covered by the next checkpoint of any kind.
+if (auditCheckpoints) {
+  const service = auditCheckpoints;
+  onEventAccepted(() => service.noteChainedEvents());
+}
+
 // Helper to broadcast event to SSE subscribers (without named event so EventSource.onmessage receives all)
 /**
  * Broadcasts an accepted event to SSE subscribers (without a named event, so `EventSource.onmessage` receives
@@ -1682,6 +1731,25 @@ function reservedBudgetAlertIssue(body: unknown): { path: 'type' | 'id'; message
   const message = 'reserved_event_type: budget.alert is emitted by the server only';
   if (candidate.type === 'budget.alert') return { path: 'type', message };
   if (typeof candidate.id === 'string' && candidate.id.startsWith('evt_budget_')) return { path: 'id', message };
+  return null;
+}
+
+/**
+ * Issue #109: every `audit.*` type is server-only, and `tombstone`/`redactionRulesVersion` are server-assigned.
+ * Checked on the raw body (before validation, which would otherwise just drop the unknown fields) so a client
+ * learns it tried to forge server state instead of having it silently ignored.
+ */
+function reservedAuditIssue(body: unknown): { error: 'reserved_type' | 'reserved_field'; path: string; message: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const candidate = body as Record<string, unknown>;
+  if (typeof candidate.type === 'string' && candidate.type.startsWith('audit.')) {
+    return { error: 'reserved_type', path: 'type', message: 'reserved_type: audit.* events are emitted by the server only' };
+  }
+  for (const field of ['tombstone', 'redactionRulesVersion']) {
+    if (Object.prototype.hasOwnProperty.call(candidate, field)) {
+      return { error: 'reserved_field', path: field, message: `reserved_field: ${field} is assigned by the server only` };
+    }
+  }
   return null;
 }
 
@@ -1839,6 +1907,13 @@ app.post('/api/v1/events', async (req, res) => {
     }
   }
 
+  const reservedAudit = reservedAuditIssue(body);
+  if (reservedAudit) {
+    markRejection(res, 'validation');
+    res.status(400).json({ error: reservedAudit.error, path: reservedAudit.path, message: reservedAudit.message });
+    return;
+  }
+
   const reserved = reservedBudgetAlertIssue(body);
   if (reserved) {
     markRejection(res, 'validation');
@@ -1941,6 +2016,16 @@ app.post('/api/v1/events/batch', async (req, res) => {
       message: `Batch contains ${rawEvents.length} events; limit is ${maxBatchSize}`,
     });
     return;
+  }
+
+  // Issue #109: the whole batch is refused when any raw item forges a server-only type or field.
+  for (let index = 0; index < rawEvents.length; index++) {
+    const reservedAudit = reservedAuditIssue(rawEvents[index]);
+    if (reservedAudit) {
+      markRejection(res, 'validation');
+      res.status(400).json({ error: reservedAudit.error, index, path: reservedAudit.path, message: reservedAudit.message });
+      return;
+    }
   }
 
   const validatedEvents: CanonicalEvent[] = [];
@@ -2171,6 +2256,461 @@ app.get('/api/v1/audit/verify', async (req, res) => {
     console.error('[agent-viewer] /api/v1/audit/verify failed:', err);
     res.status(503).json({ error: 'audit_verify_failed', message: 'The chain could not be read.' });
   }
+});
+
+/** Concurrent `GET /api/v1/audit/bundle` exports this process serves at once (issue #400). A bundle export holds
+ * a read transaction open for a potentially long streamed response, so it gets its own cap, separate from
+ * `AGENT_VIEWER_EXPORT_CONCURRENCY` (the usage-ledger CSV/JSONL export). */
+function getAuditBundleConcurrencyMax(): number {
+  return Number(process.env.AGENT_VIEWER_AUDIT_MAX_CONCURRENT ?? 2);
+}
+let activeAuditBundleExports = 0;
+
+/**
+ * Issue #400 (first sub-issue of #110, "offline-verifiable audit bundle"): streams a single NDJSON file an
+ * auditor can save and verify later, without trusting this server again. SQLite + hash chain only; memory mode
+ * (or a schema predating migration 17) answers `409 audit_requires_chain`. The standalone verifier (#401) and the
+ * `agent-viewer audit` CLI (#402) are separate sub-issues; this route only produces the bundle.
+ */
+app.get('/api/v1/audit/bundle', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  const dbPath = store.getDatabasePath?.();
+  if (!dbPath) {
+    res.status(409).json({ error: 'audit_requires_chain', message: 'Audit bundles need AGENT_VIEWER_STORAGE=sqlite with the hash chain enabled' });
+    return;
+  }
+
+  let requested: ReturnType<typeof parseAuditBundleQuery>;
+  try {
+    requested = parseAuditBundleQuery(req.query as AuditBundleRawQuery);
+  } catch (error) {
+    if (error instanceof AuditBundleRangeError) {
+      res.status(400).json({ error: 'invalid_range', message: error.message });
+      return;
+    }
+    throw error;
+  }
+
+  if (activeAuditBundleExports >= getAuditBundleConcurrencyMax()) {
+    res.setHeader('Retry-After', '5');
+    res.status(503).json({ error: 'audit_export_busy', message: 'Too many audit bundle exports are already running; try again shortly.' });
+    return;
+  }
+
+  const gzip = req.query.gzip === '1';
+  activeAuditBundleExports++;
+  let released = false;
+  const releaseSlot = () => {
+    if (!released) {
+      released = true;
+      activeAuditBundleExports--;
+    }
+  };
+  res.on('close', releaseSlot);
+  res.on('finish', releaseSlot);
+
+  try {
+    let aborted = false;
+    req.on('close', () => {
+      aborted = true;
+    });
+
+    const filename = `agent-viewer-audit-${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}.avbundle.jsonl${gzip ? '.gz' : ''}`;
+    res.status(200);
+    res.setHeader('Content-Type', gzip ? 'application/gzip' : 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    let gzipStream: zlib.Gzip | null = null;
+    if (gzip) {
+      gzipStream = zlib.createGzip();
+      gzipStream.on('error', () => {
+        if (!res.destroyed) res.destroy();
+      });
+      gzipStream.pipe(res);
+    }
+
+    async function writeChunk(chunk: string): Promise<void> {
+      if (res.destroyed || res.writableEnded) return;
+      const target = gzipStream ?? res;
+      const canContinue = target.write(chunk);
+      if (!canContinue) {
+        await new Promise<void>((resolve) => target.once('drain', resolve));
+      }
+    }
+
+    let result: Awaited<ReturnType<typeof streamAuditBundle>>;
+    try {
+      result = await streamAuditBundle(
+        {
+          dbPath,
+          checkpoints: auditCheckpoints,
+          pricingStore: getPricingStore(),
+          write: writeChunk,
+          isAborted: () => aborted || res.destroyed,
+        },
+        requested
+      );
+    } catch (error) {
+      if (error instanceof AuditBundleUnsupportedError) {
+        res.status(409).json({ error: 'audit_requires_chain', message: error.message });
+        return;
+      }
+      console.error('[agent-viewer] /api/v1/audit/bundle failed mid-stream:', error);
+      res.destroy();
+      return;
+    }
+
+    if (result.aborted || res.destroyed || res.writableEnded) {
+      if (gzipStream) gzipStream.end();
+      return;
+    }
+    // The resolved range is only known once streamAuditBundle finishes, by which point the response headers are
+    // already flushed; it is carried in the bundle's own `header` line (`range.fromSeq`/`range.toSeq`) instead.
+    if (gzipStream) {
+      gzipStream.end();
+    } else {
+      res.end();
+    }
+  } finally {
+    releaseSlot();
+  }
+});
+
+// -------------------------------------------------------------
+// Chain-compatible retention, redaction and legal hold (issue #109)
+// -------------------------------------------------------------
+
+/** Issue #109: fixed until scoped identities (#107/#108) are wired into audit events. */
+const AUDIT_API_ACTOR: AuditActor = { kind: 'api', name: 'api-token' };
+const MAX_HOLD_REASON_LENGTH = 500;
+const MAX_RULES_VERSION_LENGTH = 100;
+
+/** One destructive run at a time per process: every batch is atomic on its own, this only stops two operators
+ * from racing the same candidate list. */
+let auditDestructiveRunInFlight = false;
+
+/** Whether the store can tombstone with a chained audit trail (SQLite past migration 21). */
+function storeSupportsAuditRetention(): boolean {
+  return Boolean(store.getDatabasePath?.() && store.setLegalHold && store.activeLegalHold && store.listTombstoneCandidates && store.auditRetentionStatus);
+}
+
+/**
+ * The fixed, fail-closed order for every mutating `/api/v1/audit` route (issue #109): `401` already came from the
+ * `/api/v1` middleware; then `403 admin_token_required` when no API token is configured at all (open mode never
+ * destroys anything), `403 admin_required` for any credential but the bootstrap token, then `409
+ * audit_requires_sqlite`. The route itself then answers `400` for a bad body and `423` for an active hold.
+ * Returns `true` (response sent) when the request must stop here.
+ */
+function refuseAuditMutation(res: express.Response): boolean {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!getApiToken()) {
+    res.status(403).json({
+      error: 'admin_token_required',
+      message: 'Set AGENT_VIEWER_API_TOKEN: destructive audit operations never run on an open API.',
+    });
+    return true;
+  }
+  const submitter = res.locals.submitter as Submitter | undefined;
+  if (submitter?.kind !== 'bootstrap') {
+    res.status(403).json({ error: 'admin_required', message: 'Only the bootstrap token (AGENT_VIEWER_API_TOKEN) may run this.' });
+    return true;
+  }
+  if (!storeSupportsAuditRetention()) {
+    res.status(409).json({ error: 'audit_requires_sqlite', message: 'Tombstones and legal holds need SQLite storage.' });
+    return true;
+  }
+  return false;
+}
+
+function legalHoldLocked(res: express.Response): void {
+  res.status(423).json({ error: 'legal_hold_active', message: 'A legal hold is active; nothing can be removed until it is released.' });
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Shared tail of purge and redact: `423` when a hold stopped the run before anything was committed. */
+function sendTombstoneResult(res: express.Response, result: TombstoneResult): void {
+  if (result.stoppedByHold && result.batches === 0) {
+    legalHoldLocked(res);
+    return;
+  }
+  res.json(result);
+}
+
+/**
+ * Policy, legal hold and tombstone state. `409` in memory mode: nothing there is chained, so there is nothing
+ * auditable to report. Read-only, so it only needs the normal `/api/v1` credential.
+ */
+app.get('/api/v1/audit/retention', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!storeSupportsAuditRetention()) {
+    res.status(409).json({ error: 'audit_requires_sqlite', message: 'Tombstones and legal holds need SQLite storage.' });
+    return;
+  }
+  try {
+    const status = await store.auditRetentionStatus!();
+    res.json({
+      storage: 'sqlite',
+      policy: {
+        eventsWindowDays: retentionConfig.eventsDays,
+        intervalMinutes: retentionConfig.intervalMinutes,
+        batchSize: retentionBatchSize,
+        // The scheduled #70 job still deletes rows outright; only the routes below tombstone (see docs/retention.md).
+        scheduledJobMode: retentionConfig.eventsDays === null ? 'off' : 'delete',
+        destructiveRoutesEnabled: Boolean(getApiToken()),
+      },
+      legalHold: status.legalHold,
+      lastRun: status.lastRun,
+      tombstones: status.tombstones,
+      // No redaction rules engine exists yet, so no rules version is in force.
+      redactionRulesVersion: null,
+      rowsByRedactionRulesVersion: status.rowsByRedactionRulesVersion,
+    });
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/retention failed:', err);
+    res.status(503).json({ error: 'audit_retention_failed', message: 'Retention state could not be read.' });
+  }
+});
+
+/** Places or releases the legal hold. Never `423`: releasing is exactly what a hold must still allow. */
+app.post('/api/v1/audit/legal-hold', async (req, res) => {
+  if (refuseAuditMutation(res)) return;
+  const body = req.body;
+  const action = isPlainObject(body) ? body.action : undefined;
+  const reason = isPlainObject(body) ? body.reason : undefined;
+  if (
+    (action !== 'place' && action !== 'release')
+    || typeof reason !== 'string'
+    || reason.trim() === ''
+    || reason.length > MAX_HOLD_REASON_LENGTH
+  ) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: `Expected { action: "place" | "release", reason: non-empty string up to ${MAX_HOLD_REASON_LENGTH} characters }`,
+    });
+    return;
+  }
+  try {
+    const result = await store.setLegalHold!({
+      active: action === 'place',
+      reason,
+      actor: AUDIT_API_ACTOR,
+      submitterId: submitterIdForRequest(req, res),
+    });
+    if (!result.changed) {
+      res.status(409).json({
+        error: result.reason === 'already_active' ? 'legal_hold_already_active' : 'no_active_legal_hold',
+        legalHold: result.hold,
+      });
+      return;
+    }
+    res.json({ legalHold: result.hold, auditEventId: result.auditEventId });
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/legal-hold failed:', err);
+    res.status(500).json({ error: 'legal_hold_failed', message: 'The legal hold could not be changed.' });
+  }
+});
+
+/**
+ * Tombstones every eligible event received before `before` (ms epoch). Batches of `AGENT_VIEWER_RETENTION_BATCH_SIZE`,
+ * one chained `audit.retention.purged` event per batch; a hold placed mid-run stops it cleanly
+ * (`stoppedByHold: true`, committed batches stay).
+ */
+app.post('/api/v1/audit/retention/purge', async (req, res) => {
+  if (refuseAuditMutation(res)) return;
+  const before = isPlainObject(req.body) ? req.body.before : undefined;
+  if (typeof before !== 'number' || !Number.isSafeInteger(before) || before <= 0 || before > Date.now()) {
+    res.status(400).json({ error: 'validation_failed', message: 'Expected { before: integer ms epoch, not in the future }' });
+    return;
+  }
+  if (await store.activeLegalHold!()) {
+    legalHoldLocked(res);
+    return;
+  }
+  if (auditDestructiveRunInFlight) {
+    res.status(409).json({ error: 'run_in_progress', message: 'Another retention or redaction run is in progress.' });
+    return;
+  }
+  auditDestructiveRunInFlight = true;
+  const total: TombstoneResult = { tombstoned: 0, skipped: 0, batches: 0, auditEventIds: [], stoppedByHold: false };
+  try {
+    const submitterId = submitterIdForRequest(req, res);
+    while (true) {
+      const ids = await store.listTombstoneCandidates!(before, retentionBatchSize);
+      if (ids.length === 0) break;
+      const result = await store.tombstone(ids, {
+        reason: 'retention',
+        rulesVersion: null,
+        actor: AUDIT_API_ACTOR,
+        submitterId,
+        batchSize: retentionBatchSize,
+        context: { cutoff: before },
+      });
+      total.tombstoned += result.tombstoned;
+      total.skipped += result.skipped;
+      total.batches += result.batches;
+      total.auditEventIds.push(...result.auditEventIds);
+      if (result.stoppedByHold) {
+        total.stoppedByHold = true;
+        break;
+      }
+      // Candidates are re-read after every page; a page that tombstoned nothing would loop forever.
+      if (result.tombstoned === 0) break;
+    }
+    sendTombstoneResult(res, total);
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/retention/purge failed:', err);
+    res.status(500).json({ error: 'retention_purge_failed', message: 'The run failed; committed batches stay.', partial: total });
+  } finally {
+    auditDestructiveRunInFlight = false;
+  }
+});
+
+/**
+ * Tombstones explicitly named events (`reason: 'redaction'`), all or nothing per event: there is no field-level
+ * redaction. Pattern-based selection is not implemented yet (see docs/redaction.md).
+ */
+app.post('/api/v1/audit/redact', async (req, res) => {
+  if (refuseAuditMutation(res)) return;
+  const body = isPlainObject(req.body) ? req.body : {};
+  const eventIds = body.eventIds;
+  const rulesVersion = body.rulesVersion;
+  if (
+    !Array.isArray(eventIds)
+    || eventIds.length === 0
+    || eventIds.length > retentionBatchSize
+    || !eventIds.every((id) => typeof id === 'string' && id.length > 0)
+    || (rulesVersion !== undefined && (typeof rulesVersion !== 'string' || rulesVersion === '' || rulesVersion.length > MAX_RULES_VERSION_LENGTH))
+  ) {
+    res.status(400).json({
+      error: 'validation_failed',
+      message: `Expected { eventIds: 1 to ${retentionBatchSize} non-empty strings, rulesVersion?: string up to ${MAX_RULES_VERSION_LENGTH} characters }`,
+    });
+    return;
+  }
+  if (await store.activeLegalHold!()) {
+    legalHoldLocked(res);
+    return;
+  }
+  if (auditDestructiveRunInFlight) {
+    res.status(409).json({ error: 'run_in_progress', message: 'Another retention or redaction run is in progress.' });
+    return;
+  }
+  auditDestructiveRunInFlight = true;
+  try {
+    const result = await store.tombstone(eventIds as string[], {
+      reason: 'redaction',
+      rulesVersion: (rulesVersion as string | undefined) ?? null,
+      actor: AUDIT_API_ACTOR,
+      submitterId: submitterIdForRequest(req, res),
+      batchSize: retentionBatchSize,
+    });
+    sendTombstoneResult(res, result);
+  } catch (err) {
+    console.error('[agent-viewer] /api/v1/audit/redact failed:', err);
+    res.status(500).json({ error: 'redaction_failed', message: 'The run failed; committed batches stay.' });
+  } finally {
+    auditDestructiveRunInFlight = false;
+  }
+});
+
+// -------------------------------------------------------------
+// Signed audit checkpoints (issue #387). Under `/api/v1`, so they share the rate limiter, query-token rejection,
+// open-mode guard and Bearer auth registered above. Without a checkpoint service (memory storage, or a database
+// opened against a migration list that stops before migration 22) every route answers `409 audit_unavailable`.
+// -------------------------------------------------------------
+
+/** `null` and already responded `409 audit_unavailable` when there is no checkpoint service. */
+function requireAuditCheckpoints(res: express.Response): AuditCheckpointService | null {
+  res.setHeader('Cache-Control', 'no-store');
+  if (auditCheckpoints) return auditCheckpoints;
+  const reason = store.getDatabaseHandle?.() ? 'schema_not_migrated' : 'memory_storage';
+  res.status(409).json({ error: 'audit_unavailable', reason, message: 'Signed audit checkpoints require SQLite storage.' });
+  return null;
+}
+
+const CHECKPOINT_PAGE_DEFAULT = 100;
+const CHECKPOINT_PAGE_MAX = 1000;
+
+function parseNonNegativeIntParam(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** `?afterSeq=<n>` (keyset cursor, default 0), `?limit=1..1000` (default 100), `?format=json|jsonl`. */
+app.get('/api/v1/audit/checkpoints', (req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  const afterSeq = req.query.afterSeq === undefined ? 0 : parseNonNegativeIntParam(req.query.afterSeq);
+  const limit = req.query.limit === undefined ? CHECKPOINT_PAGE_DEFAULT : parseNonNegativeIntParam(req.query.limit);
+  const format = req.query.format ?? 'json';
+  if (afterSeq === null) {
+    res.status(400).json({ error: 'validation_failed', message: 'afterSeq must be a non-negative integer' });
+    return;
+  }
+  if (limit === null || limit < 1 || limit > CHECKPOINT_PAGE_MAX) {
+    res.status(400).json({ error: 'validation_failed', message: `limit must be an integer from 1 to ${CHECKPOINT_PAGE_MAX}` });
+    return;
+  }
+  if (format !== 'json' && format !== 'jsonl') {
+    res.status(400).json({ error: 'validation_failed', message: 'format must be "json" or "jsonl"' });
+    return;
+  }
+  const checkpoints = service.list(afterSeq, limit);
+  const nextAfterSeq = checkpoints.length === limit ? checkpoints[checkpoints.length - 1].body.checkpointSeq : null;
+  if (format === 'jsonl') {
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    if (nextAfterSeq !== null) res.setHeader('X-Next-After-Seq', String(nextAfterSeq));
+    res.send(checkpoints.map((checkpoint) => `${JSON.stringify(checkpoint)}\n`).join(''));
+    return;
+  }
+  res.json({ checkpoints, nextAfterSeq });
+});
+
+app.get('/api/v1/audit/checkpoints/latest', (_req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  const checkpoint = service.latest();
+  if (!checkpoint) {
+    res.status(404).json({ error: 'checkpoint_not_found', message: 'No signed checkpoint exists yet.' });
+    return;
+  }
+  res.json({ checkpoint });
+});
+
+/** On-demand checkpoint (`reason: 'manual'`). `201` when one was signed; `200` with `created: false` when the
+ * chain is empty or the head has not advanced since the latest checkpoint; `409` when signing was refused
+ * (head behind the latest checkpoint, or this server's key is no longer the active one). */
+app.post('/api/v1/audit/checkpoints', (_req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  try {
+    const result = service.createCheckpoint('manual');
+    if (result.created) {
+      res.status(201).json({ created: true, checkpoint: result.checkpoint });
+      return;
+    }
+    if (result.skipped === 'head_behind_checkpoint' || result.skipped === 'key_not_active') {
+      res.status(409).json({ error: 'checkpoint_refused', reason: result.skipped, message: 'The checkpoint was not signed; run GET /api/v1/audit/verify.' });
+      return;
+    }
+    res.json({ created: false, reason: result.skipped, checkpoint: result.checkpoint });
+  } catch (err) {
+    console.error('[agent-viewer] POST /api/v1/audit/checkpoints failed:', err);
+    res.status(503).json({ error: 'audit_checkpoint_failed', message: 'The checkpoint could not be written.' });
+  }
+});
+
+/** Every public key that ever signed here (never a private key), oldest first; exactly one is `active`. */
+app.get('/api/v1/audit/keys', (_req, res) => {
+  const service = requireAuditCheckpoints(res);
+  if (!service) return;
+  res.json({ activeKeyId: service.key.keyId, keys: service.keys() });
 });
 
 // -------------------------------------------------------------

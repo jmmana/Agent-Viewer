@@ -16,7 +16,8 @@ revocable, and every stored event records the id of the key that submitted it.
 now called the **bootstrap token**. It is always an implicit `admin` (see [Scopes](#scopes-issue-108)), and so is
 the CLI session token `agent-viewer start` generates (it is exported as `AGENT_VIEWER_API_TOKEN`). It is the
 break-glass credential: keep it out of agent runtimes and CI jobs, and create a named key for each of those
-instead.
+instead. See [docs/migrating-to-0.8.md](migrating-to-0.8.md) for the step-by-step runbook off a single shared
+token today, including the CLI session token, the Docker `api-token` file and the webhook HMAC secret.
 
 ## Scopes (issue #108)
 

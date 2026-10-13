@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Migration guide from the single shared token (issue #409, sub-issue of #111, docs only)**: new
+  `docs/migrating-to-0.8.md` covers the practical runbook for an operator running today's single shared
+  `AGENT_VIEWER_API_TOKEN`: what changes (nothing functional) for the bootstrap token, the CLI's generated
+  session token, the Docker `api-token` file (`AGENT_VIEWER_TOKEN_FILE`) and `AGENT_VIEWER_WEBHOOK_SECRET`;
+  step by step from backing up the SQLite file through creating one named ingest key per client, an auditor
+  key, switching clients over and retiring routine use of the bootstrap token; and the exact, code-verified
+  shape in which rows stored before the hash chain existed are reported by `GET /api/v1/audit/verify`/
+  `agent-viewer verify` (`chain.unchained` count plus a `legacy_rows` warning, never a separate "pre-chain"
+  status, never silently counted as individually verified). Linked from `README.md`'s and
+  `docs/README.es.md`'s Security tables and from `docs/api-keys.md`'s bootstrap-token section. New
+  `tests/audit-migration.test.mjs`: builds a SQLite database staged at schema version 16 (the "0.7.0 shape",
+  the same staging pattern `tests/audit-verify.test.mjs`'s legacy-rows case and
+  `tests/usage-rollup-migration.test.mjs` already use), appends pre-chain events, starts the real 0.8.0 server
+  on that file (running migrations 17-22) and asserts both documented claims over real HTTP. No server, CLI,
+  SDK or library runtime code changed.
+
 - **Threat model for the 0.8.0 formal-audit work (issue #111, first sub-issue, docs only)**: new `docs/threat-model.md` states, in one place, what the hash chain (#105), signed checkpoints (#387), chain verification (#106), named and scoped keys (#107/#108), chain-compatible retention/redaction (#109) and the offline-verifiable audit bundle (#110) actually guarantee: the assets at risk, every actor from a compromised agent to an operator holding both the database and the signing key, explicit "what the chain proves" and "what it does not" sections, memory-mode behavior (every audit route refuses rather than returning a degraded result), bundle confidentiality (an exported bundle is not redacted, unlike `GET /api/v1/usage/export`), the invoice-cross-check rules (unknown is never zero, estimated is never mixed with reported), residual risks and recommended mitigations, and explicit non-goals (not tamper-proof against a fully privileged operator, not a compliance certification, not provider billing). Cross-linked from `README.md`/`docs/README.es.md`'s Security tables, `.github/SECURITY.md` (which also gets a corrected "Data exfiltration surface" paragraph reflecting shipped scoped keys instead of describing them as a future 0.8.0 item), `docs/integration.md`'s audit-trail section, `docs/audit-chain.md` and `docs/api-keys.md`. No server, CLI, SDK or library runtime code changed. Also documents, rather than silently assumes, that `GET /api/v1/audit/verify`/`agent-viewer verify` are not yet tombstone-aware and report `hash_mismatch` on a legitimately redacted/retained row even though the standalone bundle verifier (#401) already handles this correctly; filed as [issue #408](https://github.com/jmmana/Agent-Viewer/issues/408) rather than papered over in the text. Split per `.claude/agent-policy.md`'s size rule from the rest of #111 (migration guide from the single shared token, the docs hygiene check, and the final version bump/release), tracked as issues #409, #410 and #411; also found and filed separately, a staleness bug in `docs/README.es.md`'s Security table describing shipped scoped keys as a not-yet-shipped 0.8.0 feature (issue #412).
 
 - **Crew asset recovery audit (#115)**: reconcile PR #43 and #162-164 revisions, the preserved 53-asset bank and reference, three showroom layout hashes, vector-study classification, independent-runtime evidence and unverified local work. Correct the historical migration matrix without approving prototype art or merging the legacy skin.

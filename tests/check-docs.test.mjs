@@ -188,7 +188,7 @@ test('checkReadmeLinkage matches a doc linked with an anchor (anchor-agnostic)',
 test('findEmDashViolations flags a file containing U+2014 and ignores a clean one', () => {
   const dir = makeFixtureRepo();
   try {
-    write(dir, 'docs/bad.md', 'This uses an em dash — right there.\n');
+    write(dir, 'docs/bad.md', 'This uses an em dash \u2014 right there.\n');
     write(dir, 'docs/good.md', 'This uses a comma, not that character.\n');
     const violations = findEmDashViolations(['docs/bad.md', 'docs/good.md'], dir);
     assert.deepEqual(violations, ['docs/bad.md']);

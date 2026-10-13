@@ -57,7 +57,7 @@ export const DOCS_REQUIRING_README_LINKAGE = [
 ];
 
 export const EM_DASH_DEFAULT_SINCE_REF = 'v0.7.0';
-const EM_DASH = '—';
+const EM_DASH = '\u2014';
 
 // --- markdown link extraction -------------------------------------------------------------------
 

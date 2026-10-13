@@ -187,6 +187,9 @@ session file of a running `agent-viewer start`. See [cli.md](cli.md) for the ful
 
 ## Honest limits
 
+See also [docs/threat-model.md](threat-model.md) for the full actor-by-actor statement of what a key's scope
+does and does not guarantee.
+
 - **Credential, not identity.** A named key proves "whoever holds this key", not a specific person: it can be
   shared, copied or leaked like any secret. Treat `submittedBy` as attribution to a credential, which a compromised
   machine can still misuse until the key is revoked.

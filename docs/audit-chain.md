@@ -5,7 +5,8 @@ later edit, deletion or reordering of a chained row changes a hash that every la
 so the damage is detectable by recomputing the chain. This item only *produces* the chain: walking it to find a
 broken link (`GET /api/v1/audit/verify`, issue #106) is documented in its own section below; signed checkpoints,
 named submitters, scoped keys, retention and an offline audit bundle are separate items (#387 to #111) that
-build on the format documented here.
+build on the format documented here. [docs/threat-model.md](threat-model.md) is the consolidated statement of
+what all of this proves and does not prove; read it before relying on anything stated here for an actual audit.
 
 ## Honest scope: what the chain does and does not prove
 

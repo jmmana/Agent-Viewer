@@ -1412,6 +1412,11 @@ them send `Cache-Control: no-store` and reject a `token` query parameter the sam
 route (issue #71). This table is the one-stop index; each route's full request/response shape, failure modes
 and the mechanics behind it live in the linked doc, not duplicated here.
 
+Before relying on any of this, read [docs/threat-model.md](threat-model.md): what the chain and these routes
+actually prove, what they do not (including that none of this proves a reported usage figure is true), who
+each actor can and cannot do, and the memory-mode behavior (every route below is unavailable there by design,
+not a degraded fallback).
+
 | Method & path | Scope (issue #108) | What it returns | Full reference |
 |---|---|---|---|
 | `GET /audit/chain` | `audit` | Chain head, genesis checkpoint, chained row count. `{ enabled: false, reason }` in memory mode or on a pre-chain schema. | [audit-chain.md#server-api](audit-chain.md#server-api) |

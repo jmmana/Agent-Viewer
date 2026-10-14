@@ -128,6 +128,7 @@ const EN = {
   'office.agentsHeading': 'Agents in the office',
   'office.agentLine': '{name}, {role}: {status}',
   'office.agentLineNoRole': '{name}: {status}',
+  'office.agentTool': 'Using tool: {tool}',
   'office.empty': 'Waiting for agent activity',
 
   // Usage figures (only shown when the host allows it)
@@ -314,6 +315,7 @@ const ES: OfficeMessages = {
   'office.agentsHeading': 'Agentes en la oficina',
   'office.agentLine': '{name}, {role}: {status}',
   'office.agentLineNoRole': '{name}: {status}',
+  'office.agentTool': 'Usando herramienta: {tool}',
   'office.empty': 'Esperando actividad de los agentes',
 
   'usage.title': 'Consumo',

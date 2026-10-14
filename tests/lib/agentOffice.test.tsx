@@ -117,6 +117,16 @@ describe('AgentOffice: agents from events', () => {
     expect(agentLines().builder).toBe('Bruno Díaz, Ingeniero: Programando');
   });
 
+  it('announces the active tool in English and Spanish', () => {
+    const events = [...englishTeam, makeEvent('tool.started', 'planner', { tool: 'read_file' }, { at: T0 + 4000 })];
+    const { rerender } = render(<AgentOffice events={events} />);
+
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Using a tool. Using tool: read_file');
+
+    rerender(<AgentOffice events={events} locale="es" />);
+    expect(agentLines().planner).toBe('Ana Rivas, Planner: Usando una herramienta. Usando herramienta: read_file');
+  });
+
   it('shows agents from the `agents` prop before their first event', () => {
     render(
       <AgentOffice

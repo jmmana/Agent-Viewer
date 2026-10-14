@@ -323,6 +323,9 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
             const line = role
               ? translate('office.agentLine', { name: agent.name, role, status })
               : translate('office.agentLineNoRole', { name: agent.name, status });
+            const toolText = agent.currentTool
+              ? translate('office.agentTool', { tool: agent.currentTool })
+              : '';
             const agentUsage = usageInDom ? usage?.byAgent?.[agent.id] : undefined;
             const usageText = agentUsage
               ? formatUsage(agentUsage, locale, translate).map((item) => `${item.label}: ${item.value}`).join(', ')
@@ -338,7 +341,7 @@ export const AgentOffice: React.FC<AgentOfficeProps> = ({
                   aria-pressed={selected}
                   onClick={() => handleSelect(selected ? null : agent.id)}
                 >
-                  {[line, usageText, budgetText].filter(Boolean).join('. ')}
+                  {[line, toolText, usageText, budgetText].filter(Boolean).join('. ')}
                 </button>
               </li>
             );

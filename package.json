@@ -89,7 +89,7 @@
   },
   "dependencies": {
     "express": "^5.2.1",
-    "lucide-react": "^1.52.0",
+    "lucide-react": "^1.59.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

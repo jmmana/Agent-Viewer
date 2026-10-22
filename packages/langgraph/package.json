@@ -49,7 +49,7 @@
     "@warlockcode/agent-viewer-sdk": ">=0.6.0"
   },
   "devDependencies": {
-    "@langchain/core": "^0.3.0",
+    "@langchain/core": "^1.2.18",
     "@langchain/langgraph": "^0.4.0"
   },
   "engines": {
